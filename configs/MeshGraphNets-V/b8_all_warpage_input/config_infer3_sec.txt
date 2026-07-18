@@ -66,4 +66,4 @@ prior_family	fm
 prior_fm_steps	40
 prior_mp_layers	10
 prior_hidden_dim	256
-prior_temperature	1.0  # free post-hoc knob: calibrate spread scale at inference
+prior_temperature	1.0  #free post-hoc knob: calibrate spread scale at inference

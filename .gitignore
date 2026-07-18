@@ -9,6 +9,8 @@ cae_suite.local.toml
 # Local datasets and generated model artifacts
 *.h5
 *.hdf5
+*.npy
+*.npz
 *.pth
 *.pt
 *.ckpt

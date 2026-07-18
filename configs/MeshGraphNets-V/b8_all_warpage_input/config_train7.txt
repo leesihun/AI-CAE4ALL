@@ -42,7 +42,7 @@ augment_geometry	True
 grad_accum_steps	1
 '
 %   Memory / performance
-use_checkpointing	False  # faster; set True if OOM
+use_checkpointing	False  #faster; set True if OOM
 use_amp	True
 use_ema	True
 ema_decay	0.99

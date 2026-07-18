@@ -5,7 +5,7 @@ winner, 8 single-GPU cells.
 
 Previous sweep (lambda-ladder + capacity, 2026-07-15) winner =
 **cell 8 = z128_h256_median_ph256_l0p2**
-(checkpoint preserved: outputs/b8_all/warpage_train8_z128_h256_median_ph256_l0p2.pth).
+(checkpoint preserved: ../output/meshgraphnets-v/b8_all/warpage_train8_z128_h256_median_ph256_l0p2.pth).
 That winner was still slightly UNDER-dispersed (p99_cov 0.85/0.78 < 1), and the
 decisive discriminator that round was prior_hidden_dim (cell 4 vs 8: same
 z128/l0.2, only ph 192->256, cell 4 blew up to p99_cov 2.16-2.45 while cell 8
@@ -114,13 +114,15 @@ TRAIN_TMPL = """% ============================================================
 model   MeshGraphNets-V
 mode    train
 gpu_ids {gpu}
-log_file_dir    b8_all/train{n}_{tag}.log
-modelpath       ./outputs/b8_all/warpage_train{n}_{tag}.pth
+parallel_mode   ddp
+log_file_dir    ../../output/meshgraphnets-v/b8_all/train{n}_{tag}.log
+modelpath       ../output/meshgraphnets-v/b8_all/warpage_train{n}_{tag}.pth
 
 % Datasets
-dataset_dir     ./dataset/b8_main_sec_dataset_traincopy.h5
-infer_dataset   ./dataset/b8_main_sec_dataset_infer.h5
+dataset_dir     ../dataset/b8_main_sec_dataset_traincopy.h5
+infer_dataset   ../dataset/b8_main_sec_dataset_infer.h5
 infer_timesteps 1
+split_seed      42
 num_vae_samples 10000
 
 % Common params
@@ -197,12 +199,12 @@ INFER_TMPL = """% Inference for cell {n}: {tag} ({which})
 model   MeshGraphNets-V
 mode    inference
 gpu_ids {gpu}
-log_file_dir         b8_all/infer_train{n}_{which}.log
-modelpath            ./outputs/b8_all/warpage_train{n}_{tag}.pth
-inference_output_dir outputs/b8_all/infer_train{n}_{which}
+log_file_dir         ../../output/meshgraphnets-v/b8_all/infer_train{n}_{which}.log
+modelpath            ../output/meshgraphnets-v/b8_all/warpage_train{n}_{tag}.pth
+inference_output_dir ../output/meshgraphnets-v/b8_all/infer_train{n}_{which}
 
 % Datasets
-dataset_dir     ./dataset/b8_main_sec_dataset_traincopy.h5
+dataset_dir     ../dataset/b8_main_sec_dataset_traincopy.h5
 infer_dataset   {infer_ds}
 infer_timesteps 1
 num_vae_samples 5000
@@ -263,14 +265,41 @@ prior_temperature        1.0   # free post-hoc knob: calibrate spread scale at i
 """
 
 INFER_DATASETS = {
-    "main": "./dataset/infer_b8_main.h5",
-    "sec":  "./dataset/infer_b8_secondary.h5",
+    "main": "../dataset/infer_b8_main.h5",
+    "sec":  "../dataset/infer_b8_secondary.h5",
 }
+
+
+def meshgraphnets_style(text):
+    """Normalize generated configs to the suite's canonical MGN layout."""
+    styled = []
+    pending_separator = False
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line == "'":
+            pending_separator = bool(styled)
+            continue
+        if pending_separator and styled[-1] != "'":
+            styled.append("'")
+        pending_separator = False
+        if line.startswith("%"):
+            body = line[1:].lstrip()
+            styled.append(f"%   {body}" if body else "%")
+            continue
+        parts = line.split(None, 1)
+        if len(parts) != 2:
+            raise ValueError(f"Malformed generated config line: {raw_line!r}")
+        key, value = parts
+        if "#" in value:
+            value_part, comment = value.split("#", 1)
+            value = f"{value_part.rstrip()}  #{comment.strip()}"
+        styled.append(f"{key}\t{value}")
+    return "\n".join(styled) + "\n"
 
 
 def write(path, text):
     with open(path, "w", encoding="utf-8", newline="\n") as f:
-        f.write(text)
+        f.write(meshgraphnets_style(text))
 
 
 written = []
