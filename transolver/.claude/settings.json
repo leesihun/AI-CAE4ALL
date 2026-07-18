@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "Bash(curl -sL \"https://api.github.com/repos/thuml/Transolver_plus/contents/models\")",
+      "Bash(curl -sL \"https://raw.githubusercontent.com/thuml/Transolver_plus/main/models/Transolver_plus.py\")"
+    ]
+  }
+}

@@ -1,0 +1,15 @@
+# Large/generated data - hardlinked from ../MeshGraphNets/dataset
+dataset/*.h5
+
+# Training outputs
+outputs/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# OS
+.DS_Store
+Thumbs.db

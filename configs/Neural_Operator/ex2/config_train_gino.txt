@@ -1,0 +1,88 @@
+model	gino
+mode	train
+gpu_ids	0
+parallel_mode	ddp
+'
+%   Datasets and outputs
+log_file_dir	../../output/neural_operator/ex2/gino.log
+modelpath	../output/neural_operator/ex2/gino.pth
+dataset_dir	../dataset/ex2.h5
+infer_dataset	../dataset/ex2.h5
+inference_output_dir	../output/neural_operator/rollout/ex2/gino
+infer_timesteps	49
+split_seed	42
+'
+%   Common parameters
+input_var	4
+output_var	4
+feature_loss_weights	1.0, 1.0, 1.0, 1.0
+positional_features	4
+use_node_types	True
+coordinate_normalization	centered_isotropic
+operator_dim	auto
+dimension_tolerance	0.0001
+grid_padding	0.05
+out_of_bounds_policy	error
+'
+%   Optional geometric signals
+sdf_source	none
+sdf_sidecar	none
+global_condition_features	none
+integration_weight_source	none
+'
+gino_variant	mesh_state
+gino_grid_resolution	32, 32, 32
+gino_fno_modes	8, 8, 8
+gino_fno_hidden_channels	32
+gino_fno_layers	4
+gino_kernel_hidden	64
+%   ex2 uses augment_geometry False, so unlike ex1 the grid box tightly
+%   matches the training extent (no rotation-safety padding); start from the
+%   plan's un-augmented radius and re-run the mandatory coverage preflight
+%   (training_profiles/setup.py prints it) before trusting these on first run.
+gino_in_radius	0.08
+gino_out_radius	0.08
+gino_max_empty_input_fraction	0.05
+gino_query_chunk_size	50000
+gino_use_torch_cluster	False
+gino_group_shared_geometry	False
+'
+%   Optimization
+training_epochs	500
+batch_size	1
+learningr	0.0001
+weight_decay	0.0001
+warmup_epochs	3
+num_workers	2
+prefetch_factor	4
+grad_accum_steps	4
+max_grad_norm	3.0
+'
+%   Training regularization and runtime
+std_noise	0.01
+noise_gamma	1
+augment_geometry	False
+use_amp	True
+use_checkpointing	True
+use_ema	True
+ema_decay	0.99
+use_compile	False
+'
+%   Query chunking
+train_query_chunk_size	0
+infer_query_chunk_size	0
+'
+%   Evaluation
+val_interval	5
+test_interval	10
+test_max_batches	200
+test_batch_idx	0, 10, 20, 30, 40
+plot_feature_idx	-1
+display_trainset	True
+display_testset	True
+checkpoint_interval	50
+'
+%   Dataset behavior
+write_preprocessing	False
+use_world_edges	False
+use_multiscale	False

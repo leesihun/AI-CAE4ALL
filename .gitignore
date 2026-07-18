@@ -1,0 +1,37 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+cae_suite.local.toml
+*.validation.json
+
+# Local datasets and generated model artifacts
+*.h5
+*.hdf5
+*.pth
+*.pt
+*.ckpt
+*.safetensors
+*.zip
+*.z[0-9][0-9]
+output/
+outputs/
+results/
+checkpoints/
+runs/
+logs/
+train_logs/
+wandb/
+
+# Local environments and machine-specific settings
+.venv/
+venv/
+env/
+*.egg-info/
+.vscode/
+.idea/
+**/.claude/settings.local.json
+.env
+.env.*
+!.env.example

@@ -1,0 +1,24 @@
+model	SDFFlow
+mode	sample
+gpu_ids	0
+'
+%   Models and outputs
+vae_modelpath	../output/geometry_generation/ex1/sdfflow_vae.pth
+fm_modelpath	../output/geometry_generation/ex1/sdfflow_fm.pth
+output_dir	../output/geometry_generation/ex1/samples_extrapolation
+'
+%   Controlled one-axis extrapolation from real training shape 2023.
+%   Only volume is moved just beyond the training maximum (0.495265).
+%   Order: bbox_x, bbox_z, volume, area.
+cond_values	1.06416,0.63345,0.505,5.03146
+cfg_scale	1.0
+max_condition_z	4.0
+condition_ood_policy	error
+latent_clip	5.0
+candidate_multiplier	4
+'
+%   Sampling parameters
+num_samples	32
+seed	100
+ode_steps	50
+mc_resolution	128

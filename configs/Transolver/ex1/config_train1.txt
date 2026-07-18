@@ -1,0 +1,67 @@
+model	transolver
+mode	train
+gpu_ids	0
+parallel_mode	ddp
+'
+%   Datasets and outputs
+log_file_dir	../../output/transolver/ex1/train1.log
+modelpath	../output/transolver/ex1/transolver1.pth
+dataset_dir	../dataset/ex1.h5
+infer_dataset	../dataset/hex_dataset.h5
+inference_output_dir	../output/transolver/rollout/ex1/transolver1
+infer_timesteps	1
+split_seed	42
+'
+%   Common parameters
+input_var	4
+output_var	4
+positional_features	4
+use_node_types	True
+feature_loss_weights	1.0, 1.0, 1.0, 1.0
+'
+%   Network parameters
+coordinate_normalization	centered_isotropic
+latent_dim	128
+num_layers	8
+num_heads	8
+slice_num	64
+attention_kernel	naive
+chunk_size	0
+infer_mode	direct
+infer_chunk_size	0
+mlp_ratio	1
+dropout	0.0
+temperature_init	0.5
+temperature_min	0.1
+temperature_max	5.0
+small_output_init	False
+'
+%   Optimization
+training_epochs	500
+batch_size	1
+learningr	0.0001
+weight_decay	0.0001
+warmup_epochs	3
+num_workers	2
+prefetch_factor	4
+grad_accum_steps	1
+max_grad_norm	3.0
+'
+%   Training regularization and runtime
+std_noise	0.1
+noise_gamma	1
+augment_geometry	True
+use_amp	True
+use_checkpointing	True
+use_ema	True
+ema_decay	0.99
+use_compile	False
+'
+%   Evaluation
+val_interval	5
+test_interval	50
+'
+%   Dataset behavior
+use_world_edges	False
+use_multiscale	False
+write_preprocessing	False

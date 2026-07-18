@@ -1,0 +1,76 @@
+model	SDFFlow
+mode	train
+gpu_ids	0
+'
+%   Sequential VAE -> FM pipeline
+pipeline_log_file	../output/geometry_generation/ex1/train.log
+skip_completed_stages	True
+output_dir	../output/geometry_generation/ex1
+vae_modelpath	../output/geometry_generation/ex1/sdfflow_vae.pth
+fm_modelpath	../output/geometry_generation/ex1/sdfflow_fm.pth
+'
+%   Shared dataset
+dataset_dir	../dataset/deepjeb.h5
+split_seed	42
+num_encoder_points	4096
+num_query_points	4096
+encode_batch_size	16
+'
+%   VAE architecture and losses
+latent_tokens	1
+latent_dim	256
+decoder_type	mlp
+decoder_hidden	512
+decoder_layers	8
+encoder_dim	256
+encoder_heads	4
+encoder_blocks	2
+fourier_bands	8
+kl_weight	0.00001
+deterministic_warmup_epochs	20
+posterior_noise_warmup_epochs	80
+posterior_noise_max_scale	0.1
+kl_warmup_epochs	100
+clamp_dist	0.1
+'
+%   VAE training
+vae_log_file_dir	../output/geometry_generation/ex1/train_vae.log
+vae_training_epochs	500
+vae_batch_size	4
+vae_learningr	0.0005
+vae_weight_decay	0.0001
+vae_warmup_epochs	5
+vae_num_workers	4
+vae_use_amp	True
+vae_use_ema	True
+vae_ema_decay	0.999
+vae_val_interval	5
+vae_test_interval	50
+vae_num_test_shapes	1
+vae_mc_resolution_test	96
+'
+%   FM conditioning and architecture
+use_conditions	True
+condition_names	bbox_x,bbox_z,volume,area
+condition_clip	5.0
+min_condition_std	0.00001
+cond_dropout	0.1
+fm_hidden	256
+fm_blocks	4
+fm_cond_hidden	128
+'
+%   FM training
+fm_log_file_dir	../output/geometry_generation/ex1/train_fm.log
+fm_training_epochs	300
+fm_batch_size	64
+fm_learningr	0.0002
+fm_weight_decay	0.001
+fm_warmup_epochs	10
+fm_use_amp	True
+fm_use_ema	True
+fm_ema_decay	0.999
+fm_val_interval	10
+fm_test_interval	100
+fm_num_test_shapes	2
+fm_mc_resolution_test	96
+ode_steps	50

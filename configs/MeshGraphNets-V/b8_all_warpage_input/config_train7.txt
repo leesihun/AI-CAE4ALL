@@ -1,0 +1,91 @@
+%   ============================================================
+%   Network-capacity (width x depth) sweep cell 7: z128_h256_pml5_ph384_vml5
+%   Why: see gen_sweep_configs.py docstring. Anchored on the previous winner
+%   (z128_h256_median_ph256_l0p2). Focus 2x2 = Latent_dim {256,512} x
+%   prior_mp_layers {5,10} (cells 1-4); OFAT extras cells 5-8.
+%   Latent_dim=256 (main width), prior_mp_layers=5 (prior depth),
+%   prior_hidden_dim=384 (prior width), vae_mp_layers=5 (posterior depth).
+%   Pinned: vae_latent_dim=128, lambda_mmd=0.2, mmd_bandwidth=median,
+%   alpha_recon=1000, beta_aux=1.0, posterior_min_std=0.05, fm_steps=40,
+%   Training_epochs=1000, L=2 voronoi 2000/500, mse, mp_per_level 4,8,12,8,4.
+%   ============================================================
+model	MeshGraphNets-V
+mode	train
+gpu_ids	6
+parallel_mode	ddp
+log_file_dir	../../output/meshgraphnets-v/b8_all/train7_z128_h256_pml5_ph384_vml5.log
+modelpath	../output/meshgraphnets-v/b8_all/warpage_train7_z128_h256_pml5_ph384_vml5.pth
+'
+%   Datasets
+dataset_dir	../dataset/b8_main_sec_dataset_traincopy.h5
+infer_dataset	../dataset/b8_main_sec_dataset_infer.h5
+infer_timesteps	1
+split_seed	42
+num_vae_samples	10000
+'
+%   Common params
+input_var	3
+output_var	3
+feature_loss_weights	1, 1, 1
+edge_var	8
+positional_features	4
+'
+%   Network parameters
+message_passing_num	15
+Training_epochs	1000
+Batch_size	8
+LearningR	0.0001
+Latent_dim	256
+num_workers	4
+std_noise	0.01
+augment_geometry	True
+grad_accum_steps	1
+'
+%   Memory / performance
+use_checkpointing	False  # faster; set True if OOM
+use_amp	True
+use_ema	True
+ema_decay	0.99
+test_interval	100
+val_interval	1
+'
+%   Node types
+use_node_types	False
+'
+%   World edges
+use_world_edges	False
+'
+%   Test set
+test_batch_idx	0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 33, 34
+plot_feature_idx	-1
+'
+%   Multiscale (2-level Voronoi V-cycle)
+use_multiscale	True
+coarsening_type	voronoi_seedmean
+voronoi_clusters	2000, 500
+multiscale_levels	2
+mp_per_level	4, 8, 12, 8, 4
+'
+%   VAE (MMD-InfoVAE)
+use_vae	True
+vae_latent_dim	128
+vae_mp_layers	5
+recon_loss	mse
+alpha_recon	1000
+lambda_mmd	0.2
+mmd_bandwidth	median
+vae_graph_aware	True
+beta_aux	1.0
+posterior_min_std	0.05
+'
+%   Prior - gnn_e2e joint training; prior_family fm = conditional flow matching.
+%   prior_fm_steps 40: sampling-only (validation CRPS + inference); halves Euler
+%   overshoot in the z tails vs the old 20-step default (Gen_max spike fix).
+prior_type	gnn_e2e
+use_conditional_prior	True
+prior_family	fm
+prior_nll_weight	1.0
+prior_fm_steps	40
+prior_mp_layers	5
+prior_hidden_dim	384
+prior_temperature	1.0

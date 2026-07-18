@@ -1,0 +1,18 @@
+# Core deep learning
+torch>=2.1.0
+
+# Scientific computing
+numpy>=1.24.0
+scipy>=1.10.0
+
+# Data I/O
+h5py>=3.8.0
+
+# Geometry
+trimesh>=4.0.0
+scikit-image>=0.22.0        # marching cubes
+rtree>=1.0.0                # trimesh proximity queries (real-mesh SDF sampling)
+# libigl                    # optional: much faster signed distance for real meshes
+
+# Utilities
+tqdm>=4.65.0

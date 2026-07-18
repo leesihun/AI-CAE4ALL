@@ -1,0 +1,85 @@
+model	point_deeponet
+mode	inference
+gpu_ids	0
+'
+%   Datasets and outputs
+log_file_dir	../../output/neural_operator/ex2/infer_point_deeponet.log
+modelpath	../output/neural_operator/ex2/point_deeponet.pth
+dataset_dir	../dataset/ex2.h5
+infer_dataset	../dataset/ex2.h5
+inference_output_dir	../output/neural_operator/rollout/ex2/point_deeponet
+infer_timesteps	49
+split_seed	42
+'
+%   Common parameters
+input_var	4
+output_var	4
+feature_loss_weights	1.0, 1.0, 1.0, 1.0
+positional_features	4
+use_node_types	True
+coordinate_normalization	centered_isotropic
+operator_dim	auto
+dimension_tolerance	0.0001
+grid_padding	0.05
+out_of_bounds_policy	error
+'
+%   Optional geometric signals
+sdf_source	none
+sdf_sidecar	none
+global_condition_features	none
+integration_weight_source	none
+'
+point_variant	mesh_state
+point_sensor_count	5000
+point_sampling	random
+point_resample_each_epoch	True
+point_hidden_channels	128
+point_feature_dim	128
+pointnet_depth	3
+pointnet_activation	relu
+pointnet_norm	batch
+point_branch_merge	sum
+point_condition_depth	2
+point_trunk_depth	3
+point_refiner_depth	2
+point_siren_omega0	30.0
+point_output_activation	identity
+'
+%   Optimization
+training_epochs	1
+batch_size	2
+learningr	0.0001
+weight_decay	0.0001
+warmup_epochs	3
+num_workers	2
+grad_accum_steps	2
+max_grad_norm	3.0
+'
+%   Training regularization and runtime
+std_noise	0.0
+noise_gamma	1
+augment_geometry	False
+use_amp	True
+use_checkpointing	False
+use_ema	True
+ema_decay	0.99
+use_compile	False
+'
+%   Query chunking
+train_query_chunk_size	0
+infer_query_chunk_size	0
+'
+%   Evaluation
+val_interval	1
+test_interval	10
+test_max_batches	200
+test_batch_idx	0
+plot_feature_idx	-1
+display_trainset	False
+display_testset	False
+checkpoint_interval	0
+'
+%   Dataset behavior
+write_preprocessing	False
+use_world_edges	False
+use_multiscale	False

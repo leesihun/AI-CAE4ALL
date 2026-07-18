@@ -1,0 +1,21 @@
+model	SDFFlow
+mode	interpolate
+gpu_ids	0
+'
+%   Models and outputs
+vae_modelpath	../output/geometry_generation/ex1/sdfflow_vae.pth
+fm_modelpath	../output/geometry_generation/ex1/sdfflow_fm.pth
+output_dir	../output/geometry_generation/ex1/interpolation
+'
+%   Reproduce the exact unconditional seed-0 batch used by config_sample.txt.
+seed	0
+source_num_samples	32
+sample_index_a	0
+sample_index_b	1
+alpha	0.5
+'
+ode_steps	50
+mc_resolution	128
+plot_dpi	180
+%   0 renders every face so the comparison surfaces have no plotting holes.
+plot_max_faces	0

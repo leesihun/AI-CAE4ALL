@@ -1,0 +1,79 @@
+model	deeponet
+mode	inference
+gpu_ids	0
+'
+%   Datasets and outputs
+log_file_dir	../../output/neural_operator/ex1/infer_deeponet.log
+modelpath	../output/neural_operator/ex1/deeponet.pth
+dataset_dir	../dataset/ex1.h5
+infer_dataset	../dataset/hex_dataset.h5
+inference_output_dir	../output/neural_operator/rollout/ex1/deeponet
+infer_timesteps	1
+split_seed	42
+'
+%   Common parameters
+input_var	4
+output_var	4
+feature_loss_weights	1.0, 1.0, 1.0, 1.0
+positional_features	4
+use_node_types	True
+coordinate_normalization	centered_isotropic
+operator_dim	auto
+dimension_tolerance	0.0001
+grid_padding	0.05
+out_of_bounds_policy	error
+'
+%   Optional geometric signals
+sdf_source	none
+sdf_sidecar	none
+global_condition_features	none
+integration_weight_source	none
+'
+deeponet_branch_source	fixed_sensors
+deeponet_sensor_resolution	64, 64
+deeponet_hidden_channels	256
+deeponet_branch_depth	3
+deeponet_trunk_depth	3
+deeponet_basis_dim	128
+deeponet_activation	silu
+deeponet_multi_output	split_both
+deeponet_max_branch_params	100000000
+'
+%   Optimization
+training_epochs	1
+batch_size	1
+learningr	0.0001
+weight_decay	0.0001
+warmup_epochs	3
+num_workers	2
+grad_accum_steps	1
+max_grad_norm	3.0
+'
+%   Training regularization and runtime
+std_noise	0.0
+noise_gamma	1
+augment_geometry	False
+use_amp	True
+use_checkpointing	False
+use_ema	True
+ema_decay	0.99
+use_compile	False
+'
+%   Query chunking
+train_query_chunk_size	0
+infer_query_chunk_size	0
+'
+%   Evaluation
+val_interval	1
+test_interval	100
+test_max_batches	200
+test_batch_idx	0
+plot_feature_idx	-1
+display_trainset	False
+display_testset	False
+checkpoint_interval	0
+'
+%   Dataset behavior
+write_preprocessing	False
+use_world_edges	False
+use_multiscale	False

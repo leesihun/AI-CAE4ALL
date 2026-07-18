@@ -1,0 +1,18 @@
+model	transolver
+mode	inference
+gpu_ids	0
+'
+%   Datasets and outputs
+log_file_dir	../../output/transolver/ex2/infer_smoke.log
+modelpath	../output/transolver/ex2/transolver_smoke.pth
+infer_dataset	../dataset/ex2.h5
+inference_output_dir	../output/transolver/rollout/ex2/transolver_smoke
+infer_timesteps	3
+infer_mode	direct
+infer_chunk_size	3000
+'
+%   Common parameters
+input_var	4
+output_var	4
+positional_features	4
+use_node_types	True

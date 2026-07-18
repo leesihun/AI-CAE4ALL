@@ -1,0 +1,15 @@
+model	SDFFlow
+mode	sample
+gpu_ids	0
+'
+%   Models and outputs
+vae_modelpath	../output/geometry_generation/ex1/sdfflow_vae.pth
+fm_modelpath	../output/geometry_generation/ex1/sdfflow_fm.pth
+output_dir	../output/geometry_generation/ex1/samples
+'
+%   Sampling parameters
+num_samples	32
+seed	0
+ode_steps	50
+mc_resolution	128
+cfg_scale	1.0
