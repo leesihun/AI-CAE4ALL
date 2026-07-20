@@ -21,7 +21,7 @@ feature_loss_weights  1.0, 1.0, 1.0, 1.0  # per-output-channel loss weights -- c
 '
 %   Network parameters
 coordinate_normalization  centered_isotropic  # coordinate scheme -- must be 'centered_isotropic'; enforced and recorded in the checkpoint data config
-latent_dim                128                 # hidden width -- positive int, must be divisible by num_heads
+latent_dim                256                 # hidden width -- positive int, must be divisible by num_heads
 num_layers                8                   # Transolver block count -- positive int
 num_heads                 8                   # attention heads -- positive int, must divide latent_dim
 slice_num                 128                  # Physics-Attention learned slice count -- positive int
