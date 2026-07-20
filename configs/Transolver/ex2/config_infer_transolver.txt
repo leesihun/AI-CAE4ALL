@@ -1,0 +1,19 @@
+model    transolver  # backend selector -- {transolver}
+mode     inference   # run mode -- {train|inference}
+gpu_ids  0           # CUDA device id(s) -- int or comma list; -1 = CPU (never mixed with CUDA ids)
+'
+%   Datasets and outputs (ex2.h5 rollout from t=0; stored trajectory = ground truth, same
+%   convention as configs/MeshGraphNets/ex2/config_infer1.txt)
+log_file_dir          ../../output/transolver/ex2/infer_transolver.log  # log file path, relative to the backend output dir
+modelpath             ../output/transolver/ex2/transolver.pth           # checkpoint path -- save target in train, load source in inference
+infer_dataset         ../dataset/ex2.h5                                 # inference input HDF5 path
+inference_output_dir  ../output/transolver/rollout/ex2/transolver       # rollout output directory
+infer_timesteps       49                                                # autoregressive rollout steps from t=0
+infer_mode            direct                                            # inference mode -- {direct|decoupled}; default direct
+infer_chunk_size      0                                                 # decoupled-inference chunk size -- int >= 0; default 0
+'
+%   Common parameters
+input_var            4     # physical-state input channel count -- positive int; temporal rollout needs input_var == output_var
+output_var           4     # predicted field/delta channel count -- positive int
+positional_features  4     # extra numeric positional feature channels -- int >= 0; default 0
+use_node_types       True  # append one-hot node type (feature row 7 / Part No.) -- {True|False}; needs a >7-row file
