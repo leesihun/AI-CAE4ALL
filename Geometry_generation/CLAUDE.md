@@ -6,22 +6,22 @@ authoritative implementation.
 
 ## Commands and working directories
 
-From the `CAE_ML_Suite` root:
+From the `AI-CAE4ALL` root:
 
-```powershell
-python CAE_ML_Suite_main.py --config Geometry_generation\ex1\config_train.txt --check
-python CAE_ML_Suite_main.py --config Geometry_generation\ex1\config_train.txt
-python CAE_ML_Suite_main.py --config Geometry_generation\ex1\config_sample.txt
-python CAE_ML_Suite_main.py --config Geometry_generation\ex1\config_sample_extrapolation.txt
-python CAE_ML_Suite_main.py --config Geometry_generation\ex1\config_interpolate.txt
+```bash
+python AI_CAE4ALL_main.py --config configs/Geometry_generation/config_train.txt --check
+python AI_CAE4ALL_main.py --config configs/Geometry_generation/config_train.txt
+python AI_CAE4ALL_main.py --config configs/Geometry_generation/config_sample.txt
+python AI_CAE4ALL_main.py --config configs/Geometry_generation/config_sample_extrapolation.txt
+python AI_CAE4ALL_main.py --config configs/Geometry_generation/config_interpolate.txt
 ```
 
 From `Geometry_generation`:
 
-```powershell
+```bash
 python build_dataset.py --output dataset/synthetic256.h5 --synthetic 256
-python SDFFlow_main.py --config ex1/config_train.txt
-python SDFFlow_main.py --config ex1/config_sample.txt
+python SDFFlow_main.py --config ../configs/Geometry_generation/config_train.txt
+python SDFFlow_main.py --config ../configs/Geometry_generation/config_sample.txt
 ```
 
 The config parser accepts flat `key value` text, lowercases keys and string
@@ -140,8 +140,8 @@ crossing is a hard failure because all three comparison meshes are required.
 
 At minimum, run from the suite root:
 
-```powershell
-python CAE_ML_Suite_main.py --config Geometry_generation\ex1\config_train.txt --check
+```bash
+python AI_CAE4ALL_main.py --config configs/Geometry_generation/config_train.txt --check
 python -m pytest -q tests/test_sdfflow_pipeline.py tests/test_checked_in_configs.py tests/test_required_field_matrix.py
 ```
 

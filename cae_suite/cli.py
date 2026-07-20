@@ -39,7 +39,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _print_models(registry: MethodRegistry) -> int:
-    print("CAE ML Suite registered models")
+    print("AI-CAE4ALL registered models")
     print()
     errors = False
     seen_specs: set[str] = set()
@@ -79,7 +79,7 @@ def _describe_model(registry: MethodRegistry, model_id: str) -> int:
 
 
 def _print_route(result: PreflightResult) -> None:
-    print("CAE ML Suite")
+    print("AI-CAE4ALL")
     print(f"Config      : {result.parsed.source_path}")
     if result.resolved is not None:
         print(f"Model       : {result.resolved.model_id}")
@@ -246,7 +246,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         settings = LocalSettings.load(suite_root)
     except Exception as exc:
-        print(f"[ENV-SETTINGS-001] Could not load cae_suite.local.toml: {type(exc).__name__}: {exc}")
+        print(f"[ENV-SETTINGS-001] Could not load AI-CAE4ALL local settings: {type(exc).__name__}: {exc}")
         return 4
     if args.audit_configs:
         return _audit_configs(

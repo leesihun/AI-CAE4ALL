@@ -1,0 +1,12 @@
+[python]
+# Omit this when AI-CAE4ALL is launched from an activated venv.
+# default = ".venv/bin/python"
+# Windows alternative: default = ".venv/Scripts/python.exe"
+
+[python.models]
+# Relative paths are resolved from the AI-CAE4ALL repository root.
+# meshgraphnets = "MeshGraphNets/.venv/bin/python"
+# meshgraphnets-v = "MeshGraphNets - variational/.venv/bin/python"
+# neural_operator = "Neural_Operator/.venv/bin/python"
+# transolver = "Transolver/.venv/bin/python"
+# sdfflow = "Geometry_generation/.venv/bin/python"

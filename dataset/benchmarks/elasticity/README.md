@@ -49,8 +49,8 @@ runtime behavior outside these configs.
 Example:
 
 ```powershell
-python CAE_ML_Suite_main.py --config configs/benchmarks/elasticity/config_train_transolver_paper.txt
-python CAE_ML_Suite_main.py --config configs/benchmarks/elasticity/config_infer_transolver.txt
+python AI_CAE4ALL_main.py --config configs/benchmarks/elasticity/config_train_transolver_paper.txt
+python AI_CAE4ALL_main.py --config configs/benchmarks/elasticity/config_infer_transolver.txt
 ```
 
 ## Post-inference relative L2

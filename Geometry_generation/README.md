@@ -7,11 +7,11 @@ latents are decoded to an SDF grid and exported through Marching Cubes as STL.
 
 ## Recommended workflow
 
-From the `CAE_ML_Suite` root, validate and run the merged training config:
+From the `AI-CAE4ALL` root, validate and run the merged training config:
 
-```powershell
-python CAE_ML_Suite_main.py --config Geometry_generation\ex1\config_train.txt --check
-python CAE_ML_Suite_main.py --config Geometry_generation\ex1\config_train.txt
+```bash
+python AI_CAE4ALL_main.py --config configs/Geometry_generation/config_train.txt --check
+python AI_CAE4ALL_main.py --config configs/Geometry_generation/config_train.txt
 ```
 
 The single `mode train` job runs the VAE first and starts FM training only
@@ -20,28 +20,28 @@ the GPU occupied without requiring a second manual launch.
 
 After training, generate or compare shapes with:
 
-```powershell
-python CAE_ML_Suite_main.py --config Geometry_generation\ex1\config_sample.txt
-python CAE_ML_Suite_main.py --config Geometry_generation\ex1\config_sample_extrapolation.txt
-python CAE_ML_Suite_main.py --config Geometry_generation\ex1\config_interpolate.txt
+```bash
+python AI_CAE4ALL_main.py --config configs/Geometry_generation/config_sample.txt
+python AI_CAE4ALL_main.py --config configs/Geometry_generation/config_sample_extrapolation.txt
+python AI_CAE4ALL_main.py --config configs/Geometry_generation/config_interpolate.txt
 ```
 
 Direct backend commands are also supported. Run these from
 `Geometry_generation` so relative paths keep their native meaning:
 
-```powershell
-python SDFFlow_main.py --config ex1/config_train.txt
-python SDFFlow_main.py --config ex1/config_sample.txt
+```bash
+python SDFFlow_main.py --config ../configs/Geometry_generation/config_train.txt
+python SDFFlow_main.py --config ../configs/Geometry_generation/config_sample.txt
 ```
 
 ## Canonical configs and artifacts
 
 | Config | Purpose | Main output |
 | --- | --- | --- |
-| `ex1/config_train.txt` | Sequential VAE -> FM training on DeepJEB | `outputs/ex1/sdfflow_vae.pth`, then `outputs/ex1/sdfflow_fm.pth` |
-| `ex1/config_sample.txt` | Reproducible unconditional generation | `outputs/ex1/samples/` |
-| `ex1/config_sample_extrapolation.txt` | Guarded, one-axis conditional extrapolation | `outputs/ex1/samples_extrapolation/` |
-| `ex1/config_interpolate.txt` | Reproduce samples 0 and 1 and decode their latent interpolation | `outputs/ex1/interpolation/` |
+| `configs/Geometry_generation/config_train.txt` | Sequential VAE -> FM training on DeepJEB | `outputs/ex1/sdfflow_vae.pth`, then `outputs/ex1/sdfflow_fm.pth` |
+| `configs/Geometry_generation/config_sample.txt` | Reproducible unconditional generation | `outputs/ex1/samples/` |
+| `configs/Geometry_generation/config_sample_extrapolation.txt` | Guarded, one-axis conditional extrapolation | `outputs/ex1/samples_extrapolation/` |
+| `configs/Geometry_generation/config_interpolate.txt` | Reproduce samples 0 and 1 and decode their latent interpolation | `outputs/ex1/interpolation/` |
 
 Training writes the pipeline log to `ex1/train.log`, with stage logs at
 `ex1/train_vae.log` and `ex1/train_fm.log`. These paths describe the runtime

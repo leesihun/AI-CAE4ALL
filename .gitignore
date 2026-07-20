@@ -3,6 +3,7 @@ __pycache__/
 .pytest_cache/
 .coverage
 htmlcov/
+ai_cae4all.local.toml
 cae_suite.local.toml
 *.validation.json
 *.provenance.json

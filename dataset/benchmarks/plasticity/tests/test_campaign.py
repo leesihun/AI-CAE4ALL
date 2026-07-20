@@ -86,7 +86,7 @@ def _make_suite(tmp_path: Path) -> Path:
     configs = root / "configs" / "benchmarks" / "plasticity"
     benchmark.mkdir(parents=True)
     configs.mkdir(parents=True)
-    for name in ("CAE_ML_Suite_main.py",):
+    for name in ("AI_CAE4ALL_main.py",):
         (root / name).write_text("# fixture\n", encoding="utf-8")
     for name in ("evaluate_rollouts.py", "compare_results.py"):
         (benchmark / name).write_text("# fixture\n", encoding="utf-8")
@@ -622,7 +622,7 @@ class FakeRunner:
             stderr_path.write_text("", encoding="utf-8")
 
         target = Path(command[1]).name
-        if target == "CAE_ML_Suite_main.py":
+        if target == "AI_CAE4ALL_main.py":
             model, phase = self._model_from_config(command)
             if "--check" in command:
                 return CommandResult(0, stdout="preflight passed")
@@ -722,7 +722,7 @@ class FakeRunner:
 def _noncheck_suite_phases(calls: list[list[str]]) -> list[tuple[str, str]]:
     result: list[tuple[str, str]] = []
     for command in calls:
-        if Path(command[1]).name != "CAE_ML_Suite_main.py" or "--check" in command:
+        if Path(command[1]).name != "AI_CAE4ALL_main.py" or "--check" in command:
             continue
         result.append(FakeRunner._model_from_config(command))
     return result

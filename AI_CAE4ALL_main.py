@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Unified front-facing launcher for the CAE ML Suite."""
+"""Unified front-facing launcher for AI-CAE4ALL."""
 
 from cae_suite.cli import main
 

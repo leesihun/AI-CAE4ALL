@@ -116,7 +116,7 @@ def _probe_environment(
             "ENV-PYTHON-001",
             Severity.ERROR,
             f"Python interpreter does not exist: {python_executable}",
-            hint="Set --python or configure cae_suite.local.toml.",
+            hint="Set --python or configure ai_cae4all.local.toml.",
         )
         return
     code = (

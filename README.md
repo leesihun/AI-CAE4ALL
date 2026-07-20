@@ -1,19 +1,19 @@
-# CAE ML Suite Launcher
+# AI-CAE4ALL Launcher
 
 Run any installed AI-CAE method from one command. The `model` field in the
 native config selects the repository and entrypoint automatically.
 
-```powershell
-python CAE_ML_Suite_main.py --config configs\MeshGraphNets\ex1\config_train1.txt
+```bash
+python AI_CAE4ALL_main.py --config configs/MeshGraphNets/ex1/config_train1.txt
 ```
 
 SDFFlow geometry generation uses one production training config. It trains the
 VAE first, verifies its checkpoint, and immediately trains flow matching:
 
-```powershell
-python CAE_ML_Suite_main.py --config configs\Geometry_generation\config_train.txt --check
-python CAE_ML_Suite_main.py --config configs\Geometry_generation\config_train.txt
-python CAE_ML_Suite_main.py --config configs\Geometry_generation\config_sample.txt
+```bash
+python AI_CAE4ALL_main.py --config configs/Geometry_generation/config_train.txt --check
+python AI_CAE4ALL_main.py --config configs/Geometry_generation/config_train.txt
+python AI_CAE4ALL_main.py --config configs/Geometry_generation/config_sample.txt
 ```
 
 Relaunching the training config safely reuses compatible completed stages;
@@ -32,7 +32,7 @@ Supported `model` values and aliases:
 | `meshgraphnets` | `MeshGraphNets/MeshGraphNets_main.py` |
 | `meshgraphnets-v` | `MeshGraphNets - variational/MeshGraphNets_main.py` |
 | `point_deeponet`, `deeponet`, `fno`, `gino` | `Neural_Operator/main.py` |
-| `transolver` | `transolver/Transolver_main.py` |
+| `transolver` | `Transolver/Transolver_main.py` |
 | `sdfflow` | `Geometry_generation/SDFFlow_main.py` |
 
 By default, a successful preflight starts the selected native process
@@ -42,16 +42,19 @@ resolved from the selected method repository, matching direct native runs.
 
 Useful commands:
 
-```powershell
-python CAE_ML_Suite_main.py --list-models
-python CAE_ML_Suite_main.py --describe transolver
-python CAE_ML_Suite_main.py --config configs\Transolver\ex2\config_train_smoke.txt --check
-python CAE_ML_Suite_main.py --config configs\Neural_Operator\ex1\config_train_smoke_fno.txt --dry-run
+```bash
+python AI_CAE4ALL_main.py --list-models
+python AI_CAE4ALL_main.py --describe transolver
+python AI_CAE4ALL_main.py --config configs/Transolver/ex2/config_train_transolver.txt --check
+python AI_CAE4ALL_main.py --config configs/Neural_Operator/ex1/config_train_fno.txt --dry-run
 ```
 
-For method-specific Python environments, copy `cae_suite.local.example.toml`
-to `cae_suite.local.toml` and set the desired interpreter paths. This local
-file is ignored by Git.
+On Ubuntu, activate a venv before launching and no local TOML is required; the
+launcher uses that venv's Python. For separate backend venvs, copy
+`ai_cae4all.local.example.toml` to `ai_cae4all.local.toml` and set their Python
+paths. Relative paths in that file resolve from the repository root. The local
+file is ignored by Git. Installing the root package in the venv with
+`python -m pip install -e .` also provides the `ai-cae4all` command.
 
 See [CONFIGURATION_REFERENCE.md](CONFIGURATION_REFERENCE.md) for the exhaustive
 live-code-backed key catalog, necessity classifications, shipped-config

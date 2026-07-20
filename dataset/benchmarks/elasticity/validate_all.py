@@ -288,7 +288,7 @@ def main() -> None:
         infer_configs = {model: CONFIG_ROOT / INFER_CONFIGS[model] for model in models}
         truth = HERE / "elasticity_test.h5"
 
-    launcher = str(SUITE_ROOT / "CAE_ML_Suite_main.py")
+    launcher = str(SUITE_ROOT / "AI_CAE4ALL_main.py")
     phases = ("preflight", "train", "infer", "evaluate") if args.phase == "all" else (args.phase,)
 
     if "preflight" in phases:

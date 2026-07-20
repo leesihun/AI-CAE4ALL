@@ -2,7 +2,7 @@
 """Run the seven-model Plasticity campaign without changing model runtimes.
 
 The orchestrator is intentionally conservative.  It schedules independently
-owned launcher trees through ``CAE_ML_Suite_main.py`` only when a strict
+owned launcher trees through ``AI_CAE4ALL_main.py`` only when a strict
 resource record allows their placement, records every phase, and only reuses a
 completed model after the strict rollout evaluator succeeds again.  Partial or
 otherwise ambiguous model output directories are never overwritten.
@@ -846,7 +846,7 @@ class PlasticityCampaign:
         self.paper_gate_path = self.suite_root / "output" / "benchmarks" / "paper_validation_completion_gate.json"
         self.resource_index_path = self.output_root / "resource_probe" / "index.json"
         self.runtime_config_root = self.output_root / "campaign_runtime_configs"
-        self.suite_entrypoint = self.suite_root / "CAE_ML_Suite_main.py"
+        self.suite_entrypoint = self.suite_root / "AI_CAE4ALL_main.py"
         self.evaluator = self.benchmark_dir / "evaluate_rollouts.py"
         self.comparator = self.benchmark_dir / "compare_results.py"
         self.truth = self.benchmark_dir / "plasticity_seed42_test.h5"

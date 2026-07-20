@@ -119,7 +119,7 @@ def build_transolver_spec() -> MethodSpec:
         spec_id="transolver",
         display_name="Transolver",
         model_ids=("transolver",),
-        repository="transolver",
+        repository="Transolver",
         entrypoint="Transolver_main.py",
         valid_modes=("train", "inference"),
         known_keys=TRANSOLVER_KEYS | TRANSOLVER_MGN_KEYS,

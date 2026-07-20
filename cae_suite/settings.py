@@ -17,16 +17,22 @@ except ImportError:  # pragma: no cover - Python 3.10 fallback
 
 @dataclass
 class LocalSettings:
+    base_dir: Path | None = None
     default_python: str | None = None
     model_pythons: dict[str, str] = field(default_factory=dict)
 
     @classmethod
     def load(cls, suite_root: Path) -> "LocalSettings":
-        path = suite_root / "cae_suite.local.toml"
+        base_dir = suite_root.resolve()
+        path = base_dir / "ai_cae4all.local.toml"
         if not path.exists():
-            return cls()
+            legacy_path = base_dir / "cae_suite.local.toml"
+            if legacy_path.exists():
+                path = legacy_path
+        if not path.exists():
+            return cls(base_dir=base_dir)
         if tomllib is None:
-            raise RuntimeError("cae_suite.local.toml requires tomli on Python 3.10")
+            raise RuntimeError(f"{path.name} requires tomli on Python 3.10")
         with path.open("rb") as handle:
             data: dict[str, Any] = tomllib.load(handle)
         python_data = data.get("python", {})
@@ -35,6 +41,7 @@ class LocalSettings:
         default = python_data.get("default")
         models = python_data.get("models", {})
         return cls(
+            base_dir=base_dir,
             default_python=str(default) if default else None,
             model_pythons={str(k).lower(): str(v) for k, v in models.items()} if isinstance(models, dict) else {},
         )
@@ -52,4 +59,6 @@ class LocalSettings:
             discovered = shutil.which(str(expanded))
             if discovered:
                 return Path(discovered).resolve()
+            if self.base_dir is not None:
+                return (self.base_dir / expanded).resolve()
         return expanded.resolve()

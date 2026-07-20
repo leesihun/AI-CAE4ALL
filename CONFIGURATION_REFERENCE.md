@@ -1,7 +1,7 @@
-# CAE ML Suite: Comprehensive Configuration Reference
+# AI-CAE4ALL: Comprehensive Configuration Reference
 
 > Live-code audit snapshot: 2026-07-19, from
-> `C:\Users\Lee\Desktop\Huni\CAE_ML_Suite`.
+> `C:\Users\Lee\Desktop\Huni\AI-CAE4ALL`.
 
 This is the configuration source of truth for the current suite. It covers the
 unified launcher, every model backend, all flat-text config keys, all checked-in
@@ -63,7 +63,7 @@ key value
   directory as the working directory.
 - The original config file is passed unchanged. Relative paths inside it are
   therefore relative to `Geometry_generation`, `MeshGraphNets`,
-  `MeshGraphNets - variational`, `Neural_Operator`, or `transolver`, not to the
+  `MeshGraphNets - variational`, `Neural_Operator`, or `Transolver`, not to the
   config file and not to the suite root.
 - The centralized templates correctly use paths such as
   `../output/meshgraphnets/ex1/model1.pth` because the native process starts
@@ -81,8 +81,8 @@ key value
 
 Canonical command:
 
-```powershell
-python CAE_ML_Suite_main.py --config configs\MeshGraphNets\ex1\config_train1.txt
+```bash
+python AI_CAE4ALL_main.py --config configs/MeshGraphNets/ex1/config_train1.txt
 ```
 
 ### 3.1 Routing values
@@ -95,7 +95,7 @@ python CAE_ML_Suite_main.py --config configs\MeshGraphNets\ex1\config_train1.txt
 | `deeponet` | Neural Operator | `Neural_Operator/main.py` | `train`, `inference` |
 | `fno` | Neural Operator | `Neural_Operator/main.py` | `train`, `inference` |
 | `gino` | Neural Operator | `Neural_Operator/main.py` | `train`, `inference` |
-| `transolver` | Transolver | `transolver/Transolver_main.py` | `train`, `inference` |
+| `transolver` | Transolver | `Transolver/Transolver_main.py` | `train`, `inference` |
 | `sdfflow` | SDFFlow | `Geometry_generation/SDFFlow_main.py` | `train`, `train_vae`, `train_fm`, `sample`, `reconstruct`, `interpolate` |
 
 There are no additional routing aliases in the current registry. In particular,
@@ -125,18 +125,21 @@ underscore spellings are not aliases.
 
 ### 3.3 Local interpreter TOML
 
-Copy `cae_suite.local.example.toml` to ignored `cae_suite.local.toml`.
+When launched from an activated venv, no local TOML is needed. For separate
+backend environments, copy `ai_cae4all.local.example.toml` to ignored
+`ai_cae4all.local.toml`. Relative interpreter paths resolve from the repository
+root. The legacy `cae_suite.local.toml` name is still accepted for compatibility.
 
 ```toml
 [python]
-default = "C:/Python311/python.exe"
+default = ".venv/bin/python"
 
 [python.models]
-meshgraphnets = "C:/envs/mgn/python.exe"
-meshgraphnets-v = "C:/envs/mgn-var/python.exe"
-neural_operator = "C:/envs/operators/python.exe"
-transolver = "C:/envs/transolver/python.exe"
-sdfflow = "C:/envs/sdfflow/python.exe"
+meshgraphnets = "MeshGraphNets/.venv/bin/python"
+meshgraphnets-v = "MeshGraphNets - variational/.venv/bin/python"
+neural_operator = "Neural_Operator/.venv/bin/python"
+transolver = "Transolver/.venv/bin/python"
+sdfflow = "Geometry_generation/.venv/bin/python"
 ```
 
 Interpreter precedence is `--python`, exact model ID, method/spec ID,
@@ -692,7 +695,7 @@ shown as required are required by that utility, not by model training.
 | `MeshGraphNets/MeshGraphNets_main.py` | `--config PATH` (default `config.txt`) |
 | `MeshGraphNets - variational/MeshGraphNets_main.py` | `--config PATH` (default `config.txt`) |
 | `Neural_Operator/main.py` | `--config PATH` (default `config.txt`) |
-| `transolver/Transolver_main.py` | `--config PATH` (default `config.txt`) |
+| `Transolver/Transolver_main.py` | `--config PATH` (default `config.txt`) |
 
 ### 9.2 SDFFlow dataset builder
 
@@ -845,9 +848,10 @@ These are not ML configs but are live scripts in the audited root:
 ### 10.4 Packaging and dependency configuration
 
 Root `pyproject.toml` sets `setuptools.build_meta`, package name/version
-`cae-ml-suite-launcher 0.1.0`, Python `>=3.10`, the Python-3.10-only `tomli`
-dependency, optional `pytest>=7.4`, and pytest defaults `testpaths=['tests']`,
-`addopts='-q'`. These do not change model behavior.
+`ai-cae4all-launcher 0.1.0`, Python `>=3.10`, the Python-3.10-only `tomli`
+dependency, the `ai-cae4all` console entry point, optional `pytest>=7.4`, and
+explicit packaging of only `cae_suite` and `cae_suite.specs`. Pytest defaults
+are `testpaths=['tests']`, `addopts='-q'`. These do not change model behavior.
 
 The remaining non-config text dependency files are
 `Geometry_generation/requirements.txt` and the two identical plotting extras
@@ -947,8 +951,8 @@ sampling steps 40, 1,000 epochs, and `mp_per_level 4,8,12,8,4`.
 | --- | --- |
 | `configs/Transolver/ex1/config_train1.txt` | Full ex1 DDP-capable baseline with naive attention. |
 | `configs/Transolver/ex1/config_infer1.txt` | Ex1 direct inference paired to `transolver1.pth`. |
-| `configs/Transolver/ex2/config_train_smoke.txt` | Ex2 smoke training with `slice_space` attention. |
-| `configs/Transolver/ex2/config_infer_smoke.txt` | Ex2 direct smoke inference. |
+| `configs/Transolver/ex2/config_train_transolver.txt` | Full ex2 DDP-capable temporal baseline with naive attention. |
+| `configs/Transolver/ex2/config_infer_transolver.txt` | Ex2 direct autoregressive inference paired to `transolver.pth`. |
 
 ### 11.6 Elasticity accuracy benchmarks (5)
 
@@ -1027,7 +1031,7 @@ These are current code facts, not hypothetical cautions.
 | Routing | `cae_suite/registry.py`, `cae_suite/specs/*.py` |
 | Required/default/path diagnostics | `cae_suite/specs/*.py`, `cae_suite/preflight.py` |
 | Launcher CLI and config discovery | `cae_suite/cli.py` |
-| Interpreter settings | `cae_suite/settings.py`, `cae_suite.local.example.toml` |
+| Interpreter settings | `cae_suite/settings.py`, `ai_cae4all.local.example.toml` |
 | SDFFlow parser/modes | `Geometry_generation/general_modules/load_config.py`, `SDFFlow_main.py` |
 | SDFFlow pipeline prefixing/reuse | `Geometry_generation/training_profiles/train_pipeline.py` |
 | SDFFlow VAE/FM/sampling defaults | `train_vae.py`, `train_fm.py`, `sample.py`, `interpolate.py`, `model/*.py` |
@@ -1038,8 +1042,8 @@ These are current code facts, not hypothetical cautions.
 | Neural Operator key registry | `Neural_Operator/general_modules/config_validation.py` |
 | Neural Operator model keys | `Neural_Operator/model/{point_deeponet,deeponet,fno,gino}.py` |
 | Neural Operator checkpoint overlay | `Neural_Operator/model/factory.py`, `inference_profiles/rollout.py` |
-| Transolver validation | `transolver/general_modules/config_validation.py` |
-| Transolver model/inference keys | `transolver/model/Transolver.py`, `training_profiles/*.py`, `inference_profiles/*.py` |
+| Transolver validation | `Transolver/general_modules/config_validation.py` |
+| Transolver model/inference keys | `Transolver/model/Transolver.py`, `training_profiles/*.py`, `inference_profiles/*.py` |
 | Shipped values | The exact file under root `configs/`; generators/scripts are secondary. |
 
 ## 14. Minimal authoring checklist
@@ -1064,8 +1068,8 @@ Before saving or launching a new config:
     without BOM.
 11. Run structural preflight on the individual file:
 
-    ```powershell
-    python CAE_ML_Suite_main.py --config configs\...\config.txt --check --skip-filesystem-check --skip-environment-check
+    ```bash
+    python AI_CAE4ALL_main.py --config configs/.../config.txt --check --skip-filesystem-check --skip-environment-check
     ```
 
 12. Then run full `--check` with actual datasets/checkpoints/environment. A
@@ -1203,6 +1207,6 @@ configs/Neural_Operator/ex2/config_train_gino_model_split.txt
 configs/Neural_Operator/ex2/config_train_point_deeponet.txt
 configs/Transolver/ex1/config_infer1.txt
 configs/Transolver/ex1/config_train1.txt
-configs/Transolver/ex2/config_infer_smoke.txt
-configs/Transolver/ex2/config_train_smoke.txt
+configs/Transolver/ex2/config_infer_transolver.txt
+configs/Transolver/ex2/config_train_transolver.txt
 ```

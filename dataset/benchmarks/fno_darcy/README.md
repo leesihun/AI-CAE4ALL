@@ -59,8 +59,8 @@ timestep 1 without changing runtime code.
 ## Train, infer, and evaluate
 
 ```powershell
-python CAE_ML_Suite_main.py --config configs/benchmarks/fno_darcy/config_train_fno_paper.txt
-python CAE_ML_Suite_main.py --config configs/benchmarks/fno_darcy/config_infer_fno_paper.txt
+python AI_CAE4ALL_main.py --config configs/benchmarks/fno_darcy/config_train_fno_paper.txt
+python AI_CAE4ALL_main.py --config configs/benchmarks/fno_darcy/config_infer_fno_paper.txt
 python dataset/benchmarks/fno_darcy/evaluate_relative_l2.py `
   --predictions output/benchmarks/fno_darcy/fno/inference
 ```
@@ -81,8 +81,8 @@ prepare separate benchmark files and use the explicit `paper_darcy` configs:
 
 ```powershell
 python dataset/benchmarks/fno_darcy/prepare_darcy.py --paper-protocol
-python CAE_ML_Suite_main.py --config configs/benchmarks/fno_darcy/config_train_fno_paper_validation.txt
-python CAE_ML_Suite_main.py --config configs/benchmarks/fno_darcy/config_infer_fno_paper_validation.txt
+python AI_CAE4ALL_main.py --config configs/benchmarks/fno_darcy/config_train_fno_paper_validation.txt
+python AI_CAE4ALL_main.py --config configs/benchmarks/fno_darcy/config_infer_fno_paper_validation.txt
 python dataset/benchmarks/fno_darcy/evaluate_relative_l2.py `
   --ground-truth dataset/benchmarks/fno_darcy/darcy_paper_test.h5 `
   --predictions output/benchmarks/fno_darcy/paper_validation/inference

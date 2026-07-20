@@ -3,14 +3,20 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "cae-ml-suite-launcher"
+name = "ai-cae4all-launcher"
 version = "0.1.0"
-description = "Automatic config-driven launcher for the CAE ML Suite"
+description = "Automatic config-driven launcher for AI-CAE4ALL"
 requires-python = ">=3.10"
 dependencies = ["tomli>=2.0; python_version < '3.11'"]
 
+[project.scripts]
+ai-cae4all = "cae_suite.cli:main"
+
 [project.optional-dependencies]
 test = ["pytest>=7.4"]
+
+[tool.setuptools]
+packages = ["cae_suite", "cae_suite.specs"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

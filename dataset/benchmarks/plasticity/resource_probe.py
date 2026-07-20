@@ -1060,7 +1060,7 @@ def build_dry_run_plan(
         dataset = _runtime_dataset_path(run_root, model, common_dataset)
         command = (
             python_executable,
-            str((suite_root / "CAE_ML_Suite_main.py").resolve()),
+            str((suite_root / "AI_CAE4ALL_main.py").resolve()),
             "--config",
             str(runtime_config.resolve()),
             "--no-color",
@@ -1142,7 +1142,7 @@ def prepare_model_plans(
         work = expected_training_work(dataset_record, batch_size)
         command = (
             python_executable,
-            str((suite_root / "CAE_ML_Suite_main.py").resolve()),
+            str((suite_root / "AI_CAE4ALL_main.py").resolve()),
             "--config",
             str(runtime_config.resolve()),
             "--no-color",

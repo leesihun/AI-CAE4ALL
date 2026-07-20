@@ -1,9 +1,0 @@
-[python]
-# default = "C:/Python311/python.exe"
-
-[python.models]
-# meshgraphnets = "C:/envs/mgn/python.exe"
-# meshgraphnets-v = "C:/envs/mgn-var/python.exe"
-# neural_operator = "C:/envs/operators/python.exe"
-# transolver = "C:/envs/transolver/python.exe"
-# sdfflow = "C:/envs/sdfflow/python.exe"

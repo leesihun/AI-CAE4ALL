@@ -7,7 +7,7 @@
 # canonical config is copied to a per-run runtime config with only gpu_ids
 # substituted (checked-in configs are left untouched at gpu_ids 0, so they still
 # work standalone); launched through the unified suite launcher
-# (CAE_ML_Suite_main.py) so routing/validation matches a manual --config run.
+# (AI_CAE4ALL_main.py) so routing/validation matches a manual --config run.
 #
 # meshgraphnets and meshgraphnets-hi share the same backend (deterministic
 # MeshGraphNets) but differ in architecture: meshgraphnets is the flat/vanilla
@@ -98,9 +98,9 @@ train_one() {
     log="$LOG_ROOT/train_${method}.log"
     echo "[$method] TRAIN START  gpu=$gpu  cfg=$rt_cfg (from $cfg)  -> $log"
     if [ "$PARALLEL" = "1" ]; then
-        "$PYTHON" CAE_ML_Suite_main.py --config "$rt_cfg" > "$log" 2>&1
+        "$PYTHON" AI_CAE4ALL_main.py --config "$rt_cfg" > "$log" 2>&1
     else
-        "$PYTHON" CAE_ML_Suite_main.py --config "$rt_cfg" 2>&1 | tee "$log"
+        "$PYTHON" AI_CAE4ALL_main.py --config "$rt_cfg" 2>&1 | tee "$log"
     fi
 }
 
