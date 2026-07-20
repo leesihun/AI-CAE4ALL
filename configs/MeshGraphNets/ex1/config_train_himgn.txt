@@ -2,10 +2,10 @@ model	MeshGraphNets   # MeshGraphNets, MeshGraphNets-V, point_deeponet, deeponet
 mode	train  # Train / Inference
 gpu_ids	0       # 0, 1, 2, 3.....
 parallel_mode	ddp     # ddp, model_split
-log_file_dir	../../output/meshgraphnets/ex1/train_vanilla.log
-modelpath	../output/meshgraphnets/ex1/model_vanilla.pth
-%   Datasets (same split as configs/MeshGraphNets/ex1/config_train_himgn.txt; this is the
-%   flat/non-hierarchical baseline -- HI-MGN uses config_train_himgn.txt instead)
+log_file_dir	../../output/meshgraphnets/ex1/train_himgn.log
+modelpath	../output/meshgraphnets/ex1/model_himgn.pth
+%   Datasets (same split as configs/MeshGraphNets/ex1/config_train_meshgraphnets.txt; this is the
+%   hierarchical Hi-MGN baseline -- flat/vanilla uses config_train_meshgraphnets.txt instead)
 dataset_dir	../dataset/ex1.h5
 infer_dataset	../dataset/hex_dataset.h5
 infer_timesteps	1
@@ -17,8 +17,9 @@ feature_loss_weights	1.0, 1.0, 1.0, 1.0  # Per-feature loss weights for [x_disp,
 edge_var	8  # deformed dx/dy/dz/dist + reference dx/dy/dz/dist
 positional_features	4  # Rotation-invariant node features: [centroid_dist, mean_edge_len, + encoding]
 '
-%   Network parameters (regular/vanilla MeshGraphNets -- flat processor, no multiscale)
-message_passing_num	20  # Flat processor blocks (vanilla MeshGraphNets)
+%   Network parameters (Hi-MGN canonical baseline -- hierarchical multiscale processor;
+%   mirrors config_train1.txt's voronoi_seedmean leg at time of creation)
+message_passing_num	15  # Only used for non-multiscale modes (vanilla MeshGraphNets only)
 Training_epochs	2000
 Batch_size	1
 LearningR	0.0001
@@ -49,5 +50,9 @@ use_world_edges	False   # World edges for contacts
 test_batch_idx	0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 33, 34
 plot_feature_idx	-1  # Feature index to visualize in plots (-1 = last feature, i.e., stress)
 '
-%   Multi-Scale / Hierarchical Parameters -- OFF for the regular/vanilla baseline
-use_multiscale	False
+%   Multi-Scale / Hierarchical Parameters -- ON (Hi-MGN backbone)
+use_multiscale	True    # HI-MGN
+coarsening_type	voronoi_seedmean    # Fixed to voronoi_seedmean if use_multiscale=True
+voronoi_clusters	5000, 100       # HI-MGN parameters
+multiscale_levels	2               # HI-MGN parameters
+mp_per_level	4, 6, 8, 6, 4       # Overides message_passing_num if use_multiscale=True

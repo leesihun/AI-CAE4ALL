@@ -39,7 +39,7 @@ small_output_init         False               # shrink final head at init -- {Tr
 '
 %   Optimization
 training_epochs   500     # epoch count -- matches the epoch budget used by every other ex2 baseline
-batch_size        1       # physical DataLoader batch size, before grad_accum_steps -- positive int
+batch_size        4       # physical DataLoader batch size, before grad_accum_steps -- positive int
 learningr         0.0001  # AdamW learning rate -- positive float; prefer decimal notation
 weight_decay      0.0001  # AdamW weight decay -- float >= 0; default 0.0001
 warmup_epochs     3       # linear LR warmup epochs before the cosine schedule -- int >= 0; default 3

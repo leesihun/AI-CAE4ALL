@@ -12,7 +12,7 @@
 # meshgraphnets and meshgraphnets-hi share the same backend (deterministic
 # MeshGraphNets) but differ in architecture: meshgraphnets is the flat/vanilla
 # processor (20 message-passing steps, no multiscale); meshgraphnets-hi is the
-# hierarchical HI-MGN backbone (config_train1.txt, voronoi multiscale). Transolver
+# hierarchical HI-MGN backbone (config_train_himgn.txt, voronoi multiscale). Transolver
 # reuses its existing flagship ex1 config (config_train1.txt) rather than a
 # duplicated copy, to avoid config drift.
 #
@@ -50,7 +50,7 @@ mkdir -p "$LOG_ROOT" "$RUNTIME_CONFIG_ROOT"
 config_for() {
     case "$1" in
         meshgraphnets)     echo "configs/MeshGraphNets/ex1/config_train_meshgraphnets.txt" ;;
-        meshgraphnets-hi)  echo "configs/MeshGraphNets/ex1/config_train1.txt" ;;
+        meshgraphnets-hi)  echo "configs/MeshGraphNets/ex1/config_train_himgn.txt" ;;
         deeponet)          echo "configs/Neural_Operator/ex1/config_train_deeponet.txt" ;;
         fno)               echo "configs/Neural_Operator/ex1/config_train_fno.txt" ;;
         gino)              echo "configs/Neural_Operator/ex1/config_train_gino.txt" ;;

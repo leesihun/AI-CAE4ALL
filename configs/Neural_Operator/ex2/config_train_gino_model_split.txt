@@ -45,8 +45,8 @@ gino_fno_modes                 8, 8, 8     # latent FNO Fourier modes per axis -
 gino_fno_hidden_channels       32          # latent FNO channel width -- positive int; default 64
 gino_fno_layers                4           # latent FNO block count -- int >= 1; default 4
 gino_kernel_hidden             64          # GNO kernel MLP width -- positive int; default 64
-gino_in_radius                 0.08        # mesh->grid neighbor radius, pos_normalized units -- positive float; default 0.08
-gino_out_radius                0.08        # grid->query neighbor radius, pos_normalized units -- positive float; too small vs cell diagonal warns; default 0.08
+gino_in_radius                 0.20        # mesh->grid neighbor radius, pos_normalized units -- positive float; default 0.08; measured on ex2.h5 (see config_train_gino.txt), 0.08 leaves 18.4% empty latent cells
+gino_out_radius                0.20        # grid->query neighbor radius, pos_normalized units -- positive float; too small vs cell diagonal warns; default 0.08
 gino_max_empty_input_fraction  0.05        # max fraction of latent grid points with no input neighbor -- float in [0,1]; default 0.01
 gino_query_chunk_size          50000       # internal GINO neighborhood/query chunk size -- int >= 0, 0 = unchunked (distinct from infer_query_chunk_size)
 gino_use_torch_cluster         False       # neighbor backend -- {True|False}; True needs torch_cluster, else SciPy KDTree; default False

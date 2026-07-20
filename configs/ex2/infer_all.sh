@@ -39,7 +39,7 @@ mkdir -p "$LOG_ROOT" "$RUNTIME_CONFIG_ROOT"
 config_for() {
     case "$1" in
         meshgraphnets)     echo "configs/MeshGraphNets/ex2/config_infer_meshgraphnets.txt" ;;
-        meshgraphnets-hi)  echo "configs/MeshGraphNets/ex2/config_infer1.txt" ;;
+        meshgraphnets-hi)  echo "configs/MeshGraphNets/ex2/config_infer_himgn.txt" ;;
         deeponet)          echo "configs/Neural_Operator/ex2/config_infer_deeponet.txt" ;;
         fno)               echo "configs/Neural_Operator/ex2/config_infer_fno.txt" ;;
         gino)              echo "configs/Neural_Operator/ex2/config_infer_gino.txt" ;;

@@ -48,13 +48,13 @@ point_output_activation    identity    # output activation -- {identity|tanh}; p
 '
 %   Optimization
 training_epochs   500     # epoch count -- positive int
-batch_size        2       # physical DataLoader batch size, before grad_accum_steps -- positive int
+batch_size        4       # physical DataLoader batch size, before grad_accum_steps -- positive int
 learningr         0.0001  # AdamW learning rate -- positive float; prefer decimal notation
 weight_decay      0.0001  # AdamW weight decay -- float >= 0; default 0.0001
 warmup_epochs     3       # linear LR warmup epochs before the cosine schedule -- int >= 0; default 3
 num_workers       2       # DataLoader worker processes -- int >= 0
 prefetch_factor   4       # batches prefetched per worker -- used only when num_workers > 0; default 4
-grad_accum_steps  2       # gradient accumulation steps per optimizer step -- int >= 1; default 1
+grad_accum_steps  1       # gradient accumulation steps per optimizer step -- int >= 1; default 1
 max_grad_norm     3.0     # gradient-clipping max norm -- float; default 3.0
 '
 %   Training regularization and runtime

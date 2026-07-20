@@ -37,7 +37,7 @@ temperature_max           5.0                 # max slice-assignment temperature
 small_output_init         False               # shrink final head at init -- {True|False}; default true when timesteps unknown/temporal, false for static T=1
 '
 %   Optimization
-training_epochs   500     # epoch count -- positive int
+training_epochs   2000     # epoch count -- positive int
 batch_size        1       # physical DataLoader batch size, before grad_accum_steps -- positive int
 learningr         0.0001  # AdamW learning rate -- positive float; prefer decimal notation
 weight_decay      0.0001  # AdamW weight decay -- float >= 0; default 0.0001
@@ -59,7 +59,7 @@ use_compile        False  # torch.compile(dynamic=True) on the model -- {True|Fa
 '
 %   Evaluation
 val_interval   5   # validation cadence in epochs -- positive int; default 1
-test_interval  50  # periodic test-visualization cadence in epochs -- positive int; default 10
+test_interval  100  # periodic test-visualization cadence in epochs -- positive int; default 10
 '
 %   Dataset behavior
 use_world_edges      False  # must stay False -- Transolver does not consume graph edges -- {False}
