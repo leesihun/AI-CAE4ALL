@@ -53,7 +53,7 @@ DEEPO_KEYS = frozenset(
     }
 )
 FNO_KEYS = frozenset(
-    {"fno_grid_resolution", "fno_modes", "fno_hidden_channels", "fno_layers", "fno_use_channel_mlp", "fno_norm"}
+    {"fno_grid_resolution", "fno_modes", "fno_hidden_channels", "fno_layers", "fno_use_channel_mlp", "fno_norm", "fno_variant"}
 )
 GINO_KEYS = frozenset(
     {

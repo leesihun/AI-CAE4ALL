@@ -36,6 +36,7 @@ COMMON_KEYS = {
     # injected at runtime by setup.py / dataset construction, not user-set,
     # but must be tolerated when a saved config is echoed back:
     "num_timesteps", "num_node_types", "_pin_memory", "_ddp_port", "log_dir",
+    "_paper_target_mean", "_paper_target_std",
 }
 
 POINT_DEEPONET_KEYS = {
@@ -55,7 +56,7 @@ DEEPONET_KEYS = {
 
 FNO_KEYS = {
     "fno_grid_resolution", "fno_modes", "fno_hidden_channels", "fno_layers",
-    "fno_use_channel_mlp", "fno_norm",
+    "fno_use_channel_mlp", "fno_norm", "fno_variant",
 }
 
 GINO_KEYS = {
@@ -64,6 +65,11 @@ GINO_KEYS = {
     "gino_out_radius", "gino_kernel_hidden", "gino_max_empty_input_fraction",
     "gino_query_chunk_size", "gino_use_torch_cluster",
     "gino_group_shared_geometry",
+    # Opt-in ShapeNet Car paper decoder. These keys are inert for mesh_state.
+    "gino_tucker_rank", "gino_channel_mlp_expansion", "gino_lifting_hidden",
+    "gino_kernel_widths", "gino_projection_widths", "gino_max_num_neighbors",
+    "gino_pos_embedding_type", "gino_coord_embed_dim",
+    "gino_include_grid_coordinates",
 }
 
 ALL_MODEL_KEYS = {
@@ -149,6 +155,12 @@ def validate_common_config(config, source="configuration"):
                 "model_split: the first and last pipeline stage each load their "
                 "own copy of every sample, and the unseeded per-item rotation "
                 "would rotate the input and the target differently."
+            )
+        if (model_name == "gino" and
+                str(config.get("gino_variant", "mesh_state")).lower() == "paper_decoder"):
+            raise ValueError(
+                f"{source}: gino_variant=paper_decoder does not implement the "
+                "pipeline model-split protocol. Use parallel_mode ddp."
             )
 
     if config.get("use_world_edges", False):

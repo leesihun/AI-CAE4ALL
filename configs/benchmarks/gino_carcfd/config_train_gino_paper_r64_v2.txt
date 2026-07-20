@@ -1,0 +1,40 @@
+# Paper-era decoder reconstruction; keeps the first hybrid run intact.
+dataset_path dataset/benchmarks/gino_carcfd/carcfd_paper_r64.h5
+checkpoint_path output/benchmarks/gino_carcfd/paper_r64_paper2023/model.pth
+log_path output/benchmarks/gino_carcfd/paper_r64_paper2023/train.jsonl
+evaluation_output output/benchmarks/gino_carcfd/paper_r64_paper2023/relative_l2.json
+device cuda:0
+seed 666
+require_full_hybrid_protocol True
+
+gino_variant paper_decoder
+gino_grid_resolution 64,64,64
+gino_fno_modes 16,16,16
+gino_fno_hidden_channels 64
+gino_fno_layers 4
+gino_tucker_rank 0.4
+gino_channel_mlp_expansion 1.0
+gino_lifting_hidden 256
+gino_domain_padding 0.125
+gino_out_radius 0.055
+gino_pos_embedding_type paper_2023
+gino_coord_embed_dim 16
+gino_include_grid_coordinates True
+gino_kernel_widths 512,256
+gino_projection_widths 256
+gino_query_chunk_size 1024
+gino_max_num_neighbors 512
+gino_use_torch_cluster True
+use_checkpointing True
+
+training_epochs 100
+batch_size 1
+learning_rate 0.00025
+weight_decay 0.0001
+lr_step_size 50
+lr_gamma 0.5
+num_workers 0
+use_amp False
+max_grad_norm 0.0
+checkpoint_interval 10
+test_interval 0

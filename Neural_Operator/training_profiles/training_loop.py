@@ -92,6 +92,104 @@ def _accum_window_size(batch_idx, total_batches, actual_accum):
     return window_end - window_start
 
 
+def _is_paper_darcy(config) -> bool:
+    return (str(config.get('model', '')).lower() == 'fno'
+            and str(config.get('fno_variant', 'mesh')).lower() == 'paper_darcy')
+
+
+def _paper_relative_l2_batch(prediction, target, ptr, target_mean, target_std):
+    """Decoded per-sample relative L2 used by the paper-era Darcy recipe.
+
+    The returned optimization loss is a SUM over samples, matching the
+    released ``LpLoss(size_average=False)`` behavior. Epoch statistics retain
+    an explicit sample count so reporting is the corresponding mean.
+    """
+    prediction = prediction * target_std + target_mean
+    target = target * target_std + target_mean
+    values = []
+    for graph_idx in range(ptr.numel() - 1):
+        start = int(ptr[graph_idx].item())
+        end = int(ptr[graph_idx + 1].item())
+        difference_norm = torch.linalg.vector_norm(prediction[start:end] - target[start:end])
+        target_norm = torch.linalg.vector_norm(target[start:end])
+        values.append(difference_norm / target_norm)
+    per_sample = torch.stack(values)
+    loss_sum = per_sample.sum()
+    return loss_sum, loss_sum.detach(), per_sample.numel()
+
+
+def _paper_target_stats(config, device):
+    try:
+        mean = config['_paper_target_mean']
+        std = config['_paper_target_std']
+    except KeyError as exc:
+        raise RuntimeError(
+            "paper_darcy loss requires train-derived _paper_target_mean/std"
+        ) from exc
+    return (
+        torch.as_tensor(mean, dtype=torch.float32, device=device),
+        torch.as_tensor(std, dtype=torch.float32, device=device),
+    )
+
+
+def _train_epoch_paper_darcy(model, dataloader, optimizer, device, config, epoch):
+    """Isolated paper loss path; the normal MSE hot loop remains unchanged."""
+    model.train()
+    getattr(model, 'module', model).set_epoch(epoch)
+    target_mean, target_std = _paper_target_stats(config, device)
+    total_loss_sum = torch.zeros((), dtype=torch.float64, device=device)
+    total_loss_count = 0
+
+    pbar = tqdm.tqdm(dataloader, total=len(dataloader))
+    for batch_idx, graph in enumerate(pbar):
+        graph = _move_graph_to_device(graph, device, config)
+        optimizer.zero_grad(set_to_none=True)
+        prediction, target = model(graph)
+        loss, batch_loss_sum, batch_loss_count = _paper_relative_l2_batch(
+            prediction, target, graph.ptr, target_mean, target_std
+        )
+        loss.backward()
+        # The released Darcy recipe does not apply gradient clipping.
+        optimizer.step()
+
+        total_loss_sum += batch_loss_sum.double()
+        total_loss_count += batch_loss_count
+        if batch_idx % 10 == 0:
+            mem_gb = torch.cuda.memory_allocated() / 1e9 if torch.cuda.is_available() else 0
+            pbar.set_postfix({
+                'relative_l2': f'{batch_loss_sum.item() / batch_loss_count:.2e}',
+                'mem': f'{mem_gb:.1f}GB',
+            })
+
+    total_loss_sum = total_loss_sum.item()
+    mean = total_loss_sum / total_loss_count
+    return {'mean': mean, 'total_mean': mean, 'sum': total_loss_sum, 'count': total_loss_count}
+
+
+def _evaluate_epoch_paper_darcy(model, dataloader, device, config, progress_name):
+    model.eval()
+    target_mean, target_std = _paper_target_stats(config, device)
+    total_loss_sum = torch.zeros((), dtype=torch.float64, device=device)
+    total_loss_count = 0
+    with torch.no_grad():
+        pbar = tqdm.tqdm(dataloader, desc=progress_name)
+        for batch_idx, graph in enumerate(pbar):
+            graph = _move_graph_to_device(graph, device, config)
+            prediction, target = model(graph, add_noise=False)
+            _, batch_loss_sum, batch_loss_count = _paper_relative_l2_batch(
+                prediction, target, graph.ptr, target_mean, target_std
+            )
+            total_loss_sum += batch_loss_sum.double()
+            total_loss_count += batch_loss_count
+            if batch_idx % 10 == 0:
+                pbar.set_postfix({
+                    'relative_l2': f'{batch_loss_sum.item() / batch_loss_count:.2e}'
+                })
+    total_loss_sum = total_loss_sum.item()
+    mean = total_loss_sum / total_loss_count
+    return {'mean': mean, 'total_mean': mean, 'sum': total_loss_sum, 'count': total_loss_count}
+
+
 # Batches skipped before profiling starts (allocator/cudnn warmup): 2 wait + 2 warmup.
 _PROFILE_SKIP_BATCHES = 4
 
@@ -147,9 +245,15 @@ def log_training_config(config):
     else:
         print("Per-feature loss weights: equal (default)")
     print(f"Model: {config.get('model')}")
+    if _is_paper_darcy(config):
+        print("Loss: decoded mean per-sample relative L2 (paper_darcy opt-in)")
 
 
 def train_epoch(model, dataloader, optimizer, device, config, epoch, ema_model=None):
+    if _is_paper_darcy(config):
+        return _train_epoch_paper_darcy(
+            model, dataloader, optimizer, device, config, epoch
+        )
     model.train()
     # DistributedDataParallel does not delegate custom methods to the wrapped
     # module (torch.compile's OptimizedModule does); unwrap so the epoch
@@ -219,6 +323,10 @@ def train_epoch(model, dataloader, optimizer, device, config, epoch, ema_model=N
 
 
 def _evaluate_epoch(model, dataloader, device, config, *, progress_name='Validation'):
+    if _is_paper_darcy(config):
+        return _evaluate_epoch_paper_darcy(
+            model, dataloader, device, config, progress_name
+        )
     model.eval()
 
     loss_weights = _build_loss_weights(config, device)

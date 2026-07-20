@@ -516,7 +516,7 @@ class MeshGraphDataset(Dataset):
                         seeds_l = entry.get('seeds')
                         mode_l = entry.get('mode', 'centroid')
 
-                        if mode_l == 'inherit' and seeds_l is not None:
+                        if mode_l in ('inherit', 'seedmean') and seeds_l is not None:
                             coarse_ref = cur_ref[seeds_l].astype(np.float64)
                             coarse_def = cur_def[seeds_l].astype(np.float64)
                         else:

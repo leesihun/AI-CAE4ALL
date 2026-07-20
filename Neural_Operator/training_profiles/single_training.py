@@ -85,10 +85,16 @@ def single_worker(config, config_filename='config.txt'):
     optimizer, scheduler, warmup_epochs, cosine_T0 = build_optimizer_scheduler(
         config, model.parameters(), total_epochs
     )
-    use_fused = torch.cuda.is_available()
-    print(f"Optimizer: AdamW (fused={use_fused}, weight_decay={float(config.get('weight_decay', 1e-4))})")
-    print(f"Scheduler: LinearLR warmup ({warmup_epochs} epochs) -> "
-          f"CosineAnnealingWarmRestarts (T_0={cosine_T0}, T_mult=1, eta_min=1e-8)")
+    paper_darcy = (str(config.get('model', '')).lower() == 'fno'
+                   and str(config.get('fno_variant', 'mesh')).lower() == 'paper_darcy')
+    if paper_darcy:
+        print(f"Optimizer: Adam (coupled L2 weight_decay={float(config.get('weight_decay', 1e-4))})")
+        print("Scheduler: StepLR (step_size=100, gamma=0.5); no warmup")
+    else:
+        use_fused = torch.cuda.is_available()
+        print(f"Optimizer: AdamW (fused={use_fused}, weight_decay={float(config.get('weight_decay', 1e-4))})")
+        print(f"Scheduler: LinearLR warmup ({warmup_epochs} epochs) -> "
+              f"CosineAnnealingWarmRestarts (T_0={cosine_T0}, T_mult=1, eta_min=1e-8)")
 
     if torch.cuda.is_available():
         print(f'After optimizer creation: {torch.cuda.memory_allocated()/1e9:.2f}GB')

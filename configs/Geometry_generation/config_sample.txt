@@ -1,15 +1,15 @@
-model	SDFFlow
-mode	sample
-gpu_ids	0
+model	SDFFlow  # SDF-VAE + latent flow-matching geometry generator
+mode	sample  # noise -> FM ODE -> SDF -> STL
+gpu_ids	0  # SDFFlow is single-process; only the first GPU ID is used
 '
 %   Models and outputs
-vae_modelpath	../output/geometry_generation/ex1/sdfflow_vae.pth
-fm_modelpath	../output/geometry_generation/ex1/sdfflow_fm.pth
-output_dir	../output/geometry_generation/ex1/samples
+vae_modelpath	../output/geometry_generation/ex1/sdfflow_vae.pth  # Frozen VAE checkpoint (decodes sampled latents to SDF)
+fm_modelpath	../output/geometry_generation/ex1/sdfflow_fm.pth  # Trained FM checkpoint (defines latent stats, conditions, architecture)
+output_dir	../output/geometry_generation/ex1/samples  # STLs + sample_<seed>_meta.json are written here
 '
 %   Sampling parameters
-num_samples	32
-seed	0
-ode_steps	50
-mc_resolution	128
-cfg_scale	1.0
+num_samples	32  # Number of shapes to generate
+seed	0  # RNG seed for latent sampling (reproducible batch)
+ode_steps	50  # Euler integration steps for the FM sampling ODE
+mc_resolution	128  # Marching Cubes grid resolution for the decoded SDF
+cfg_scale	1.0  # Classifier-free guidance scale: 1.0 = plain sampling, >1.0 = stronger guidance (unconditional runs ignore this)

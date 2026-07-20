@@ -1,76 +1,76 @@
-model	SDFFlow
-mode	train
-gpu_ids	0
+model	SDFFlow  # SDF-VAE + latent flow-matching geometry generator
+mode	train  # train (merged VAE->FM pipeline), train_vae, train_fm, sample, reconstruct, interpolate
+gpu_ids	0  # SDFFlow is single-process; only the first GPU ID is used
 '
 %   Sequential VAE -> FM pipeline
-pipeline_log_file	../output/geometry_generation/ex1/train.log
-skip_completed_stages	True
-output_dir	../output/geometry_generation/ex1
-vae_modelpath	../output/geometry_generation/ex1/sdfflow_vae.pth
-fm_modelpath	../output/geometry_generation/ex1/sdfflow_fm.pth
+pipeline_log_file	../output/geometry_generation/ex1/train.log  # Pipeline-level start/reuse/complete banner log
+skip_completed_stages	True  # Reuse a stage's checkpoint when it is complete and config-compatible with this run
+output_dir	../output/geometry_generation/ex1  # Base dir for periodic reconstruction/generation test artifacts
+vae_modelpath	../output/geometry_generation/ex1/sdfflow_vae.pth  # VAE checkpoint; also the FM stage's frozen encoder
+fm_modelpath	../output/geometry_generation/ex1/sdfflow_fm.pth  # FM checkpoint
 '
 %   Shared dataset
-dataset_dir	../dataset/deepjeb.h5
-split_seed	42
-num_encoder_points	4096
-num_query_points	4096
-encode_batch_size	16
+dataset_dir	../dataset/deepjeb.h5  # SDF HDF5 dataset (see build_dataset.py)
+split_seed	42  # Seed for the deterministic 80/10/10 train/val/test split
+num_encoder_points	4096  # Surface points (+normals) sampled per shape for the VAE encoder
+num_query_points	4096  # SDF query points sampled per shape for VAE decoder supervision
+encode_batch_size	16  # Batch size when the FM stage encodes the dataset to frozen VAE latents
 '
 %   VAE architecture and losses
-latent_tokens	1
-latent_dim	256
-decoder_type	mlp
-decoder_hidden	512
-decoder_layers	8
-encoder_dim	256
-encoder_heads	4
-encoder_blocks	2
-fourier_bands	8
-kl_weight	0.00001
-deterministic_warmup_epochs	20
-posterior_noise_warmup_epochs	80
-posterior_noise_max_scale	0.1
-kl_warmup_epochs	100
-clamp_dist	0.1
+latent_tokens	1  # Number of latent tokens (1 = single global token; >1 pairs with decoder_type attention)
+latent_dim	256  # Channel width per latent token
+decoder_type	mlp  # mlp (DeepSDF-style) or attention (VecSet-style cross-attention)
+decoder_hidden	512  # Decoder hidden width (mlp) / attention d_model (attention)
+decoder_layers	8  # MLP layer count (mlp) / cross-attention block count (attention)
+encoder_dim	256  # Point-cloud cross-attention encoder d_model
+encoder_heads	4  # Encoder cross-attention heads
+encoder_blocks	2  # Encoder cross-attention block count
+fourier_bands	8  # NeRF-style positional encoding bands for point/query coordinates
+kl_weight	0.00001  # Target KL weight once kl_warmup_epochs completes
+deterministic_warmup_epochs	20  # Epochs with mu-only encoding (no posterior noise, no KL) before warmups start
+posterior_noise_warmup_epochs	80  # Epochs to linearly ramp posterior noise up to posterior_noise_max_scale
+posterior_noise_max_scale	0.1  # Max reparameterization noise scale once warmed up
+kl_warmup_epochs	100  # Epochs to linearly ramp KL weight up to kl_weight
+clamp_dist	0.1  # Truncation distance for the SDF loss target
 '
 %   VAE training
-vae_log_file_dir	../output/geometry_generation/ex1/train_vae.log
-vae_training_epochs	500
-vae_batch_size	4
-vae_learningr	0.0005
-vae_weight_decay	0.0001
-vae_warmup_epochs	5
-vae_num_workers	4
-vae_use_amp	True
-vae_use_ema	True
-vae_ema_decay	0.999
-vae_val_interval	5
-vae_test_interval	50
-vae_num_test_shapes	1
-vae_mc_resolution_test	96
+vae_log_file_dir	../output/geometry_generation/ex1/train_vae.log  # VAE-stage training log
+vae_training_epochs	500  # VAE training epochs
+vae_batch_size	4  # VAE training batch size (shapes per step)
+vae_learningr	0.0005  # VAE learning rate
+vae_weight_decay	0.0001  # VAE optimizer weight decay
+vae_warmup_epochs	5  # VAE LR warmup epochs
+vae_num_workers	4  # VAE dataloader worker processes
+vae_use_amp	True  # Mixed-precision VAE training (bfloat16 if supported, else float16)
+vae_use_ema	True  # EMA shadow model used for VAE validation/reconstruction test
+vae_ema_decay	0.999  # VAE EMA decay factor
+vae_val_interval	5  # Run VAE validation every N epochs
+vae_test_interval	50  # Run VAE reconstruction test + checkpoint save every N epochs
+vae_num_test_shapes	1  # Shapes reconstructed during the periodic VAE test
+vae_mc_resolution_test	96  # Marching Cubes grid resolution for the VAE test
 '
 %   FM conditioning and architecture
-use_conditions	True
-condition_names	bbox_x,bbox_z,volume,area
-condition_clip	5.0
-min_condition_std	0.00001
-cond_dropout	0.1
-fm_hidden	256
-fm_blocks	4
-fm_cond_hidden	128
+use_conditions	True  # Condition the FM stage on shape descriptors (bbox/volume/area)
+condition_names	bbox_x,bbox_z,volume,area  # Subset/order of dataset cond_names used as FM conditions
+condition_clip	5.0  # Clip normalized conditions to +/- this many std devs
+min_condition_std	0.00001  # Reject condition_names whose train-split std is below this (near-constant descriptor)
+cond_dropout	0.1  # Fraction of batches trained with the null condition (enables classifier-free guidance)
+fm_hidden	256  # Velocity network hidden width
+fm_blocks	4  # AdaLN-Zero residual block count
+fm_cond_hidden	128  # Timestep/condition embedding width
 '
 %   FM training
-fm_log_file_dir	../output/geometry_generation/ex1/train_fm.log
-fm_training_epochs	300
-fm_batch_size	64
-fm_learningr	0.0002
-fm_weight_decay	0.001
-fm_warmup_epochs	10
-fm_use_amp	True
-fm_use_ema	True
-fm_ema_decay	0.999
-fm_val_interval	10
-fm_test_interval	100
-fm_num_test_shapes	2
-fm_mc_resolution_test	96
-ode_steps	50
+fm_log_file_dir	../output/geometry_generation/ex1/train_fm.log  # FM-stage training log
+fm_training_epochs	300  # FM training epochs
+fm_batch_size	64  # FM training batch size (latents per step)
+fm_learningr	0.0002  # FM learning rate
+fm_weight_decay	0.001  # FM optimizer weight decay
+fm_warmup_epochs	10  # FM LR warmup epochs
+fm_use_amp	True  # Mixed-precision FM training
+fm_use_ema	True  # EMA shadow model used for FM validation/generation test
+fm_ema_decay	0.999  # FM EMA decay factor
+fm_val_interval	10  # Run FM validation every N epochs
+fm_test_interval	100  # Run FM generation test + checkpoint save every N epochs
+fm_num_test_shapes	2  # Latents sampled during the periodic FM generation test
+fm_mc_resolution_test	96  # Marching Cubes grid resolution for the FM test
+ode_steps	50  # Euler integration steps for FM sampling during the periodic test

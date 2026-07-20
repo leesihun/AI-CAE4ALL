@@ -1,0 +1,75 @@
+model	point_deeponet
+mode	inference
+gpu_ids	0
+parallel_mode	ddp
+'
+%   Held-out full-trajectory rollouts: state 0 seed plus 19 one-step updates
+log_file_dir	../../output/benchmarks/plasticity/point_deeponet/infer.log
+modelpath	../output/benchmarks/plasticity/point_deeponet/model.pth
+dataset_dir	../dataset/benchmarks/plasticity/plasticity.h5
+infer_dataset	../dataset/benchmarks/plasticity/plasticity_seed42_test.h5
+inference_output_dir	../output/benchmarks/plasticity/point_deeponet/inference
+infer_timesteps	19
+split_seed	42
+'
+input_var	4
+output_var	4
+feature_loss_weights	1.0, 1.0, 1.0, 1.0
+positional_features	4
+use_node_types	False
+coordinate_normalization	centered_isotropic
+operator_dim	auto
+dimension_tolerance	0.0001
+grid_padding	0.05
+out_of_bounds_policy	error
+sdf_source	none
+sdf_sidecar	none
+global_condition_features	none
+integration_weight_source	none
+'
+%   Checkpoint-owned architecture, repeated for explicit native validation
+point_variant	mesh_state
+point_sensor_count	2048
+point_sampling	random
+point_resample_each_epoch	True
+point_hidden_channels	128
+point_feature_dim	128
+pointnet_depth	3
+pointnet_activation	relu
+pointnet_norm	batch
+point_branch_merge	sum
+point_condition_depth	2
+point_trunk_depth	3
+point_refiner_depth	2
+point_siren_omega0	30.0
+point_output_activation	identity
+'
+training_epochs	1
+batch_size	1
+learningr	0.0001
+weight_decay	0.0001
+warmup_epochs	1
+num_workers	0
+grad_accum_steps	1
+max_grad_norm	3.0
+std_noise	0.0
+noise_gamma	1
+augment_geometry	False
+use_amp	True
+use_checkpointing	False
+use_ema	True
+ema_decay	0.99
+use_compile	False
+train_query_chunk_size	0
+infer_query_chunk_size	0
+val_interval	1
+test_interval	10
+test_max_batches	200
+test_batch_idx	0
+plot_feature_idx	1
+display_trainset	False
+display_testset	False
+checkpoint_interval	0
+write_preprocessing	False
+use_world_edges	False
+use_multiscale	False

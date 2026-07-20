@@ -52,10 +52,12 @@ dataset.h5
       test
 ```
 
-The builder initializes `metadata/splits/*`, but the current training loader
-does not consume those HDF5 splits. Training calls `dataset.split(0.8, 0.1, 0.1,
-seed=split_seed)` and creates a deterministic seeded split from sorted sample
-ids.
+The standard builders initialize `metadata/splits/*`, and the elasticity
+converter also writes intended benchmark partitions at top-level
+`splits/{train,val,test}`. The current training loaders do not consume either
+form. Training calls `dataset.split(0.8, 0.1, 0.1, seed=split_seed)` and creates
+a deterministic seeded split from sorted sample IDs. The benchmark configs'
+`split_strategy hdf5` field is not implemented in the stable runtime snapshot.
 
 ## `nodal_data`
 

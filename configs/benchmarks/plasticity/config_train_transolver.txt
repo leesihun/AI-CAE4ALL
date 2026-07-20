@@ -1,0 +1,67 @@
+model	transolver
+mode	train
+gpu_ids	0
+parallel_mode	ddp
+'
+%   Plasticity: 987 cases, 20 states, 3131 nodes; one-step delta training
+log_file_dir	../../output/benchmarks/plasticity/transolver/train.log
+modelpath	../output/benchmarks/plasticity/transolver/model.pth
+dataset_dir	../dataset/benchmarks/plasticity/plasticity.h5
+infer_dataset	../dataset/benchmarks/plasticity/plasticity_seed42_test.h5
+inference_output_dir	../output/benchmarks/plasticity/transolver/inference
+infer_timesteps	19
+split_seed	42
+'
+%   State: ux, uy, uz=0, static die profile; physical score uses displacement only
+input_var	4
+output_var	4
+feature_loss_weights	1.0, 1.0, 1.0, 1.0
+positional_features	4
+use_node_types	False
+'
+%   Transolver-3 associative Physics-Attention with geometry tiling
+coordinate_normalization	centered_isotropic
+latent_dim	128
+num_layers	8
+num_heads	8
+slice_num	64
+attention_kernel	slice_space
+chunk_size	1024
+infer_mode	direct
+infer_chunk_size	0
+mlp_ratio	1
+dropout	0.0
+temperature_init	0.5
+temperature_min	0.1
+temperature_max	5.0
+small_output_init	True
+'
+%   Optimization
+training_epochs	500
+batch_size	1
+learningr	0.0001
+weight_decay	0.0001
+warmup_epochs	3
+num_workers	2
+prefetch_factor	4
+grad_accum_steps	4
+max_grad_norm	3.0
+std_noise	0.0
+noise_gamma	1
+augment_geometry	False
+'
+%   Runtime and evaluation
+use_amp	True
+use_checkpointing	True
+use_ema	True
+ema_decay	0.99
+use_compile	False
+val_interval	5
+test_interval	10
+test_max_batches	200
+display_trainset	False
+write_test_predictions	False
+use_parallel_stats	True
+write_preprocessing	False
+use_world_edges	False
+use_multiscale	False

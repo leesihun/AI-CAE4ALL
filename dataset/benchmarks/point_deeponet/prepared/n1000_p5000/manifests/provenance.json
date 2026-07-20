@@ -1,0 +1,96 @@
+{
+  "benchmark": "Point-DeepONet 1000-case paper subset",
+  "excluded_items": [
+    "102_240",
+    "138_14",
+    "149_256",
+    "20_476",
+    "200_610",
+    "208_139",
+    "225_120",
+    "247_440",
+    "249_321",
+    "25_234",
+    "280_556",
+    "285_628",
+    "293_424",
+    "322_257",
+    "348_556",
+    "377_14",
+    "377_82",
+    "416_78",
+    "421_466",
+    "474_564",
+    "486_507",
+    "497_153",
+    "506_25",
+    "506_533",
+    "527_8",
+    "533_16",
+    "536_282",
+    "560_454",
+    "56_324",
+    "570_548",
+    "623_129",
+    "625_289",
+    "72_209"
+  ],
+  "kaggle_dataset_ref": "jangseop/point-deeponet-dataset",
+  "kaggle_dataset_version": 2,
+  "kaggle_download_endpoint": "https://api.kaggle.com/v1/datasets.DatasetApiService/DownloadDataset",
+  "labels_csv": "C:\\Users\\Lee\\Desktop\\Huni\\CAE_ML_Suite\\dataset\\benchmarks\\point_deeponet\\source\\bracket_labels.csv",
+  "labels_csv_sha256": "ad61fedc69d73a14b96f361cdf0d29e866d306f804220f9f925dc8b65e5ef4a6",
+  "n_points_per_case": 5000,
+  "node_sampling_note": "The released notebook seeds one process-global RNG but iterates a Python set, so its per-case indices are not reproducible from source alone. This preparer uses an order-independent SHA-256-derived RandomState seed per case and retains the released choice-with/without-replacement rule.",
+  "node_sampling_policy": "sha256-case-seed-v1",
+  "node_sampling_seed": 42,
+  "output_schema": {
+    "dtype": "float32",
+    "sample_indices": [
+      5000
+    ],
+    "targets": [
+      5000,
+      4
+    ],
+    "xyzdmlc": [
+      5000,
+      9
+    ]
+  },
+  "plan": {
+    "case_count": 1000,
+    "selected_target_bytes": 3369003776,
+    "selected_total_bytes": 10949102272,
+    "selected_xyzdmlc_bytes": 7580098496,
+    "train_count": 800,
+    "train_manifest_sha256": "b1153fad047e45bfe5bbdda15cb93ecb6e30983de4bdd7824a9111a044c88d33",
+    "unique_geometry_count": 837,
+    "valid_count": 200,
+    "valid_manifest_sha256": "282cab5b4e3ec9dd45f8f59399a9bdda06bf99165c848cbf443fc66bd419b05a"
+  },
+  "prefix_order": [
+    "ver",
+    "hor",
+    "dia"
+  ],
+  "selection_protocol": "sorted item_name; prefix order ver/hor/dia; NumPy RandomState.choice without replacement; stable mass sort; fresh RandomState.shuffle; 80/20",
+  "selection_seed": 42,
+  "split_seed": 42,
+  "targets_archive": {
+    "file_name": "targets.npz",
+    "npy_member_count": 6315,
+    "remote_etag": "\"164a27cb7a5805aee76849ed9f9e3f71\"",
+    "remote_last_modified": "Fri, 20 Dec 2024 12:06:41 GMT",
+    "remote_size": 21180653504
+  },
+  "targets_source_url": "https://api.kaggle.com/v1/datasets.DatasetApiService/DownloadDataset",
+  "xyzdmlc_archive": {
+    "file_name": "xyzdmlc.npz",
+    "npy_member_count": 6315,
+    "remote_etag": "\"0d458f324ccbc3a69d709fb7d79e6e01\"",
+    "remote_last_modified": "Fri, 20 Dec 2024 12:20:36 GMT",
+    "remote_size": 47654389328
+  },
+  "xyzdmlc_source_url": "https://api.kaggle.com/v1/datasets.DatasetApiService/DownloadDataset"
+}

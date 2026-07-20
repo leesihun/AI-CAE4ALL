@@ -21,6 +21,11 @@ from training_profiles.training_loop import build_ema_model
 SCHEMA_VERSION = "deeponet_repo_v1"
 
 
+def _is_paper_darcy(config) -> bool:
+    return (str(config.get('model', '')).lower() == 'fno'
+            and str(config.get('fno_variant', 'mesh')).lower() == 'paper_darcy')
+
+
 # ---------------------------------------------------------------------------
 # Dataset
 # ---------------------------------------------------------------------------
@@ -47,6 +52,12 @@ def build_dataset_splits(config, split_seed: int):
         config['noise_std_ratio'] = (
             train_dataset.node_std[:output_var] / np.maximum(train_dataset.delta_std, 1e-8)
         ).tolist()
+
+    if _is_paper_darcy(config):
+        # The paper loss is evaluated after decoding the normalized direct
+        # solution. Keep these runtime-only values out of every graph object.
+        config['_paper_target_mean'] = train_dataset.delta_mean.tolist()
+        config['_paper_target_std'] = train_dataset.delta_std.tolist()
 
     return train_dataset, val_dataset, test_dataset
 
@@ -123,6 +134,17 @@ def build_optimizer_scheduler(config, params, total_epochs: int):
     """
     learning_rate = config.get('learningr')
     weight_decay = float(config.get('weight_decay', 1e-4))
+    if _is_paper_darcy(config):
+        # Paper-era Darcy recipe: coupled L2 decay in Adam and a 0.5 LR drop
+        # every 100 epochs. No warmup is introduced in this opt-in mode.
+        optimizer = torch.optim.Adam(
+            params, lr=learning_rate, weight_decay=weight_decay
+        )
+        scheduler = torch.optim.lr_scheduler.StepLR(
+            optimizer, step_size=100, gamma=0.5
+        )
+        return optimizer, scheduler, 0, 100
+
     use_fused = torch.cuda.is_available()
     optimizer = torch.optim.AdamW(params, lr=learning_rate, weight_decay=weight_decay, fused=use_fused)
 

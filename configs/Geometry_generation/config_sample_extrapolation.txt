@@ -1,24 +1,24 @@
-model	SDFFlow
-mode	sample
-gpu_ids	0
+model	SDFFlow  # SDF-VAE + latent flow-matching geometry generator
+mode	sample  # noise -> FM ODE (conditioned + CFG) -> SDF -> STL
+gpu_ids	0  # SDFFlow is single-process; only the first GPU ID is used
 '
 %   Models and outputs
-vae_modelpath	../output/geometry_generation/ex1/sdfflow_vae.pth
-fm_modelpath	../output/geometry_generation/ex1/sdfflow_fm.pth
-output_dir	../output/geometry_generation/ex1/samples_extrapolation
+vae_modelpath	../output/geometry_generation/ex1/sdfflow_vae.pth  # Frozen VAE checkpoint (decodes sampled latents to SDF)
+fm_modelpath	../output/geometry_generation/ex1/sdfflow_fm.pth  # Trained FM checkpoint (defines cond_names order and normalization stats)
+output_dir	../output/geometry_generation/ex1/samples_extrapolation  # STLs + sample_<seed>_meta.json are written here
 '
 %   Controlled one-axis extrapolation from real training shape 2023.
 %   Only volume is moved just beyond the training maximum (0.495265).
 %   Order: bbox_x, bbox_z, volume, area.
-cond_values	1.06416,0.63345,0.505,5.03146
-cfg_scale	1.0
-max_condition_z	4.0
-condition_ood_policy	error
-latent_clip	5.0
-candidate_multiplier	4
+cond_values	1.06416,0.63345,0.505,5.03146  # Requested raw condition values in fm_ckpt cond_names order
+cfg_scale	1.0  # Classifier-free guidance scale; 1.0 is the conservative default
+max_condition_z	4.0  # Reject/clamp requests whose normalized condition exceeds this many std devs
+condition_ood_policy	error  # error, warn, or clamp when a requested condition exceeds max_condition_z
+latent_clip	5.0  # Clamp sampled normalized latents to +/- this magnitude before decoding
+candidate_multiplier	4  # Oversample num_samples x this many candidates, rank by condition accuracy, keep the best num_samples
 '
 %   Sampling parameters
-num_samples	32
-seed	100
-ode_steps	50
-mc_resolution	128
+num_samples	32  # Number of shapes to keep after candidate ranking
+seed	100  # RNG seed for latent sampling
+ode_steps	50  # Euler integration steps for the FM sampling ODE
+mc_resolution	128  # Marching Cubes grid resolution for the decoded SDF

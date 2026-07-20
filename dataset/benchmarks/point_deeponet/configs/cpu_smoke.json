@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "profile": "cpu_smoke",
+  "prepared_dir": "../prepared/n1000_p5000",
+  "output_dir": "../outputs/cpu_smoke",
+  "dataset": {
+    "n_samples": 2,
+    "n_train": 1,
+    "n_valid": 1,
+    "n_points": 5000,
+    "train_cases": ["hor_20_506"],
+    "valid_cases": ["hor_202_79"]
+  },
+  "model": {
+    "branch_components": "mlc",
+    "pointnet_components": "xyz",
+    "trunk_components": "xyzd",
+    "output_components": "xyzs",
+    "branch_hidden_dim": 100,
+    "trunk_hidden_dim": 100,
+    "trunk_encoding_hidden_dim": 100,
+    "fc_hidden_dim": 100,
+    "pointnet_channels": [32, 64, 100],
+    "siren_w0": 10.0
+  },
+  "preprocessing": {
+    "learned_scaler_fit_split": "train",
+    "output_clipping": "released_fixed_by_direction"
+  },
+  "train": {
+    "iterations": 2,
+    "batch_size": 1,
+    "loss": "mse",
+    "optimizer": "AdamW",
+    "learning_rate": 0.001,
+    "weight_decay": 0.00001,
+    "learning_rate_decay": {
+      "type": "inverse_time",
+      "decay_steps": 1,
+      "decay_rate": 0.0001
+    },
+    "seed": 2024,
+    "device": "cpu",
+    "num_workers": 0,
+    "pin_memory": false
+  },
+  "evaluation": {
+    "batch_size": 1,
+    "validate_every": 1,
+    "aggregate": "available_direction_component_pooled_r2_smoke_only",
+    "paper_target_average_r2": 0.897
+  }
+}

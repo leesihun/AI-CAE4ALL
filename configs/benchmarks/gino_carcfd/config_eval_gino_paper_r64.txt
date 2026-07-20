@@ -1,0 +1,9 @@
+dataset_path dataset/benchmarks/gino_carcfd/carcfd_paper_r64.h5
+checkpoint_path output/benchmarks/gino_carcfd/paper_r64/model.pth
+evaluation_output output/benchmarks/gino_carcfd/paper_r64/relative_l2.json
+device cuda:0
+batch_size 1
+num_workers 0
+use_amp False
+gino_query_chunk_size 1024
+gino_use_torch_cluster True

@@ -1,0 +1,52 @@
+model	MeshGraphNets
+mode	inference
+gpu_ids	0
+parallel_mode	ddp
+'
+%   HI-MGN held-out rollout: state 0 seed plus 19 one-step updates
+log_file_dir	../../output/benchmarks/plasticity/hi_meshgraphnets/infer.log
+modelpath	../output/benchmarks/plasticity/hi_meshgraphnets/model.pth
+dataset_dir	../dataset/benchmarks/plasticity/plasticity_hi_meshgraphnets_runtime.h5
+infer_dataset	../dataset/benchmarks/plasticity/plasticity_seed42_test.h5
+inference_output_dir	../output/benchmarks/plasticity/hi_meshgraphnets/inference
+infer_timesteps	19
+split_seed	42
+'
+%   Checkpoint-owned HI-MGN architecture, repeated for explicit native validation
+input_var	4
+output_var	4
+feature_loss_weights	1.0, 1.0, 1.0, 1.0
+edge_var	8
+positional_features	4
+use_node_types	False
+message_passing_num	15
+latent_dim	128
+use_world_edges	False
+use_multiscale	True
+coarsening_type	voronoi_seedmean
+voronoi_clusters	500, 100
+multiscale_levels	2
+mp_per_level	4, 6, 8, 6, 4
+'
+training_epochs	1
+batch_size	1
+learningr	0.0001
+weight_decay	0.0001
+warmup_epochs	1
+num_workers	0
+grad_accum_steps	1
+std_noise	0.0
+noise_gamma	1
+augment_geometry	False
+use_checkpointing	False
+use_amp	True
+use_ema	True
+ema_decay	0.99
+use_compile	False
+val_interval	1
+test_interval	10
+test_max_batches	200
+display_trainset	False
+display_testset	False
+test_batch_idx	0
+plot_feature_idx	1

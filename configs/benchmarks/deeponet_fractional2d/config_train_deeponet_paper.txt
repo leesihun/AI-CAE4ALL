@@ -1,0 +1,16 @@
+# Isolated DeepONet paper validation: 2D fractional Laplacian on the unit disk.
+benchmark_profile paper
+dataset_dir dataset/benchmarks/deeponet_fractional2d/fractional2d_released.h5
+output_dir output/benchmarks/deeponet_fractional2d/paper_validation
+device cpu
+seed 12345
+epochs 5000
+batch_size 100000
+learning_rate 0.001
+hidden_width 60
+eval_interval_epochs 100
+checkpoint_interval_epochs 100
+function_eval_chunk 256
+resume True
+# Figure 2e gives a curve rather than a numeric table; this is an approximate comparator.
+paper_plot_normalized_mse 0.0012

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from ..diagnostics import Severity
 from .base import (
     MethodSpec,
@@ -86,7 +88,15 @@ def validate_transolver(ctx: SpecValidationContext) -> None:
     if values.get("use_multiscale", False) is not False:
         ctx.add("TRANS-MULTI-001", Severity.ERROR, "use_multiscale must be False for Transolver.", field_name="use_multiscale")
     if values.get("write_preprocessing", False) is not False:
-        ctx.add("TRANS-WRITE-001", Severity.ERROR, "write_preprocessing must be False.", field_name="write_preprocessing")
+        dataset_name = Path(str(values.get("dataset_dir", ""))).name
+        if ctx.mode != "train" or not dataset_name.endswith("_transolver_runtime.h5"):
+            ctx.add(
+                "TRANS-WRITE-001",
+                Severity.ERROR,
+                "write_preprocessing=True is allowed only for a dedicated "
+                "*_transolver_runtime.h5 training copy.",
+                field_name="write_preprocessing",
+            )
     if str(values.get("coordinate_normalization", "centered_isotropic")).lower() != "centered_isotropic":
         ctx.add("TRANS-COORD-001", Severity.ERROR, "coordinate_normalization must be centered_isotropic.", field_name="coordinate_normalization")
 

@@ -20,6 +20,15 @@ def register_model(name, core_cls, validate_fn):
     VALIDATORS[name] = validate_fn
 
 
+def _resolve_core_class(model_name, config):
+    """Select an opt-in architecture variant without changing registry defaults."""
+    if (model_name == "gino" and
+            str(config.get("gino_variant", "mesh_state")).lower() == "paper_decoder"):
+        from model.gino_carcfd import CarCFDGINODecoder
+        return CarCFDGINODecoder
+    return MODEL_REGISTRY[model_name]
+
+
 def build_model(config, train_dataset):
     """Build (OperatorWrapper, DataSpec, CoordinateDomain) for the selected model.
 
@@ -38,7 +47,7 @@ def build_model(config, train_dataset):
         train_dataset, out_of_bounds_policy=str(config.get('out_of_bounds_policy', 'error')).lower(),
     )
 
-    core_cls = MODEL_REGISTRY[model_name]
+    core_cls = _resolve_core_class(model_name, config)
     core = core_cls(config, data_spec, coordinate_domain)
 
     core_params = sum(p.numel() for p in core.parameters())
@@ -77,7 +86,7 @@ def build_model_from_checkpoint(config, checkpoint):
     config['input_var'] = data_spec.input_var
     config['output_var'] = data_spec.output_var
 
-    core_cls = MODEL_REGISTRY[model_name]
+    core_cls = _resolve_core_class(model_name, config)
     core = core_cls(config, data_spec, coordinate_domain)
     wrapper = OperatorWrapper(core, config)
 
@@ -103,4 +112,13 @@ from model.fno import MeshFNO, validate_config as _validate_fno  # noqa: E402
 register_model("fno", MeshFNO, _validate_fno)
 
 from model.gino import MeshGINO, validate_config as _validate_gino  # noqa: E402
-register_model("gino", MeshGINO, _validate_gino)
+
+
+def _validate_gino_variant(config, data_spec):
+    if str(config.get("gino_variant", "mesh_state")).lower() == "paper_decoder":
+        from model.gino_carcfd import validate_carcfd_config
+        return validate_carcfd_config(config, data_spec)
+    return _validate_gino(config, data_spec)
+
+
+register_model("gino", MeshGINO, _validate_gino_variant)

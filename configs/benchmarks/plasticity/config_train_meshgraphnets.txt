@@ -1,0 +1,55 @@
+model	MeshGraphNets
+mode	train
+gpu_ids	0
+parallel_mode	ddp
+'
+%   Plasticity: 987 cases, 20 states, 3131 nodes; one-step delta training
+log_file_dir	../../output/benchmarks/plasticity/meshgraphnets/train.log
+modelpath	../output/benchmarks/plasticity/meshgraphnets/model.pth
+dataset_dir	../dataset/benchmarks/plasticity/plasticity_meshgraphnets_runtime.h5
+infer_dataset	../dataset/benchmarks/plasticity/plasticity_seed42_test.h5
+inference_output_dir	../output/benchmarks/plasticity/meshgraphnets/inference
+infer_timesteps	19
+split_seed	42
+'
+%   State: ux, uy, uz=0, static die profile; physical score uses displacement only
+input_var	4
+output_var	4
+feature_loss_weights	1.0, 1.0, 1.0, 1.0
+edge_var	8
+positional_features	4
+use_node_types	False
+'
+%   Deterministic MeshGraphNets baseline
+message_passing_num	15
+latent_dim	128
+use_world_edges	False
+use_multiscale	False
+'
+%   Optimization
+training_epochs	500
+batch_size	4
+learningr	0.0001
+weight_decay	0.0001
+warmup_epochs	3
+num_workers	2
+prefetch_factor	4
+grad_accum_steps	1
+std_noise	0.0
+noise_gamma	1
+augment_geometry	False
+'
+%   Runtime and evaluation
+use_checkpointing	False
+use_amp	True
+use_ema	True
+ema_decay	0.99
+use_compile	False
+val_interval	5
+test_interval	10
+test_max_batches	200
+train_eval_subset_size	200
+display_trainset	False
+display_testset	False
+test_batch_idx	0, 1
+plot_feature_idx	1

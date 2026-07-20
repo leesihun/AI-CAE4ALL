@@ -1,21 +1,21 @@
-model	SDFFlow
-mode	interpolate
-gpu_ids	0
+model	SDFFlow  # SDF-VAE + latent flow-matching geometry generator
+mode	interpolate  # reproduce two FM samples, lerp their normalized latents, decode all three to STL
+gpu_ids	0  # SDFFlow is single-process; only the first GPU ID is used
 '
 %   Models and outputs
-vae_modelpath	../output/geometry_generation/ex1/sdfflow_vae.pth
-fm_modelpath	../output/geometry_generation/ex1/sdfflow_fm.pth
-output_dir	../output/geometry_generation/ex1/interpolation
+vae_modelpath	../output/geometry_generation/ex1/sdfflow_vae.pth  # Frozen VAE checkpoint (decodes latents to SDF)
+fm_modelpath	../output/geometry_generation/ex1/sdfflow_fm.pth  # Trained FM checkpoint (must match the sampling batch being reproduced)
+output_dir	../output/geometry_generation/ex1/interpolation  # STLs, triptych PNG, and *_meta.json are written here
 '
 %   Reproduce the exact unconditional seed-0 batch used by config_sample.txt.
-seed	0
-source_num_samples	32
-sample_index_a	0
-sample_index_b	1
-alpha	0.5
+seed	0  # RNG seed; must match the config_sample.txt run whose batch is being reproduced
+source_num_samples	32  # Must equal the original num_samples so endpoint indices line up
+sample_index_a	0  # First endpoint's index within the reproduced source batch
+sample_index_b	1  # Second endpoint's index within the reproduced source batch
+alpha	0.5  # Interpolation position in [0, 1]; 0 = sample_index_a, 1 = sample_index_b
 '
-ode_steps	50
-mc_resolution	128
-plot_dpi	180
+ode_steps	50  # Euler integration steps for reproducing the source FM batch
+mc_resolution	128  # Marching Cubes grid resolution for the decoded SDF
+plot_dpi	180  # DPI for the triptych comparison PNG
 %   0 renders every face so the comparison surfaces have no plotting holes.
-plot_max_faces	0
+plot_max_faces	0  # Max triangles rendered per mesh in the plot (0 = render every face)

@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "profile": "paper_n1000_p5000",
+  "prepared_dir": "../prepared/n1000_p5000",
+  "output_dir": "../outputs/paper_n1000_p5000",
+  "dataset": {
+    "n_samples": 1000,
+    "n_train": 800,
+    "n_valid": 200,
+    "n_points": 5000,
+    "cache_in_memory": true,
+    "train_manifest_sha256": "b1153fad047e45bfe5bbdda15cb93ecb6e30983de4bdd7824a9111a044c88d33",
+    "valid_manifest_sha256": "282cab5b4e3ec9dd45f8f59399a9bdda06bf99165c848cbf443fc66bd419b05a"
+  },
+  "model": {
+    "branch_components": "mlc",
+    "pointnet_components": "xyz",
+    "trunk_components": "xyzd",
+    "output_components": "xyzs",
+    "branch_hidden_dim": 100,
+    "trunk_hidden_dim": 100,
+    "trunk_encoding_hidden_dim": 100,
+    "fc_hidden_dim": 100,
+    "pointnet_channels": [32, 64, 100],
+    "siren_w0": 10.0
+  },
+  "preprocessing": {
+    "learned_scaler_fit_split": "released_all_selected_before_split",
+    "output_clipping": "released_fixed_by_direction"
+  },
+  "train": {
+    "iterations": 40000,
+    "batch_size": 16,
+    "loss": "mse",
+    "optimizer": "AdamW",
+    "learning_rate": 0.001,
+    "weight_decay": 0.00001,
+    "learning_rate_decay": {
+      "type": "inverse_time",
+      "decay_steps": 1,
+      "decay_rate": 0.0001
+    },
+    "seed": 2024,
+    "sampler": "deepxde_numpy_batch_sampler",
+    "device": "cuda",
+    "num_workers": 0,
+    "pin_memory": true
+  },
+  "evaluation": {
+    "batch_size": 16,
+    "validate_every": 1000,
+    "aggregate": "mean_of_12_direction_component_pooled_r2",
+    "paper_target_average_r2": 0.897
+  }
+}

@@ -1,0 +1,19 @@
+# Isolated exact released Transolver-v1 Elasticity protocol.
+source_dir dataset/benchmarks/elasticity/source/original_data
+output_dir output/benchmarks/elasticity/transolver_paper_validation
+device cuda:0
+seed 42
+epochs 500
+batch_size 1
+learning_rate 0.001
+weight_decay 0.00001
+max_grad_norm 0.1
+hidden_dim 128
+num_layers 8
+num_heads 8
+slice_num 64
+mlp_ratio 1
+dropout 0.0
+eval_interval_epochs 1
+checkpoint_interval_epochs 25
+resume True
