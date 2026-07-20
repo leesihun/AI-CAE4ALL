@@ -47,6 +47,12 @@ class LocalSettings:
         )
 
     def resolve_python(self, model_id: str, spec_id: str, override: str | None = None) -> Path:
+        # Deliberately does not call Path.resolve() anywhere below: a venv's
+        # bin/python is a symlink to the base interpreter, and resolve() would
+        # dereference it to e.g. /usr/bin/python3.12. Launching that resolved
+        # path directly skips CPython's pyvenv.cfg discovery (which walks up
+        # from the *invoked* executable path), so the spawned process would
+        # silently lose the venv's site-packages. Keep the symlink intact.
         selected = (
             override
             or self.model_pythons.get(model_id.lower())
@@ -58,7 +64,8 @@ class LocalSettings:
         if not expanded.is_absolute():
             discovered = shutil.which(str(expanded))
             if discovered:
-                return Path(discovered).resolve()
+                return Path(discovered)
             if self.base_dir is not None:
-                return (self.base_dir / expanded).resolve()
-        return expanded.resolve()
+                return self.base_dir / expanded
+            expanded = expanded.absolute()
+        return expanded
