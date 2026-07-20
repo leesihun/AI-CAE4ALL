@@ -474,7 +474,11 @@ def test_model(model, dataloader, device, config, epoch, dataset=None, output_pr
                 else:
                     filename = f'batch{batch_idx}'
 
-                output_path = f'outputs/{output_prefix}/{gpu_ids}/{str(epoch)}/{filename}.h5'
+                # config['log_dir'] is set by init_log_file() from log_file_dir,
+                # the same directory the checkpoint/log already live in -- keep
+                # periodic viz output there instead of a bare cwd-relative path.
+                viz_base = config.get('log_dir', 'outputs')
+                output_path = os.path.join(viz_base, output_prefix, gpu_ids, str(epoch), f'{filename}.h5')
                 predicted_np = predicted.float().cpu().numpy() if hasattr(predicted, 'cpu') else predicted
                 target_np = target.float().cpu().numpy() if hasattr(target, 'cpu') else target
 
