@@ -39,7 +39,9 @@ gino_in_radius                 0.08        # mesh->grid neighbor radius, pos_nor
 gino_out_radius                0.08        # grid->query neighbor radius, pos_normalized units -- positive float; too small vs cell diagonal warns; default 0.08
 gino_max_empty_input_fraction  0.05        # max fraction of latent grid points with no input neighbor -- float in [0,1]; default 0.01
 gino_query_chunk_size          50000       # internal GINO neighborhood/query chunk size -- int >= 0, 0 = unchunked (distinct from infer_query_chunk_size)
-gino_use_torch_cluster         False       # neighbor backend -- {True|False}; True needs torch_cluster, else SciPy KDTree; default False
+gino_use_torch_cluster         True        # neighbor backend -- {True|False}; True runs the radius search on-GPU (torch_cluster); note the checkpoint's trained value overlays this at load. default False
+gino_max_num_neighbors         8192        # initial torch_cluster per-query neighbor cap -- 0 = auto (2048 seed); auto-grows, never truncates
+gino_cache_neighbors           True        # reuse per-sample neighbor edges across rollout timesteps (static geometry) -- {True|False}; default True
 gino_group_shared_geometry     False       # accepted and shipped but no live code reads it -- {True|False}; keep False
 '
 %   Optimization

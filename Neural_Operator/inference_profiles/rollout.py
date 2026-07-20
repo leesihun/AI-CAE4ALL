@@ -167,6 +167,9 @@ def run_rollout(config, config_filename='config.txt'):
                 graph = Data(x=x_t, pos=pos_t, pos_normalized=pos_norm_t, edge_index=edge_index_t)
                 graph.batch = batch_t
                 graph.ptr = ptr_t
+                # Static geometry per sample -> lets GINO reuse its cached
+                # neighbor edge index across all rollout timesteps.
+                graph.sample_id = int(sample_id)
 
                 if infer_chunk_size > 0:
                     encoded = model.encode_operator(graph)

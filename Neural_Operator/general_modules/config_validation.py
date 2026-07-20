@@ -64,7 +64,7 @@ GINO_KEYS = {
     "gino_fno_hidden_channels", "gino_fno_layers", "gino_in_radius",
     "gino_out_radius", "gino_kernel_hidden", "gino_max_empty_input_fraction",
     "gino_query_chunk_size", "gino_use_torch_cluster",
-    "gino_group_shared_geometry",
+    "gino_group_shared_geometry", "gino_cache_neighbors",
     # Opt-in ShapeNet Car paper decoder. These keys are inert for mesh_state.
     "gino_tucker_rank", "gino_channel_mlp_expansion", "gino_lifting_hidden",
     "gino_kernel_widths", "gino_projection_widths", "gino_max_num_neighbors",

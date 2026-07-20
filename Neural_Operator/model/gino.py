@@ -13,6 +13,7 @@ exists (section 8.4's paper-profile gate).
 """
 
 import math
+from collections import OrderedDict
 
 import torch
 import torch.nn as nn
@@ -63,6 +64,12 @@ def validate_config(config, data_spec):
     if use_torch_cluster and not HAS_TORCH_CLUSTER:
         raise ValueError("gino_use_torch_cluster=True but torch_cluster is not installed.")
 
+    max_num_neighbors = int(config.get('gino_max_num_neighbors', 0))
+    if max_num_neighbors < 0:
+        raise ValueError(
+            f"gino_max_num_neighbors must be >= 0 (0 = auto-grow the torch_cluster "
+            f"neighbor cap), got {max_num_neighbors}.")
+
     min_r = min_reachable_radius(resolution, d)
     if out_radius < min_r:
         print(
@@ -106,6 +113,24 @@ class MeshGINO(OperatorCore):
         self.use_checkpointing = bool(config.get('use_checkpointing', False))
         self.has_sdf = bool(data_spec.has_sdf)
 
+        # --- neighbor-search acceleration (torch_cluster path) --------------
+        # torch_cluster.radius preallocates per-query `max_num_neighbors`, so a
+        # fixed cap is a correctness trap on GINO's dense input encode (mean
+        # ~5k, seen-max ~7k neighbors/latent point): too small drops edges,
+        # too large OOMs. We start from an initial cap and auto-grow it per
+        # direction until no query saturates it, then cache the working cap so
+        # steady-state does one search. 0 -> a modest 2048 seed that grows.
+        self.max_num_neighbors = int(config.get('gino_max_num_neighbors', 0))
+        self._initial_cap = self.max_num_neighbors if self.max_num_neighbors > 0 else 2048
+        self._neighbor_caps: dict = {}
+        # Geometry is static per sample, so in eval/rollout the same sample's
+        # edge index is identical every timestep -- cache it. Training stays
+        # uncached (each step is a different sample; augmentation moves coords).
+        self.augment_geometry = bool(config.get('augment_geometry', False))
+        self.cache_neighbors = bool(config.get('gino_cache_neighbors', True))
+        self._neighbor_edge_cache: "OrderedDict" = OrderedDict()
+        self._neighbor_edge_cache_cap = 4  # in+out for ~2 samples
+
         source_feat_dim = (data_spec.total_node_dim + (1 if self.has_sdf else 0)
                           + data_spec.global_condition_dim)
         self.source_feat_dim = source_feat_dim
@@ -140,12 +165,66 @@ class MeshGINO(OperatorCore):
             with torch.no_grad():
                 self.projection[-1].weight.mul_(0.01)
 
-    def _neighbors(self, queries: torch.Tensor, sources: torch.Tensor, r: float) -> torch.Tensor:
+    def _neighbors(self, queries: torch.Tensor, sources: torch.Tensor, r: float,
+                   cap_key: str) -> torch.Tensor:
+        """Radius neighbors [2,E] (row0=query idx, row1=source idx). Uses
+        torch_cluster on-device when enabled (auto-growing, non-truncating cap
+        keyed by `cap_key`), else the scipy KDTree baseline."""
         if self.use_torch_cluster and HAS_TORCH_CLUSTER:
-            return radius_neighbors_torch_cluster(queries, sources, r)
+            return self._neighbors_torch_cluster(queries, sources, r, cap_key)
         ei_np = radius_neighbors_scipy(
             queries.detach().cpu().numpy(), sources.detach().cpu().numpy(), r)
         return torch.from_numpy(ei_np).to(queries.device)
+
+    def _neighbors_torch_cluster(self, queries: torch.Tensor, sources: torch.Tensor,
+                                 r: float, cap_key: str) -> torch.Tensor:
+        nq, ns = queries.shape[0], sources.shape[0]
+        if nq == 0 or ns == 0:
+            return torch.zeros((2, 0), dtype=torch.long, device=queries.device)
+        cap = min(self._neighbor_caps.get(cap_key, self._initial_cap), ns)
+        while True:
+            ei = radius_neighbors_torch_cluster(
+                queries, sources, r, max_num_neighbors=cap,
+                query_chunk=self.query_chunk_size)
+            if ei.shape[1] == 0 or cap >= ns:
+                break
+            # If any query hit the cap it may have been truncated; grow + redo.
+            # This only fires during warmup -- the cap then stays put.
+            if int(torch.bincount(ei[0], minlength=nq).max()) < cap:
+                break
+            cap = min(cap * 2, ns)
+        self._neighbor_caps[cap_key] = cap
+        return ei
+
+    def _neighbors_cached(self, queries: torch.Tensor, sources: torch.Tensor,
+                          r: float, cap_key: str, sample_id) -> torch.Tensor:
+        use_cache = (self.cache_neighbors and not self.training
+                     and not self.augment_geometry and sample_id is not None)
+        if not use_cache:
+            return self._neighbors(queries, sources, r, cap_key)
+        key = (int(sample_id), cap_key)
+        hit = self._neighbor_edge_cache.get(key)
+        if hit is not None and hit.device == queries.device:
+            self._neighbor_edge_cache.move_to_end(key)
+            return hit
+        ei = self._neighbors(queries, sources, r, cap_key)
+        self._neighbor_edge_cache[key] = ei
+        self._neighbor_edge_cache.move_to_end(key)
+        while len(self._neighbor_edge_cache) > self._neighbor_edge_cache_cap:
+            self._neighbor_edge_cache.popitem(last=False)
+        return ei
+
+    @staticmethod
+    def _graph_sample_ids(graph):
+        """Per-graph sample ids from a (possibly batched) graph, or None."""
+        sid = getattr(graph, 'sample_id', None)
+        if sid is None:
+            return None
+        if torch.is_tensor(sid):
+            return [int(v) for v in sid.flatten().tolist()]
+        if isinstance(sid, (list, tuple)):
+            return [int(v) for v in sid]
+        return [int(sid)]
 
     def _assemble_node_features(self, graph) -> torch.Tensor:
         feats = graph.x
@@ -160,14 +239,15 @@ class MeshGINO(OperatorCore):
         out = self.spectral_layers[i](h) + self.pointwise_layers[i](h)
         return self.activation(out)
 
-    def _encode_one_graph(self, coords_g: torch.Tensor, feats_g: torch.Tensor) -> torch.Tensor:
+    def _encode_one_graph(self, coords_g: torch.Tensor, feats_g: torch.Tensor,
+                          sample_id=None) -> torch.Tensor:
         """coords_g: [N,d] in [0,1]^d, feats_g: [N, source_feat_dim].
 
         Returns latent_feat [prod(resolution), hidden] after input GNO + FNO blocks.
         """
         device = coords_g.device
         latent_pts = self.latent_points.to(device)
-        ei_in = self._neighbors(latent_pts, coords_g, self.in_radius)
+        ei_in = self._neighbors_cached(latent_pts, coords_g, self.in_radius, 'in', sample_id)
         z = self.input_gno(latent_pts, coords_g, feats_g, ei_in, num_queries=latent_pts.shape[0])
 
         z_grid = z.T.reshape(1, self.hidden, *self.resolution)
@@ -183,10 +263,11 @@ class MeshGINO(OperatorCore):
         prod_res = latent_pts.shape[0]
         return h.reshape(self.hidden, prod_res).T  # [prod(res), hidden]
 
-    def _decode_one_graph(self, latent_feat: torch.Tensor, coords_slice: torch.Tensor) -> torch.Tensor:
+    def _decode_one_graph(self, latent_feat: torch.Tensor, coords_slice: torch.Tensor,
+                          sample_id=None) -> torch.Tensor:
         device = coords_slice.device
         latent_pts = self.latent_points.to(device)
-        ei_out = self._neighbors(coords_slice, latent_pts, self.out_radius)
+        ei_out = self._neighbors_cached(coords_slice, latent_pts, self.out_radius, 'out', sample_id)
         u = self.output_gno(coords_slice, latent_pts, latent_feat, ei_out,
                             num_queries=coords_slice.shape[0])
         return self.projection(u)
@@ -195,14 +276,16 @@ class MeshGINO(OperatorCore):
         num_graphs = graph.ptr.numel() - 1
         c01, _ = self.domain.to_unit_box(graph.pos_normalized)
         feats_full = self._assemble_node_features(graph)
+        sample_ids = self._graph_sample_ids(graph)
 
         outputs = []
         for g in range(num_graphs):
             start, end = int(graph.ptr[g]), int(graph.ptr[g + 1])
             coords_g = c01[start:end]
             feats_g = feats_full[start:end]
-            latent_feat = self._encode_one_graph(coords_g, feats_g)
-            outputs.append(self._decode_one_graph(latent_feat, coords_g))
+            sid = sample_ids[g] if sample_ids is not None and g < len(sample_ids) else None
+            latent_feat = self._encode_one_graph(coords_g, feats_g, sid)
+            outputs.append(self._decode_one_graph(latent_feat, coords_g, sid))
         return torch.cat(outputs, dim=0)
 
     def supports_query_chunking(self) -> bool:
@@ -213,10 +296,12 @@ class MeshGINO(OperatorCore):
         num_graphs = graph.ptr.numel() - 1
         c01, _ = self.domain.to_unit_box(graph.pos_normalized)
         feats_full = self._assemble_node_features(graph)
+        sample_ids = self._graph_sample_ids(graph)
         latents = []
         for g in range(num_graphs):
             start, end = int(graph.ptr[g]), int(graph.ptr[g + 1])
-            latents.append(self._encode_one_graph(c01[start:end], feats_full[start:end]))
+            sid = sample_ids[g] if sample_ids is not None and g < len(sample_ids) else None
+            latents.append(self._encode_one_graph(c01[start:end], feats_full[start:end], sid))
         return latents
 
     def decode_queries(self, encoded, graph, start: int, end: int):
@@ -231,7 +316,11 @@ class MeshGINO(OperatorCore):
             lo, hi = max(start, g_start), min(end, g_end)
             if lo >= hi:
                 continue
-            outputs.append(self._decode_one_graph(encoded[g], c01[lo:hi]))
+            # sample_id=None: the query set here is an arbitrary [lo,hi) SLICE of
+            # the graph's coords, so it must not reuse (or populate) the per-sample
+            # decode cache, which is keyed only by sample_id and holds the whole
+            # graph's edge index. Encode caching still applies via encode_operator.
+            outputs.append(self._decode_one_graph(encoded[g], c01[lo:hi], None))
         return torch.cat(outputs, dim=0)
 
     def coverage_preflight(self, graph) -> dict:
@@ -250,10 +339,10 @@ class MeshGINO(OperatorCore):
             device = coords_g.device
             latent_pts = self.latent_points.to(device)
 
-            ei_in = self._neighbors(latent_pts, coords_g, self.in_radius)
+            ei_in = self._neighbors(latent_pts, coords_g, self.in_radius, 'in')
             in_stats = neighbor_stats(ei_in.cpu().numpy(), latent_pts.shape[0])
 
-            ei_out = self._neighbors(coords_g, latent_pts, self.out_radius)
+            ei_out = self._neighbors(coords_g, latent_pts, self.out_radius, 'out')
             out_stats = neighbor_stats(ei_out.cpu().numpy(), coords_g.shape[0])
 
             report = {'graph': g, 'input_gno': in_stats, 'output_gno': out_stats}
@@ -312,10 +401,12 @@ class MeshGINO(OperatorCore):
         latent_pts = self.latent_points.to(device)
         coord_grid = self.coord_grid.to(device).unsqueeze(0)
         grid_ins = []
+        sample_ids = self._graph_sample_ids(graph)
         for g in range(num_graphs):
             start, end = int(graph.ptr[g]), int(graph.ptr[g + 1])
             coords_g = c01[start:end]
-            ei_in = self._neighbors(latent_pts, coords_g, self.in_radius)
+            sid = sample_ids[g] if sample_ids is not None and g < len(sample_ids) else None
+            ei_in = self._neighbors_cached(latent_pts, coords_g, self.in_radius, 'in', sid)
             z = self.input_gno(latent_pts, coords_g, feats_full[start:end], ei_in,
                                num_queries=latent_pts.shape[0])
             z_grid = z.T.reshape(1, self.hidden, *self.resolution)
@@ -332,11 +423,13 @@ class MeshGINO(OperatorCore):
         num_graphs = graph.ptr.numel() - 1
         c01, _ = self.domain.to_unit_box(graph.pos_normalized)
         prod_res = self.latent_points.shape[0]
+        sample_ids = self._graph_sample_ids(graph)
         outputs = []
         for g in range(num_graphs):
             start, end = int(graph.ptr[g]), int(graph.ptr[g + 1])
             latent_feat = h[g].reshape(self.hidden, prod_res).T
-            outputs.append(self._decode_one_graph(latent_feat, c01[start:end]))
+            sid = sample_ids[g] if sample_ids is not None and g < len(sample_ids) else None
+            outputs.append(self._decode_one_graph(latent_feat, c01[start:end], sid))
         return torch.cat(outputs, dim=0)
 
     def prune_to_pipeline_blocks(self, owned) -> None:
@@ -368,5 +461,8 @@ class MeshGINO(OperatorCore):
             'gino_out_radius': self.out_radius,
             'gino_kernel_hidden': self.kernel_hidden,
             'gino_use_torch_cluster': self.use_torch_cluster,
+            'gino_max_num_neighbors': self.max_num_neighbors,
+            'gino_query_chunk_size': self.query_chunk_size,
+            'gino_cache_neighbors': self.cache_neighbors,
             'source_feat_dim': self.source_feat_dim,
         }

@@ -40,16 +40,24 @@ global_condition_features  none  # global scalar conditions -- must be 'none'; d
 integration_weight_source  none  # quadrature-weight source -- accepted but inert; no weighted-kernel integration exists; keep none
 '
 gino_variant                   mesh_state  # GINO variant -- {mesh_state|paper}; paper fails (weighted integration unavailable); default mesh_state
-gino_grid_resolution           32, 32, 32  # latent grid size per active axis -- comma list, each entry >= 2; default [32]*operator_dim
+%   gino_grid_resolution coarsened 32->20 and gino_kernel_hidden halved
+%   64->32: the input GNO encode is unchunked (see config_train_gino.txt),
+%   so at 32,32,32 + in_radius=0.20 it was 182.9M mesh<->grid edges/sample
+%   in one kernel-MLP pass -- the real OOM driver. 20,20,20 cuts that to
+%   42.8M edges (4.3x fewer) at the same in_radius; halving kernel_hidden
+%   roughly halves per-edge memory on top.
+gino_grid_resolution           20, 20, 20  # latent grid size per active axis -- comma list, each entry >= 2; default [32]*operator_dim
 gino_fno_modes                 8, 8, 8     # latent FNO Fourier modes per axis -- comma list
 gino_fno_hidden_channels       32          # latent FNO channel width -- positive int; default 64
 gino_fno_layers                4           # latent FNO block count -- int >= 1; default 4
-gino_kernel_hidden             64          # GNO kernel MLP width -- positive int; default 64
+gino_kernel_hidden             32          # GNO kernel MLP width -- positive int; default 64
 gino_in_radius                 0.20        # mesh->grid neighbor radius, pos_normalized units -- positive float; default 0.08; measured on ex2.h5 (see config_train_gino.txt), 0.08 leaves 18.4% empty latent cells
 gino_out_radius                0.20        # grid->query neighbor radius, pos_normalized units -- positive float; too small vs cell diagonal warns; default 0.08
 gino_max_empty_input_fraction  0.05        # max fraction of latent grid points with no input neighbor -- float in [0,1]; default 0.01
-gino_query_chunk_size          50000       # internal GINO neighborhood/query chunk size -- int >= 0, 0 = unchunked (distinct from infer_query_chunk_size)
-gino_use_torch_cluster         False       # neighbor backend -- {True|False}; True needs torch_cluster, else SciPy KDTree; default False
+gino_query_chunk_size          50000       # neighbor-search per-query chunk (bounds torch_cluster's query_chunk*cap prealloc) AND kernel/query chunking -- int >= 0, 0 = unchunked (distinct from infer_query_chunk_size)
+gino_use_torch_cluster         True        # neighbor backend -- {True|False}; True runs the radius search on-GPU (torch_cluster), else CPU SciPy KDTree; default False
+gino_max_num_neighbors         8192        # initial torch_cluster per-query neighbor cap -- int >= 0, 0 = auto (2048 seed); auto-grows until no query saturates it, so it never truncates
+gino_cache_neighbors           True        # reuse the per-sample neighbor edge index in eval/rollout (static geometry) -- {True|False}; training stays uncached; default True
 gino_group_shared_geometry     False       # accepted and shipped but no live code reads it -- {True|False}; keep False
 '
 %   Optimization
