@@ -1,67 +1,67 @@
-model	transolver
-mode	train
-gpu_ids	0
-parallel_mode	ddp
+model          transolver  # backend selector -- {transolver}
+mode           train       # run mode -- {train|inference}
+gpu_ids        0           # CUDA device id(s) -- int or comma list; -1 = CPU (never mixed with CUDA ids)
+parallel_mode  ddp         # parallelism -- {ddp|node_shard}; node_shard needs >=2 GPUs + attention_kernel slice_space; model_split is an alias for node_shard; default ddp
 '
 %   Datasets and outputs
-log_file_dir	../../output/transolver/ex1/train1.log
-modelpath	../output/transolver/ex1/transolver1.pth
-dataset_dir	../dataset/ex1.h5
-infer_dataset	../dataset/hex_dataset.h5
-inference_output_dir	../output/transolver/rollout/ex1/transolver1
-infer_timesteps	1
-split_seed	42
+log_file_dir          ../../output/transolver/ex1/train1.log        # log file path, relative to the backend output dir
+modelpath             ../output/transolver/ex1/transolver1.pth      # checkpoint path -- save target in train, load source in inference
+dataset_dir           ../dataset/ex1.h5                             # training mesh-state HDF5 path
+infer_dataset         ../dataset/hex_dataset.h5                     # inference input HDF5 path
+inference_output_dir  ../output/transolver/rollout/ex1/transolver1  # rollout output directory
+infer_timesteps       1                                             # rollout length (int) -- static T=1 inference still needs this unless the direct-static path treats the output as one field
+split_seed            42                                            # RNG seed for the deterministic 80/10/10 train/val/test split; default 42
 '
 %   Common parameters
-input_var	4
-output_var	4
-positional_features	4
-use_node_types	True
-feature_loss_weights	1.0, 1.0, 1.0, 1.0
+input_var             4                   # physical-state input channel count -- positive int; temporal rollout needs input_var == output_var
+output_var            4                   # predicted field/delta channel count -- positive int
+positional_features   4                   # extra numeric positional feature channels -- int >= 0; default 0
+use_node_types        True                # append one-hot node type (feature row 7 / Part No.) -- {True|False}; needs a >7-row file
+feature_loss_weights  1.0, 1.0, 1.0, 1.0  # per-output-channel loss weights -- comma list, length must equal output_var, entries >= 0
 '
 %   Network parameters
-coordinate_normalization	centered_isotropic
-latent_dim	128
-num_layers	8
-num_heads	8
-slice_num	64
-attention_kernel	naive
-chunk_size	0
-infer_mode	direct
-infer_chunk_size	0
-mlp_ratio	1
-dropout	0.0
-temperature_init	0.5
-temperature_min	0.1
-temperature_max	5.0
-small_output_init	False
+coordinate_normalization  centered_isotropic  # coordinate scheme -- must be 'centered_isotropic'; enforced and recorded in the checkpoint data config
+latent_dim                128                 # hidden width -- positive int, must be divisible by num_heads
+num_layers                8                   # Transolver block count -- positive int
+num_heads                 8                   # attention heads -- positive int, must divide latent_dim
+slice_num                 64                  # Physics-Attention learned slice count -- positive int
+attention_kernel          naive               # attention kernel -- {naive|slice_space}; chunking and node_shard require slice_space; default naive
+chunk_size                0                   # attention tiling size -- int >= 0, 0 = untiled; positive requires attention_kernel slice_space; default 0
+infer_mode                direct              # inference mode -- {direct|decoupled}; default direct
+infer_chunk_size          0                   # decoupled-inference chunk size -- int >= 0; default 0
+mlp_ratio                 1                   # block MLP expansion ratio -- positive; default 1
+dropout                   0.0                 # block dropout rate -- float in [0,1); default 0.0
+temperature_init          0.5                 # initial slice-assignment temperature -- float; default 0.5
+temperature_min           0.1                 # min slice-assignment temperature -- float; default 0.1
+temperature_max           5.0                 # max slice-assignment temperature -- float; require 0 < min <= init <= max; default 5.0
+small_output_init         False               # shrink final head at init -- {True|False}; default true when timesteps unknown/temporal, false for static T=1
 '
 %   Optimization
-training_epochs	500
-batch_size	1
-learningr	0.0001
-weight_decay	0.0001
-warmup_epochs	3
-num_workers	2
-prefetch_factor	4
-grad_accum_steps	1
-max_grad_norm	3.0
+training_epochs   500     # epoch count -- positive int
+batch_size        1       # physical DataLoader batch size, before grad_accum_steps -- positive int
+learningr         0.0001  # AdamW learning rate -- positive float; prefer decimal notation
+weight_decay      0.0001  # AdamW weight decay -- float >= 0; default 0.0001
+warmup_epochs     3       # linear LR warmup epochs before the cosine schedule -- int >= 0; default 3
+num_workers       2       # DataLoader worker processes -- int >= 0
+prefetch_factor   4       # batches prefetched per worker -- used only when num_workers > 0; default 4
+grad_accum_steps  1       # gradient accumulation steps per optimizer step -- int >= 1; default 1
+max_grad_norm     3.0     # gradient-clipping max norm -- float; default 3.0
 '
 %   Training regularization and runtime
-std_noise	0.1
-noise_gamma	1
-augment_geometry	True
-use_amp	True
-use_checkpointing	True
-use_ema	True
-ema_decay	0.99
-use_compile	False
+std_noise          0.1    # Gaussian std of training input noise -- float >= 0; default 0
+noise_gamma        1      # target-correction multiplier matching injected input noise -- default 1
+augment_geometry   True   # train-only z-rotation / x-y reflection augmentation -- {True|False}; must be False for model_split; default False
+use_amp            True   # bfloat16 autocast on supported CUDA -- {True|False}; default True
+use_checkpointing  True   # activation checkpointing to cut memory -- {True|False}; default False
+use_ema            True   # maintain EMA weights (inference prefers EMA when stored) -- {True|False}; default False
+ema_decay          0.99   # EMA decay rate -- float in (0,1); default 0.999
+use_compile        False  # torch.compile(dynamic=True) on the model -- {True|False}; default False
 '
 %   Evaluation
-val_interval	5
-test_interval	50
+val_interval   5   # validation cadence in epochs -- positive int; default 1
+test_interval  50  # periodic test-visualization cadence in epochs -- positive int; default 10
 '
 %   Dataset behavior
-use_world_edges	False
-use_multiscale	False
-write_preprocessing	False
+use_world_edges      False  # must stay False -- Transolver does not consume graph edges -- {False}
+use_multiscale       False  # must stay False -- MGN multiscale hierarchy is unsupported here -- {False}
+write_preprocessing  False  # must stay False -- writing normalization back into the source HDF5 is rejected -- {False}

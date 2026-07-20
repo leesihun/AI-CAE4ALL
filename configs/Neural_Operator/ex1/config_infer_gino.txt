@@ -1,82 +1,82 @@
-model	gino
-mode	inference
-gpu_ids	0
+model    gino       # backend selector -- {point_deeponet|deeponet|fno|gino}
+mode     inference  # run mode -- {train|inference}
+gpu_ids  0          # CUDA device id(s) -- int or comma list; -1 = CPU (never mixed with CUDA ids)
 '
 %   Datasets and outputs
-log_file_dir	../../output/neural_operator/ex1/infer_gino.log
-modelpath	../output/neural_operator/ex1/gino.pth
-dataset_dir	../dataset/ex1.h5
-infer_dataset	../dataset/hex_dataset.h5
-inference_output_dir	../output/neural_operator/rollout/ex1/gino
-infer_timesteps	1
-split_seed	42
+log_file_dir          ../../output/neural_operator/ex1/infer_gino.log  # log file path, relative to the backend output dir
+modelpath             ../output/neural_operator/ex1/gino.pth           # checkpoint path -- save target in train, load source in inference
+dataset_dir           ../dataset/ex1.h5                                # training mesh-state HDF5 path
+infer_dataset         ../dataset/hex_dataset.h5                        # inference input HDF5 path
+inference_output_dir  ../output/neural_operator/rollout/ex1/gino       # rollout output directory
+infer_timesteps       1                                                # rollout length (int) -- required for static T=1; omit only when a temporal input has >1 timestep
+split_seed            42                                               # RNG seed for the deterministic 80/10/10 train/val/test split; default 42
 '
 %   Common parameters
-input_var	4
-output_var	4
-feature_loss_weights	1.0, 1.0, 1.0, 1.0
-positional_features	4
-use_node_types	True
-coordinate_normalization	centered_isotropic
-operator_dim	auto
-dimension_tolerance	0.0001
-grid_padding	0.05
-out_of_bounds_policy	error
+input_var                 4                   # physical-state input channel count -- positive int; temporal rollout needs input_var == output_var
+output_var                4                   # predicted field/delta channel count -- positive int
+feature_loss_weights      1.0, 1.0, 1.0, 1.0  # per-output-channel loss weights -- comma list, length must equal output_var, entries >= 0
+positional_features       4                   # extra numeric positional feature channels -- int >= 0; default 0
+use_node_types            True                # append one-hot node type (feature row 7 / Part No.) -- {True|False}; needs a >7-row file
+coordinate_normalization  centered_isotropic  # coordinate scheme marker -- must be 'centered_isotropic'; Neural Operator always uses it regardless of value read
+operator_dim              auto                # spatial dimensionality -- {auto|2|3}; auto detects active axes from geometry; default auto
+dimension_tolerance       0.0001              # relative-extent threshold to treat an axis as inactive/planar -- float; default 0.0001
+grid_padding              0.05                # fractional pad around the train-fit coord domain for grid/point/GINO adapters -- float; default 0.05
+out_of_bounds_policy      error               # query coords outside the fitted [0,1]^d domain -- {error|clamp}; error=raise, clamp=clip; default error
 '
 %   Optional geometric signals
-sdf_source	none
-sdf_sidecar	none
-global_condition_features	none
-integration_weight_source	none
+sdf_source                 none  # signed-distance source -- {none|dataset|sidecar}; non-none needs a finite SDF per sample; default none
+sdf_sidecar                none  # sidecar SDF file path -- used only when sdf_source=sidecar, else none
+global_condition_features  none  # global scalar conditions -- must be 'none'; declared conditions are rejected (loader never attaches them)
+integration_weight_source  none  # quadrature-weight source -- accepted but inert; no weighted-kernel integration exists; keep none
 '
-gino_variant	mesh_state
-gino_grid_resolution	48, 48
-gino_fno_modes	12, 12
-gino_fno_hidden_channels	64
-gino_fno_layers	4
-gino_kernel_hidden	64
-gino_in_radius	0.3
-gino_out_radius	0.3
-gino_max_empty_input_fraction	0.3
-gino_query_chunk_size	20000
-gino_use_torch_cluster	False
-gino_group_shared_geometry	False
+gino_variant                   mesh_state  # GINO variant -- {mesh_state|paper}; paper fails (weighted integration unavailable); default mesh_state
+gino_grid_resolution           48, 48      # latent grid size per active axis -- comma list, each entry >= 2; default [32]*operator_dim
+gino_fno_modes                 12, 12      # latent FNO Fourier modes per axis -- comma list
+gino_fno_hidden_channels       64          # latent FNO channel width -- positive int; default 64
+gino_fno_layers                4           # latent FNO block count -- int >= 1; default 4
+gino_kernel_hidden             64          # GNO kernel MLP width -- positive int; default 64
+gino_in_radius                 0.3         # mesh->grid neighbor radius, pos_normalized units -- positive float; default 0.08
+gino_out_radius                0.3         # grid->query neighbor radius, pos_normalized units -- positive float; too small vs cell diagonal warns; default 0.08
+gino_max_empty_input_fraction  0.3         # max fraction of latent grid points with no input neighbor -- float in [0,1]; default 0.01
+gino_query_chunk_size          20000       # internal GINO neighborhood/query chunk size -- int >= 0, 0 = unchunked (distinct from infer_query_chunk_size)
+gino_use_torch_cluster         False       # neighbor backend -- {True|False}; True needs torch_cluster, else SciPy KDTree; default False
+gino_group_shared_geometry     False       # accepted and shipped but no live code reads it -- {True|False}; keep False
 '
 %   Optimization
-training_epochs	1
-batch_size	1
-learningr	0.0001
-weight_decay	0.0001
-warmup_epochs	3
-num_workers	2
-grad_accum_steps	1
-max_grad_norm	3.0
+training_epochs   1       # epoch count -- positive int
+batch_size        1       # physical DataLoader batch size, before grad_accum_steps -- positive int
+learningr         0.0001  # AdamW learning rate -- positive float; prefer decimal notation
+weight_decay      0.0001  # AdamW weight decay -- float >= 0; default 0.0001
+warmup_epochs     3       # linear LR warmup epochs before the cosine schedule -- int >= 0; default 3
+num_workers       2       # DataLoader worker processes -- int >= 0
+grad_accum_steps  1       # gradient accumulation steps per optimizer step -- int >= 1; default 1
+max_grad_norm     3.0     # gradient-clipping max norm -- float; default 3.0
 '
 %   Training regularization and runtime
-std_noise	0.0
-noise_gamma	1
-augment_geometry	False
-use_amp	True
-use_checkpointing	True
-use_ema	True
-ema_decay	0.99
-use_compile	False
+std_noise          0.0    # Gaussian std of training input noise -- float >= 0; default 0
+noise_gamma        1      # target-correction multiplier matching injected input noise -- default 1
+augment_geometry   False  # train-only z-rotation / x-y reflection augmentation -- {True|False}; must be False for model_split; default False
+use_amp            True   # bfloat16 autocast on supported CUDA -- {True|False}; default True
+use_checkpointing  True   # activation checkpointing to cut memory -- {True|False}; default False
+use_ema            True   # maintain EMA weights (inference prefers EMA when stored) -- {True|False}; default False
+ema_decay          0.99   # EMA decay rate -- float in (0,1); default 0.999
+use_compile        False  # torch.compile(dynamic=True) on the model -- {True|False}; default False
 '
 %   Query chunking
-train_query_chunk_size	0
-infer_query_chunk_size	0
+train_query_chunk_size  0  # accepted and shipped but no training code reads it -- int; keep 0
+infer_query_chunk_size  0  # inference query-decoding chunk size -- int >= 0, 0 = unchunked
 '
 %   Evaluation
-val_interval	1
-test_interval	100
-test_max_batches	200
-test_batch_idx	0
-plot_feature_idx	-1
-display_trainset	False
-display_testset	False
-checkpoint_interval	0
+val_interval         1      # validation cadence in epochs -- positive int; default 1
+test_interval        100    # periodic test-visualization cadence in epochs -- positive int; default 10
+test_max_batches     200    # cap on batches for periodic visualization/eval -- int; default 200
+test_batch_idx       0      # batch indices selected for periodic visualization -- int or comma list
+plot_feature_idx     -1     # output channel to plot -- int, -1 = last channel; default -1
+display_trainset     False  # render training samples in periodic tests -- {True|False}; default True
+display_testset      False  # render test samples in periodic tests -- {True|False}; default True
+checkpoint_interval  0      # extra periodic checkpoint cadence in epochs -- int, 0 disables
 '
 %   Dataset behavior
-write_preprocessing	False
-use_world_edges	False
-use_multiscale	False
+write_preprocessing  False  # must stay False -- writing normalization back into the source HDF5 is rejected -- {False}
+use_world_edges      False  # must stay False -- operators do not consume MGN world edges -- {False}
+use_multiscale       False  # must stay False -- MGN multiscale hierarchy is unsupported here -- {False}
