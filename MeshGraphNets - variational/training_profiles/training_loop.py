@@ -7,6 +7,7 @@ import numpy as np
 from torch.optim.swa_utils import AveragedModel, get_ema_multi_avg_fn
 from torch.utils.data import Subset
 from torch_geometric.loader import DataLoader
+from training_profiles.amp import build_grad_scaler, resolve_amp_dtype
 from general_modules.mesh_utils_fast import (
     save_inference_results_fast,
     render_plot_data,
@@ -197,7 +198,8 @@ def train_epoch(model, dataloader, optimizer, device, config, epoch, ema_model=N
 
     loss_weights = _build_loss_weights(config, device)
     use_amp = config.get('use_amp', True)
-    amp_dtype = torch.bfloat16
+    amp_dtype = resolve_amp_dtype(device)
+    scaler = build_grad_scaler(amp_dtype, use_amp)
     recon_loss_kind = config.get('recon_loss', 'huber')
 
     # VAE config (MMD objective: InfoVAE-style aggregate-posterior matching)
@@ -330,7 +332,7 @@ def train_epoch(model, dataloader, optimizer, device, config, epoch, ema_model=N
         sync_ctx = (contextlib.nullcontext() if (is_step_batch or not hasattr(model, 'no_sync'))
                     else model.no_sync())
         with sync_ctx:
-            scaled_loss.backward()
+            scaler.scale(scaled_loss).backward()
 
         loss_val = batch_loss_sum / batch_loss_count
         total_loss_sum += batch_loss_sum
@@ -347,10 +349,14 @@ def train_epoch(model, dataloader, optimizer, device, config, epoch, ema_model=N
 
         # Step optimizer at end of accumulation window or final batch
         if is_step_batch:
+            # Unscale before clipping so max_norm is compared against true
+            # gradients. No-op when the scaler is disabled (bf16 / AMP off).
+            scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(sim_params, max_norm=3.0)
             if prior_params_list:
                 torch.nn.utils.clip_grad_norm_(prior_params_list, max_norm=3.0)
-            optimizer.step()
+            scaler.step(optimizer)
+            scaler.update()
             if ema_model is not None:
                 ema_model.update_parameters(model)
             optimizer.zero_grad(set_to_none=True)
@@ -394,7 +400,7 @@ def _evaluate_epoch(model, dataloader, device, config, epoch=0, *,
 
     loss_weights = _build_loss_weights(config, device)
     use_amp = config.get('use_amp', True)
-    amp_dtype = torch.bfloat16
+    amp_dtype = resolve_amp_dtype(device)
     recon_loss_kind = config.get('recon_loss', 'huber')
 
     use_vae = config.get('use_vae', False)
@@ -497,7 +503,7 @@ def evaluate_vae_learned_prior_epoch(model, dataloader, device, config, epoch=0,
     model.eval()
     loss_weights = _build_loss_weights(config, device)
     use_amp = config.get('use_amp', True)
-    amp_dtype = torch.bfloat16
+    amp_dtype = resolve_amp_dtype(device)
     prior_temperature = float(config.get('prior_temperature', 1.0))
 
     total_loss_sum = 0.0
@@ -708,7 +714,7 @@ def test_model(model, dataloader, device, config, epoch, dataset=None, output_pr
     faces_cache = {}
 
     use_amp = config.get('use_amp', True)
-    amp_dtype = torch.bfloat16
+    amp_dtype = resolve_amp_dtype(device)
 
     # Cap test batches to avoid NCCL timeout in DDP (test runs only on rank 0;
     # other ranks wait at a barrier whose timeout is the process-group timeout).

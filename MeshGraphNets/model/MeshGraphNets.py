@@ -197,11 +197,32 @@ class EncoderProcessorDecoder(nn.Module):
 
     def _encode(self, graph):
         """Encoder wrapped by use_checkpointing: its edge MLP internals scale
-        with E and would otherwise stay resident for the whole backward."""
-        return run_checkpointed(
-            self.encoder, graph,
+        with E and would otherwise stay resident for the whole backward.
+
+        Only tensors cross the checkpoint boundary — the Data is rebuilt here,
+        outside it. Checkpointing the module directly (Data in, Data out) makes
+        Dynamo abort with "lift_tracked_freevar_to_input should not be called on
+        root SubgraphTracer", which is why `use_compile` + `use_checkpointing`
+        used to be mutually exclusive.
+        """
+        has_world = (
+            self.use_world_edges and hasattr(graph, 'world_edge_attr')
+            and graph.world_edge_index.shape[1] > 0
+        )
+        node_, edge_, world_ = run_checkpointed(
+            self.encoder.encode_tensors,
+            graph.x, graph.edge_attr,
+            graph.world_edge_attr if has_world else None,
             enabled=self.use_checkpointing and self.training,
         )
+        out = Data(x=node_, edge_attr=edge_, edge_index=graph.edge_index)
+        if world_ is not None:
+            out.world_edge_attr = world_
+            out.world_edge_index = graph.world_edge_index
+        elif self.use_world_edges:
+            out.world_edge_attr = torch.zeros(0, edge_.shape[1], device=edge_.device)
+            out.world_edge_index = torch.zeros(2, 0, dtype=torch.long, device=edge_.device)
+        return out
 
     def _forward_flat(self, graph):
         graph = self._encode(graph)
@@ -289,11 +310,18 @@ class EncoderProcessorDecoder(nn.Module):
             ftc_key = f'fine_to_coarse_{i}'
             if not hasattr(graph, ftc_key):
                 break
+            centroid = graph[f'coarse_centroid_{i}']
             ld = {
                 'ftc': graph[ftc_key],
                 'c_ei': graph[f'coarse_edge_index_{i}'],
                 'c_ea': graph[f'coarse_edge_attr_{i}'],
-                'n_c': int(graph[f'num_coarse_{i}'].sum()),
+                # Read the coarse node count off a shape, not off the GPU:
+                # int(num_coarse_{i}.sum()) forces a CPU<->GPU sync per level on
+                # every forward, stalling the pipeline the training loop is
+                # otherwise careful to keep sync-free. coarse_centroid_{i} has
+                # exactly num_coarse rows (and batching concatenates both), so
+                # this is the same number.
+                'n_c': centroid.shape[0],
                 'c_we_idx': getattr(graph, f'coarse_world_edge_index_{i}', None),
                 'c_we_attr': getattr(graph, f'coarse_world_edge_attr_{i}', None),
             }
@@ -302,7 +330,7 @@ class EncoderProcessorDecoder(nn.Module):
             if hasattr(graph, seed_key):
                 ld['seeds'] = graph[seed_key]
             ld['up_ei'] = graph[f'unpool_edge_index_{i}']
-            ld['coarse_centroid'] = graph[f'coarse_centroid_{i}']
+            ld['coarse_centroid'] = centroid
             ld['fine_pos'] = graph.pos if i == 0 else graph[f'coarse_centroid_{i - 1}']
             level_data[i] = ld
         return level_data

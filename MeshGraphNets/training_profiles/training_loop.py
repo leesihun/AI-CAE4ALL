@@ -14,6 +14,7 @@ from general_modules.mesh_utils_fast import (
     render_plot_data,
     save_inference_results_fast,
 )
+from training_profiles.amp import build_grad_scaler, resolve_amp_dtype
 
 
 def build_ema_model(model, config):
@@ -151,7 +152,8 @@ def train_epoch(model, dataloader, optimizer, device, config, epoch, ema_model=N
 
     loss_weights = _build_loss_weights(config, device)
     use_amp = config.get('use_amp', True)
-    amp_dtype = torch.bfloat16
+    amp_dtype = resolve_amp_dtype(device)
+    scaler = build_grad_scaler(amp_dtype, use_amp)
 
     grad_accum_steps = config.get('grad_accum_steps', 1)
     total_batches = len(dataloader)
@@ -172,15 +174,20 @@ def train_epoch(model, dataloader, optimizer, device, config, epoch, ema_model=N
             loss, batch_loss_sum, batch_loss_count = _loss_from_errors(errors, loss_weights)
             scaled_loss = loss / _accum_window_size(batch_idx, total_batches, actual_accum)
 
-        scaled_loss.backward()
+        scaler.scale(scaled_loss).backward()
 
         total_loss_sum += batch_loss_sum.double()
         total_loss_count += batch_loss_count
 
         is_last_batch = batch_idx == total_batches - 1
         if (batch_idx + 1) % actual_accum == 0 or is_last_batch:
+            # Gradients must be unscaled before clipping, otherwise max_norm
+            # would be compared against loss-scaled gradients. No-op when the
+            # scaler is disabled (bf16 / AMP off).
+            scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=3.0)
-            optimizer.step()
+            scaler.step(optimizer)
+            scaler.update()
             if ema_model is not None:
                 ema_model.update_parameters(model)
             optimizer.zero_grad(set_to_none=True)
@@ -212,7 +219,7 @@ def _evaluate_epoch(model, dataloader, device, config, *, progress_name='Validat
 
     loss_weights = _build_loss_weights(config, device)
     use_amp = config.get('use_amp', True)
-    amp_dtype = torch.bfloat16
+    amp_dtype = resolve_amp_dtype(device)
 
     with torch.no_grad():
         total_loss_sum = torch.zeros((), dtype=torch.float64, device=device)
@@ -292,7 +299,7 @@ def test_model(model, dataloader, device, config, epoch, dataset=None, output_pr
     faces_cache = {}
 
     use_amp = config.get('use_amp', True)
-    amp_dtype = torch.bfloat16
+    amp_dtype = resolve_amp_dtype(device)
 
     total_test = len(dataloader)
     max_test_batches = int(config.get('test_max_batches', 200))

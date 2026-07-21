@@ -29,6 +29,7 @@ from parallelism.model_split import (
     set_pipeline_process_groups,
 )
 from parallelism.partition import partition_stages, partition_summary
+from training_profiles.amp import describe_amp, resolve_amp_dtype
 from training_profiles.setup import (
     build_dataset_splits,
     build_model_config,
@@ -175,7 +176,14 @@ def _split_worker_inner(rank: int, num_stages: int, config: dict, gpu_ids: list,
         print(f"[model_split rank=0] optimizer ready; warmup={warmup_epochs}, cosine_T0={cosine_T0}")
 
     use_amp = bool(config.get('use_amp', True))
-    amp_dtype = torch.bfloat16
+    amp_dtype = resolve_amp_dtype(device)
+    if use_amp and amp_dtype is torch.float16 and rank == 0:
+        # The 1F1B schedule backwards partial stage losses across P2P links, so
+        # a GradScaler would have to scale activation grads in transit too.
+        # Not wired: run this path on sm_80+ (native bf16) or with use_amp False.
+        print(f"[model_split rank=0] WARNING: {describe_amp(amp_dtype)}, and loss "
+              f"scaling is not implemented for the pipeline path — gradients may "
+              f"underflow. Prefer use_amp False here on pre-Ampere hardware.")
     modelpath = config.get('modelpath')
 
     microbatches = max(1, int(config.get('pipeline_microbatches', 2 * num_stages)))

@@ -500,15 +500,20 @@ class EncoderProcessorDecoder(nn.Module):
             ftc_key = f'fine_to_coarse_{i}'
             if not hasattr(graph, ftc_key):
                 break
+            centroid = graph[f'coarse_centroid_{i}']
             ld = {
                 'ftc': graph[ftc_key],
                 'c_ei': graph[f'coarse_edge_index_{i}'],
                 'c_ea': graph[f'coarse_edge_attr_{i}'],
-                'n_c': int(graph[f'num_coarse_{i}'].sum()),
+                # Read the coarse node count off a shape, not off the GPU:
+                # int(num_coarse_{i}.sum()) forces a CPU<->GPU sync per level on
+                # every forward. coarse_centroid_{i} has exactly num_coarse rows
+                # (batching concatenates both), so this is the same number.
+                'n_c': centroid.shape[0],
                 'c_we_idx': getattr(graph, f'coarse_world_edge_index_{i}', None),
                 'c_we_attr': getattr(graph, f'coarse_world_edge_attr_{i}', None),
                 'up_ei': graph[f'unpool_edge_index_{i}'],
-                'coarse_centroid': graph[f'coarse_centroid_{i}'],
+                'coarse_centroid': centroid,
                 'fine_pos': graph.pos if i == 0 else graph[f'coarse_centroid_{i - 1}'],
             }
             seed_key = f'coarse_seed_idx_{i}'

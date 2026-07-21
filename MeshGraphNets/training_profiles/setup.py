@@ -13,6 +13,7 @@ import torch
 
 from general_modules.data_loader import load_data
 from model.MeshGraphNets import MeshGraphNets
+from training_profiles.amp import describe_amp, resolve_amp_dtype
 from training_profiles.training_loop import build_ema_model
 
 
@@ -74,7 +75,7 @@ def log_model_summary(model, config, ema_model=None):
     if config.get('use_checkpointing', False):
         print("Gradient checkpointing: ENABLED")
     if config.get('use_amp', True):
-        print("Mixed precision (AMP): ENABLED (bfloat16)")
+        print(f"Mixed precision (AMP): ENABLED ({describe_amp(resolve_amp_dtype())})")
     if config.get('use_compile', False):
         print("torch.compile: ENABLED (dynamic=True)")
     if ema_model is not None:

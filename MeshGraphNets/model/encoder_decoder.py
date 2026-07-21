@@ -16,12 +16,38 @@ class Encoder(nn.Module):
         if use_world_edges:
             self.world_eb_encoder = build_mlp(edge_input_size, latent_dim, latent_dim)
 
+    def encode_tensors(self, x, edge_attr, world_edge_attr=None):
+        """Tensor fast path: encode node/edge/world features, no Data object.
+
+        Kept separate so gradient checkpointing wraps a tensor-in/tensor-out
+        callable. Passing a PyG Data across a `torch.utils.checkpoint` boundary
+        makes Dynamo fail outright with "lift_tracked_freevar_to_input should
+        not be called on root SubgraphTracer", so `use_checkpointing` and
+        `torch.compile` cannot both be on unless the boundary stays tensors.
+
+        Returns (node_latents, edge_latents, world_edge_latents); the last is
+        None when there are no world edges to encode.
+        """
+        node_ = self.nb_encoder(x)
+        edge_ = self.eb_encoder(edge_attr)
+        world_ = None
+        if (self.use_world_edges and world_edge_attr is not None
+                and world_edge_attr.shape[0] > 0):
+            world_ = self.world_eb_encoder(world_edge_attr)
+        return node_, edge_, world_
+
     def forward(self, graph):
-        node_ = self.nb_encoder(graph.x)
-        edge_ = self.eb_encoder(graph.edge_attr)
+        has_world = (
+            self.use_world_edges and hasattr(graph, 'world_edge_attr')
+            and graph.world_edge_index.shape[1] > 0
+        )
+        node_, edge_, world_ = self.encode_tensors(
+            graph.x, graph.edge_attr,
+            graph.world_edge_attr if has_world else None,
+        )
         out = Data(x=node_, edge_attr=edge_, edge_index=graph.edge_index)
-        if self.use_world_edges and hasattr(graph, 'world_edge_attr') and graph.world_edge_index.shape[1] > 0:
-            out.world_edge_attr = self.world_eb_encoder(graph.world_edge_attr)
+        if world_ is not None:
+            out.world_edge_attr = world_
             out.world_edge_index = graph.world_edge_index
         elif self.use_world_edges:
             out.world_edge_attr = torch.zeros(0, edge_.shape[1], device=edge_.device)
