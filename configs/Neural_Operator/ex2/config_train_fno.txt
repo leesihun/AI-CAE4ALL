@@ -52,7 +52,7 @@ max_grad_norm     3.0     # gradient-clipping max norm -- float; default 3.0
 %   Training regularization and runtime
 std_noise          0.01   # Gaussian std of training input noise -- float >= 0; default 0
 noise_gamma        1      # target-correction multiplier matching injected input noise -- default 1
-augment_geometry   False  # train-only z-rotation / x-y reflection augmentation -- {True|False}; must be False for model_split; default False
+augment_geometry   True   # train-only z-rotation / x-y reflection augmentation -- {True|False}; must be False for model_split; default False
 use_amp            True   # bfloat16 autocast on supported CUDA -- {True|False}; default True
 use_checkpointing  False  # activation checkpointing to cut memory -- {True|False}; default False
 use_ema            True   # maintain EMA weights (inference prefers EMA when stored) -- {True|False}; default False

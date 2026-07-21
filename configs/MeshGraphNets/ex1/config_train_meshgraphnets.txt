@@ -24,7 +24,7 @@ Batch_size	1
 LearningR	0.0001
 Latent_dim	128  # MeshGraphNets latent dimension
 num_workers	2    # number of workers for dataloader
-std_noise	0.1  # Artificial noise added for training only.
+std_noise	0.01  # Artificial noise added for training only.
 weight_decay	0.0001  # AdamW decoupled weight decay (decimal form only)
 augment_geometry	True  # Random Z-rotation + reflection augmentation (training only)
 grad_accum_steps	1   # Only for batch_sizes=1 but requires more batch

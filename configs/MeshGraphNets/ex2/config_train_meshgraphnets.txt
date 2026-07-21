@@ -28,7 +28,7 @@ prefetch_factor	2  # flat batches are ~350MB; 8x4 prefetch would pin ~11GB
 pin_memory	True  # 0.5GB variable-shape batches: pinning serializes in the parent (0.67s/batch vs 0.26s off)
 std_noise	0.01  # input-noise injection for autoregressive stability (multi-step)
 weight_decay	0.0001  # AdamW decoupled weight decay (decimal form only)
-augment_geometry	True  # OFF for ex2: directional y-sag breaks the Z-rotation/reflection isotropy assumption
+augment_geometry	True  # kept ON for ex2 parity across all baselines (isotropy caveat overridden)
 grad_accum_steps	1
 '
 %   Memory Optimization
