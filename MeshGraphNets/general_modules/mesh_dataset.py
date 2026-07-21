@@ -70,6 +70,10 @@ class MeshGraphDataset(Dataset):
         self._coarse_cache_max = int(config.get('coarse_cache_per_worker', 500))
         self._coarse_cache: Dict = {}  # {sample_id: list[dict]} — list from build_multiscale_hierarchy
         self._static_cache: Dict = {}  # per-worker topology and positional features
+        # Shared on-disk hierarchy/positional cache: built once, streamed by all
+        # workers. Keeps the ~15s/sample FPS-Voronoi coarsening off the hot path.
+        self._ms_cache_path = None
+        self._ms_reader = None
 
         # Per-level coarsening method. Accepted values per level:
         #   'bfs'              — BFS bi-stride, centroid pool
@@ -147,6 +151,46 @@ class MeshGraphDataset(Dataset):
         print(f"  num_timesteps: {self.num_timesteps}")
 
         self._sanity_check_mesh_topology()
+
+        # Build (or locate) the shared on-disk hierarchy cache for ALL samples.
+        # Hierarchies are pure functions of mesh topology + reference geometry
+        # (reference positions are time-invariant, and FPS uses only Euclidean
+        # distances so rotation augmentation cannot change the result), so one
+        # shared file serves every split, worker, and concurrent job.
+        if self.use_multiscale:
+            if not HAS_COARSENING:
+                raise ImportError("use_multiscale=True requires model/coarsening.py (import failed)")
+            from general_modules.multiscale_cache import ensure_cache
+            self._ms_cache_path = ensure_cache(self.h5_file, self.sample_ids, config)
+
+    def _get_ms_reader(self):
+        """Lazily open the per-process on-disk hierarchy cache reader (or None)."""
+        if getattr(self, '_ms_cache_path', None) is None:
+            return None
+        if getattr(self, '_ms_reader', None) is None:
+            from general_modules.multiscale_cache import HierarchyCacheReader
+            self._ms_reader = HierarchyCacheReader(self._ms_cache_path)
+        return self._ms_reader
+
+    def _get_hierarchy(self, sample_id: int, edge_index: np.ndarray,
+                       num_nodes: int, ref_pos: np.ndarray) -> List[dict]:
+        """Return a sample's coarsening hierarchy, preferring the on-disk cache.
+
+        Falls back to building in-process when the cache is unavailable or does
+        not carry this sample (e.g. a split whose ids were not in the set the
+        cache was built for).
+        """
+        reader = self._get_ms_reader()
+        if reader is not None:
+            try:
+                if reader.has(sample_id):
+                    return reader.get_hierarchy(sample_id)
+            except (OSError, KeyError):
+                pass  # unreadable cache: fall through and rebuild
+        return build_multiscale_hierarchy(
+            edge_index, num_nodes, ref_pos,
+            self.multiscale_levels, self.coarsening_types, self.voronoi_clusters,
+        )
 
     def _sanity_check_mesh_topology(self) -> None:
         """Validate mesh topology across all samples.
@@ -379,6 +423,10 @@ class MeshGraphDataset(Dataset):
         subset._h5_handle = None
         subset.is_training = is_training
         subset.augment_geometry = self.config.get('augment_geometry', False) and is_training
+        # The cache was built over the full sample set, so every split reads the
+        # same file; the reader itself is per-process and opened lazily.
+        subset._ms_cache_path = self._ms_cache_path
+        subset._ms_reader = None
         return subset
 
     def _resolve_split_ids(self, train_ratio: float, val_ratio: float, test_ratio: float, seed: int):
@@ -490,9 +538,8 @@ class MeshGraphDataset(Dataset):
                 first_pos_data = data_h5[:3, 0, :]  # [3, nodes] — ref xyz
                 level_ref_pos = first_pos_data.T     # [N, 3]
 
-                hierarchy = build_multiscale_hierarchy(
-                    edge_idx, num_nodes, level_ref_pos,
-                    L, self.coarsening_types, self.voronoi_clusters,
+                hierarchy = self._get_hierarchy(
+                    sid, edge_idx, num_nodes, level_ref_pos,
                 )
                 actual_levels = len(hierarchy)
 
@@ -637,8 +684,17 @@ class MeshGraphDataset(Dataset):
 
         x_pos = None
         if self.num_pos_features > 0:
-            ref_pos_0 = first_step[:3, :].T
-            x_pos = compute_positional_features(ref_pos_0, edge_index, self.num_pos_features)
+            # The shared cache carries positional features alongside the
+            # hierarchy; computing them costs ~2s/sample otherwise.
+            reader = self._get_ms_reader()
+            if reader is not None:
+                try:
+                    x_pos = reader.get_pos(sample_id) if reader.has(sample_id) else None
+                except (OSError, KeyError):
+                    x_pos = None
+            if x_pos is None:
+                ref_pos_0 = first_step[:3, :].T
+                x_pos = compute_positional_features(ref_pos_0, edge_index, self.num_pos_features)
 
         cached = (edge_index, x_pos, node_types)
         if self._coarse_cache_max > 0:
@@ -653,6 +709,7 @@ class MeshGraphDataset(Dataset):
         state['_h5_handle'] = None
         state['_coarse_cache'] = {}    # workers start with empty cache; they build lazily
         state['_static_cache'] = {}
+        state['_ms_reader'] = None     # holds an HDF5 handle; workers reopen lazily
         return state
 
     def __setstate__(self, state):
@@ -752,6 +809,9 @@ class MeshGraphDataset(Dataset):
         else:
             x_raw = x_phys
 
+        # Reference positions before augmentation, kept for the coarsening cache.
+        ref_pos_raw = pos
+
         # Geometric augmentation: Z-axis rotation + reflection (training only)
         if getattr(self, 'augment_geometry', False):
             R = self._random_augmentation_matrix()  # [3, 3]
@@ -843,10 +903,12 @@ class MeshGraphDataset(Dataset):
             # Retrieve from cache (or compute on-demand for split subsets)
             if sample_id not in self._coarse_cache:
                 raw_edge_idx = edge_index.numpy()  # already bidirectional [2, 2M]
-                level_ref_pos = pos.numpy()         # [N, 3] for Euclidean FPS
-                hierarchy = build_multiscale_hierarchy(
-                    raw_edge_idx, pos.shape[0], level_ref_pos,
-                    self.multiscale_levels, self.coarsening_types, self.voronoi_clusters,
+                # Unrotated reference positions: `pos` may already carry this
+                # item's random augmentation, and a cached hierarchy must not
+                # depend on whichever draw happened to miss the cache first.
+                level_ref_pos = ref_pos_raw         # [N, 3] for Euclidean FPS
+                hierarchy = self._get_hierarchy(
+                    sample_id, raw_edge_idx, pos.shape[0], level_ref_pos,
                 )
                 # LRU-style eviction: evict oldest entry if over capacity
                 if len(self._coarse_cache) >= self._coarse_cache_max:
