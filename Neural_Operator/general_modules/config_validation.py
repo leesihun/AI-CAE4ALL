@@ -23,6 +23,8 @@ COMMON_KEYS = {
     "warmup_epochs", "num_workers", "prefetch_factor", "grad_accum_steps",
     "max_grad_norm",
     "std_noise", "noise_gamma", "noise_std_ratio",
+    # Time integration (training_profiles/ar_rollout.py): ar_ot (default) or ar_rt.
+    "time_integration",
     "augment_geometry",
     "use_amp", "use_checkpointing", "use_ema", "ema_decay", "use_compile",
     "val_interval", "test_interval", "test_max_batches", "test_batch_idx",
@@ -36,7 +38,7 @@ COMMON_KEYS = {
     # injected at runtime by setup.py / dataset construction, not user-set,
     # but must be tolerated when a saved config is echoed back:
     "num_timesteps", "num_node_types", "_pin_memory", "_ddp_port", "log_dir",
-    "_paper_target_mean", "_paper_target_std",
+    "_paper_target_mean", "_paper_target_std", "_norm_stats",
 }
 
 POINT_DEEPONET_KEYS = {

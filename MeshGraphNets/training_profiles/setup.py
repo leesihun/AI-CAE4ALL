@@ -43,6 +43,11 @@ def build_dataset_splits(config, split_seed: int):
             train_dataset.node_std[:output_var] / np.maximum(train_dataset.delta_std, 1e-8)
         ).tolist()
 
+    # AR-RT rebuilds normalized features on-device at every unrolled step, so
+    # the training loop needs the same stats the dataset normalizes with.
+    config['_norm_stats'] = build_normalization_dict(train_dataset)
+    config['_norm_stats']['world_edge_radius'] = train_dataset.world_edge_radius
+
     return train_dataset, val_dataset, test_dataset
 
 

@@ -14,3 +14,6 @@ function_eval_chunk 256
 resume True
 # Figure 2e gives a curve rather than a numeric table; this is an approximate comparator.
 paper_plot_normalized_mse 0.0012
+'
+%   Time integration (CONFIGURATION_REFERENCE.md section 3.5)
+time_integration	ar_ot  # ar_ot = one-step/teacher-forced (default); ar_rt = full-trajectory autoregressive rollout training

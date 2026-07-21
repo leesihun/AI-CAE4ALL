@@ -38,3 +38,6 @@ use_amp False
 max_grad_norm 0.0
 checkpoint_interval 10
 test_interval 0
+'
+%   Time integration (CONFIGURATION_REFERENCE.md section 3.5)
+time_integration	ar_ot  # ar_ot = one-step/teacher-forced (default); ar_rt = full-trajectory autoregressive rollout training

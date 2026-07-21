@@ -19,6 +19,13 @@ from model.conditional_prior import (
     mixture_nll,
     sample_from_mixture,
 )
+from general_modules.time_integration import resolve_rollout_window
+from training_profiles.ar_rollout import (
+    RolloutContext,
+    ar_rt_enabled,
+    describe_ar_rt,
+    rollout_loss,
+)
 
 
 def _unwrap_for_submodule(model):
@@ -129,6 +136,140 @@ def _delta_stats(dataloader, device):
     return None, None
 
 
+
+class _ObjectiveTerms:
+    """Resolved weights and switches for one epoch's objective.
+
+    Lifted out of the batch loop so the same composition serves both the
+    one-step (AR-OT) path and each step of an AR-RT unroll -- the objective is
+    defined once, and the time-integration scheme only decides how many times
+    it is evaluated.
+    """
+
+    def __init__(self, config, inner_model, use_amp, amp_dtype, loss_weights):
+        self.use_amp = use_amp
+        self.amp_dtype = amp_dtype
+        self.loss_weights = loss_weights
+        self.recon_loss_kind = config.get('recon_loss', 'huber')
+
+        self.use_vae = config.get('use_vae', False)
+        self.alpha_recon = float(config.get('alpha_recon', 1.0))
+        self.lambda_mmd = float(config.get('lambda_mmd', 1.0))
+        self.beta_aux = float(config.get('beta_aux', 1.0))
+
+        prior_type = str(config.get('prior_type', '')).lower().strip()
+        self.inner_model = inner_model
+        self.has_gnn_prior = (
+            self.use_vae and prior_type == 'gnn_e2e'
+            and getattr(inner_model, 'prior', None) is not None
+        )
+        prior_family = getattr(getattr(inner_model, 'prior', None), 'family', 'gmm')
+        self.prior_loss_weight = float(config.get('prior_nll_weight', 1.0)) if self.has_gnn_prior else 0.0
+        self.prior_kl_reg_weight = (
+            float(config.get('prior_kl_reg_weight', 0.02))
+            if (self.has_gnn_prior and prior_family == 'gmm') else 0.0
+        )
+        self.compute_prior_path = self.has_gnn_prior and (
+            self.prior_loss_weight > 0.0 or self.prior_kl_reg_weight > 0.0
+        )
+
+
+def _compose_loss(model, graph, terms):
+    """Evaluate the full objective on one forward pass.
+
+    Returns `(prediction, loss, recon_sum, mmd, aux, kl_anchor, prior_loss)` --
+    all tensors, so an AR-RT step can be gradient-checkpointed wholesale.
+    """
+    with torch.amp.autocast('cuda', dtype=terms.amp_dtype, enabled=terms.use_amp):
+        predicted_acc, target_acc, vae_losses, aux_loss_val, prior_outputs = model(
+            graph, compute_prior_path=terms.compute_prior_path,
+        )
+        mmd_loss_val = vae_losses['mmd']
+
+    # KL anchor for the gmm prior family. Computed in fp32 outside the autocast
+    # region because analytical_prior_kl_loss does exp(log_var_k) and 1/var_k
+    # which underflow in bfloat16. .detach() on mu, logvar so the encoder isn't
+    # dragged by the anchor -- only the prior is constrained.
+    kl_anchor_val = torch.zeros((), device=predicted_acc.device, dtype=torch.float32)
+    if (prior_outputs is not None
+            and prior_outputs.get('prior_params') is not None
+            and terms.prior_kl_reg_weight > 0.0
+            and vae_losses.get('mu') is not None):
+        kl_anchor_val = analytical_prior_kl_loss(
+            {k: v.float() for k, v in prior_outputs['prior_params'].items()},
+            vae_losses['mu'].detach().float(),
+            vae_losses['logvar'].detach().float(),
+        )
+
+    # Prior density-matching loss on a FRESH posterior sample (detached, fp32).
+    # Resampling z ~ q(z|y) every step makes the target the smoothed posterior
+    # cloud rather than a fixed set of points. Gradient reaches only the prior --
+    # q is detached; for fm it also flows into the prior's trunk via the pooled
+    # conditioning vector from the forward pass.
+    prior_loss_val = torch.zeros((), device=predicted_acc.device, dtype=torch.float32)
+    if (prior_outputs is not None
+            and terms.prior_loss_weight > 0.0
+            and vae_losses.get('mu') is not None):
+        mu_q = vae_losses['mu'].detach().float()
+        logvar_q = vae_losses['logvar'].detach().float()
+        z_fresh = mu_q + torch.exp(0.5 * logvar_q) * torch.randn_like(mu_q)
+        if prior_outputs.get('pooled') is not None:
+            prior_loss_val = terms.inner_model.prior.fm_loss(
+                prior_outputs['pooled'], z_fresh,
+            )
+        else:
+            prior_loss_val = mixture_nll(
+                {k: v.float() for k, v in prior_outputs['prior_params'].items()},
+                z_fresh,
+            )
+
+    with torch.amp.autocast('cuda', dtype=terms.amp_dtype, enabled=terms.use_amp):
+        errors = _recon_errors(predicted_acc, target_acc, terms.recon_loss_kind)
+        recon_loss, batch_loss_sum, _ = _loss_from_errors(errors, terms.loss_weights)
+        if terms.use_vae:
+            loss = (terms.alpha_recon * recon_loss
+                    + terms.lambda_mmd * mmd_loss_val
+                    + terms.beta_aux * aux_loss_val)
+            # Joint GNN E2E prior contribution: density matching (mixture NLL or
+            # flow-matching MSE; + small KL anchor for gmm).
+            if prior_outputs is not None and terms.prior_kl_reg_weight > 0.0:
+                loss = loss + terms.prior_kl_reg_weight * kl_anchor_val
+            if prior_outputs is not None and terms.prior_loss_weight > 0.0:
+                loss = loss + terms.prior_loss_weight * prior_loss_val
+        else:
+            loss = recon_loss
+
+    aux_tensor = torch.as_tensor(aux_loss_val, device=predicted_acc.device, dtype=torch.float32)
+    return (predicted_acc, loss, batch_loss_sum,
+            mmd_loss_val, aux_tensor, kl_anchor_val, prior_loss_val)
+
+
+def _build_rollout_context(config, device):
+    """Return an AR-RT context, or None when the run is AR-OT."""
+    return RolloutContext(config, device) if ar_rt_enabled(config) else None
+
+
+def _objective_for_batch(model, graph, terms, rollout_ctx, training=True):
+    """Apply the objective under whichever time-integration scheme is active.
+
+    Returns `(loss, recon_sum, recon_count, mmd, aux, kl_anchor, prior_loss)`.
+    Under AR-RT every returned term is the trajectory average of the per-step
+    term, so downstream logging and gradient scaling are unchanged.
+    """
+    if rollout_ctx is None:
+        prediction, loss, recon_sum, mmd, aux, kl_anchor, prior_loss = _compose_loss(
+            model, graph, terms
+        )
+        return loss, recon_sum, prediction.shape[0], mmd, aux, kl_anchor, prior_loss
+
+    loss, _, recon_sum, recon_count, extras = rollout_loss(
+        model, graph, rollout_ctx,
+        lambda g: _compose_loss(model, g, terms),
+        training=training,
+    )
+    return (loss, recon_sum, recon_count, *extras)
+
+
 def _move_graph_to_device(graph, device, config):
     non_blocking = bool(config.get('_pin_memory', False)) and getattr(device, 'type', None) == 'cuda'
     return graph.to(device, non_blocking=non_blocking)
@@ -153,6 +294,11 @@ def log_training_config(config):
         print(f"Per-feature loss weights (normalized):  {[f'{v:.4f}' for v in w_normalized]}")
     else:
         print("Per-feature loss weights: equal (default)")
+
+    if ar_rt_enabled(config):
+        print(describe_ar_rt(resolve_rollout_window(config, int(config.get('num_timesteps', 1)))))
+    else:
+        print("Time integration: AR-OT (one-step / teacher-forced training)")
 
     if config.get('use_vae', False):
         z_dim   = config.get('vae_latent_dim', 32)
@@ -261,70 +407,22 @@ def train_epoch(model, dataloader, optimizer, device, config, epoch, ema_model=N
     total_batches = len(dataloader)
     actual_accum = total_batches if grad_accum_steps == 0 else grad_accum_steps
 
+    objective_terms = _ObjectiveTerms(config, inner_model, use_amp, amp_dtype, loss_weights)
+    rollout_ctx = _build_rollout_context(config, device)
+
     optimizer.zero_grad(set_to_none=True)
 
     pbar = tqdm.tqdm(dataloader, total=total_batches)
     for batch_idx, graph in enumerate(pbar):
         graph = _move_graph_to_device(graph, device, config)
 
-        with torch.amp.autocast('cuda', dtype=amp_dtype, enabled=use_amp):
-            predicted_acc, target_acc, vae_losses, aux_loss_val, prior_outputs = model(
-                graph, compute_prior_path=compute_prior_path,
-            )
-            mmd_loss_val = vae_losses['mmd']
+        (loss, batch_loss_sum, batch_loss_count, mmd_loss_val, aux_loss_val,
+         kl_anchor_val, prior_loss_val) = _objective_for_batch(
+            model, graph, objective_terms, rollout_ctx, training=True,
+        )
 
-        # KL anchor for the gmm prior family. Computed in fp32 outside the
-        # autocast region because analytical_prior_kl_loss does exp(log_var_k)
-        # and 1/var_k which underflow in bfloat16. .detach() on μ, logvar so the
-        # encoder isn't dragged by the anchor — only the prior is constrained.
-        kl_anchor_val = torch.zeros((), device=predicted_acc.device, dtype=torch.float32)
-        if (prior_outputs is not None
-                and prior_outputs.get('prior_params') is not None
-                and prior_kl_reg_weight > 0.0
-                and vae_losses.get('mu') is not None):
-            kl_anchor_val = analytical_prior_kl_loss(
-                {k: v.float() for k, v in prior_outputs['prior_params'].items()},
-                vae_losses['mu'].detach().float(),
-                vae_losses['logvar'].detach().float(),
-            )
-
-        # Prior density-matching loss on a FRESH posterior sample (detached,
-        # fp32). Resampling z ~ q(z|y) every step makes the target the smoothed
-        # posterior cloud rather than a fixed set of points. Gradient reaches
-        # only the prior — q is detached; for fm it also flows into the prior's
-        # trunk via the pooled conditioning vector from the forward pass.
-        prior_loss_val = torch.zeros((), device=predicted_acc.device, dtype=torch.float32)
-        if (prior_outputs is not None
-                and prior_loss_weight > 0.0
-                and vae_losses.get('mu') is not None):
-            mu_q = vae_losses['mu'].detach().float()
-            logvar_q = vae_losses['logvar'].detach().float()
-            z_fresh = mu_q + torch.exp(0.5 * logvar_q) * torch.randn_like(mu_q)
-            if prior_outputs.get('pooled') is not None:
-                prior_loss_val = inner_model.prior.fm_loss(
-                    prior_outputs['pooled'], z_fresh,
-                )
-            else:
-                prior_loss_val = mixture_nll(
-                    {k: v.float() for k, v in prior_outputs['prior_params'].items()},
-                    z_fresh,
-                )
-
-        with torch.amp.autocast('cuda', dtype=amp_dtype, enabled=use_amp):
-            errors = _recon_errors(predicted_acc, target_acc, recon_loss_kind)
-            recon_loss, batch_loss_sum, batch_loss_count = _loss_from_errors(errors, loss_weights)
-            if use_vae:
-                loss = alpha_recon * recon_loss + lambda_mmd * mmd_loss_val + beta_aux * aux_loss_val
-                # Joint GNN E2E prior contribution: density matching (mixture
-                # NLL or flow-matching MSE; + small KL anchor for gmm).
-                if prior_outputs is not None and prior_kl_reg_weight > 0.0:
-                    loss = loss + prior_kl_reg_weight * kl_anchor_val
-                if prior_outputs is not None and prior_loss_weight > 0.0:
-                    loss = loss + prior_loss_weight * prior_loss_val
-            else:
-                loss = recon_loss
-            # Scale loss so accumulated gradients equal the mean within each accumulation window.
-            scaled_loss = loss / _accum_window_size(batch_idx, total_batches, actual_accum)
+        # Scale loss so accumulated gradients equal the mean within each accumulation window.
+        scaled_loss = loss / _accum_window_size(batch_idx, total_batches, actual_accum)
 
         # Suppress DDP gradient all-reduce on non-step batches (accumulation window).
         # no_sync() is a no-op on non-DDP models; hasattr check keeps single-GPU path clean.
@@ -343,7 +441,7 @@ def train_epoch(model, dataloader, optimizer, device, config, epoch, ema_model=N
             total_mmd_gpu += mmd_loss_val.detach().float()
             total_aux_gpu += aux_loss_val.detach().float()
             mmd_count += 1
-            if prior_outputs is not None:
+            if compute_prior_path:
                 total_kl_anchor_gpu  += kl_anchor_val.detach()
                 total_prior_loss_gpu += prior_loss_val.detach()
 
@@ -369,8 +467,8 @@ def train_epoch(model, dataloader, optimizer, device, config, epoch, ema_model=N
                 postfix['mmd'] = f'{float(mmd_loss_val):.2e}'
                 postfix['aux'] = f'{float(aux_loss_val):.2e}'
                 postfix['λ']   = f'{lambda_mmd:.1e}'
-                if prior_outputs is not None:
-                    p_key = 'fm_p' if prior_outputs.get('pooled') is not None else 'nll_p'
+                if compute_prior_path:
+                    p_key = 'fm_p' if prior_family == 'fm' else 'nll_p'
                     postfix[p_key] = f'{prior_loss_val.item():.2e}'
                     if prior_kl_reg_weight > 0.0:
                         postfix['kl_a'] = f'{kl_anchor_val.item():.2e}'
@@ -406,6 +504,22 @@ def _evaluate_epoch(model, dataloader, device, config, epoch=0, *,
     use_vae = config.get('use_vae', False)
     alpha_recon = float(config.get('alpha_recon', 1.0))
     lambda_mmd = float(config.get('lambda_mmd', 1.0))
+    # Validation follows the training scheme: under AR-RT the reported loss is
+    # the rollout loss, so best-checkpoint selection optimizes the quantity the
+    # run is actually training for.
+    rollout_ctx = _build_rollout_context(config, device)
+
+    def compose_eval(g):
+        """Validation's objective (reconstruction + MMD) on one forward pass."""
+        with torch.amp.autocast('cuda', dtype=amp_dtype, enabled=use_amp):
+            predicted, target, vae_losses, _, _ = model(
+                g, add_noise=False, use_posterior=use_posterior,
+            )
+            errors = _recon_errors(predicted, target, recon_loss_kind)
+        mmd = vae_losses['mmd']
+        recon_loss, recon_sum, _ = _loss_from_errors(errors, loss_weights)
+        opt = alpha_recon * recon_loss + lambda_mmd * mmd if use_vae else recon_loss
+        return predicted, opt, recon_sum, mmd
 
     with torch.no_grad():
         total_loss_sum = 0.0
@@ -419,21 +533,19 @@ def _evaluate_epoch(model, dataloader, device, config, epoch=0, *,
         for batch_idx, graph in enumerate(pbar):
             graph = _move_graph_to_device(graph, device, config)
 
-            with torch.amp.autocast('cuda', dtype=amp_dtype, enabled=use_amp):
-                predicted, target, vae_losses, _, _ = model(
-                    graph, add_noise=False, use_posterior=use_posterior,
+            if rollout_ctx is None:
+                predicted, opt_loss, batch_loss_sum, mmd_loss_val = compose_eval(graph)
+                batch_loss_count = predicted.shape[0]
+            else:
+                opt_loss, _, batch_loss_sum, batch_loss_count, extras = rollout_loss(
+                    model, graph, rollout_ctx, compose_eval, training=False,
                 )
-                errors = _recon_errors(predicted, target, recon_loss_kind)
-            mmd_loss_val = vae_losses['mmd']
+                mmd_loss_val = extras[0]
 
-            recon_loss, batch_loss_sum, batch_loss_count = _loss_from_errors(errors, loss_weights)
+            total_opt_loss_gpu += opt_loss.detach() * batch_loss_count
             if use_vae:
-                opt_loss = alpha_recon * recon_loss + lambda_mmd * mmd_loss_val
-                total_opt_loss_gpu += opt_loss.detach() * batch_loss_count
                 total_mmd_gpu += mmd_loss_val.detach().float()
                 mmd_count += 1
-            else:
-                total_opt_loss_gpu += recon_loss.detach() * batch_loss_count
 
             total_loss_sum += batch_loss_sum
             total_loss_count += batch_loss_count

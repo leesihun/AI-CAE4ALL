@@ -53,3 +53,6 @@ display_trainset	False
 display_testset	False
 test_batch_idx	0, 1
 plot_feature_idx	1
+'
+%   Time integration (CONFIGURATION_REFERENCE.md section 3.5)
+time_integration	ar_ot  # ar_ot = one-step/teacher-forced (default); ar_rt = full-trajectory autoregressive rollout training

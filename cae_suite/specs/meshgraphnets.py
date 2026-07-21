@@ -32,6 +32,8 @@ MGN_KEYS = frozenset(
         "test_batch_idx", "plot_feature_idx", "use_multiscale", "coarsening_type",
         "voronoi_clusters", "multiscale_levels", "mp_per_level", "profile_batches",
         "pipeline_microbatches",
+        # Time integration (CONFIGURATION_REFERENCE.md section 3.5): ar_ot or ar_rt.
+        "time_integration",
     }
 )
 

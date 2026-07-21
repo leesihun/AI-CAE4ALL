@@ -89,3 +89,6 @@ prior_fm_steps	40  # Euler integration steps for FM-prior sampling/validation
 prior_mp_layers	5  # Prior message-passing depth
 prior_hidden_dim	384  # Conditional-prior hidden width
 prior_temperature	1.0  # Sampling spread control (inference only)
+'
+%   Time integration (CONFIGURATION_REFERENCE.md sections 3.5 and 6.7)
+time_integration	ar_ot  # ar_ot = one-step/teacher-forced (default); ar_rt = full-trajectory autoregressive rollout training

@@ -21,6 +21,14 @@ from torch.optim.swa_utils import AveragedModel, get_ema_multi_avg_fn
 from torch.utils.data import Subset
 from torch_geometric.loader import DataLoader
 
+from general_modules.time_integration import resolve_rollout_window
+from training_profiles.ar_rollout import (
+    RolloutContext,
+    ar_rt_enabled,
+    describe_ar_rt,
+    rollout_loss,
+)
+
 
 def build_ema_model(model, config):
     """Create an EMA shadow model if use_ema is enabled."""
@@ -63,6 +71,28 @@ def _loss_from_errors(errors, loss_weights):
     return loss_sum / loss_count, loss_sum.detach(), loss_count
 
 
+def _build_rollout_context(config, device):
+    """Return an AR-RT context, or None when the run is AR-OT."""
+    return RolloutContext(config, device) if ar_rt_enabled(config) else None
+
+
+def _forward_and_loss(model, graph, ctx, loss_weights, training):
+    """One optimization target for a batch, under whichever scheme is active.
+
+    AR-OT evaluates the model once on a ground-truth input pair; AR-RT unrolls
+    it over the trajectory. Both return `(loss, loss_sum, loss_count)`.
+    """
+    def loss_fn(prediction, target):
+        errors = torch.nn.functional.mse_loss(prediction, target, reduction='none')
+        return _loss_from_errors(errors, loss_weights)
+
+    if ctx is not None:
+        return rollout_loss(model, graph, ctx, loss_fn, training=training)
+
+    predicted, target = model(graph) if training else model(graph, add_noise=False)
+    return loss_fn(predicted, target)
+
+
 def _move_graph_to_device(graph, device, config):
     non_blocking = bool(config.get('_pin_memory', False)) and getattr(device, 'type', None) == 'cuda'
     return graph.to(device, non_blocking=non_blocking)
@@ -88,6 +118,10 @@ def log_training_config(config):
         print("Per-feature loss weights: equal (default)")
     print(f"attention_kernel: {config.get('attention_kernel', 'naive')}, "
           f"chunk_size: {config.get('chunk_size', 0)}")
+    if ar_rt_enabled(config):
+        print(describe_ar_rt(resolve_rollout_window(config, int(config.get('num_timesteps', 1)))))
+    else:
+        print("Time integration: AR-OT (one-step / teacher-forced training)")
 
 
 def train_epoch(model, dataloader, optimizer, device, config, epoch, ema_model=None):
@@ -112,6 +146,8 @@ def train_epoch(model, dataloader, optimizer, device, config, epoch, ema_model=N
     actual_accum = total_batches if grad_accum_steps == 0 else grad_accum_steps
     max_grad_norm = float(config.get('max_grad_norm', 3.0))
 
+    rollout_ctx = _build_rollout_context(config, device)
+
     optimizer.zero_grad(set_to_none=True)
 
     pbar = tqdm.tqdm(dataloader, total=total_batches)
@@ -121,9 +157,9 @@ def train_epoch(model, dataloader, optimizer, device, config, epoch, ema_model=N
         graph = _move_graph_to_device(graph, device, config)
 
         with torch.amp.autocast('cuda', dtype=amp_dtype, enabled=use_amp and device.type == 'cuda'):
-            predicted, target = model(graph)
-            errors = torch.nn.functional.mse_loss(predicted, target, reduction='none')
-            loss, batch_loss_sum, batch_loss_count = _loss_from_errors(errors, loss_weights)
+            loss, batch_loss_sum, batch_loss_count = _forward_and_loss(
+                model, graph, rollout_ctx, loss_weights, training=True,
+            )
             scaled_loss = loss / _accum_window_size(batch_idx, total_batches, actual_accum)
 
         scaled_loss.backward()
@@ -158,6 +194,10 @@ def _evaluate_epoch(model, dataloader, device, config, *, progress_name='Validat
     use_amp = config.get('use_amp', True)
     amp_dtype = torch.bfloat16
     max_val_batches = int(config.get('max_val_batches', 0))
+    # Validation follows the training scheme: under AR-RT the reported loss is
+    # the rollout loss, so best-checkpoint selection optimizes the quantity the
+    # run is actually training for.
+    rollout_ctx = _build_rollout_context(config, device)
 
     with torch.no_grad():
         total_loss_sum = torch.zeros((), dtype=torch.float64, device=device)
@@ -173,9 +213,9 @@ def _evaluate_epoch(model, dataloader, device, config, *, progress_name='Validat
                 break
             graph = _move_graph_to_device(graph, device, config)
             with torch.amp.autocast('cuda', dtype=amp_dtype, enabled=use_amp and device.type == 'cuda'):
-                predicted, target = model(graph, add_noise=False)
-                errors = torch.nn.functional.mse_loss(predicted, target, reduction='none')
-            _, batch_loss_sum, batch_loss_count = _loss_from_errors(errors, loss_weights)
+                _, batch_loss_sum, batch_loss_count = _forward_and_loss(
+                    model, graph, rollout_ctx, loss_weights, training=False,
+                )
 
             if batch_idx % 10 == 0:
                 mem_gb = torch.cuda.memory_allocated() / 1e9 if torch.cuda.is_available() else 0

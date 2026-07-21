@@ -42,6 +42,15 @@ def build_dataset_splits(config, split_seed: int):
             train_dataset.node_std[:output_var] / np.maximum(train_dataset.delta_std, 1e-8)
         ).tolist()
 
+    # AR-RT re-normalizes node features on-device at every unrolled step, so
+    # the training loop needs the same stats the dataset normalizes with.
+    config['_norm_stats'] = {
+        'node_mean': train_dataset.node_mean,
+        'node_std': train_dataset.node_std,
+        'delta_mean': train_dataset.delta_mean,
+        'delta_std': train_dataset.delta_std,
+    }
+
     return train_dataset, val_dataset, test_dataset
 
 

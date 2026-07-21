@@ -65,3 +65,6 @@ test_interval  100  # periodic test-visualization cadence in epochs -- positive 
 use_world_edges      False  # must stay False -- Transolver does not consume graph edges -- {False}
 use_multiscale       False  # must stay False -- MGN multiscale hierarchy is unsupported here -- {False}
 write_preprocessing  False  # must stay False -- writing normalization back into the source HDF5 is rejected -- {False}
+'
+%   Time integration (CONFIGURATION_REFERENCE.md section 3.5)
+time_integration	ar_ot  # ar_ot = one-step/teacher-forced (default); ar_rt = full-trajectory autoregressive rollout training

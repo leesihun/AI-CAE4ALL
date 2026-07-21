@@ -50,3 +50,6 @@ plot_feature_idx	-1  # Feature index to visualize in plots (-1 = last feature, i
 '
 %   Multi-Scale / Hierarchical Parameters
 use_multiscale	False
+'
+%   Time integration (CONFIGURATION_REFERENCE.md section 3.5)
+time_integration	ar_ot  # ar_ot = one-step/teacher-forced (default); ar_rt = full-trajectory autoregressive rollout training

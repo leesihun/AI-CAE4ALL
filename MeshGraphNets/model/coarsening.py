@@ -487,8 +487,9 @@ def build_unpool_edges(
 
 # Regex to extract level index from attribute names like "fine_to_coarse_0"
 _LEVEL_RE = re.compile(
-    r'^(fine_to_coarse|coarse_edge_index|coarse_edge_attr|coarse_centroid'
-    r'|coarse_seed_idx|unpool_edge_index|num_coarse)_(\d+)$'
+    r'^(fine_to_coarse|coarse_world_edge_index|coarse_world_edge_attr'
+    r'|coarse_edge_index|coarse_edge_attr|coarse_centroid'
+    r'|coarse_seed_idx|coarse_anchor_idx|unpool_edge_index|num_coarse)_(\d+)$'
 )
 
 
@@ -507,10 +508,29 @@ class MultiscaleData(Data):
                                                     present only when the
                                                     level uses voronoi_inherit
                                                     mode.
+        coarse_anchor_idx_{i} [num_coarse_i] long — fine-node index of each
+                                                    cluster's position anchor.
+                                                    Optional: written only for
+                                                    seed-anchored levels under
+                                                    AR-RT, where the rollout
+                                                    re-derives coarse positions
+                                                    every step. Unlike
+                                                    coarse_seed_idx it never
+                                                    changes how the model pools.
+
+        coarse_world_edge_index_{i} [2, W_i] — lifted contact edges at level i+1,
+                                               and coarse_world_edge_attr_{i}
+                                               [W_i, 8] their features. Optional:
+                                               present only when
+                                               coarse_world_edges is enabled.
 
     When Batch.from_data_list combines multiple MultiscaleData objects:
     - fine_to_coarse_{i} values are offset by cumulative num_coarse_{i} counts
     - coarse_edge_index_{i} values are offset by cumulative num_coarse_{i} counts
+    - coarse_world_edge_index_{i} is offset the same way. Without an explicit
+      rule PyG falls back to its default `'index'` heuristic and offsets these
+      by the *fine* node count, which silently mixes samples together at
+      batch_size > 1 — they live in level i+1's node space, not the mesh's.
     - coarse_edge_attr_{i} is concatenated along dim 0 (no offset needed)
     - coarse_seed_idx_{i} values are offset by cumulative fine-node counts
       (level 0 → num_nodes; level i>0 → num_coarse_{i-1})
@@ -521,14 +541,14 @@ class MultiscaleData(Data):
         m = _LEVEL_RE.match(key)
         if m:
             prefix, level = m.group(1), m.group(2)
-            if prefix in ('fine_to_coarse', 'coarse_edge_index'):
+            if prefix in ('fine_to_coarse', 'coarse_edge_index', 'coarse_world_edge_index'):
                 return int(self[f'num_coarse_{level}'])
             if prefix == 'unpool_edge_index':
                 # Row 0 = coarse src (offset by num_coarse), Row 1 = fine dst (offset by fine node count)
                 coarse_inc = int(self[f'num_coarse_{level}'])
                 fine_inc = self.num_nodes if int(level) == 0 else int(self[f'num_coarse_{int(level) - 1}'])
                 return torch.tensor([[coarse_inc], [fine_inc]])
-            if prefix == 'coarse_seed_idx':
+            if prefix in ('coarse_seed_idx', 'coarse_anchor_idx'):
                 # Indices into level (l-1)'s node space (or fine-node space at l=0).
                 lvl = int(level)
                 return self.num_nodes if lvl == 0 else int(self[f'num_coarse_{lvl - 1}'])
@@ -538,9 +558,10 @@ class MultiscaleData(Data):
         m = _LEVEL_RE.match(key)
         if m:
             prefix = m.group(1)
-            if prefix in ('coarse_edge_index', 'unpool_edge_index'):
+            if prefix in ('coarse_edge_index', 'coarse_world_edge_index',
+                          'unpool_edge_index'):
                 return 1   # [2, E] — concatenate along edge dimension
-            if prefix in ('fine_to_coarse', 'coarse_edge_attr', 'coarse_centroid',
-                          'coarse_seed_idx'):
+            if prefix in ('fine_to_coarse', 'coarse_edge_attr', 'coarse_world_edge_attr',
+                          'coarse_centroid', 'coarse_seed_idx', 'coarse_anchor_idx'):
                 return 0   # [N, ...] — concatenate along node/edge dim
         return super().__cat_dim__(key, value, *args, **kwargs)

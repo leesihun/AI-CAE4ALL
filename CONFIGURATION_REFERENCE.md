@@ -201,6 +201,65 @@ exact `point_deeponet`, `deeponet`, `fno`, or `gino` entry is added.
 | `_pin_memory` | D | DataLoader/model-split | Runtime CUDA-derived pin-memory flag. |
 | `log_dir` | D | profiling | Derived from `log_file_dir`. |
 
+### 3.5 Time integration: AR-OT and AR-RT
+
+Active in both MeshGraphNets variants, Transolver, and all four Neural Operator
+models. Only meaningful for temporal datasets (`num_timesteps > 1`); `ar_rt` on
+a static dataset is rejected at dataset construction.
+
+| Key | Need | Native default | Meaning |
+| --- | --- | --- | --- |
+| `time_integration` | O | `ar_ot` | `ar_ot` or `ar_rt` (the hyphenated `AR-OT`/`AR-RT` spelling is also accepted). |
+
+**AR-OT** (the default, and the repository's only previous behavior) trains on
+ground-truth consecutive pairs — teacher forcing — and first feeds the model
+its own predictions at inference. `std_noise` exists to paper over that
+train/test mismatch.
+
+**AR-RT** unrolls the model over the whole trajectory during training,
+consuming its own predictions exactly as inference does, so it learns to
+correct its own accumulated error. It follows NVIDIA/GM's crash-dynamics study
+(arXiv:2510.15201) and its reference implementation
+(`physicsnemo/examples/structural_mechanics/crash/rollout.py`): unroll
+`num_timesteps - 1` steps, backpropagate through all of them without detaching,
+gradient-checkpoint every step so that fits, and inject no noise. There are no
+further knobs — `time_integration ar_rt` selects the whole recipe.
+
+Practical notes:
+
+- **Item count changes.** This repository's AR-OT gives each `(t, t+1)` pair its
+  own dataset item, so a `T`-step trajectory yields `T-1` separate optimizer
+  steps. AR-RT gives the whole trajectory one item — one forward unrolls every
+  step, one loss reduces the whole trajectory, one backward, one optimizer
+  step, exactly mirroring the reference training harness (which applies that
+  same one-trajectory-per-item granularity to *both* of its schemes; only the
+  per-step input feeding differs there, teacher-forced vs. autoregressive).
+  Per-epoch data volume and per-epoch node evaluations are unchanged here, but
+  an epoch now performs roughly `T` times fewer optimizer steps. Raise
+  `training_epochs` by about that factor to keep the same number of weight
+  updates. The per-step loss is averaged over the trajectory, so gradient
+  magnitudes — and therefore learning rates — carry over unchanged.
+- **Memory.** The unroll holds one state tensor per timestep plus one step's
+  activations. Per-step checkpointing is what keeps this within reach; a long
+  trajectory on a large mesh is still the most expensive way to train.
+- **Validation follows training.** Under `ar_rt` the reported validation loss is
+  the rollout loss, so best-checkpoint selection optimizes rollout accuracy.
+  Periodic test-set output stays one-step (it is the visualization path).
+- **Loss scale is preserved.** Each step's target is the correction back onto
+  the ground truth in the same normalized-delta space AR-OT uses, so a
+  single-step trajectory is numerically identical to `ar_ot`.
+- **MeshGraphNets rebuilds geometry per step.** Mesh edge features, world
+  (contact) edges, and multiscale coarse-level features are all recomputed
+  on-device from each predicted state, matching inference. `coarse_world_edges
+  True` is rejected under `ar_rt`.
+- **`std_noise` / `noise_gamma` are inert under `ar_rt`.** The rollout supplies
+  the input perturbation they stood in for, and measures its target from the
+  unperturbed state.
+- **Variational MeshGraphNets** resamples the latent at every unrolled step and
+  keeps its loss composition unchanged; see section 6.7.
+- **DDP.** `ar_rt` forces `static_graph=True` on the DDP wrapper, which is
+  required when one backward follows several forwards.
+
 ## 4. SDFFlow / Geometry generation
 
 Canonical files are under `configs/Geometry_generation/`. Valid modes are
@@ -487,6 +546,27 @@ these. Suite preflight warns and strict mode promotes them: `free_bits`,
 `lambda_kl`, `lambda_det`, `alpha_prior_max`, `residual_scale`,
 `bipartite_unpool`, and `positional_encoding`. They are **L**, not optional
 features.
+
+### 6.7 Time integration under the VAE
+
+`time_integration` (section 3.5) is active here too, with two variational
+specifics:
+
+- **The latent is resampled at every unrolled step.** Each step is a full
+  forward, so the posterior is re-encoded and a fresh `z` drawn; the rollout
+  explores the posterior along the trajectory rather than committing to one
+  draw for all of it. Per-step gradient checkpointing preserves RNG state, so
+  the draw recomputed during backward is the one used in the forward.
+- **The loss composition is unchanged.** Every step produces the same weighted
+  sum of reconstruction, MMD, aux and prior-density terms as the one-step path,
+  and the rollout averages those composed losses over the trajectory. The
+  reported `mmd_mean` / `aux_mean` / `prior_loss_mean` are therefore trajectory
+  averages, directly comparable to their AR-OT values.
+
+The posterior encoder conditions on `graph.y`, so the rollout writes each
+step's target there before the forward: the encoder sees the correction the
+model is actually being asked to make from its own current state, not the
+ground-truth transition it would see under teacher forcing.
 
 ## 7. Neural Operator family
 

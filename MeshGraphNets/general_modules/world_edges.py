@@ -13,7 +13,11 @@ import numpy as np
 import torch
 from scipy.spatial import KDTree
 
-from general_modules.edge_features import EDGE_FEATURE_DIM, compute_edge_attr
+from general_modules.edge_features import (
+    EDGE_FEATURE_DIM,
+    compute_edge_attr,
+    compute_edge_attr_torch,
+)
 
 try:
     from torch_cluster import radius_graph
@@ -103,6 +107,94 @@ def compute_world_edges(
     if edge_mean is not None and edge_std is not None:
         wea = (wea - edge_mean) / edge_std
     return we, wea.astype(np.float32)
+
+
+def compute_world_edges_torch(
+    reference_pos: torch.Tensor,
+    deformed_pos: torch.Tensor,
+    mesh_edges: torch.Tensor,
+    radius: float,
+    max_num_neighbors: int,
+    batch: Optional[torch.Tensor] = None,
+    ptr: Optional[torch.Tensor] = None,
+    edge_mean: Optional[torch.Tensor] = None,
+    edge_std: Optional[torch.Tensor] = None,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Torch/GPU world edges for one AR-RT rollout step.
+
+    Connectivity is a discrete function of position and carries no useful
+    gradient, so the radius search runs under `no_grad`; the returned edge
+    *features* are differentiable in `deformed_pos`, which is what lets a
+    contact that forms mid-rollout influence the loss.
+
+    `batch`/`ptr` come from the PyG Batch, so a batched graph never grows
+    world edges between two different samples.
+
+    Returns (world_edge_index [2, E_world] long, world_edge_attr [E_world, 8]).
+    """
+    device = deformed_pos.device
+    empty_ei = torch.zeros((2, 0), dtype=torch.long, device=device)
+    empty_ea = torch.zeros((0, EDGE_FEATURE_DIM), dtype=deformed_pos.dtype, device=device)
+
+    with torch.no_grad():
+        pos_detached = deformed_pos.detach()
+        if HAS_TORCH_CLUSTER and device.type == 'cuda':
+            candidates = radius_graph(
+                x=pos_detached.float(), r=radius, batch=batch,
+                loop=False, max_num_neighbors=max_num_neighbors,
+            ).long()
+        else:
+            candidates = _radius_graph_kdtree(pos_detached, ptr, radius, device)
+
+        if candidates.shape[1] == 0:
+            return empty_ei, empty_ea
+
+        world_edge_index = _drop_mesh_edges_torch(candidates, mesh_edges,
+                                                  deformed_pos.shape[0])
+
+    if world_edge_index.shape[1] == 0:
+        return empty_ei, empty_ea
+
+    attr = compute_edge_attr_torch(reference_pos, deformed_pos, world_edge_index)
+    if edge_mean is not None and edge_std is not None:
+        attr = (attr - edge_mean) / edge_std
+    return world_edge_index, attr
+
+
+def _radius_graph_kdtree(pos: torch.Tensor, ptr: Optional[torch.Tensor],
+                         radius: float, device) -> torch.Tensor:
+    """CPU scipy fallback for `compute_world_edges_torch`, one graph at a time.
+
+    Per-graph so that a batch never produces edges between separate samples;
+    `ptr` is the PyG batch boundary vector (None => a single graph).
+    """
+    pos_np = pos.cpu().numpy()
+    if ptr is None:
+        bounds = [(0, pos_np.shape[0])]
+    else:
+        ptr_list = ptr.tolist()
+        bounds = list(zip(ptr_list[:-1], ptr_list[1:]))
+
+    per_graph = []
+    for start, end in bounds:
+        tree = KDTree(pos_np[start:end])
+        pairs = tree.query_pairs(r=radius, output_type='ndarray')
+        if len(pairs) == 0:
+            continue
+        pairs = pairs.T.astype(np.int64) + start
+        per_graph.append(np.concatenate([pairs, pairs[[1, 0]]], axis=1))
+
+    if not per_graph:
+        return torch.zeros((2, 0), dtype=torch.long, device=device)
+    return torch.from_numpy(np.concatenate(per_graph, axis=1)).to(device)
+
+
+def _drop_mesh_edges_torch(candidates: torch.Tensor, mesh_edges: torch.Tensor,
+                           num_nodes: int) -> torch.Tensor:
+    """Torch port of `_drop_mesh_edges` (same src*N+dst key encoding)."""
+    mesh_keys = mesh_edges[0] * num_nodes + mesh_edges[1]
+    cand_keys = candidates[0] * num_nodes + candidates[1]
+    return candidates[:, ~torch.isin(cand_keys, mesh_keys)]
 
 
 def _drop_mesh_edges(candidates: np.ndarray, mesh_edges: np.ndarray,

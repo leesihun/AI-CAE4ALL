@@ -1,0 +1,81 @@
+model          transolver  # backend selector -- {transolver}
+mode           train       # run mode -- {train|inference}
+gpu_ids        2,3         # cell 6 (L10_C256_M64_mlp4) -- server B, 2-GPU DDP pair
+parallel_mode  ddp         # parallelism -- {ddp|node_shard}
+'
+%   ex2 capacity sweep (OFAT star) cell 6/8: L10_C256_M64_mlp4
+%   ROLE: slice_num axis: 128 -> 64
+%   Star center = num_layers 10, latent_dim 256, slice_num 128.
+%   Each cell differs from that center in exactly ONE hyperparameter, so any
+%   difference in validation loss is attributable to that one axis. See
+%   gen_sweep_configs.py for the design, its interaction blind spot, and the
+%   memory math behind use_checkpointing.
+log_file_dir          ../../output/transolver/ex2_sweep/train6_L10_C256_M64_mlp4.log     # log file path, relative to the backend output dir
+modelpath             ../output/transolver/ex2_sweep/transolver_train6_L10_C256_M64_mlp4.pth  # checkpoint path -- save target in train, load source in inference
+dataset_dir           ../dataset/ex2.h5                                    # training mesh-state HDF5 path
+infer_dataset         ../dataset/ex2.h5                                    # inference input HDF5 path
+inference_output_dir  ../output/transolver/rollout/ex2_sweep/train6_L10_C256_M64_mlp4  # rollout output directory
+infer_timesteps       49                                                   # 50 stored timesteps -> 49 autoregressive rollout steps
+split_seed            42                                                   # RNG seed for the deterministic 80/10/10 train/val/test split; default 42
+'
+%   Common parameters
+input_var             4                   # physical-state input channel count -- positive int; temporal rollout needs input_var == output_var
+output_var             4                  # predicted field/delta channel count -- positive int
+positional_features    4                  # extra numeric positional feature channels -- int >= 0; default 0
+use_node_types          True              # append one-hot node type (feature row 7 / Part No.) -- {True|False}; needs a >7-row file
+feature_loss_weights    1.0, 1.0, 1.0, 1.0  # per-output-channel loss weights -- comma list, length must equal output_var, entries >= 0
+'
+%   Network parameters -- THIS CELL: num_layers=10, latent_dim=256, slice_num=64
+coordinate_normalization  centered_isotropic  # coordinate scheme -- must be 'centered_isotropic'; enforced and recorded in the checkpoint data config
+latent_dim                256               # hidden width -- positive int, must be divisible by num_heads
+num_layers                10                  # Transolver block count -- positive int
+num_heads                 8                   # attention heads -- positive int, must divide latent_dim
+slice_num                 64                  # Physics-Attention learned slice count -- positive int
+attention_kernel          naive               # attention kernel -- {naive|slice_space}; chunking and node_shard require slice_space; default naive
+chunk_size                0                   # attention tiling size -- int >= 0, 0 = untiled; positive requires attention_kernel slice_space; default 0
+infer_mode                direct              # inference mode -- {direct|decoupled}; default direct
+infer_chunk_size          0                   # decoupled-inference chunk size -- int >= 0; default 0
+mlp_ratio                 4                   # block MLP expansion ratio -- PINNED at the anchor value, not an axis in this sweep
+dropout                   0.0                 # block dropout rate -- float in [0,1); default 0.0
+temperature_init          0.5                 # initial slice-assignment temperature -- float; default 0.5
+temperature_min           0.1                 # min slice-assignment temperature -- float; default 0.1
+temperature_max           5.0                 # max slice-assignment temperature -- float; require 0 < min <= init <= max; default 5.0
+small_output_init         False               # shrink final head at init -- {True|False}; default true when timesteps unknown/temporal, false for static T=1
+'
+%   Optimization -- pinned identically across all 8 cells (project decision: do not compensate capacity with regularization)
+training_epochs   500     # epoch count -- matches the epoch budget used by every other ex2 baseline
+batch_size        4       # PER-RANK DataLoader batch size under DDP, before grad_accum_steps -- positive int
+learningr         0.0001  # AdamW learning rate -- positive float; prefer decimal notation
+weight_decay      0.0001  # AdamW weight decay -- float >= 0; default 0.0001
+warmup_epochs     3       # linear LR warmup epochs before the cosine schedule -- int >= 0; default 3
+num_workers       2       # DataLoader worker processes -- int >= 0
+prefetch_factor   4       # batches prefetched per worker -- used only when num_workers > 0; default 4
+grad_accum_steps  1       # gradient accumulation steps per optimizer step -- int >= 1; default 1
+max_grad_norm     3.0     # gradient-clipping max norm -- float; default 3.0
+'
+%   Training regularization and runtime
+std_noise          0.01   # lower than ex1 -- input-noise injection for autoregressive rollout stability (multi-step)
+noise_gamma        1      # target-correction multiplier matching injected input noise -- default 1
+augment_geometry   True   # kept ON for ex2 parity across all baselines (isotropy caveat overridden); matches MeshGraphNets ex2
+use_amp            True   # bfloat16 autocast on supported CUDA -- {True|False}; native bf16 tensor cores on B300, no Turing MAGMA-fallback penalty
+use_checkpointing  True   # precautionary at this star's sizes (worst cell ~130-200 GB without it on 200k-node graphs); also matches the existing ex2 config
+use_ema            True   # maintain EMA weights (inference prefers EMA when stored) -- {True|False}; default False
+ema_decay          0.99   # EMA decay rate -- float in (0,1); default 0.999
+use_compile        False  # torch.compile(dynamic=True) on the model -- {True|False}; default False
+'
+%   Time integration -- PINNED EXPLICITLY (CONFIGURATION_REFERENCE.md section 3.5).
+%   ar_ot is the native default and what all five ex2 baselines use, but it is
+%   pinned rather than left implicit because switching ex2 to ar_rt would
+%   invalidate this sweep: optimizer steps per epoch drop by ~T (49), validation
+%   becomes ROLLOUT loss (not comparable to ar_ot numbers), and bptt holds one
+%   state tensor per unrolled step, breaking the memory budget above.
+time_integration  ar_ot   # ar_ot = one-step/teacher-forced; ar_rt = autoregressive rollout training
+'
+%   Evaluation
+val_interval   5   # validation cadence in epochs -- positive int; default 1
+test_interval  25  # periodic test-visualization cadence in epochs -- positive int; default 10
+'
+%   Dataset behavior
+use_world_edges      False  # must stay False -- Transolver does not consume graph edges -- {False}
+use_multiscale       False  # must stay False -- MGN multiscale hierarchy is unsupported here -- {False}
+write_preprocessing  False  # must stay False -- writing normalization back into the source HDF5 is rejected -- {False}

@@ -72,3 +72,6 @@ checkpoint_interval	50
 write_preprocessing	False
 use_world_edges	False
 use_multiscale	False
+'
+%   Time integration (CONFIGURATION_REFERENCE.md section 3.5)
+time_integration	ar_ot  # ar_ot = one-step/teacher-forced (default); ar_rt = full-trajectory autoregressive rollout training

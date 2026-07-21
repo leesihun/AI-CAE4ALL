@@ -131,6 +131,7 @@ def attach_coarse_levels_to_graph(
     coarse_edge_stds: Sequence[np.ndarray],
     device: Optional[torch.device] = None,
     world_edge_index: Optional[np.ndarray] = None,
+    expose_anchors: bool = False,
 ) -> None:
     """
     Compute per-level centroids and coarse edge features for a single timestep,
@@ -204,6 +205,18 @@ def attach_coarse_levels_to_graph(
             if device is not None:
                 seed_idx_t = seed_idx_t.to(device)
             graph[f'coarse_seed_idx_{level}'] = seed_idx_t
+
+        # AR-RT needs to re-derive coarse positions from predicted fine
+        # positions at every unrolled step. Centroid levels can do that from
+        # fine_to_coarse alone; seed-anchored levels cannot, so the anchor
+        # indices are exported under a name the model never reads (writing
+        # coarse_seed_idx here would silently switch seedmean levels from
+        # mean-pooling to gather-pooling).
+        if expose_anchors and mode in ('inherit', 'seedmean') and seeds is not None:
+            anchor_idx_t = torch.from_numpy(seeds.astype(np.int64))
+            if device is not None:
+                anchor_idx_t = anchor_idx_t.to(device)
+            graph[f'coarse_anchor_idx_{level}'] = anchor_idx_t
 
         if 'up_ei' in entry:
             up_t = torch.from_numpy(entry['up_ei'])

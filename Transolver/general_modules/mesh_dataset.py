@@ -10,6 +10,11 @@ from general_modules.dataset_stats import (
     compute_normalization_stats, finalize_moments, finalize_position_scale,
 )
 from general_modules.positional_features import compute_positional_features
+from general_modules.time_integration import (
+    AR_RT,
+    resolve_rollout_window,
+    resolve_time_integration,
+)
 
 POSITION_SCALE_EPS = 1e-8
 
@@ -106,8 +111,17 @@ class MeshGraphDataset(Dataset):
         config['num_timesteps'] = self.num_timesteps
         validate_temporal_contract(config)
 
+        # Time integration scheme (see training_profiles/ar_rollout.py):
+        # ar_ot trains on ground-truth pairs, ar_rt unrolls the model over a
+        # window of timesteps and trains on its own predictions.
+        self.time_integration = resolve_time_integration(config)
+        self.rollout_window = resolve_rollout_window(config, self.num_timesteps)
+
         print(f"Found {len(self.sample_ids)} samples")
         print(f"  num_timesteps: {self.num_timesteps}, feature rows: {self.num_features}")
+        print(f"  time_integration: {self.time_integration}"
+              + (f" (rollout window: {self.rollout_window} steps)"
+                 if self.time_integration == AR_RT else ""))
 
         self._validate_edge_indices()
 
@@ -204,6 +218,8 @@ class MeshGraphDataset(Dataset):
         subset.num_features = self.num_features
         subset.sample_ids = list(sample_ids)
         subset.num_timesteps = self.num_timesteps
+        subset.time_integration = self.time_integration
+        subset.rollout_window = self.rollout_window
         subset.use_node_types = self.use_node_types
         subset.num_node_types = None
         subset.node_type_to_idx = None
@@ -334,9 +350,13 @@ class MeshGraphDataset(Dataset):
 
     def __len__(self) -> int:
         if self.num_timesteps > 1:
-            return len(self.sample_ids) * (self.num_timesteps - 1)
+            return len(self.sample_ids) * self._windows_per_sample()
         else:
             return len(self.sample_ids)
+
+    def _windows_per_sample(self) -> int:
+        """Window start times per trajectory: (T-1) one-step pairs under AR-OT."""
+        return max(1, self.num_timesteps - self.rollout_window)
 
     def _get_h5_handle(self):
         if not hasattr(self, '_h5_handle') or self._h5_handle is None:
@@ -404,8 +424,9 @@ class MeshGraphDataset(Dataset):
 
     def __getitem__(self, idx: int) -> Data:
         if self.num_timesteps > 1:
-            sample_idx = idx // (self.num_timesteps - 1)
-            time_idx = idx % (self.num_timesteps - 1)
+            windows = self._windows_per_sample()
+            sample_idx = idx // windows
+            time_idx = idx % windows
         else:
             sample_idx = idx
             time_idx = 0
@@ -417,6 +438,7 @@ class MeshGraphDataset(Dataset):
         edge_index, x_pos, node_types = self._get_static_sample_data(sample_id, f, dset)
         part_ids = node_types
 
+        future_states = None  # [N, W, output_var] raw future states (AR-RT only)
         if self.num_timesteps == 1:
             data_t = dset[:, 0, :].T  # [N, F]
             pos = data_t[:, :3].copy()  # [N, 3]
@@ -424,13 +446,22 @@ class MeshGraphDataset(Dataset):
             y_raw = data_t[:, 3:3 + self.output_dim]
             target_delta = y_raw.copy()
         else:
-            pair = dset[:, time_idx:time_idx + 2, :]  # [F, 2, N]
-            data_t = pair[:, 0, :].T
-            data_t1 = pair[:, 1, :].T
+            # One slice covers the whole rollout window; W=1 under AR-OT makes
+            # this the same two-step read as before.
+            window = self.rollout_window
+            block = dset[:, time_idx:time_idx + window + 1, :]  # [F, W+1, N]
+            data_t = block[:, 0, :].T
+            data_t1 = block[:, 1, :].T
             pos = data_t[:, :3].copy()
             x_phys = data_t[:, 3:3 + self.input_dim].copy()
             y_raw = data_t1[:, 3:3 + self.output_dim]
             target_delta = y_raw - x_phys
+            if self.time_integration == AR_RT:
+                # Absolute ground-truth states: the rollout re-derives each
+                # step's target as (state_gt - state_pred), not from a stored delta.
+                future_states = np.ascontiguousarray(
+                    block[3:3 + self.output_dim, 1:, :].transpose(2, 1, 0)
+                ).astype(np.float32)
 
         if self.num_pos_features > 0:
             x_raw = np.concatenate([x_phys, x_pos], axis=1)
@@ -445,6 +476,10 @@ class MeshGraphDataset(Dataset):
             pos = pos @ R.T
             x_raw[:, :3] = x_raw[:, :3] @ R.T
             target_delta[:, :3] = target_delta[:, :3] @ R.T
+            if future_states is not None:
+                # The rollout integrates in this rotated frame, so its
+                # ground-truth targets must live there too.
+                future_states[:, :, :3] = future_states[:, :, :3] @ R.T
 
         if self.node_mean is None or self.node_std is None or self.position_scale is None:
             raise RuntimeError("Dataset preprocessing has not been prepared: statistics are missing.")
@@ -481,6 +516,15 @@ class MeshGraphDataset(Dataset):
             time_idx=time_idx if self.num_timesteps > 1 else None,
             part_ids=part_ids_tensor,
         )
+
+        if future_states is not None:
+            # AR-RT payload. `y` (the step-0 normalized delta) is still set, so
+            # a one-step rollout is numerically identical to the AR-OT path.
+            graph_data.y_seq = torch.from_numpy(future_states)          # [N, W, output_var]
+            graph_data.state0 = torch.from_numpy(
+                np.ascontiguousarray(x_raw[:, :self.input_dim]).astype(np.float32)
+            )                                                           # [N, input_var] physical units
+
         return graph_data
 
     def split(self, train_ratio: float, val_ratio: float, test_ratio: float, seed: int = 0):

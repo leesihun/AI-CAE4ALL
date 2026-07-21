@@ -8,6 +8,11 @@ from torch_geometric.data import Data
 from general_modules.dataset_stats import compute_normalization_stats, finalize_moments
 from general_modules.edge_features import EDGE_FEATURE_DIM, compute_edge_attr
 from general_modules.positional_features import compute_positional_features
+from general_modules.time_integration import (
+    AR_RT,
+    resolve_rollout_window,
+    resolve_time_integration,
+)
 from general_modules.world_edges import HAS_TORCH_CLUSTER, compute_world_edges
 
 # Multiscale coarsening (optional — only imported when use_multiscale=True)
@@ -102,6 +107,12 @@ class MeshGraphDataset(Dataset):
         if len(self.voronoi_clusters) == 1 and self.multiscale_levels > 1:
             self.voronoi_clusters = self.voronoi_clusters * self.multiscale_levels
 
+        # Time integration scheme (see training_profiles/ar_rollout.py):
+        # ar_ot trains on ground-truth pairs, ar_rt unrolls the model over the
+        # trajectory and trains on its own predictions.
+        self.time_integration = resolve_time_integration(config)
+        self.rollout_window = 1  # resolved below, once num_timesteps is known
+
         print(f"Loading MeshGraphDataset: {h5_file}")
         print(f"  input_dim: {self.input_dim}, output_dim: {self.output_dim}, edge_dim: {self.edge_dim}")
         print(f"  use_node_types: {self.use_node_types}")
@@ -138,6 +149,8 @@ class MeshGraphDataset(Dataset):
             self._static_cache = {}
             self.is_training = False
             self.augment_geometry = False
+
+        self.rollout_window = resolve_rollout_window(config, self.num_timesteps)
 
         print(f"Found {len(self.sample_ids)} samples")
         print(f"  num_timesteps: {self.num_timesteps}")
@@ -357,6 +370,8 @@ class MeshGraphDataset(Dataset):
         subset.edge_dim = self.edge_dim
         subset.sample_ids = list(sample_ids)
         subset.num_timesteps = self.num_timesteps
+        subset.time_integration = self.time_integration
+        subset.rollout_window = self.rollout_window
         subset.use_node_types = self.use_node_types
         subset.num_node_types = None
         subset.node_type_to_idx = None
@@ -596,17 +611,21 @@ class MeshGraphDataset(Dataset):
         """
         Calculate total number of samples.
 
-        For multi-timestep data, each sample can produce (num_timesteps - 1)
-        training pairs: (t_0→t_1), (t_1→t_2), ..., (t_n-1→t_n)
+        For multi-timestep data, each sample yields one item per rollout window
+        of `rollout_window` steps: the familiar (T-1) one-step pairs under
+        AR-OT, and a single full-trajectory item under AR-RT.
 
         For single timestep data, returns the number of samples.
         """
         if self.num_timesteps > 1:
-            # Multiple timesteps: each sample generates (T-1) training pairs
-            return len(self.sample_ids) * (self.num_timesteps - 1)
+            return len(self.sample_ids) * self._windows_per_sample()
         else:
             # Single timestep: static data
             return len(self.sample_ids)
+
+    def _windows_per_sample(self) -> int:
+        """Number of distinct window start times in one trajectory."""
+        return max(1, self.num_timesteps - self.rollout_window)
 
     def _get_h5_handle(self):
         """Get or create persistent HDF5 file handle (one per DataLoader worker process).
@@ -741,8 +760,8 @@ class MeshGraphDataset(Dataset):
         """
         # Calculate sample and timestep indices
         if self.num_timesteps > 1:
-            sample_idx = idx // (self.num_timesteps - 1)
-            time_idx = idx % (self.num_timesteps - 1)
+            sample_idx = idx // self._windows_per_sample()
+            time_idx = idx % self._windows_per_sample()
         else:
             sample_idx = idx
             time_idx = 0
@@ -760,6 +779,7 @@ class MeshGraphDataset(Dataset):
         # Data shape: [nodes, time, features]
 
         # Extract data based on timesteps
+        future_states = None  # [N, W, output_var] raw future states (AR-RT only)
         if self.num_timesteps == 1:  # Static case
             data_t = data[:, 0, :]  # [N, 7]
             pos = data_t[:, :3]  # [N, 3]
@@ -774,6 +794,14 @@ class MeshGraphDataset(Dataset):
             x_phys = data_t[:, 3:3+self.input_dim]  # [N, input_var]
             y_raw = data_t1[:, 3:3+self.output_dim]  # [N, output_var]
             target_delta = y_raw - x_phys  # [N, output_var]
+            if self.time_integration == AR_RT:
+                # Absolute ground-truth states over the window: the rollout
+                # re-derives each step's target as (state_gt - state_pred),
+                # not from a stored delta.
+                window = self.rollout_window
+                future_states = np.ascontiguousarray(
+                    data[:, time_idx + 1:time_idx + window + 1, 3:3 + self.output_dim]
+                ).astype(np.float32)
 
         if self.num_pos_features > 0:
             x_raw = np.concatenate([x_phys, x_pos], axis=1)  # [N, input_var + pos_features]
@@ -785,6 +813,10 @@ class MeshGraphDataset(Dataset):
             R = self._random_augmentation_matrix()  # [3, 3]
             pos = pos @ R.T                          # rotate reference positions
             x_raw[:, :3] = x_raw[:, :3] @ R.T       # rotate displacement components (zeros for T=1, no-op)
+            if future_states is not None:
+                # [N, W, 3] @ [3, 3] — the rollout integrates in this rotated
+                # frame, so its ground-truth targets must live there too.
+                future_states[:, :, :3] = future_states[:, :, :3] @ R.T
             target_delta[:, :3] = target_delta[:, :3] @ R.T  # rotate delta displacement
             # Scalar features (stress) and positional features are rotation-invariant, unchanged
 
@@ -849,6 +881,14 @@ class MeshGraphDataset(Dataset):
             part_ids=part_ids_tensor
         )
 
+        if future_states is not None:
+            # AR-RT payload. `y` (the step-0 normalized delta) is still set, so
+            # a single-step trajectory is identical to the AR-OT path.
+            graph_data.y_seq = torch.from_numpy(future_states)              # [N, W, output_var]
+            graph_data.state0 = torch.from_numpy(
+                np.ascontiguousarray(x_raw[:, :self.input_dim]).astype(np.float32)
+            )                                                               # [N, input_var] physical units
+
         # Compute world edges if enabled
         # IMPORTANT: Use deformed_pos (reference + displacement) for collision detection
         if self.use_world_edges:
@@ -880,6 +920,7 @@ class MeshGraphDataset(Dataset):
                 pos.numpy(), deformed_pos.astype(np.float32),
                 self.coarse_edge_means, self.coarse_edge_stds,
                 world_edge_index=world_ei_for_coarse,
+                expose_anchors=self.time_integration == AR_RT,
             )
 
         return graph_data

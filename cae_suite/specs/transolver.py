@@ -28,6 +28,8 @@ TRANSOLVER_KEYS = frozenset(
         "temperature_min", "temperature_max", "small_output_init", "training_epochs",
         "batch_size", "learningr", "weight_decay", "warmup_epochs", "num_workers",
         "prefetch_factor", "grad_accum_steps", "max_grad_norm", "std_noise", "noise_gamma",
+        # Time integration (CONFIGURATION_REFERENCE.md section 3.5): ar_ot or ar_rt.
+        "time_integration",
         "augment_geometry", "use_amp", "use_checkpointing", "use_ema", "ema_decay",
         "use_compile", "val_interval", "test_interval", "test_max_batches",
         "use_world_edges", "use_multiscale", "write_preprocessing",

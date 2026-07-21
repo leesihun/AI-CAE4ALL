@@ -17,3 +17,6 @@ dropout 0.0
 eval_interval_epochs 1
 checkpoint_interval_epochs 25
 resume True
+'
+%   Time integration (CONFIGURATION_REFERENCE.md section 3.5)
+time_integration	ar_ot  # ar_ot = one-step/teacher-forced (default); ar_rt = full-trajectory autoregressive rollout training

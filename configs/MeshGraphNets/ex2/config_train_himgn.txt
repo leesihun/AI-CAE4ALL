@@ -58,3 +58,6 @@ coarsening_type	voronoi_seedmean
 voronoi_clusters	5000, 100
 multiscale_levels	2
 mp_per_level	2, 3, 5, 3, 2
+'
+%   Time integration (CONFIGURATION_REFERENCE.md section 3.5)
+time_integration	ar_ot  # ar_ot = one-step/teacher-forced (default); ar_rt = full-trajectory autoregressive rollout training

@@ -15,6 +15,8 @@ VAR_KEYS = frozenset(
         "feature_loss_weights", "edge_var", "positional_features",
         "message_passing_num", "training_epochs", "batch_size", "learningr",
         "latent_dim", "num_workers", "prefetch_factor", "std_noise", "noise_gamma",
+        # Time integration (CONFIGURATION_REFERENCE.md section 3.5): ar_ot or ar_rt.
+        "time_integration",
         "noise_std_ratio", "weight_decay", "warmup_epochs", "augment_geometry",
         "grad_accum_steps", "use_checkpointing", "use_amp", "use_ema", "ema_decay",
         "use_compile", "test_interval", "val_interval", "test_max_batches",

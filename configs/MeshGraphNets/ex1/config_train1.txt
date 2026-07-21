@@ -53,3 +53,6 @@ coarsening_type	voronoi_seedmean    # Fixed to voronoi_seedmean if use_multiscal
 voronoi_clusters	5000, 100       # HI-MGN parameters
 multiscale_levels	2               # HI-MGN parameters
 mp_per_level	4, 6, 8, 6, 4       # Overides message_passing_num if use_multiscale=True
+'
+%   Time integration (CONFIGURATION_REFERENCE.md section 3.5)
+time_integration	ar_ot  # ar_ot = one-step/teacher-forced (default); ar_rt = full-trajectory autoregressive rollout training

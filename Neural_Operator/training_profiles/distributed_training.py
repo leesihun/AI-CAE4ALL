@@ -28,6 +28,7 @@ from training_profiles.setup import (
     log_model_summary,
     save_checkpoint,
 )
+from training_profiles.ar_rollout import ar_rt_enabled
 from training_profiles.training_loop import (
     log_training_config,
     run_periodic_test,
@@ -146,15 +147,25 @@ def _train_worker_inner(rank, world_size, config, gpu_ids, config_filename):
         print("\nInitializing model...")
     model, ema_model, data_spec, coordinate_domain = build_model_and_ema(config, train_dataset, device)
 
+    # AR-RT runs one forward per unrolled step before a single backward, so
+    # every parameter's gradient hook fires once per step. DDP's reducer rejects
+    # that ("marked ready twice") unless the graph is declared static, which
+    # also legalizes the per-step checkpointing.
+    static_graph = ar_rt_enabled(config)
+    if static_graph and rank == 0:
+        print("  DDP: static_graph=True (required by AR-RT unrolling)")
+
     if torch.cuda.is_available():
         ddp_model = DDP(
             model, device_ids=[gpu_id], broadcast_buffers=True,
             find_unused_parameters=False, gradient_as_bucket_view=True,
+            static_graph=static_graph,
         )
     else:
         ddp_model = DDP(
             model, broadcast_buffers=True,
             find_unused_parameters=False, gradient_as_bucket_view=True,
+            static_graph=static_graph,
         )
 
     if torch.cuda.is_available() and rank == 0:
