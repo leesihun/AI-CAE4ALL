@@ -23,8 +23,9 @@ Training_epochs	500
 Batch_size	4
 LearningR	0.0001
 Latent_dim	128  # MeshGraphNets latent dimension
-num_workers	8  # 32 logical cores; __getitem__ is ~0.6s CPU so 2 workers starved the GPU
+num_workers	12  # pin_memory off, so workers are the real limit now
 prefetch_factor	2  # flat batches are ~350MB; 8x4 prefetch would pin ~11GB
+pin_memory	False  # 0.5GB variable-shape batches: pinning serializes in the parent (0.67s/batch vs 0.26s off)
 std_noise	0.01  # input-noise injection for autoregressive stability (multi-step)
 weight_decay	0.0001  # AdamW decoupled weight decay (decimal form only)
 augment_geometry	True  # OFF for ex2: directional y-sag breaks the Z-rotation/reflection isotropy assumption

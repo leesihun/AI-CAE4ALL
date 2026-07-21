@@ -116,7 +116,12 @@ def _train_worker_inner(rank, world_size, config, gpu_ids, config_filename):
 
     # Create dataloaders
     num_workers = config['num_workers']
-    pin_memory = torch.cuda.is_available()
+    # Pinning is done by one thread in the parent process, so it serializes the
+    # whole input pipeline regardless of num_workers. On large graph batches
+    # (~0.5 GB) with per-sample-varying tensor shapes the pinned-memory caching
+    # allocator misses every batch, and pinning costs far more than the faster
+    # H2D copy saves. Opt out with `pin_memory False` in the config.
+    pin_memory = bool(config.get('pin_memory', True)) and torch.cuda.is_available()
     config['_pin_memory'] = pin_memory
     mp_context = 'spawn' if num_workers > 0 else None
     prefetch_factor = int(config.get('prefetch_factor', 4)) if num_workers > 0 else None

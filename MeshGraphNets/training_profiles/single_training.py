@@ -51,7 +51,9 @@ def single_worker(config, config_filename='config.txt'):
     # ---- DataLoaders ----
     print("\nCreating dataloaders...")
     num_workers = config['num_workers']
-    pin_memory = torch.cuda.is_available()
+    # See distributed_training: pinning serializes in the parent thread and is a
+    # net loss on ~0.5 GB variable-shape graph batches. Opt out via config.
+    pin_memory = bool(config.get('pin_memory', True)) and torch.cuda.is_available()
     config['_pin_memory'] = pin_memory
     mp_context = 'spawn' if num_workers > 0 else None
     prefetch_factor = int(config.get('prefetch_factor', 4)) if num_workers > 0 else None
