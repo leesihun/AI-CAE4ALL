@@ -18,7 +18,7 @@ edge_var	8  # deformed dx/dy/dz/dist + reference dx/dy/dz/dist
 positional_features	4  # Rotation-invariant node features: [centroid_dist, mean_edge_len, + encoding]
 '
 %   Network parameters
-message_passing_num	20  # Flat processor blocks (vanilla MeshGraphNets)
+message_passing_num	15  # Flat processor blocks (vanilla MeshGraphNets)
 Training_epochs	500
 Batch_size	4
 LearningR	0.0001
@@ -26,7 +26,7 @@ Latent_dim	128  # MeshGraphNets latent dimension
 num_workers	2
 std_noise	0.01  # input-noise injection for autoregressive stability (multi-step)
 weight_decay	0.0001  # AdamW decoupled weight decay (decimal form only)
-augment_geometry	False  # OFF for ex2: directional y-sag breaks the Z-rotation/reflection isotropy assumption
+augment_geometry	True  # OFF for ex2: directional y-sag breaks the Z-rotation/reflection isotropy assumption
 grad_accum_steps	1
 '
 %   Memory Optimization

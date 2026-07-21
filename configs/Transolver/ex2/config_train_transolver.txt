@@ -51,9 +51,9 @@ max_grad_norm     3.0     # gradient-clipping max norm -- float; default 3.0
 %   Training regularization and runtime
 std_noise          0.01   # lower than ex1 -- input-noise injection for autoregressive rollout stability (multi-step)
 noise_gamma        1      # target-correction multiplier matching injected input noise -- default 1
-augment_geometry   False  # OFF for ex2: directional y-sag breaks the Z-rotation/reflection isotropy assumption (same reasoning as MeshGraphNets ex2)
+augment_geometry   True   # OFF for ex2: directional y-sag breaks the Z-rotation/reflection isotropy assumption (same reasoning as MeshGraphNets ex2)
 use_amp            True   # bfloat16 autocast on supported CUDA -- {True|False}; default True
-use_checkpointing  True   # activation checkpointing to cut memory -- {True|False}; default False
+use_checkpointing  False  # activation checkpointing to cut memory -- {True|False}; default False
 use_ema            True   # maintain EMA weights (inference prefers EMA when stored) -- {True|False}; default False
 ema_decay          0.99   # EMA decay rate -- float in (0,1); default 0.999
 use_compile        False  # torch.compile(dynamic=True) on the model -- {True|False}; default False

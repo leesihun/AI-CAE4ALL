@@ -27,7 +27,7 @@ Latent_dim	128  # MeshGraphNets latent dimension
 num_workers	2
 std_noise	0.01  # input-noise injection for autoregressive stability (multi-step)
 weight_decay	0.0001  # AdamW decoupled weight decay (decimal form only)
-augment_geometry	False  # OFF for ex2: directional y-sag breaks the Z-rotation/reflection isotropy assumption
+augment_geometry	True  # OFF for ex2: directional y-sag breaks the Z-rotation/reflection isotropy assumption
 grad_accum_steps	1
 '
 %   Memory Optimization
@@ -55,4 +55,4 @@ use_multiscale	True
 coarsening_type	voronoi_seedmean
 voronoi_clusters	5000, 100
 multiscale_levels	2
-mp_per_level	4, 6, 8, 6, 4
+mp_per_level	2, 3, 5, 3, 2
