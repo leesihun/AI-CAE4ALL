@@ -28,7 +28,8 @@ _VAE_COMPATIBILITY_KEYS = (
     'dataset_dir', 'split_seed', 'num_encoder_points', 'num_query_points',
     'latent_tokens', 'latent_dim', 'decoder_type', 'decoder_hidden',
     'decoder_layers', 'decoder_heads', 'encoder_dim', 'encoder_heads',
-    'encoder_blocks', 'fourier_bands', 'kl_weight',
+    'encoder_blocks', 'encoder_self_attention', 'fourier_bands', 'kl_weight',
+    'surface_weight', 'normal_weight', 'eikonal_weight',
     'deterministic_warmup_epochs', 'posterior_noise_warmup_epochs',
     'posterior_noise_max_scale', 'kl_warmup_epochs', 'clamp_dist',
     'training_epochs', 'batch_size', 'learningr', 'weight_decay',
@@ -39,8 +40,9 @@ _FM_COMPATIBILITY_KEYS = (
     'dataset_dir', 'split_seed', 'num_encoder_points', 'encode_batch_size',
     'vae_modelpath', 'use_conditions', 'condition_names', 'condition_clip',
     'min_condition_std', 'cond_dropout', 'fm_hidden', 'fm_blocks',
-    'fm_cond_hidden', 'training_epochs', 'batch_size', 'learningr',
-    'weight_decay', 'warmup_epochs', 'use_amp', 'use_ema', 'ema_decay',
+    'fm_cond_hidden', 'fm_arch', 'fm_heads', 'fm_time_sampling',
+    'fm_time_logit_mean', 'fm_time_logit_std', 'training_epochs', 'batch_size',
+    'learningr', 'weight_decay', 'warmup_epochs', 'use_amp', 'use_ema', 'ema_decay',
 )
 
 

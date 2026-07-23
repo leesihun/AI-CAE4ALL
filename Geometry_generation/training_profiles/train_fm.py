@@ -116,6 +116,13 @@ def fm_worker(config, config_filename='config.txt'):
     optimizer, scheduler = build_optimizer_scheduler(config, model.parameters(), total_epochs)
 
     cond_dropout = float(config.get('cond_dropout', 0.1))
+    time_sampling = str(config.get('fm_time_sampling', 'uniform')).lower()
+    if time_sampling not in ('uniform', 'logit_normal'):
+        raise ValueError("fm_time_sampling must be 'uniform' or 'logit_normal'")
+    logit_mean = float(config.get('fm_time_logit_mean', 0.0))
+    logit_std = float(config.get('fm_time_logit_std', 1.0))
+    if time_sampling == 'logit_normal':
+        print(f'FM timestep sampling: logit-normal (mean={logit_mean:g}, std={logit_std:g})')
     use_amp = bool(config.get('use_amp', False))
     amp_enabled = use_amp and device.type == 'cuda'
     amp_dtype = (torch.bfloat16 if amp_enabled and torch.cuda.is_bf16_supported()
@@ -163,7 +170,9 @@ def fm_worker(config, config_filename='config.txt'):
                 optimizer.zero_grad(set_to_none=True)
                 with torch.autocast('cuda', dtype=amp_dtype, enabled=amp_enabled):
                     loss = flow_matching_loss(
-                        model, z_batch, cond=cond, cond_dropout=cond_dropout)
+                        model, z_batch, cond=cond, cond_dropout=cond_dropout,
+                        time_sampling=time_sampling, logit_mean=logit_mean,
+                        logit_std=logit_std)
                 scaler.scale(loss).backward()
                 scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)

@@ -8,7 +8,7 @@ from torch.utils.data import DataLoader
 
 from general_modules.sdf_dataset import build_dataset_splits, compute_cond_stats
 from general_modules.mesh_extraction import decode_sdf_grid, sdf_grid_to_mesh, mesh_report
-from model.sdf_vae import SDFVAE, sdf_loss
+from model.sdf_vae import SDFVAE, sdf_loss, hybrid_geometry_losses
 from training_profiles.setup import (
     append_log,
     build_ema_model,
@@ -61,6 +61,19 @@ def vae_worker(config, config_filename='config.txt'):
     posterior_noise_max_scale = float(config.get('posterior_noise_max_scale', 1.0))
     kl_warmup_epochs = int(config.get('kl_warmup_epochs', 0))
     clamp_dist = float(config.get('clamp_dist', 0.1))
+
+    # Hybrid geometry losses (TripoSG-style). Any positive weight enables a
+    # dedicated fp32 training path because the normal/eikonal terms need
+    # second-order gradients that are unstable under AMP.
+    surface_weight = float(config.get('surface_weight', 0.0))
+    normal_weight = float(config.get('normal_weight', 0.0))
+    eikonal_weight = float(config.get('eikonal_weight', 0.0))
+    hybrid_grad_points = int(config.get('hybrid_grad_points', 2048))
+    use_hybrid = (surface_weight > 0 or normal_weight > 0 or eikonal_weight > 0)
+    if use_hybrid:
+        print(f'Hybrid VAE losses enabled (surface={surface_weight:g} '
+              f'normal={normal_weight:g} eikonal={eikonal_weight:g}); '
+              f'stage runs in fp32 (AMP bypassed for the gradient terms).')
     use_amp = bool(config.get('use_amp', False))
     amp_enabled = use_amp and device.type == 'cuda'
     amp_dtype = (torch.bfloat16 if amp_enabled and torch.cuda.is_bf16_supported()
@@ -94,6 +107,7 @@ def vae_worker(config, config_filename='config.txt'):
         for epoch in range(total_epochs):
             model.train()
             recon_sum, kl_sum, batches = 0.0, 0.0, 0
+            hybrid_sum = 0.0
             posterior_noise_scale = posterior_noise_max_scale * _warmup_scale(
                 epoch, deterministic_warmup_epochs, posterior_noise_warmup_epochs)
             effective_kl_weight = kl_weight * _warmup_scale(
@@ -105,17 +119,35 @@ def vae_worker(config, config_filename='config.txt'):
                 query_sdf = batch['query_sdf'].to(device, non_blocking=True)
 
                 optimizer.zero_grad(set_to_none=True)
-                with torch.autocast('cuda', dtype=amp_dtype, enabled=amp_enabled):
-                    sdf_pred, kl, _, _ = model(
-                        surface_points, surface_normals, query_points,
-                        posterior_noise_scale=posterior_noise_scale)
-                    recon = sdf_loss(sdf_pred.float(), query_sdf, clamp_dist)
-                    loss = recon + effective_kl_weight * kl.float()
-                scaler.scale(loss).backward()
-                scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-                scaler.step(optimizer)
-                scaler.update()
+                if use_hybrid:
+                    # fp32 path: reconstruction + KL + surface/normal/eikonal.
+                    mu, logvar = model.encode(surface_points, surface_normals)
+                    z = model.reparameterize(mu, logvar, posterior_noise_scale)
+                    sdf_pred = model.decode(z, query_points)
+                    recon = sdf_loss(sdf_pred, query_sdf, clamp_dist)
+                    kl = model.kl_divergence(mu, logvar)
+                    surface_l, normal_l, eikonal_l = hybrid_geometry_losses(
+                        model, z, surface_points, surface_normals, query_points,
+                        subsample=hybrid_grad_points)
+                    hybrid_l = (surface_weight * surface_l + normal_weight * normal_l
+                                + eikonal_weight * eikonal_l)
+                    loss = recon + effective_kl_weight * kl + hybrid_l
+                    loss.backward()
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                    optimizer.step()
+                    hybrid_sum += float(hybrid_l.item())
+                else:
+                    with torch.autocast('cuda', dtype=amp_dtype, enabled=amp_enabled):
+                        sdf_pred, kl, _, _ = model(
+                            surface_points, surface_normals, query_points,
+                            posterior_noise_scale=posterior_noise_scale)
+                        recon = sdf_loss(sdf_pred.float(), query_sdf, clamp_dist)
+                        loss = recon + effective_kl_weight * kl.float()
+                    scaler.scale(loss).backward()
+                    scaler.unscale_(optimizer)
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                    scaler.step(optimizer)
+                    scaler.update()
                 if ema_model is not None:
                     ema_model.update_parameters(model)
 
@@ -126,6 +158,8 @@ def vae_worker(config, config_filename='config.txt'):
             scheduler.step()
             train_loss = recon_sum / max(batches, 1)
             train_kl = kl_sum / max(batches, 1)
+            train_hybrid = hybrid_sum / max(batches, 1)
+            hybrid_str = f' Hybrid: {train_hybrid:.2e}' if use_hybrid else ''
             current_lr = optimizer.param_groups[0]['lr']
 
             do_val = (epoch % val_interval == 0) or (epoch == total_epochs - 1)
@@ -133,11 +167,11 @@ def vae_worker(config, config_filename='config.txt'):
             if do_val:
                 valid_loss = _validate(eval_model, val_loader, device, clamp_dist)
                 print(f'Epoch {epoch}/{total_epochs} TrainSDF: {train_loss:.2e} '
-                      f'KL: {train_kl:.2e} ValidSDF: {valid_loss:.2e} LR: {current_lr:.2e} '
+                      f'KL: {train_kl:.2e}{hybrid_str} ValidSDF: {valid_loss:.2e} LR: {current_lr:.2e} '
                       f'KLWeight: {effective_kl_weight:.2e} PosteriorNoise: {posterior_noise_scale:.2f}')
             else:
                 print(f'Epoch {epoch}/{total_epochs} TrainSDF: {train_loss:.2e} '
-                      f'KL: {train_kl:.2e} LR: {current_lr:.2e} '
+                      f'KL: {train_kl:.2e}{hybrid_str} LR: {current_lr:.2e} '
                       f'KLWeight: {effective_kl_weight:.2e} PosteriorNoise: {posterior_noise_scale:.2f}')
 
             elapsed = time.time() - start_time

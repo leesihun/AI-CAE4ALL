@@ -51,6 +51,12 @@ def main():
                         help='Conservatively repair small holes before watertightness validation')
     parser.add_argument('--max_faces', type=int, default=0,
                         help='Simplify real meshes above this face count (0 disables)')
+    parser.add_argument('--sharp_edge_fraction', type=float, default=0.0,
+                        help='Fraction of surface points routed onto sharp edges '
+                             '(Dora-style Sharp Edge Sampling; 0 disables)')
+    parser.add_argument('--sharp_edge_angle', type=float, default=0.5236,
+                        help='Dihedral angle (radians) above which an edge is '
+                             'treated as sharp (default 30 deg)')
     parser.add_argument('--workers', type=int, default=0,
                         help='Parallel real-mesh workers (0 or 1 runs sequentially)')
     parser.add_argument('--append_missing', action='store_true',
@@ -97,7 +103,8 @@ def main():
                 print(f'Processing {len(paths)} sources missing from the existing dataset')
             tasks = [
                 (path, args.num_surface, args.num_near, args.num_uniform,
-                 args.seed + i, args.repair, args.max_faces)
+                 args.seed + i, args.repair, args.max_faces,
+                 args.sharp_edge_fraction, args.sharp_edge_angle)
                 for i, path in enumerate(paths)
             ]
             if args.workers > 1:
@@ -128,7 +135,8 @@ def _process_mesh(task):
     """
     import trimesh
 
-    path, num_surface, num_near, num_uniform, seed, repair, max_faces = task
+    (path, num_surface, num_near, num_uniform, seed, repair, max_faces,
+     sharp_edge_fraction, sharp_edge_angle) = task
     try:
         mesh = trimesh.load(path, force='mesh')
         if repair and mesh.is_empty:
@@ -169,7 +177,9 @@ def _process_mesh(task):
         mesh, center, scale = normalize_mesh(mesh)
         sample = sample_mesh_sdf(
             mesh, num_surface, num_near, num_uniform,
-            rng=np.random.default_rng(seed))
+            rng=np.random.default_rng(seed),
+            sharp_edge_fraction=sharp_edge_fraction,
+            sharp_edge_angle=sharp_edge_angle)
         cond = mesh_descriptors(mesh)
         return {
             'path': path,

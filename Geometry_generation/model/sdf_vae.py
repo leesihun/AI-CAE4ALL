@@ -6,11 +6,32 @@ decoder; `latent_tokens > 1` with `decoder_type attention` is the VecSet-style
 upgrade path (same trainer, same FM stage).
 """
 
+import contextlib
+
 import numpy as np
 import torch
 import torch.nn as nn
 
 from model.mlp import init_weights
+
+
+def _math_attention_ctx():
+    """Force the math scaled-dot-product-attention backend.
+
+    The fused flash / mem-efficient SDPA kernels have no double-backward, so the
+    eikonal/normal gradient penalties (which need create_graph=True) fail when
+    the decoder uses attention. The math backend is decomposed and supports
+    second-order gradients on both CPU and CUDA.
+    """
+    try:
+        from torch.nn.attention import sdpa_kernel, SDPBackend
+        return sdpa_kernel(SDPBackend.MATH)
+    except Exception:
+        try:
+            return torch.backends.cuda.sdp_kernel(
+                enable_flash=False, enable_mem_efficient=False, enable_math=True)
+        except Exception:
+            return contextlib.nullcontext()
 
 
 class FourierFeatures(nn.Module):
@@ -48,6 +69,30 @@ class CrossAttentionBlock(nn.Module):
         return queries
 
 
+class SelfAttentionBlock(nn.Module):
+    """Pre-LN self-attention + feed-forward among the latent tokens (residual).
+
+    Lets the latent tokens exchange information so a VecSet latent can
+    specialize spatially (Dora-style dual attention). A no-op for a single
+    global token, but harmless there.
+    """
+
+    def __init__(self, d_model, num_heads):
+        super().__init__()
+        self.norm_attn = nn.LayerNorm(d_model)
+        self.attn = nn.MultiheadAttention(d_model, num_heads, batch_first=True)
+        self.norm_ff = nn.LayerNorm(d_model)
+        self.ff = nn.Sequential(
+            nn.Linear(d_model, 4 * d_model), nn.SiLU(), nn.Linear(4 * d_model, d_model))
+
+    def forward(self, tokens):
+        h = self.norm_attn(tokens)
+        attn_out, _ = self.attn(h, h, h, need_weights=False)
+        tokens = tokens + attn_out
+        tokens = tokens + self.ff(self.norm_ff(tokens))
+        return tokens
+
+
 class PointCloudEncoder(nn.Module):
     """Surface point cloud (+normals) -> latent tokens (mu, logvar)."""
 
@@ -60,11 +105,16 @@ class PointCloudEncoder(nn.Module):
         self.latent_tokens = int(config.get('latent_tokens', 1))
         self.latent_dim = int(config.get('latent_dim', 256))
 
+        self.self_attention = bool(config.get('encoder_self_attention', False))
+
         self.fourier = FourierFeatures(num_bands)
         self.point_proj = nn.Linear(self.fourier.out_dim + 3, d_model)
         self.queries = nn.Parameter(torch.randn(1, self.latent_tokens, d_model) * 0.02)
         self.blocks = nn.ModuleList(
             CrossAttentionBlock(d_model, num_heads) for _ in range(num_blocks))
+        if self.self_attention:
+            self.self_blocks = nn.ModuleList(
+                SelfAttentionBlock(d_model, num_heads) for _ in range(num_blocks))
         self.out_norm = nn.LayerNorm(d_model)
         self.to_latent = nn.Linear(d_model, 2 * self.latent_dim)
 
@@ -72,8 +122,10 @@ class PointCloudEncoder(nn.Module):
         feats = torch.cat([self.fourier(surface_points), surface_normals], dim=-1)
         context = self.point_proj(feats)
         queries = self.queries.expand(surface_points.shape[0], -1, -1)
-        for block in self.blocks:
+        for i, block in enumerate(self.blocks):
             queries = block(queries, context)
+            if self.self_attention:
+                queries = self.self_blocks[i](queries)
         mu, logvar = self.to_latent(self.out_norm(queries)).chunk(2, dim=-1)
         return mu, logvar  # (B, tokens, latent_dim)
 
@@ -173,6 +225,12 @@ class SDFVAE(nn.Module):
     def reparameterize(mu, logvar, noise_scale=1.0):
         return mu + float(noise_scale) * torch.randn_like(mu) * torch.exp(0.5 * logvar)
 
+    @staticmethod
+    def kl_divergence(mu, logvar):
+        """Standard diagonal-Gaussian KL to N(0, I), summed over the latent and
+        averaged over the batch."""
+        return -0.5 * (1 + logvar - mu.pow(2) - logvar.exp()).sum(dim=(1, 2)).mean()
+
     def decode(self, z_tokens, query_points):
         if self.decoder_type == 'mlp':
             return self.decoder(z_tokens.flatten(1), query_points)
@@ -188,7 +246,7 @@ class SDFVAE(nn.Module):
         mu, logvar = self.encode(surface_points, surface_normals)
         z = self.reparameterize(mu, logvar, posterior_noise_scale)
         sdf_pred = self.decode(z, query_points)
-        kl = -0.5 * (1 + logvar - mu.pow(2) - logvar.exp()).sum(dim=(1, 2)).mean()
+        kl = self.kl_divergence(mu, logvar)
         return sdf_pred, kl, mu, logvar
 
 
@@ -202,3 +260,49 @@ def sdf_loss(sdf_pred, sdf_target, clamp_dist=0.1):
     """
     target = torch.clamp(sdf_target, -clamp_dist, clamp_dist)
     return (sdf_pred - target).abs().mean()
+
+
+def _sdf_gradient(sdf, points):
+    """d(sdf)/d(points) with a retained graph for second-order backprop."""
+    grad = torch.autograd.grad(
+        sdf, points, grad_outputs=torch.ones_like(sdf),
+        create_graph=True, retain_graph=True, only_inputs=True)[0]
+    return grad
+
+
+def hybrid_geometry_losses(vae, z, surface_points, surface_normals, query_points,
+                           subsample=0):
+    """Extra SDF-VAE losses beyond plain reconstruction (TripoSG-style).
+
+    Returns (surface, normal, eikonal) scalar losses:
+      * surface: |f(x_surface)| -> 0  (the level set passes through the surface)
+      * normal:  1 - cos(<grad f, n>) at the surface (correct surface orientation)
+      * eikonal: (||grad f|| - 1)^2 over query space (a true metric SDF)
+
+    Must run outside autocast: the gradient terms need a stable fp32 graph.
+    `subsample` (>0) caps the number of surface / query points used for the
+    gradient terms to bound memory and the double-backward cost.
+    """
+    if subsample and subsample > 0:
+        if surface_points.shape[1] > subsample:
+            idx = torch.randperm(surface_points.shape[1], device=surface_points.device)[:subsample]
+            surface_points = surface_points[:, idx]
+            surface_normals = surface_normals[:, idx]
+        if query_points.shape[1] > subsample:
+            idx = torch.randperm(query_points.shape[1], device=query_points.device)[:subsample]
+            query_points = query_points[:, idx]
+
+    with _math_attention_ctx():
+        surf = surface_points.detach().requires_grad_(True)
+        sdf_surf = vae.decode(z, surf)
+        grad_surf = _sdf_gradient(sdf_surf, surf)
+        surface_l = sdf_surf.abs().mean()
+        grad_surf_n = grad_surf / (grad_surf.norm(dim=-1, keepdim=True) + 1e-8)
+        normal_l = (1.0 - (grad_surf_n * surface_normals).sum(dim=-1)).mean()
+
+        qp = query_points.detach().requires_grad_(True)
+        sdf_q = vae.decode(z, qp)
+        grad_q = _sdf_gradient(sdf_q, qp)
+        eikonal_l = (grad_q.norm(dim=-1) - 1.0).pow(2).mean()
+
+    return surface_l, normal_l, eikonal_l

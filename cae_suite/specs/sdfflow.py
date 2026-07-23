@@ -29,6 +29,10 @@ SDFFLOW_KEYS = frozenset(
         "num_test_shapes", "mc_resolution_test", "encode_batch_size", "use_conditions",
         "condition_names", "condition_clip", "min_condition_std", "cond_dropout",
         "fm_hidden", "fm_blocks", "fm_cond_hidden", "ode_steps",
+        "fm_arch", "fm_heads", "fm_time_sampling", "fm_time_logit_mean",
+        "fm_time_logit_std",
+        "surface_weight", "normal_weight", "eikonal_weight", "hybrid_grad_points",
+        "encoder_self_attention",
         "num_samples", "seed", "mc_resolution", "cond_values", "cfg_scale",
         "max_condition_z", "condition_ood_policy", "latent_clip", "candidate_multiplier",
         "source_num_samples", "sample_index_a", "sample_index_b", "alpha",
@@ -67,7 +71,7 @@ def validate_sdfflow(ctx: SpecValidationContext) -> None:
             "num_encoder_points", "num_query_points", "latent_tokens", "latent_dim",
             "decoder_hidden", "decoder_layers", "decoder_heads", "encoder_dim", "encoder_heads",
             "encoder_blocks", "fourier_bands", "fm_hidden", "fm_blocks",
-            "fm_cond_hidden", "ode_steps", "num_samples", "mc_resolution",
+            "fm_cond_hidden", "fm_heads", "ode_steps", "num_samples", "mc_resolution",
             "mc_resolution_test", "encode_batch_size", "candidate_multiplier",
             "source_num_samples", "plot_dpi",
             "vae_training_epochs", "vae_batch_size", "vae_learningr",
@@ -82,6 +86,23 @@ def validate_sdfflow(ctx: SpecValidationContext) -> None:
 
     if "decoder_type" in values and str(values["decoder_type"]).lower() not in {"mlp", "attention"}:
         ctx.add("SDF-DECODER-001", Severity.ERROR, "decoder_type must be 'mlp' or 'attention'.", field_name="decoder_type")
+
+    if "fm_arch" in values and str(values["fm_arch"]).lower() not in {"mlp", "dit"}:
+        ctx.add("SDF-FMARCH-001", Severity.ERROR, "fm_arch must be 'mlp' or 'dit'.", field_name="fm_arch")
+
+    if "fm_time_sampling" in values and str(values["fm_time_sampling"]).lower() not in {"uniform", "logit_normal"}:
+        ctx.add("SDF-FMTIME-001", Severity.ERROR, "fm_time_sampling must be 'uniform' or 'logit_normal'.", field_name="fm_time_sampling")
+
+    if ctx.mode in {"train", "train_fm"} and str(values.get("fm_arch", "mlp")).lower() == "dit" \
+            and integer(values.get("latent_tokens", 1)) == 1:
+        ctx.add(
+            "SDF-FMARCH-002",
+            Severity.WARNING,
+            "fm_arch=dit over a single latent token has no tokens to attend across; "
+            "pair it with latent_tokens > 1 (VecSet) for any benefit.",
+            field_name="fm_arch",
+            promote_in_strict=True,
+        )
 
     for field_name in (
         "deterministic_warmup_epochs",

@@ -1,0 +1,97 @@
+model	SDFFlow  # SDF-VAE + latent flow-matching geometry generator
+mode	train  # train (merged VAE->FM pipeline), train_vae, train_fm, sample, reconstruct, interpolate
+gpu_ids	0  # SDFFlow is single-process; only the first GPU ID is used
+'
+%   SOTA-aligned variant. Trains from scratch to ex2/ so ex1 stays intact.
+%   Enables, vs config_train.txt:
+%     - VecSet latent (32 tokens x 64 dim) + attention decoder      (#4)
+%     - DiT velocity net with self-attention over tokens            (#5)
+%     - logit-normal FM timestep sampling (Stable Diffusion 3)      (#1)
+%     - hybrid VAE loss: surface + normal + eikonal (TripoSG)       (#3)
+%     - encoder self-attention among latent tokens, deeper encoder  (#6)
+%   Sharp-edge point sampling (#2) is a dataset-build option; rebuild with
+%   build_dataset.py --sharp_edge_fraction 0.3 and point dataset_dir at it.
+'
+%   Sequential VAE -> FM pipeline
+pipeline_log_file	../output/geometry_generation/ex2/train.log
+skip_completed_stages	True
+output_dir	../output/geometry_generation/ex2
+vae_modelpath	../output/geometry_generation/ex2/sdfflow_vae.pth
+fm_modelpath	../output/geometry_generation/ex2/sdfflow_fm.pth
+'
+%   Shared dataset
+dataset_dir	../dataset/deepjeb.h5  # rebuild with --sharp_edge_fraction to also get #2
+split_seed	42
+num_encoder_points	4096
+num_query_points	4096
+encode_batch_size	16
+'
+%   VAE architecture and losses
+latent_tokens	32  # VecSet latent: 32 tokens (modest for ~2K brackets; avoids overfit)
+latent_dim	64  # small per-token channel (3DShape2VecSet-style), 32x64 = 2048 flat
+decoder_type	attention  # VecSet cross-attention decoder (required once latent_tokens > 1)
+decoder_hidden	512  # attention d_model
+decoder_layers	4  # cross-attention block count
+decoder_heads	8  # decoder attention heads
+encoder_dim	512  # deeper/wider point-cloud encoder
+encoder_heads	8
+encoder_blocks	4  # 2 -> 4 blocks
+encoder_self_attention	True  # let latent tokens exchange info (Dora-style dual attention)
+fourier_bands	8
+kl_weight	0.0001  # tuning knob; nudge toward ~1e-3 if the FM latent is under-regularized
+deterministic_warmup_epochs	20
+posterior_noise_warmup_epochs	80
+posterior_noise_max_scale	0.1
+kl_warmup_epochs	100
+clamp_dist	0.1
+surface_weight	0.1  # |f(x_surface)| -> 0
+normal_weight	0.1  # align grad(f) with surface normals
+eikonal_weight	0.01  # ||grad f|| -> 1 (true metric SDF)
+hybrid_grad_points	2048  # cap points used for the gradient terms (memory/second-order cost)
+'
+%   VAE training
+vae_log_file_dir	../output/geometry_generation/ex2/train_vae.log
+vae_training_epochs	500
+vae_batch_size	4
+vae_learningr	0.0005
+vae_weight_decay	0.0001
+vae_warmup_epochs	5
+vae_num_workers	4
+vae_use_amp	False  # hybrid losses force an fp32 path anyway; keep AMP off for clarity
+vae_use_ema	True
+vae_ema_decay	0.999
+vae_val_interval	5
+vae_test_interval	50
+vae_num_test_shapes	1
+vae_mc_resolution_test	96
+'
+%   FM conditioning and architecture
+use_conditions	True
+condition_names	bbox_x,bbox_z,volume,area
+condition_clip	5.0
+min_condition_std	0.00001
+cond_dropout	0.1
+fm_arch	dit  # DiT over the latent token set (uses self-attention among tokens)
+fm_hidden	512  # 256 -> 512
+fm_blocks	8  # 4 -> 8 DiT blocks
+fm_heads	8
+fm_cond_hidden	256
+fm_time_sampling	logit_normal  # Stable Diffusion 3 schedule
+fm_time_logit_mean	0.0
+fm_time_logit_std	1.0
+'
+%   FM training
+fm_log_file_dir	../output/geometry_generation/ex2/train_fm.log
+fm_training_epochs	300
+fm_batch_size	64
+fm_learningr	0.0002
+fm_weight_decay	0.001
+fm_warmup_epochs	10
+fm_use_amp	True
+fm_use_ema	True
+fm_ema_decay	0.999
+fm_val_interval	10
+fm_test_interval	100
+fm_num_test_shapes	2
+fm_mc_resolution_test	96
+ode_steps	50

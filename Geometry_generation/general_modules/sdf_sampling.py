@@ -54,19 +54,75 @@ def _signed_distance(mesh, points, chunk=32768):
     return out
 
 
+def _sharp_face_ids(mesh, angle_threshold):
+    """Face indices adjacent to a sharp edge (dihedral angle > threshold rad)."""
+    angles = mesh.face_adjacency_angles
+    if angles is None or len(angles) == 0:
+        return np.empty(0, dtype=np.int64)
+    sharp_pairs = mesh.face_adjacency[angles > angle_threshold]
+    if len(sharp_pairs) == 0:
+        return np.empty(0, dtype=np.int64)
+    return np.unique(sharp_pairs.reshape(-1)).astype(np.int64)
+
+
+def _sample_faces(mesh, face_ids, count, rng):
+    """Area-weighted point sampling restricted to a subset of faces.
+
+    Returns (points, face_normals). Uses uniform barycentric coordinates so the
+    density within each chosen face is uniform.
+    """
+    areas = mesh.area_faces[face_ids]
+    total = areas.sum()
+    if total <= 0:
+        probs = np.full(len(face_ids), 1.0 / len(face_ids))
+    else:
+        probs = areas / total
+    chosen = rng.choice(face_ids, size=count, p=probs)
+    tris = mesh.triangles[chosen]  # (count, 3, 3)
+    u = rng.random(count)
+    v = rng.random(count)
+    over = u + v > 1.0
+    u[over] = 1.0 - u[over]
+    v[over] = 1.0 - v[over]
+    w = 1.0 - u - v
+    points = (tris[:, 0] * w[:, None] + tris[:, 1] * u[:, None] + tris[:, 2] * v[:, None])
+    return points.astype(np.float32), mesh.face_normals[chosen].astype(np.float32)
+
+
 def sample_mesh_sdf(mesh, num_surface, num_near, num_uniform,
-                    near_sigmas=(0.01, 0.05), bound=1.0, rng=None):
+                    near_sigmas=(0.01, 0.05), bound=1.0, rng=None,
+                    sharp_edge_fraction=0.0, sharp_edge_angle=0.5236):
     """Sample surface points/normals and SDF query points from a watertight mesh.
 
     Near-surface queries are surface samples perturbed by Gaussian noise at two
     scales (half each); uniform queries fill [-bound, bound]^3.
 
+    `sharp_edge_fraction` (Dora-style Sharp Edge Sampling) routes that fraction
+    of surface points onto faces adjacent to sharp edges (dihedral angle above
+    `sharp_edge_angle` radians, default 30 deg), so high-curvature features are
+    over-represented in the encoder point cloud and near-surface queries. It
+    falls back to uniform area sampling when a mesh has no sharp edges.
+
     Returns dict with surface_points, surface_normals, sdf_points, sdf_values.
     """
     rng = rng or np.random.default_rng()
 
-    surface_points, face_idx = trimesh.sample.sample_surface(mesh, num_surface, seed=int(rng.integers(2**31)))
-    surface_normals = mesh.face_normals[face_idx]
+    num_sharp = int(round(num_surface * float(sharp_edge_fraction)))
+    if num_sharp > 0:
+        sharp_ids = _sharp_face_ids(mesh, sharp_edge_angle)
+        num_sharp = num_sharp if len(sharp_ids) > 0 else 0
+    num_area = num_surface - num_sharp
+
+    area_points, area_face_idx = trimesh.sample.sample_surface(
+        mesh, num_area, seed=int(rng.integers(2**31)))
+    area_normals = mesh.face_normals[area_face_idx]
+    if num_sharp > 0:
+        sharp_points, sharp_normals = _sample_faces(mesh, sharp_ids, num_sharp, rng)
+        surface_points = np.concatenate([area_points, sharp_points], axis=0)
+        surface_normals = np.concatenate([area_normals, sharp_normals], axis=0)
+    else:
+        surface_points = area_points
+        surface_normals = area_normals
 
     base_idx = rng.integers(0, num_surface, size=num_near)
     base = surface_points[base_idx]
