@@ -6,6 +6,8 @@ import time
 
 import torch
 
+from general_modules import distributed as D
+
 
 _STAGE_SETTING_SUFFIXES = (
     'log_file_dir',
@@ -96,7 +98,7 @@ def checkpoint_status(path, stage, expected_config):
 
 
 def _append_pipeline_log(path, message):
-    if not path:
+    if not path or not D.is_main_process():
         return
     directory = os.path.dirname(path)
     if directory:
@@ -126,24 +128,31 @@ def train_pipeline(config, config_filename='config.txt'):
     skip_completed = bool(config.get('skip_completed_stages', True))
     pipeline_log = config.get('pipeline_log_file', 'ex1/train.log')
     started = time.time()
+    rank0 = D.is_main_process()
     banner = f'==== Pipeline {time.strftime("%Y-%m-%d %H:%M:%S")} config={config_filename} ===='
     _append_pipeline_log(pipeline_log, banner)
-    print('\n' + '=' * 60)
-    print('Starting sequential training pipeline: VAE -> FM')
-    print('=' * 60)
+    if rank0:
+        print('\n' + '=' * 60)
+        print('Starting sequential training pipeline: VAE -> FM')
+        print('=' * 60)
 
     vae_complete, vae_reason = checkpoint_status(vae_path, 'vae', vae_config)
     vae_trained = not (skip_completed and vae_complete)
     if vae_trained:
-        print(f'\n[Pipeline 1/2] Training VAE ({vae_reason})')
+        if rank0:
+            print(f'\n[Pipeline 1/2] Training VAE ({vae_reason})')
         _append_pipeline_log(pipeline_log, f'VAE start: {vae_reason}')
         vae_worker(vae_config, config_filename)
+        # Barrier so every rank observes rank 0's final VAE checkpoint write
+        # before the compatibility re-check reads it.
+        D.barrier()
         vae_complete, vae_reason = checkpoint_status(vae_path, 'vae', vae_config)
         if not vae_complete:
             raise RuntimeError(f'VAE stage did not complete; FM will not start: {vae_reason}')
         _append_pipeline_log(pipeline_log, f'VAE complete: {vae_reason}')
     else:
-        print(f'\n[Pipeline 1/2] Reusing VAE: {vae_reason}')
+        if rank0:
+            print(f'\n[Pipeline 1/2] Reusing VAE: {vae_reason}')
         _append_pipeline_log(pipeline_log, f'VAE reused: {vae_reason}')
 
     _release_stage_memory()
@@ -151,14 +160,17 @@ def train_pipeline(config, config_filename='config.txt'):
     fm_complete, fm_reason = checkpoint_status(fm_path, 'fm', fm_config)
     reuse_fm = skip_completed and not vae_trained and fm_complete
     if reuse_fm:
-        print(f'\n[Pipeline 2/2] Reusing FM: {fm_reason}')
+        if rank0:
+            print(f'\n[Pipeline 2/2] Reusing FM: {fm_reason}')
         _append_pipeline_log(pipeline_log, f'FM reused: {fm_reason}')
     else:
         if vae_trained and fm_complete:
             fm_reason = 'VAE was retrained, so the existing FM is stale'
-        print(f'\n[Pipeline 2/2] Training FM ({fm_reason})')
+        if rank0:
+            print(f'\n[Pipeline 2/2] Training FM ({fm_reason})')
         _append_pipeline_log(pipeline_log, f'FM start: {fm_reason}')
         fm_worker(fm_config, config_filename)
+        D.barrier()
         fm_complete, fm_reason = checkpoint_status(fm_path, 'fm', fm_config)
         if not fm_complete:
             raise RuntimeError(f'FM stage did not complete: {fm_reason}')
@@ -166,6 +178,7 @@ def train_pipeline(config, config_filename='config.txt'):
 
     elapsed = time.time() - started
     message = f'Pipeline complete in {elapsed:.2f}s: VAE={vae_path}, FM={fm_path}'
-    print(f'\n{message}')
+    if rank0:
+        print(f'\n{message}')
     _append_pipeline_log(pipeline_log, message)
 

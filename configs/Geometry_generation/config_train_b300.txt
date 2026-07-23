@@ -1,0 +1,99 @@
+model	SDFFlow  # SDF-VAE + latent flow-matching geometry generator
+mode	train  # merged VAE->FM pipeline
+gpu_ids	0,1,2,3,4,5,6,7  # all 8 B300 GPUs
+parallel_mode	ddp  # ddp = data parallel (fits on one 288GB B300); fsdp = shard a huge DiT
+'
+%   Multi-GPU B300 variant of config_train_v2.txt. Trains to ex3/.
+%   parallel_mode ddp: SDFFlow self-spawns one rank per GPU (no torchrun needed).
+%   Effective batch = per-GPU batch x num GPUs. Rank 0 owns val/test/checkpoints.
+%
+%   Switch parallel_mode to fsdp ONLY when the velocity DiT itself does not fit
+%   on one B300 (multi-billion params). fsdp shards params/grads/optimizer
+%   (SDFFlow's "model split"); it disables EMA and does its own bf16.
+%   fsdp_min_params controls the auto-wrap granularity.
+% fsdp_min_params	20000000
+'
+%   Sequential VAE -> FM pipeline
+pipeline_log_file	../output/geometry_generation/ex3/train.log
+skip_completed_stages	True
+output_dir	../output/geometry_generation/ex3
+vae_modelpath	../output/geometry_generation/ex3/sdfflow_vae.pth
+fm_modelpath	../output/geometry_generation/ex3/sdfflow_fm.pth
+'
+%   Shared dataset
+dataset_dir	../dataset/deepjeb.h5
+split_seed	42
+num_encoder_points	4096
+num_query_points	4096
+encode_batch_size	32
+'
+%   VAE architecture and losses (VecSet + hybrid, as config_train_v2)
+latent_tokens	32
+latent_dim	64
+decoder_type	attention
+decoder_hidden	512
+decoder_layers	4
+decoder_heads	8
+encoder_dim	512
+encoder_heads	8
+encoder_blocks	4
+encoder_self_attention	True
+fourier_bands	8
+kl_weight	0.0001
+deterministic_warmup_epochs	20
+posterior_noise_warmup_epochs	80
+posterior_noise_max_scale	0.1
+kl_warmup_epochs	100
+clamp_dist	0.1
+surface_weight	0.1
+normal_weight	0.1
+eikonal_weight	0.01
+hybrid_grad_points	2048
+'
+%   VAE training
+vae_log_file_dir	../output/geometry_generation/ex3/train_vae.log
+vae_training_epochs	500
+vae_batch_size	4  # per GPU; effective 32 across 8 GPUs
+vae_learningr	0.0005
+vae_weight_decay	0.0001
+vae_warmup_epochs	5
+vae_num_workers	8
+vae_use_amp	False  # hybrid losses need fp32; B300 is fast enough
+vae_use_ema	True
+vae_ema_decay	0.999
+vae_val_interval	5
+vae_test_interval	50
+vae_num_test_shapes	1
+vae_mc_resolution_test	96
+'
+%   FM conditioning and architecture (DiT + logit-normal, as config_train_v2)
+use_conditions	True
+condition_names	bbox_x,bbox_z,volume,area
+condition_clip	5.0
+min_condition_std	0.00001
+cond_dropout	0.1
+fm_arch	dit
+fm_hidden	512
+fm_blocks	8
+fm_heads	8
+fm_cond_hidden	256
+fm_time_sampling	logit_normal
+fm_time_logit_mean	0.0
+fm_time_logit_std	1.0
+'
+%   FM training
+fm_log_file_dir	../output/geometry_generation/ex3/train_fm.log
+fm_training_epochs	300
+fm_batch_size	64  # per GPU; effective 512 across 8 GPUs
+fm_learningr	0.0002
+fm_weight_decay	0.001
+fm_warmup_epochs	10
+fm_num_workers	8
+fm_use_amp	True  # bf16 on B300
+fm_use_ema	True
+fm_ema_decay	0.999
+fm_val_interval	10
+fm_test_interval	100
+fm_num_test_shapes	2
+fm_mc_resolution_test	96
+ode_steps	50

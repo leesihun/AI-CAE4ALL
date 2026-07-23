@@ -1,11 +1,20 @@
-"""Stage 2: flow matching over frozen-VAE latents (optionally conditional + CFG)."""
+"""Stage 2: flow matching over frozen-VAE latents (optionally conditional + CFG).
+
+Runs single-process or, under `parallel_mode` ddp/fsdp, as one rank of a spawned
+distributed job. Each rank deterministically encodes the dataset to the same
+frozen latents (identical normalization), shards the latent batch, and shares
+gradients. Rank 0 owns validation, the generation test, and checkpoints. FSDP is
+the intended "model split" for a large velocity DiT.
+"""
 
 import os
 import time
 
 import torch
 from torch.utils.data import DataLoader, TensorDataset
+from torch.utils.data.distributed import DistributedSampler
 
+from general_modules import distributed as D
 from general_modules.sdf_dataset import build_dataset_splits
 from general_modules.mesh_extraction import decode_sdf_grid, sdf_grid_to_mesh, mesh_report
 from model.sdf_vae import SDFVAE
@@ -20,15 +29,28 @@ from training_profiles.setup import (
     resolve_device,
     save_checkpoint,
 )
+from training_profiles.train_vae import _clip_grads
+
+
+def _state_dict_to_cpu(state_dict):
+    """Move every tensor in a (possibly None) state dict to CPU before it is
+    embedded in another checkpoint -- the source VAE checkpoint may have been
+    loaded onto a CUDA device."""
+    if state_dict is None:
+        return None
+    return {k: (v.cpu() if torch.is_tensor(v) else v) for k, v in state_dict.items()}
 
 
 def fm_worker(config, config_filename='config.txt'):
     device = resolve_device(config)
     split_seed = int(config.get('split_seed', 42))
+    rank0 = D.is_main_process()
+    world_size = D.get_world_size()
 
-    # ---- Frozen VAE ----
+    # ---- Frozen VAE (loaded identically on every rank) ----
     vae_path = config.get('vae_modelpath', './outputs/sdfflow_vae.pth')
-    print(f'\nLoading frozen VAE from {vae_path}')
+    if rank0:
+        print(f'\nLoading frozen VAE from {vae_path}')
     vae_ckpt = load_checkpoint(vae_path, device)
     vae = SDFVAE(vae_ckpt['config']).to(device)
     state = vae_ckpt['ema_state'] or vae_ckpt['model_state']
@@ -40,8 +62,9 @@ def fm_worker(config, config_filename='config.txt'):
     for p in vae.parameters():
         p.requires_grad_(False)
 
-    # ---- Encode all shapes to latents ----
-    print('\nEncoding dataset to latents...')
+    # ---- Encode all shapes to latents (deterministic: eval + mu) ----
+    if rank0:
+        print('\nEncoding dataset to latents...')
     train_dataset, val_dataset, _ = build_dataset_splits(config, split_seed)
     z_train, c_train = _encode_split(vae, train_dataset, device, config)
     z_val, c_val = _encode_split(vae, val_dataset, device, config)
@@ -89,31 +112,52 @@ def fm_worker(config, config_filename='config.txt'):
         cond_max = c_train.amax(dim=0, keepdim=True)
         c_train_n = ((c_train - cond_mean) / cond_std).clamp(-cond_clip, cond_clip)
         c_val_n = ((c_val - cond_mean) / cond_std).clamp(-cond_clip, cond_clip)
-        print(f'Conditional FM: cond_dim={cond_dim} ({cond_names})')
-        print(f'Condition normalization clipped to +/-{cond_clip:g} sigma')
+        if rank0:
+            print(f'Conditional FM: cond_dim={cond_dim} ({cond_names})')
+            print(f'Condition normalization clipped to +/-{cond_clip:g} sigma')
     else:
         cond_dim = 0
         cond_mean = cond_std = None
         c_train_n = torch.zeros(len(z_train_n), 0)
         c_val_n = torch.zeros(len(z_val_n), 0)
-        print('Unconditional FM (use_conditions False)')
+        if rank0:
+            print('Unconditional FM (use_conditions False)')
 
     latent_flat_dim = z_train.shape[1]
-    print(f'Latents: train {z_train.shape}, val {z_val.shape}')
+    if rank0:
+        print(f'Latents: train {z_train.shape}, val {z_val.shape}')
 
-    train_loader = DataLoader(TensorDataset(z_train_n, c_train_n),
-                              batch_size=int(config.get('batch_size', 64)), shuffle=True)
+    batch_size = int(config.get('batch_size', 64))
+    train_ds = TensorDataset(z_train_n, c_train_n)
+    if world_size > 1:
+        train_sampler = DistributedSampler(
+            train_ds, num_replicas=world_size, rank=D.get_rank(), shuffle=True)
+        train_loader = DataLoader(train_ds, batch_size=batch_size, sampler=train_sampler)
+    else:
+        train_sampler = None
+        train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
 
     # ---- Model ----
-    print('\nInitializing velocity network...')
+    if rank0:
+        print('\nInitializing velocity network...')
     model = VelocityNet(config, latent_flat_dim, cond_dim=cond_dim).to(device)
-    ema_model = build_ema_model(model, config)
+
+    is_fsdp = D.is_dist() and D.parallel_mode(config) == 'fsdp'
+    ema_config = config
+    if is_fsdp and config.get('use_ema', False):
+        if rank0:
+            print('NOTE: EMA is not supported under parallel_mode=fsdp; disabling it.')
+        ema_config = dict(config); ema_config['use_ema'] = False
+    ema_model = build_ema_model(model, ema_config)
     if ema_model is not None:
         ema_model = ema_model.to(device)
-    log_model_summary(model, config, ema_model)
+
+    train_model, is_fsdp = D.wrap_model(model, config, device)
+    if rank0:
+        log_model_summary(model, config, ema_model)
 
     total_epochs = int(config.get('training_epochs', 2000))
-    optimizer, scheduler = build_optimizer_scheduler(config, model.parameters(), total_epochs)
+    optimizer, scheduler = build_optimizer_scheduler(config, train_model.parameters(), total_epochs)
 
     cond_dropout = float(config.get('cond_dropout', 0.1))
     time_sampling = str(config.get('fm_time_sampling', 'uniform')).lower()
@@ -121,10 +165,10 @@ def fm_worker(config, config_filename='config.txt'):
         raise ValueError("fm_time_sampling must be 'uniform' or 'logit_normal'")
     logit_mean = float(config.get('fm_time_logit_mean', 0.0))
     logit_std = float(config.get('fm_time_logit_std', 1.0))
-    if time_sampling == 'logit_normal':
+    if time_sampling == 'logit_normal' and rank0:
         print(f'FM timestep sampling: logit-normal (mean={logit_mean:g}, std={logit_std:g})')
     use_amp = bool(config.get('use_amp', False))
-    amp_enabled = use_amp and device.type == 'cuda'
+    amp_enabled = use_amp and device.type == 'cuda' and not is_fsdp
     amp_dtype = (torch.bfloat16 if amp_enabled and torch.cuda.is_bf16_supported()
                  else torch.float16)
     scaler = torch.amp.GradScaler(
@@ -132,22 +176,39 @@ def fm_worker(config, config_filename='config.txt'):
     val_interval = int(config.get('val_interval', 10))
     test_interval = int(config.get('test_interval', 250))
     modelpath = config.get('fm_modelpath', './outputs/sdfflow_fm.pth')
+    params = [p for p in train_model.parameters() if p.requires_grad]
 
-    log_file = init_log_file(config, config_filename)
-    print('\n' + '=' * 60)
-    print('Starting flow-matching training loop...')
-    print('=' * 60 + '\n')
+    log_file = init_log_file(config, config_filename) if rank0 else None
+    if rank0:
+        print('\n' + '=' * 60)
+        print('Starting flow-matching training loop...')
+        print('=' * 60 + '\n')
     start_time = time.time()
     valid_loss = float('nan')
 
     def checkpoint_payload(epoch):
         return {
+            'schema_version': 'sdfflow_infer_v1',
             'stage': 'fm',
             'epoch': epoch,
-            'model_state': model.state_dict(),
-            'ema_state': ema_model.state_dict() if ema_model is not None else None,
+            'model_state': D.full_state_dict(train_model, is_fsdp),
+            'ema_state': (D.unwrap_model(ema_model).state_dict()
+                          if ema_model is not None else None),
             'config': config,
             'vae_modelpath': vae_path,
+            # The FM checkpoint is the one canonical inference artifact: it
+            # embeds the frozen VAE it was trained against (co-located, both
+            # moved to CPU) so a stand-alone inference bundle needs only this
+            # one file (INFERENCE_BUNDLE_PLAN.md section 5.5). `vae_modelpath`
+            # above is kept for backward compatibility / provenance only.
+            'vae': {
+                'model_state': _state_dict_to_cpu(vae_ckpt['model_state']),
+                'ema_state': _state_dict_to_cpu(vae_ckpt.get('ema_state')),
+                'config': vae_ckpt['config'],
+                'cond_mean': vae_ckpt.get('cond_mean'),
+                'cond_std': vae_ckpt.get('cond_std'),
+                'cond_names': vae_ckpt.get('cond_names'),
+            },
             'latent_flat_dim': latent_flat_dim,
             'latent_mean': latent_mean.cpu(),
             'latent_std': latent_std.cpu(),
@@ -160,9 +221,16 @@ def fm_worker(config, config_filename='config.txt'):
             'cond_names': cond_names,
         }
 
+    def maybe_save(epoch):
+        payload = checkpoint_payload(epoch)  # collective under FSDP; call on all ranks
+        if rank0:
+            save_checkpoint(modelpath, payload)
+
     try:
         for epoch in range(total_epochs):
-            model.train()
+            if train_sampler is not None:
+                train_sampler.set_epoch(epoch)
+            train_model.train()
             loss_sum, batches = 0.0, 0
             for z_batch, c_batch in train_loader:
                 z_batch = z_batch.to(device, non_blocking=True)
@@ -170,12 +238,13 @@ def fm_worker(config, config_filename='config.txt'):
                 optimizer.zero_grad(set_to_none=True)
                 with torch.autocast('cuda', dtype=amp_dtype, enabled=amp_enabled):
                     loss = flow_matching_loss(
-                        model, z_batch, cond=cond, cond_dropout=cond_dropout,
+                        train_model, z_batch, cond=cond, cond_dropout=cond_dropout,
                         time_sampling=time_sampling, logit_mean=logit_mean,
                         logit_std=logit_std)
                 scaler.scale(loss).backward()
-                scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                if amp_enabled and amp_dtype == torch.float16:
+                    scaler.unscale_(optimizer)
+                _clip_grads(train_model, is_fsdp, params, 1.0)
                 scaler.step(optimizer)
                 scaler.update()
                 if ema_model is not None:
@@ -184,34 +253,39 @@ def fm_worker(config, config_filename='config.txt'):
                 batches += 1
 
             scheduler.step()
-            train_loss = loss_sum / max(batches, 1)
+            train_loss = D.reduce_epoch_mean(loss_sum, batches, device)
             current_lr = optimizer.param_groups[0]['lr']
 
             do_val = (epoch % val_interval == 0) or (epoch == total_epochs - 1)
-            eval_model = ema_model.module if ema_model is not None else model
-            if do_val:
+            eval_model = D.unwrap_model(ema_model) if ema_model is not None else model
+            if do_val and rank0:
                 valid_loss = _validate(eval_model, z_val_n, c_val_n, device, cond_dim)
                 print(f'Epoch {epoch}/{total_epochs} TrainFM: {train_loss:.2e} '
                       f'ValidFM: {valid_loss:.2e} LR: {current_lr:.2e}')
-            else:
+            elif rank0:
                 print(f'Epoch {epoch}/{total_epochs} TrainFM: {train_loss:.2e} LR: {current_lr:.2e}')
 
-            elapsed = time.time() - start_time
-            val_str = f'Valid {valid_loss:.4e}' if do_val else 'Valid skipped'
-            append_log(log_file, f'Elapsed: {elapsed:.2f}s Epoch {epoch} '
-                                 f'TrainFM {train_loss:.4e} {val_str} LR: {current_lr:.4e}')
+            if rank0:
+                elapsed = time.time() - start_time
+                val_str = f'Valid {valid_loss:.4e}' if do_val else 'Valid skipped'
+                append_log(log_file, f'Elapsed: {elapsed:.2f}s Epoch {epoch} '
+                                     f'TrainFM {train_loss:.4e} {val_str} LR: {current_lr:.4e}')
 
             if epoch % test_interval == 0 or epoch == total_epochs - 1:
-                run_generation_test(eval_model, vae, device, config, epoch,
-                                    latent_flat_dim, latent_mean, latent_std,
-                                    cond_dim=cond_dim)
-                save_checkpoint(modelpath, checkpoint_payload(epoch))
+                if rank0:
+                    run_generation_test(eval_model, vae, device, config, epoch,
+                                        latent_flat_dim, latent_mean, latent_std,
+                                        cond_dim=cond_dim)
+                maybe_save(epoch)
+                D.barrier()
 
-        save_checkpoint(modelpath, checkpoint_payload(total_epochs - 1))
-        print(f'\nTraining finished. FM saved to {modelpath} (val FM loss {valid_loss:.2e})')
+        maybe_save(total_epochs - 1)
+        if rank0:
+            print(f'\nTraining finished. FM saved to {modelpath} (val FM loss {valid_loss:.2e})')
     except KeyboardInterrupt:
-        print('\nTraining interrupted by user. Saving checkpoint...')
-        save_checkpoint(modelpath, checkpoint_payload(-1))
+        if rank0:
+            print('\nTraining interrupted by user. Saving checkpoint...')
+        maybe_save(-1)
 
 
 @torch.no_grad()

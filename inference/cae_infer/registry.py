@@ -13,7 +13,14 @@ import importlib
 import sys
 from pathlib import Path
 
-CAE_INFER_DIR = Path(__file__).resolve().parent
+if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+    # PyInstaller build: families/common ship as raw data (see pyinstaller.spec)
+    # under sys._MEIPASS/cae_infer/..., not frozen into the PYZ archive -- see
+    # that spec file's comment for why (duplicate `model`/`general_modules`
+    # module names across families can't coexist in one frozen import cache).
+    CAE_INFER_DIR = Path(sys._MEIPASS) / "cae_infer"
+else:
+    CAE_INFER_DIR = Path(__file__).resolve().parent
 FAMILIES_DIR = CAE_INFER_DIR / "families"
 
 # family key -> subdirectory name under families/

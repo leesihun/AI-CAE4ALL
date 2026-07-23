@@ -1,0 +1,15 @@
+# CPU-only inference bundle dependencies. Install with:
+#   pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
+#
+# No CUDA, no torch_cluster (see README.md "Why CPU-only"). Pin exact versions
+# from your training environment before shipping a bundle to an end-user --
+# the ranges below are the minimum verified-compatible floor, not a promise
+# every newer release keeps the same checkpoint-loading behavior.
+
+torch>=2.2
+torch_geometric>=2.5
+scipy>=1.11
+h5py>=3.10
+numpy>=1.24
+scikit-image>=0.22
+trimesh>=4.0

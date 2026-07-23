@@ -35,6 +35,10 @@ def build_parser() -> argparse.ArgumentParser:
                     help="sdfflow only: Marching Cubes grid resolution.")
     p.add_argument("--seed", type=int, default=None,
                     help="sdfflow only: sampler seed for reproducibility.")
+    p.add_argument("--cond-values", default=None, dest="cond_values",
+                    help="sdfflow only: comma-separated target condition values, in the "
+                         "checkpoint's cond_names order (e.g. '0.4,0.2,0.01,0.6'). "
+                         "Omit for unconditional generation.")
     return p
 
 
@@ -50,6 +54,7 @@ def main(argv=None) -> int:
             query_chunk_size=args.query_chunk_size, num_samples=args.num_samples,
             ode_steps=args.ode_steps, cfg_scale=args.cfg_scale,
             mc_resolution=args.mc_resolution, seed=args.seed,
+            cond_values=args.cond_values,
         )
     except Exception as exc:
         print(f"ERROR: {exc}", file=sys.stderr)

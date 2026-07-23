@@ -1149,32 +1149,47 @@ one ex2 model-split file.
 | `configs/Transolver/ex2/config_train_transolver.txt` | Full ex2 DDP-capable temporal baseline with naive attention. |
 | `configs/Transolver/ex2/config_infer_transolver.txt` | Ex2 direct autoregressive inference paired to `transolver.pth`. |
 
-### 11.6 Elasticity accuracy benchmarks (5)
+### 11.6 Benchmark tree (34)
 
-All files are training configs under `configs/benchmarks/elasticity/`. Their
-declared intent is a converted 1,300-sample dataset, the published 1,000-case
-training and 200-case test partitions, a 100-case validation reserve,
-de-normalized relative L2, 500 epochs, and no positional feature rows because
-coordinates are supplied by the operator adapter. That intent is **not live**:
-the loaders ignore top-level split arrays, the training loops use MSE, the four
-Neural Operator files fail native unknown-key validation, and suite strict mode
-rejects all five. Do not treat benchmark results as paper-comparable until the
-runtime and registries implement these fields.
+`configs/benchmarks/` has grown well beyond the previous five-file elasticity
+set. It now holds **34** files across five datasets. **28 route through the
+launcher** (suite schema, MSE, seeded split — the published paper split arrays
+are still not consumed, so these are comparisons, not paper-faithful runs) and
+**6 do not** (official/paper harness, section 11.7).
 
-| File | Purpose |
+| Subdir | Count | Suite-routable | Contents |
+| --- | ---: | ---: | --- |
+| `elasticity/` | 11 | 10 | `config_{train,infer}_{deeponet,fno,gino,point_deeponet}.txt`, `config_infer_transolver.txt`, `config_train_transolver_paper.txt` — the old `split_strategy` / `loss_type` / `relative_l2_epsilon` keys were **removed** (section 7.1). Plus 1 official file (11.7). |
+| `plasticity/` | 14 | 14 | `config_{train,infer}_{deeponet,fno,gino,hi_meshgraphnets,meshgraphnets,point_deeponet,transolver}.txt` — full seven-method train+infer set, the only benchmark family with MeshGraphNets/hi-MeshGraphNets entries. |
+| `fno_darcy/` | 4 | 4 | `config_{train,infer}_fno_paper.txt` and `…_fno_paper_validation.txt` — these route (`model fno`) despite the `_paper` name. |
+| `gino_carcfd/` | 4 | 0 | `config_{train,eval}_gino_paper_r64{,_v2}.txt` — all official-harness (11.7). |
+| `deeponet_fractional2d/` | 1 | 0 | `config_train_deeponet_paper.txt` — official-harness (11.7). |
+
+### 11.7 Official / paper-reproduction configs (6, not launcher inputs)
+
+Six benchmark files carry **no `model` key** and therefore fail launcher routing
+by design (`ROUTE`/`CFG-COMMON-002`). They are not suite configs: they drive an
+**official reference-implementation harness** (note the untracked
+`dataset/benchmarks/point_deeponet/source/point_deeponet_official` tree) and use
+a **different flat schema** — keys like `epochs`, `learning_rate`, `hidden_width`
+/ `hidden_dim`, `device`, `checkpoint_path`, `dataset_path`, `evaluation_output`,
+`benchmark_profile`, `paper_plot_normalized_mse`, `require_full_hybrid_protocol`,
+`lr_step_size`, `lr_gamma`, `gino_domain_padding`, `source_dir`. None of these
+are in any suite spec, so **do not** run them through `AI_CAE4ALL_main.py`.
+
+| File | Reproduces |
 | --- | --- |
-| `config_train_point_deeponet.txt` | Point-DeepONet comparison with all 972 points as sensors, width 128, feature width 128, and batch size 8. |
-| `config_train_deeponet.txt` | Fixed 32x32-sensor canonical DeepONet comparison with 64 basis functions and batch size 8. |
-| `config_train_fno.txt` | 32x32-grid, four-layer FNO comparison with 12 modes per axis and width 64. |
-| `config_train_gino.txt` | 32x32-grid mesh-state GINO comparison with 8 modes per axis, width 64, and batch size 2. |
-| `config_train_transolver_paper.txt` | Paper-style Transolver baseline: width 128, eight blocks/heads, 64 slices, naive attention, and batch size 1. |
+| `configs/benchmarks/deeponet_fractional2d/config_train_deeponet_paper.txt` | Official DeepONet, fractional-2D benchmark. |
+| `configs/benchmarks/elasticity/config_train_transolver_paper_validation.txt` | Official Transolver elasticity validation. |
+| `configs/benchmarks/gino_carcfd/config_train_gino_paper_r64.txt`, `config_eval_gino_paper_r64.txt` | Official GINO car-CFD (r64) train/eval. |
+| `configs/benchmarks/gino_carcfd/config_train_gino_paper_r64_v2.txt`, `config_eval_gino_paper_r64_v2.txt` | Official GINO car-CFD (r64, v2) train/eval. |
 
 ## 12. Live mismatches and traps
 
 These are current code facts, not hypothetical cautions.
 
 1. **Centralized audit discovery is stale.** `--audit-configs` searches each
-   backend for `config*.txt`; all 79 live files are now under root `configs/`,
+   backend for `config*.txt`; all 117 live files are now under root `configs/`,
    so the command reports zero.
 2. **`num_workers` is runtime-required but under-specified.** MGN variants,
    Neural Operator, and Transolver training directly index
@@ -1210,13 +1225,71 @@ These are current code facts, not hypothetical cautions.
 13. **Loss plot path logic is stale.** Plot helpers insert a GPU-ID directory
     that training log writers do not.
 14. **Several removed docs/old templates are not part of this snapshot.** Do
-    not reuse older counts such as 96 configs; the audited live count is 79.
-15. **The elasticity configs are ahead of their implementation.** Their
-    `split_strategy`, `loss_type`, and `relative_l2_epsilon` fields are unknown
-    to suite schemas. Neural Operator native validation also rejects those three
-    plus `use_parallel_stats`; Transolver ignores the three benchmark fields.
-    Consequently the intended published split and relative-L2 objective are not
-    active. The converted HDF5 is also absent in this snapshot.
+    not reuse older counts such as 79 or 96 configs; the audited live count is
+    117 (of which 111 route through the launcher).
+15. **The benchmark configs are still MSE + seeded-split, but the schema-ahead
+    keys are gone.** The elasticity files no longer declare `split_strategy`,
+    `loss_type`, or `relative_l2_epsilon` (they were removed), so the current
+    `configs/benchmarks/elasticity/*` and `plasticity/*` files route and pass
+    preflight. The runtime still ignores any top-level HDF5 split arrays and
+    still trains on MSE, so results are not paper-faithful, but the config files
+    themselves are now valid launcher inputs.
+16. **`pin_memory` is a live MeshGraphNets key with no suite schema slot.**
+    Native MGN reads `config.get('pin_memory', True)`; the suite `MGN_KEYS` set
+    omits it, so `pin_memory` warns (`CFG-UNKNOWN-001`) and strict mode rejects
+    it. It is shipped in the two ex2 hi-MGN training files. Add it to `MGN_KEYS`
+    to author it cleanly (section 5.3).
+17. **SDFFlow gained a Tier-2 key family (working tree).** `fm_arch`,
+    `fm_heads`, `fm_time_sampling`, `fm_time_logit_mean`, `fm_time_logit_std`,
+    `surface_weight`, `normal_weight`, `eikonal_weight`, `hybrid_grad_points`,
+    and `encoder_self_attention` are new optional keys (section 4). Any positive
+    hybrid weight forces the VAE stage into fp32 and bypasses AMP for the
+    gradient terms, so `vae_use_amp` is effectively ignored there.
+18. **Six benchmark files are not launcher inputs.** The official/paper
+    reproduction configs (section 11.7) carry no `model` key and use a separate
+    schema; running them through the launcher is a routing error, not a bug.
+19. **Inventory is 117, not 79.** Any older count (79, 96) is stale. Neural
+    Operator lost its 8 `*_smoke_*` pairs; MeshGraphNets and Transolver each
+    gained named/sweep files; whole plasticity/fno_darcy/gino_carcfd/
+    deeponet_fractional2d benchmark subdirs were added.
+
+### 12.1 Present-but-unused key index
+
+Keys that appear in checked-in templates (or are accepted by a spec) yet do
+**not** select a live implementation for the named backend. "In N files" counts
+current `config*.txt` occurrences. Remove them from a clean config unless the
+status says to keep a required marker. Markers: **M** compatibility marker (only
+one value is accepted; selects nothing else), **I** accepted but inert, **G**
+schema gap (live in native code but not authorable through the suite validator),
+**O/I** active in some backends but inert in the named one.
+
+| Key | Marker | Backend | In N files | Status |
+| --- | --- | --- | ---: | --- |
+| `coordinate_normalization` | M (**keep**) | Neural Operator, Transolver | 51 | Required by suite/checkpoint metadata, but the value is ignored — the coordinate domain is always train-derived. Keep for preflight/checkpoint compatibility. |
+| `integration_weight_source` | I | Neural Operator | 37 | Accepted; `DataSpec.has_integration_weights` is hardcoded false. No weighted-kernel path exists. |
+| `train_query_chunk_size` | I | Neural Operator | 37 | Accepted and shipped; no training code reads it (only `infer_query_chunk_size` is live). |
+| `gino_group_shared_geometry` | I | GINO | 9 | Accepted and shipped; no live reader. |
+| `point_sampling` | M | Point-DeepONet | 8 | Only `random` accepted. |
+| `pointnet_activation` | M | Point-DeepONet | 8 | Only `relu` accepted. |
+| `pointnet_norm` | M | Point-DeepONet | 8 | Only `batch` accepted. |
+| `point_branch_merge` | M | Point-DeepONet | 8 | Only `sum` accepted. |
+| `deeponet_multi_output` | M | DeepONet | 8 | Only `split_both` accepted. |
+| `fno_norm` | M | FNO | 12 | Only `none` accepted in the baseline. |
+| `weight_decay` | I (variational only) | MeshGraphNets-V | 79 | Active for deterministic MGN / Neural Operator / Transolver / SDFFlow; **inert** for variational MGN, whose optimizer is `torch.optim.Adam`. |
+| `pin_memory` | G | MeshGraphNets | 2 | Live in native MGN (`config.get('pin_memory', True)`), missing from suite `MGN_KEYS` → warns / strict-rejects (section 5.3, trap 16). |
+| `use_parallel_stats` | O / G | Transolver / Neural Operator | 4 | Transolver: a known key (**O**). Neural Operator: code reads it but the native registry and suite schema omit it, so authoring it is rejected (**G**). Currently shipped only in 2 Transolver benchmark files. |
+| `train_eval_subset_size` | O / G | MeshGraphNets / Neural Operator | 2 | Active **O** in MGN; a **G** in Neural Operator (DDP reads it, schema omits it, hardcoded 128). |
+| `test_batch_idx` | G | Transolver | 90 | Active in MGN and Neural Operator visualization; **absent from `TRANSOLVER_KEYS`**, so it is a gap for Transolver only. |
+| `gino_transform_type` | G | GINO | 0 | Code reads it (only `linear` accepted); schema omits it, so authoring is rejected. Not currently shipped — leave absent. |
+| `hybrid_grad_points` | O (non-compat) | SDFFlow VAE | 1 | Active, but not a pipeline compatibility key, so changing it alone does not invalidate a reused VAE checkpoint (section 4.5). |
+
+**No longer present.** `split_strategy`, `loss_type`, and `relative_l2_epsilon`
+(the old elasticity benchmark-intent keys) have been **removed** from every
+config — 0 occurrences now. The variational **L** keys (`free_bits`,
+`fit_latent_gmm`, `gmm_*`, `lambda_kl`, `lambda_det`, `alpha_prior_max`,
+`residual_scale`, `bipartite_unpool`, `positional_encoding`) and the
+deterministic-MGN **X** VAE/prior keys are not shipped in any current template;
+if you find them in an old file, delete them (sections 5.4, 6.6).
 
 ## 13. Source-of-truth map
 
@@ -1275,82 +1348,76 @@ Before saving or launching a new config:
 
 Until `--audit-configs` includes root `configs/`, the suite's Python API can
 audit the centralized set with filesystem, native, dataset, and environment
-probes intentionally disabled. The 2026-07-19 audit used
-`run_preflight(..., PreflightOptions(skip_filesystem=True, skip_native=True,
+probes intentionally disabled. The 2026-07-23 audit called
+`run_preflight(fp, suite_root=root, registry=reg, settings=settings,
+options=PreflightOptions(strict=..., skip_filesystem=True, skip_native=True,
 skip_environment=True, skip_dataset=True))` for every
 `configs/**/config*.txt`, once with strict false and once with strict true.
 
 The result was:
 
 ```text
-non-strict: files=79, failing=0, errors=0, warnings=35
-strict:     files=79, failing=5, errors=19, warnings=16
+non-strict: files=117, routed+clean=111, routefail(no model)=6, errors=12, warnings=19
+strict:     files=117, clean=108, routefail(no model)=6, promoted-fail=3, errors=15, warnings=16
 ```
 
 The non-strict result means syntax, routing, required suite fields, and
-cross-field validators passed, with unknown fields retained as warnings. The
-strict result exposes the five benchmark files' schema gap. Neither run
-validates the existence of every referenced HDF5/checkpoint, full dataset
-consistency, checkpoint tensor compatibility, CUDA availability, or training
-completion.
+cross-field validators passed for all 111 routable files, with unknown fields
+retained as warnings. The 12 errors and 6 routefails all belong to the
+official/paper harness files that carry no `model` key (section 11.7). The strict
+result additionally promotes the 2 `pin_memory` unknown-key warnings and 1
+recommendation warning to errors (3 files). Neither run validates the existence
+of every referenced HDF5/checkpoint, full dataset consistency, checkpoint tensor
+compatibility, CUDA availability, or training completion.
 
 ## 16. Verification record
 
-The completed document was checked mechanically against the stable source
-snapshot:
+The 2026-07-23 re-audit was checked mechanically against the working-tree
+source:
 
-- 274 distinct keys accepted/diagnosed by suite method specs: all represented.
-- 226 distinct literal config keys read by live non-test Python paths (including
-  `self.config` reads and derived fields): all represented.
-- 60 distinct Python CLI argument names across 87 `add_argument` calls: all
-  represented.
-- 79 live `config*.txt` files: all represented by exact path below.
-- All 215 Python source files passed `python -m py_compile`.
-- All five Bash files passed Git-for-Windows Bash `-n` syntax validation.
-- All 135 Neural Operator tests passed; only upstream deprecation warnings were
-  emitted.
-- Non-strict centralized structural preflight: 79/79 pass, zero errors, 35
-  warnings. Strict preflight: 74/79 pass; the 19 elasticity unknown-key warnings
-  become errors while the 16 variational workload warnings remain warnings.
-- Native-loader/validator probe: 72/79 pass. Four Neural Operator elasticity
-  files fail their native unknown-key guard. The Transolver elasticity file
-  reaches a missing-dataset error because its generated HDF5 is absent. The two
-  normal Transolver inference files fail the checkpoint-existence check because
-  `output/transolver/ex1/transolver1.pth` and
-  `output/transolver/ex2/transolver_smoke.pth` are absent. Their config schema is
-  structurally valid; training the paired files must create those artifacts
-  before inference.
-- Markdown has one H1 and balanced fenced code blocks.
+- **296** distinct keys in the union of the five suite specs' `known_keys`
+  (deterministic MGN, variational MGN, Neural Operator, Transolver, SDFFlow),
+  measured by importing each `build_*_spec()`.
+- **258** distinct literal keys used across all 117 `config*.txt` files. **21**
+  of them are not in any spec `known_keys`; all 21 belong to the 6 official/paper
+  harness files (section 11.7) plus `pin_memory` (2 MGN files, section 5.3). Every
+  suite-schema key used by a routable config is represented above.
+- **117** live `config*.txt` files: all enumerated in Appendix A.
+- Structural preflight (`skip_filesystem`/`skip_native`/`skip_environment`/
+  `skip_dataset`, exactly like section 15): **non-strict** — 111 routed files
+  with 0 errors, 6 no-`model` files route-fail (12 errors, all inside those 6),
+  19 warnings (16 `MGNV-SAMPLES-WORKLOAD`, 2 `CFG-UNKNOWN-001` for `pin_memory`,
+  1 `CFG-REC-001`). **Strict** — 108 clean; the 3 additional failures are the 2
+  `pin_memory` files and 1 recommendation file promoted to errors; the 16
+  workload warnings do not promote.
+- `configs/Geometry_generation/config_train_v2.txt` (the new Tier-2 file) passes
+  a full launcher `--check` with datasets/native/environment probes skipped:
+  0 errors, 0 warnings, 7 notices.
+- New SDFFlow keys traced to their live consumers: `surface_weight` /
+  `normal_weight` / `eikonal_weight` / `hybrid_grad_points`
+  (`training_profiles/train_vae.py`), `fm_arch` / `fm_heads`
+  (`model/velocity_net.py`), `fm_time_sampling` / `fm_time_logit_mean` /
+  `fm_time_logit_std` (`training_profiles/train_fm.py`), `encoder_self_attention`
+  (`model/sdf_vae.py`), and the `--sharp_edge_fraction` / `--sharp_edge_angle`
+  build flags (`build_dataset.py` → `general_modules/sdf_sampling.py`).
 
-## Appendix A. Exact 79-file path list
+> Scope note: this pass re-verified spec/config structure, the SDFFlow code
+> changes, and the structural-preflight audit. It did **not** re-run the native
+> loader/dataset/checkpoint probes, the Neural Operator test suite, or the
+> `py_compile`/Bash-syntax sweep from the previous snapshot; treat those as
+> last verified on 2026-07-19/07-22.
+
+## Appendix A. Exact 117-file path list
+
+Ordered as `sorted()` returns them. The 6 files marked `[official]` carry no
+`model` key and are not launcher inputs (section 11.7).
 
 ```text
-configs/benchmarks/elasticity/config_train_deeponet.txt
-configs/benchmarks/elasticity/config_train_fno.txt
-configs/benchmarks/elasticity/config_train_gino.txt
-configs/benchmarks/elasticity/config_train_point_deeponet.txt
-configs/benchmarks/elasticity/config_train_transolver_paper.txt
 configs/Geometry_generation/config_interpolate.txt
 configs/Geometry_generation/config_sample.txt
 configs/Geometry_generation/config_sample_extrapolation.txt
 configs/Geometry_generation/config_train.txt
-configs/MeshGraphNets/ex1/config_infer1.txt
-configs/MeshGraphNets/ex1/config_infer2.txt
-configs/MeshGraphNets/ex1/config_infer3.txt
-configs/MeshGraphNets/ex1/config_infer4.txt
-configs/MeshGraphNets/ex1/config_train1.txt
-configs/MeshGraphNets/ex1/config_train2.txt
-configs/MeshGraphNets/ex1/config_train3.txt
-configs/MeshGraphNets/ex1/config_train4.txt
-configs/MeshGraphNets/ex2/config_infer1.txt
-configs/MeshGraphNets/ex2/config_infer2.txt
-configs/MeshGraphNets/ex2/config_infer3.txt
-configs/MeshGraphNets/ex2/config_infer4.txt
-configs/MeshGraphNets/ex2/config_train1.txt
-configs/MeshGraphNets/ex2/config_train10.txt
-configs/MeshGraphNets/ex2/config_train2.txt
-configs/MeshGraphNets/ex2/config_train3.txt
-configs/MeshGraphNets/ex2/config_train4.txt
+configs/Geometry_generation/config_train_v2.txt
 configs/MeshGraphNets-V/b8_all_warpage_input/config_infer1_main.txt
 configs/MeshGraphNets-V/b8_all_warpage_input/config_infer1_sec.txt
 configs/MeshGraphNets-V/b8_all_warpage_input/config_infer2_main.txt
@@ -1375,22 +1442,39 @@ configs/MeshGraphNets-V/b8_all_warpage_input/config_train5.txt
 configs/MeshGraphNets-V/b8_all_warpage_input/config_train6.txt
 configs/MeshGraphNets-V/b8_all_warpage_input/config_train7.txt
 configs/MeshGraphNets-V/b8_all_warpage_input/config_train8.txt
+configs/MeshGraphNets/ex1/config_infer1.txt
+configs/MeshGraphNets/ex1/config_infer2.txt
+configs/MeshGraphNets/ex1/config_infer3.txt
+configs/MeshGraphNets/ex1/config_infer4.txt
+configs/MeshGraphNets/ex1/config_infer_himgn.txt
+configs/MeshGraphNets/ex1/config_infer_meshgraphnets.txt
+configs/MeshGraphNets/ex1/config_train1.txt
+configs/MeshGraphNets/ex1/config_train2.txt
+configs/MeshGraphNets/ex1/config_train3.txt
+configs/MeshGraphNets/ex1/config_train4.txt
+configs/MeshGraphNets/ex1/config_train_himgn.txt
+configs/MeshGraphNets/ex1/config_train_meshgraphnets.txt
+configs/MeshGraphNets/ex2/config_infer1.txt
+configs/MeshGraphNets/ex2/config_infer2.txt
+configs/MeshGraphNets/ex2/config_infer3.txt
+configs/MeshGraphNets/ex2/config_infer4.txt
+configs/MeshGraphNets/ex2/config_infer_himgn.txt
+configs/MeshGraphNets/ex2/config_infer_meshgraphnets.txt
+configs/MeshGraphNets/ex2/config_train1.txt
+configs/MeshGraphNets/ex2/config_train10.txt
+configs/MeshGraphNets/ex2/config_train2.txt
+configs/MeshGraphNets/ex2/config_train3.txt
+configs/MeshGraphNets/ex2/config_train4.txt
+configs/MeshGraphNets/ex2/config_train_himgn.txt
+configs/MeshGraphNets/ex2/config_train_meshgraphnets.txt
 configs/Neural_Operator/ex1/config_infer_deeponet.txt
 configs/Neural_Operator/ex1/config_infer_fno.txt
 configs/Neural_Operator/ex1/config_infer_gino.txt
 configs/Neural_Operator/ex1/config_infer_point_deeponet.txt
-configs/Neural_Operator/ex1/config_infer_smoke_deeponet.txt
-configs/Neural_Operator/ex1/config_infer_smoke_fno.txt
-configs/Neural_Operator/ex1/config_infer_smoke_gino.txt
-configs/Neural_Operator/ex1/config_infer_smoke_point_deeponet.txt
 configs/Neural_Operator/ex1/config_train_deeponet.txt
 configs/Neural_Operator/ex1/config_train_fno.txt
 configs/Neural_Operator/ex1/config_train_gino.txt
 configs/Neural_Operator/ex1/config_train_point_deeponet.txt
-configs/Neural_Operator/ex1/config_train_smoke_deeponet.txt
-configs/Neural_Operator/ex1/config_train_smoke_fno.txt
-configs/Neural_Operator/ex1/config_train_smoke_gino.txt
-configs/Neural_Operator/ex1/config_train_smoke_point_deeponet.txt
 configs/Neural_Operator/ex2/config_infer_deeponet.txt
 configs/Neural_Operator/ex2/config_infer_fno.txt
 configs/Neural_Operator/ex2/config_infer_gino.txt
@@ -1403,5 +1487,47 @@ configs/Neural_Operator/ex2/config_train_point_deeponet.txt
 configs/Transolver/ex1/config_infer1.txt
 configs/Transolver/ex1/config_train1.txt
 configs/Transolver/ex2/config_infer_transolver.txt
+configs/Transolver/ex2/config_train1.txt
+configs/Transolver/ex2/config_train2.txt
+configs/Transolver/ex2/config_train3.txt
+configs/Transolver/ex2/config_train4.txt
+configs/Transolver/ex2/config_train5.txt
+configs/Transolver/ex2/config_train6.txt
+configs/Transolver/ex2/config_train7.txt
+configs/Transolver/ex2/config_train8.txt
 configs/Transolver/ex2/config_train_transolver.txt
+configs/benchmarks/deeponet_fractional2d/config_train_deeponet_paper.txt   [official]
+configs/benchmarks/elasticity/config_infer_deeponet.txt
+configs/benchmarks/elasticity/config_infer_fno.txt
+configs/benchmarks/elasticity/config_infer_gino.txt
+configs/benchmarks/elasticity/config_infer_point_deeponet.txt
+configs/benchmarks/elasticity/config_infer_transolver.txt
+configs/benchmarks/elasticity/config_train_deeponet.txt
+configs/benchmarks/elasticity/config_train_fno.txt
+configs/benchmarks/elasticity/config_train_gino.txt
+configs/benchmarks/elasticity/config_train_point_deeponet.txt
+configs/benchmarks/elasticity/config_train_transolver_paper.txt
+configs/benchmarks/elasticity/config_train_transolver_paper_validation.txt   [official]
+configs/benchmarks/fno_darcy/config_infer_fno_paper.txt
+configs/benchmarks/fno_darcy/config_infer_fno_paper_validation.txt
+configs/benchmarks/fno_darcy/config_train_fno_paper.txt
+configs/benchmarks/fno_darcy/config_train_fno_paper_validation.txt
+configs/benchmarks/gino_carcfd/config_eval_gino_paper_r64.txt   [official]
+configs/benchmarks/gino_carcfd/config_eval_gino_paper_r64_v2.txt   [official]
+configs/benchmarks/gino_carcfd/config_train_gino_paper_r64.txt   [official]
+configs/benchmarks/gino_carcfd/config_train_gino_paper_r64_v2.txt   [official]
+configs/benchmarks/plasticity/config_infer_deeponet.txt
+configs/benchmarks/plasticity/config_infer_fno.txt
+configs/benchmarks/plasticity/config_infer_gino.txt
+configs/benchmarks/plasticity/config_infer_hi_meshgraphnets.txt
+configs/benchmarks/plasticity/config_infer_meshgraphnets.txt
+configs/benchmarks/plasticity/config_infer_point_deeponet.txt
+configs/benchmarks/plasticity/config_infer_transolver.txt
+configs/benchmarks/plasticity/config_train_deeponet.txt
+configs/benchmarks/plasticity/config_train_fno.txt
+configs/benchmarks/plasticity/config_train_gino.txt
+configs/benchmarks/plasticity/config_train_hi_meshgraphnets.txt
+configs/benchmarks/plasticity/config_train_meshgraphnets.txt
+configs/benchmarks/plasticity/config_train_point_deeponet.txt
+configs/benchmarks/plasticity/config_train_transolver.txt
 ```

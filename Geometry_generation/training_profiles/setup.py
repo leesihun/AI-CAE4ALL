@@ -11,10 +11,25 @@ from torch.optim.swa_utils import AveragedModel, get_ema_multi_avg_fn
 
 
 def resolve_device(config):
+    from general_modules import distributed as D
+
+    # In a spawned distributed run the process group is already initialized and
+    # this rank's GPU is pinned; use the current device rather than gpu_ids[0].
+    if D.is_dist():
+        if torch.cuda.is_available():
+            device = torch.device(f'cuda:{torch.cuda.current_device()}')
+        else:
+            device = torch.device('cpu')
+        if D.is_main_process():
+            print(f'Using device: {device} (distributed: {D.parallel_mode(config)}, '
+                  f'world_size={D.get_world_size()})')
+        return device
+
     gpu_ids = config.get('gpu_ids', 0)
     if isinstance(gpu_ids, list):
         if len(gpu_ids) > 1:
-            print('NOTE: multi-GPU not supported in this checkout; using first GPU.')
+            print('NOTE: parallel_mode=single ignores extra GPU IDs; using the first. '
+                  'Set parallel_mode ddp (or fsdp) to use all listed GPUs.')
         gpu_ids = gpu_ids[0]
     if torch.cuda.is_available():
         torch.cuda.set_device(int(gpu_ids))

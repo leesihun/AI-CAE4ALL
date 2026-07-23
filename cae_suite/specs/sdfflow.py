@@ -33,6 +33,7 @@ SDFFLOW_KEYS = frozenset(
         "fm_time_logit_std",
         "surface_weight", "normal_weight", "eikonal_weight", "hybrid_grad_points",
         "encoder_self_attention",
+        "parallel_mode", "fsdp_min_params", "num_workers",
         "num_samples", "seed", "mc_resolution", "cond_values", "cfg_scale",
         "max_condition_z", "condition_ood_policy", "latent_clip", "candidate_multiplier",
         "source_num_samples", "sample_index_a", "sample_index_b", "alpha",
@@ -55,12 +56,26 @@ SDFFLOW_KEYS = frozenset(
 def validate_sdfflow(ctx: SpecValidationContext) -> None:
     validate_common_values(ctx)
     values = ctx.values
+    par_mode = str(values.get("parallel_mode", "single")).lower()
+    if par_mode not in {"single", "ddp", "fsdp"}:
+        ctx.add("SDF-PAR-001", Severity.ERROR,
+                "parallel_mode must be single, ddp, or fsdp.", field_name="parallel_mode")
     gpu_ids = as_list(values.get("gpu_ids", []))
-    if len(gpu_ids) > 1:
+    if len(gpu_ids) > 1 and par_mode == "single":
         ctx.add(
             "SDF-GPU-001",
             Severity.WARNING,
-            "SDFFlow is single-process and will use only the first GPU ID.",
+            "parallel_mode=single uses only the first GPU ID; set parallel_mode "
+            "ddp (or fsdp) to use all listed GPUs.",
+            field_name="gpu_ids",
+            promote_in_strict=True,
+        )
+    if par_mode in {"ddp", "fsdp"} and len(gpu_ids) < 2:
+        ctx.add(
+            "SDF-PAR-002",
+            Severity.WARNING,
+            f"parallel_mode={par_mode} lists <2 GPUs; it will fall back to "
+            "single-GPU training.",
             field_name="gpu_ids",
             promote_in_strict=True,
         )
