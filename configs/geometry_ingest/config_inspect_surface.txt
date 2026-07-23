@@ -1,0 +1,12 @@
+% Geometry ingest -- inspect only: mesh each input and print stats, write nothing.
+% Run:  python AI_CAE4ALL_main.py --config configs/geometry_ingest/config_inspect_surface.txt
+
+model geometry_ingest
+mode inspect
+
+input_geometry ../benchmarks/gino_carcfd/source/extracted/processed-car-pressure-data/data
+reader trimesh
+mesh_type surface
+emit graph, pointcloud
+num_points 4096
+limit 3

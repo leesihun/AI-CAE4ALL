@@ -12,7 +12,7 @@ preflight validation, and then **subprocess-launches that repo's native
 entrypoint** — it never imports the ML code.
 
 Each method repo is self-contained (own venv, own tests, own `CLAUDE.md`) and
-also runnable directly. The five specs live in [cae_suite/specs/](cae_suite/specs/):
+also runnable directly. The specs live in [cae_suite/specs/](cae_suite/specs/):
 
 | `model` config value(s) | Repo | Entrypoint | Has own CLAUDE.md |
 | --- | --- | --- | --- |
@@ -21,6 +21,15 @@ also runnable directly. The five specs live in [cae_suite/specs/](cae_suite/spec
 | `point_deeponet`, `deeponet`, `fno`, `gino` | `Neural_Operator/` | `main.py` | [yes](Neural_Operator/CLAUDE.md) |
 | `transolver` | `Transolver/` | `Transolver_main.py` | — |
 | `sdfflow` | `Geometry_generation/` | `SDFFlow_main.py` | [yes](Geometry_generation/CLAUDE.md) |
+| `geometry_ingest` | `dataset/geometry_ingest/` | `main.py` | [yes](dataset/geometry_ingest/README.md) |
+
+The first five are the ML methods. **`geometry_ingest` is a non-ML data-prep
+utility** routed through the same launcher: it meshes CAD/geometry (STEP/IGES/STL)
+into the shared mesh HDF5 contract (graph for MeshGraphNets, point cloud for the
+operators/Transolver). Its spec sets `native_probe=False` and `dataset_kind=None`,
+its modes are `ingest`/`inspect`, and it needs no GPU. See
+[dataset/geometry_ingest/README.md](dataset/geometry_ingest/README.md) and
+CONFIGURATION_REFERENCE.md section 9.9.
 
 **When working inside a method repo, its own `CLAUDE.md` is authoritative** for
 that method's data contract, architecture facts, and validation steps. This file

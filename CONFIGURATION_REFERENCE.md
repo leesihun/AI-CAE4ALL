@@ -142,10 +142,16 @@ python AI_CAE4ALL_main.py --config configs/MeshGraphNets/ex1/config_train1.txt
 | `gino` | Neural Operator | `Neural_Operator/main.py` | `train`, `inference` |
 | `transolver` | Transolver | `Transolver/Transolver_main.py` | `train`, `inference` |
 | `sdfflow` | SDFFlow | `Geometry_generation/SDFFlow_main.py` | `train`, `train_vae`, `train_fm`, `sample`, `reconstruct`, `interpolate` |
+| `geometry_ingest` | Geometry Ingest (data-prep utility, not an ML method) | `dataset/geometry_ingest/main.py` | `ingest`, `inspect` |
 
 There are no additional routing aliases in the current registry. In particular,
 `MeshGraphNets-V` in a config is lowercased to `meshgraphnets-v` and works, but
 underscore spellings are not aliases.
+
+`geometry_ingest` is the one **non-ML** registered model: a CAD/geometry → shared
+mesh HDF5 preprocessing tool (section 9.9). It has no GPU, no checkpoint, and no
+native config validator (its spec sets `native_probe=False`, `dataset_kind=None`,
+and drops `gpu_ids` from the required-common set).
 
 ### 3.2 Launcher CLI flags
 
@@ -946,6 +952,54 @@ configured path logic; verify before relying on it.
 code-level settings are `H5_PATH='dataset/ex1.h5'`, `OUT_DIR='ex1'`, edge
 subsampling cap `60_000`, per-sample output DPI `150`, and stats DPI `140`.
 It assumes the standard eight-row nodal layout and plots every sample.
+
+### 9.9 Geometry ingest (launcher-routed data-prep model)
+
+`dataset/geometry_ingest/` turns CAD/geometry files (STEP, IGES, STL, PLY, OBJ)
+into the shared mesh HDF5 contract (`dataset/DATASET_FORMAT.md`), so a meshed part
+feeds MeshGraphNets (as a graph) and the operator/Transolver models (as a point
+cloud, edges dropped) with no conversion step. It is both a launcher-routed model
+(`model geometry_ingest`) and a standalone CLI (`python -m geometry_ingest.cli`).
+Solution-field rows are zero-filled: geometry carries no solution, so an ingested
+file is an **inference initial condition**, not a training pair.
+
+Modes: `ingest` (write) and `inspect` (mesh + print stats, write nothing).
+Config paths resolve from the tool repo root (`dataset/geometry_ingest/`), matching
+the native-path convention. Comments must be on their own `%` line — inline
+comments after a value are **not** stripped (they become part of the value and are
+parsed as a list), the same quirk documented for every backend here.
+
+| Key | Need | Meaning |
+| --- | --- | --- |
+| `model` | R | `geometry_ingest`. |
+| `mode` | R | `ingest` or `inspect`. |
+| `input_geometry` | R | Directory of geometry files (validated as an input **directory**; a single file works via the standalone CLI). |
+| `output_dataset` | R for `ingest` | Output HDF5 path (graph emit). A point-cloud emit is written alongside as `<stem>_pointcloud.h5`. |
+| `reader` | O (`auto`) | `auto` \| `trimesh` \| `gmsh`. `auto` → gmsh for CAD/volume, trimesh for surface formats. |
+| `mesh_type` | O (`volume`) | `volume` → gmsh tetrahedral mesh (dim 3); `surface` → triangle mesh (dim 2). |
+| `emit` | O (`graph`) | Comma list of `graph`, `pointcloud`. |
+| `num_points` | O (`0`) | Point-cloud resample size; `0` keeps every node. |
+| `resample_method` | O (`fps`) | `fps` (even spread) \| `random`. |
+| `num_fields` | O (`3`) | Zero-filled solution-field rows after xyz. |
+| `mesh_size_max` / `mesh_size_min` | O (`0`) | gmsh target element size (`0` = gmsh default). |
+| `seed` | O (`42`) | FPS / random-resample seed. |
+| `limit` | O (`0`) | Cap number of inputs (`0` = all). |
+| `gpu_ids` | I | Accepted but unused; the tool is CPU-only. |
+| `log_file_dir` | O | Accepted for parity; currently unused by the tool. |
+
+Dependencies (checked in the tool's environment): `numpy`, `h5py`, `trimesh`
+always; **`gmsh`** additionally for `mesh_type volume` or `reader gmsh` — it is
+imported lazily, so surface (`trimesh`) runs need no gmsh. A `volume`/`gmsh`
+config raises the `GEOM-GMSH-001` preflight notice as a reminder. `reader trimesh`
+with `mesh_type volume` is rejected (`GEOM-READER-002`): trimesh cannot tet-mesh.
+Offline Linux/manylinux install wheels are **committed** under
+`dataset/geometry_ingest/wheels/` (all < 50 MB), and `deps.py::ensure` installs a
+missing module from them at call time (offline, `--no-deps`), so an airgapped clone
+runs the volume path with no separate install step; see the tool README.
+
+Checked-in templates: `configs/geometry_ingest/config_ingest_volume.txt` (CAD →
+volume, needs gmsh), `config_ingest_surface.txt` (STL/PLY → surface, trimesh only),
+and `config_inspect_surface.txt` (stats-only).
 
 ## 10. Shell-script and environment configuration
 

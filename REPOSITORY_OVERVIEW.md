@@ -38,6 +38,15 @@ simulation:
 | Transformer surrogate | Transolver | Mesh fields via learned "physics slices" + attention |
 | Generative geometry | Geometry_generation / SDFFlow | *New 3D shapes* via an SDF-VAE and flow matching |
 
+Alongside the five ML methods, the same launcher routes one **non-ML data-prep
+utility**, `geometry_ingest` (`dataset/geometry_ingest/`, modes `ingest`/`inspect`):
+it meshes CAD/geometry (STEP/IGES/STL) into the shared mesh HDF5 contract — a graph
+for MeshGraphNets and a point cloud for the operators/Transolver — so a raw part can
+feed any method with no conversion step. It trains nothing and needs no GPU. See
+[dataset/geometry_ingest/README.md](dataset/geometry_ingest/README.md),
+[docs/methods/11_Geometry_Ingest.md](docs/methods/11_Geometry_Ingest.md), and
+CONFIGURATION_REFERENCE.md §9.9.
+
 ### 1.1 The core idea: one launcher, five native runtimes
 
 The launcher (`cae_suite/`, invoked via `AI_CAE4ALL_main.py` or the `ai-cae4all`

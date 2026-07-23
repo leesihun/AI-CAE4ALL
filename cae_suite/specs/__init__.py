@@ -1,4 +1,5 @@
 from .base import MethodSpec, PathKind, PathRule, SpecValidationContext
+from .geometry_ingest import build_geometry_ingest_spec
 from .meshgraphnets import build_meshgraphnets_spec
 from .meshgraphnets_variational import build_variational_spec
 from .neural_operator import build_neural_operator_spec
@@ -15,4 +16,5 @@ __all__ = [
     "build_neural_operator_spec",
     "build_transolver_spec",
     "build_sdfflow_spec",
+    "build_geometry_ingest_spec",
 ]

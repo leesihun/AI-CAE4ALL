@@ -1,0 +1,24 @@
+% Geometry ingest -- surface meshes (STL/PLY/OBJ) -> shared HDF5 contract.
+% Uses trimesh only (no gmsh needed). Reads a directory of surface meshes.
+% Run:  python AI_CAE4ALL_main.py --config configs/geometry_ingest/config_ingest_surface.txt
+% input_geometry is relative to the tool repo (dataset/geometry_ingest).
+% NOTE: comments must be on their own % line -- inline comments after a value are not stripped.
+
+model geometry_ingest
+mode ingest
+
+input_geometry ../benchmarks/gino_carcfd/source/extracted/processed-car-pressure-data/data
+output_dataset outputs/ingested/cars.h5
+
+% Pre-triangulated surface formats.
+reader trimesh
+% surface -> triangle graph (dim 2).
+mesh_type surface
+emit graph, pointcloud
+
+num_points 4096
+resample_method fps
+num_fields 3
+% Cap inputs for a quick run (0 = all).
+limit 2
+seed 42

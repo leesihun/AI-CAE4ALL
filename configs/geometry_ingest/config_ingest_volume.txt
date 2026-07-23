@@ -1,0 +1,31 @@
+% Geometry ingest -- STEP/IGES -> volume tet mesh -> shared HDF5 contract.
+% Primary CAD use case. Requires 'gmsh' in the method environment.
+% Run:  python AI_CAE4ALL_main.py --config configs/geometry_ingest/config_ingest_volume.txt
+% Paths are relative to the tool repo (dataset/geometry_ingest); absolute paths also work.
+% NOTE: comments must be on their own % line -- inline comments after a value are not stripped.
+
+model geometry_ingest
+mode ingest
+
+% A directory of CAD/geometry files (.step .stp .igs .iges .stl .ply .obj).
+input_geometry incoming_geometry
+output_dataset outputs/ingested/parts.h5
+
+% auto -> gmsh for CAD/volume, trimesh for surface formats.
+reader auto
+% volume -> gmsh tetrahedral mesh (dim 3).
+mesh_type volume
+% GNN graph (nodes + mesh_edge) plus an operator point cloud.
+emit graph, pointcloud
+
+% Point-cloud resample size (0 = keep every node).
+num_points 8192
+% fps (even spread) | random.
+resample_method fps
+% Zero-filled solution-field rows after xyz (e.g. ux,uy,uz).
+num_fields 3
+
+% gmsh target max element size (0 = gmsh default).
+mesh_size_max 5.0
+mesh_size_min 0.0
+seed 42

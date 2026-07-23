@@ -5,6 +5,13 @@ group per sample. The current loader is `general_modules/mesh_dataset.py`; the
 dataset builders are `build_dataset.py`, `dataset/generate_inference_dataset.py`,
 and `dataset/reduce_dataset.py`.
 
+This same `data/{id}/{nodal_data, mesh_edge}` layout can also be **authored from
+CAD/geometry** (STEP/IGES/STL/PLY/OBJ) by the `geometry_ingest` tool
+(`dataset/geometry_ingest/`, `model geometry_ingest`): it meshes a part (surface
+triangles or volume tets) and writes this contract with solution-field rows
+zero-filled — i.e. an inference initial condition, not a training pair. See
+[geometry_ingest/README.md](geometry_ingest/README.md).
+
 ## File Layout
 
 ```text

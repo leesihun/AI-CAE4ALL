@@ -25,6 +25,12 @@ docs describe the implementation.
 | 8 | [08_GINO.md](08_GINO.md) | `gino` | `Neural_Operator/` | Neural operator |
 | 9 | [09_Transolver.md](09_Transolver.md) | `transolver` | `Transolver/` | Transformer operator |
 | 10 | [10_SDFFlow.md](10_SDFFlow.md) | `sdfflow` | `Geometry_generation/` | Generative geometry |
+| 11 | [11_Geometry_Ingest.md](11_Geometry_Ingest.md) | `geometry_ingest` | `dataset/geometry_ingest/` | Data-prep utility (not an ML method) |
+
+> **`geometry_ingest` is a data-prep utility, not an ML method.** It is included
+> here because it is a launcher-routed `model`, but it trains nothing: it meshes
+> CAD/geometry (STEP/IGES/STL) into the shared HDF5 contract that the ML methods
+> above consume. See its doc for details.
 
 > **MGN / HI-MGN / BSMS-GNN share one codebase.** They are not three separate
 > repos: MGN is the flat baseline, HI-MGN is the multiscale V-cycle
