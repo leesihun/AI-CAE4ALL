@@ -240,6 +240,9 @@ def _probe_dataset(
 
 def _validate_dataset_against_config(result: PreflightResult, field_name: str) -> None:
     metadata = result.dataset_metadata
+    if metadata.get("x_shape") or metadata.get("y_shape"):
+        _validate_table_against_config(result, field_name)
+        return
     nodal_shape = metadata.get("nodal_shape")
     if not nodal_shape or len(nodal_shape) != 3:
         return
@@ -274,6 +277,39 @@ def _validate_dataset_against_config(result: PreflightResult, field_name: str) -
             f"Temporal data (T={timesteps}) requires input_var == output_var; got {input_var} and {output_var}.",
             field_name="input_var",
             location=result.parsed.location("input_var"),
+        )
+
+
+def _validate_table_against_config(result: PreflightResult, field_name: str) -> None:
+    """Cross-check a tabular X[S,N]/Y[S,M] HDF5 against input_var/output_var."""
+    metadata = result.dataset_metadata
+    x_shape = metadata.get("x_shape")
+    y_shape = metadata.get("y_shape")
+    values = result.parsed.values
+    try:
+        input_var = int(values["input_var"]) if "input_var" in values else None
+    except (TypeError, ValueError):
+        input_var = None
+    try:
+        output_var = int(values["output_var"]) if "output_var" in values else None
+    except (TypeError, ValueError):
+        output_var = None
+    location = result.parsed.location(field_name)
+    if x_shape and len(x_shape) == 2 and input_var is not None and x_shape[1] != input_var:
+        result.report.add(
+            "DATASET-FEATURES-001",
+            Severity.ERROR,
+            f"Dataset X has {x_shape[1]} input columns but input_var is {input_var}.",
+            field_name=field_name,
+            location=location,
+        )
+    if y_shape and len(y_shape) == 2 and output_var is not None and y_shape[1] != output_var:
+        result.report.add(
+            "DATASET-FEATURES-002",
+            Severity.ERROR,
+            f"Dataset Y has {y_shape[1]} output columns but output_var is {output_var}.",
+            field_name=field_name,
+            location=location,
         )
 
 

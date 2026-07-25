@@ -32,6 +32,30 @@ Valid modes are `train`, `train_vae`, `train_fm`, `sample`, `reconstruct`, and
 `interpolate`. Production training uses `train`; the two split training modes
 are retained for targeted debugging and have no checked-in split configs.
 
+## Multi-GPU (`parallel_mode`)
+
+The training modes (`train`, `train_vae`, `train_fm`) support `parallel_mode`:
+
+- `single` (default) — one process/one GPU; unchanged legacy behavior.
+- `ddp` — Distributed Data Parallel. `SDFFlow_main.py` self-spawns one worker
+  per GPU in `gpu_ids` (a self-picked free TCP port; no `torchrun`). The batch
+  is sharded, gradients all-reduced. Rank 0 owns validation, the periodic test,
+  logging, and checkpoint writes. Use when the model fits on one GPU (on a
+  288 GB B300, almost everything). The checked-in `config_train_b300.txt` is an
+  8-GPU DDP example.
+- `fsdp` — Fully Sharded Data Parallel; SDFFlow's "model split". Shards
+  params/grads/optimizer for a velocity DiT too large for one GPU. Requires
+  CUDA/NCCL; disables EMA and performs its own bf16. `fsdp_min_params` sets the
+  auto-wrap granularity.
+
+Distributed plumbing lives in `general_modules/distributed.py`. Sampling,
+reconstruction, and interpolation remain single-process. The suite launch
+command is unchanged (`python SDFFlow_main.py --config ...`); the spawn happens
+inside the process when `parallel_mode` is ddp/fsdp and >1 GPU is listed.
+DDP/FSDP was validated with a 2-rank gloo/CPU run of the merged pipeline
+(including the hybrid VAE double-backward); FSDP's CUDA path is standard PyTorch
+FSDP1 but is only exercised on the GPU server.
+
 ## Merged training invariants
 
 `training_profiles/train_pipeline.py` converts the merged config into native
@@ -122,7 +146,8 @@ crossing is a hard failure because all three comparison meshes are required.
 
 | File | Role |
 | --- | --- |
-| `SDFFlow_main.py` | Config load and mode dispatch |
+| `SDFFlow_main.py` | Config load, mode dispatch, distributed spawn dispatch |
+| `general_modules/distributed.py` | DDP/FSDP setup, spawn, rank gating, sharded state-dict gather |
 | `build_dataset.py` | Real meshes or synthetic primitives to HDF5 |
 | `general_modules/sdf_sampling.py` | Normalization, SDF samples, descriptors, repair path |
 | `general_modules/sdf_dataset.py` | Lazy-open HDF5 dataset, seeded split, condition statistics |

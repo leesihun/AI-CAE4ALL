@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>AI-CAE4All Studio</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%2310251e'/%3E%3Cpath d='M15 21h34M15 32h34M15 43h34M32 13v38' stroke='%23ccf48d' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <main class="app">
+    <header class="topbar">
+      <button class="brand" id="brandHome" aria-label="AI-CAE4All Studio home">
+        <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span>
+          <strong>AI-CAE4All</strong>
+          <small>Simulation intelligence studio</small>
+        </span>
+      </button>
+
+      <nav class="topnav" aria-label="Studio workspaces">
+        <button class="nav-item active" data-section="pipeline">Pipeline</button>
+        <button class="nav-item" data-section="models">Models</button>
+        <button class="nav-item" data-section="data">Data</button>
+        <button class="nav-item" data-section="experiments">Runs <span class="nav-count">2</span></button>
+        <button class="nav-item" data-section="optimization">Optimization</button>
+        <button class="nav-item" data-section="benchmarks">Benchmarks</button>
+        <button class="nav-item" data-section="artifacts">Artifacts</button>
+        <button class="nav-item" data-section="deploy">Deploy</button>
+        <button class="nav-item" data-section="system">System</button>
+        <button class="nav-item" data-section="docs">Docs</button>
+      </nav>
+
+      <div class="top-actions">
+        <span class="route-health"><i></i> 11 routes healthy</span>
+        <button class="button dark" id="buildExe">Build .exe</button>
+        <button class="button dark" id="validateTop">Validate</button>
+        <button class="button acid" id="runTop"><span class="play">▶</span> Run pipeline</button>
+      </div>
+    </header>
+
+    <div class="shell inspector-collapsed" id="studioShell">
+      <aside class="palette" aria-label="Block library">
+        <div class="side-title panel-heading">
+          <span>
+            <strong>Block library</strong>
+            <small>Drag a module onto the canvas</small>
+          </span>
+          <button class="panel-toggle" id="hideLibrary" aria-label="Hide block library">‹</button>
+        </div>
+        <label class="search">
+          <span aria-hidden="true">⌕</span>
+          <input id="blockSearch" type="search" placeholder="Search blocks">
+        </label>
+        <div class="library-summary"><span>Typed modules</span><span>Drag or click to add</span></div>
+        <div class="palette-list" id="paletteList"></div>
+      </aside>
+
+      <section class="workspace" aria-label="Pipeline canvas">
+        <header class="canvas-toolbar">
+          <div class="pipeline-heading">
+            <span class="toolbar-kicker">Pipeline</span>
+            <span class="pipeline-title-row">
+              <input id="pipelineName" value="SimulGen-VAE field reconstruction" aria-label="Pipeline name">
+              <span class="saved-state" id="savedState">Saved locally · just now</span>
+            </span>
+          </div>
+          <div class="canvas-actions">
+            <button class="button small panel-reopen" id="showLibrary">Library</button>
+            <select id="templateSelect" aria-label="Pipeline template">
+              <option value="simulgen">SimulGen-VAE reconstruction</option>
+              <option value="geometry">Geometry ingest</option>
+              <option value="physics">Train + predict</option>
+              <option value="parametric">Parametric estimator</option>
+              <option value="generative">Generative optimization</option>
+              <option value="blank">Blank pipeline</option>
+            </select>
+            <button class="button small" id="arrangeGraph">Auto layout</button>
+            <button class="button square" id="undoGraph" aria-label="Undo">↶</button>
+            <button class="button small panel-reopen" id="showInspector">Inspector</button>
+          </div>
+        </header>
+
+        <div class="stage" id="stage">
+          <div class="graph-meta" id="graphStats">
+            <span><strong>6</strong> blocks</span>
+            <span><strong>8</strong> links</span>
+            <span class="graph-ready"><i></i> Ready</span>
+          </div>
+
+          <div class="canvas-world" id="canvasWorld">
+            <svg class="edge-layer" id="edgeLayer" aria-hidden="true"></svg>
+            <div class="node-layer" id="nodeLayer"></div>
+          </div>
+
+          <div class="run-banner" id="runBanner">
+            <span class="spinner"></span>
+            <span><strong id="runTitle">Pipeline validation</strong><small id="runDetail">Checking typed graph…</small></span>
+            <button class="button small" id="stopRun">Stop</button>
+          </div>
+
+          <div class="canvas-help">
+            <span>Drag canvas to pan</span><i></i><span>Wheel to zoom</span><i></i>
+            <span>Click or drag sockets to connect</span><i></i><kbd>Del</kbd><span>remove</span>
+          </div>
+          <div class="zoom">
+            <button id="zoomOut" aria-label="Zoom out">−</button>
+            <button id="fitGraph" aria-label="Fit graph">⌗</button>
+            <span id="zoomLevel">90%</span>
+            <button id="zoomIn" aria-label="Zoom in">+</button>
+          </div>
+        </div>
+      </section>
+
+      <aside class="inspector" aria-label="Selected block inspector">
+        <div class="side-title panel-heading">
+          <span>
+            <strong>Inspector</strong>
+            <small id="inspectorHint">Select a block</small>
+          </span>
+          <button class="panel-toggle" id="hideInspector" aria-label="Hide inspector">›</button>
+        </div>
+        <div class="inspector-content" id="inspectorContent"></div>
+      </aside>
+    </div>
+  </main>
+
+  <div class="overlay" id="configOverlay" role="dialog" aria-modal="true" aria-labelledby="configTitle">
+    <section class="config-shell">
+      <header class="modal-head config-head">
+        <div class="modal-heading">
+          <span class="modal-icon violet" id="configIcon"></span>
+          <span>
+            <h2 id="configTitle">Full configuration</h2>
+            <p id="configSubtitle">Every live configuration key</p>
+          </span>
+        </div>
+        <div class="modal-actions">
+          <select id="configMode" aria-label="Model mode"></select>
+          <select id="configPreset" aria-label="Configuration preset"></select>
+          <button class="button small" id="applyPreset">Apply preset</button>
+          <input id="configFile" type="file" accept=".txt,text/plain" hidden>
+          <button class="button small" id="loadTxt">Load .txt</button>
+          <button class="button small" id="exportTxt">Export .txt</button>
+          <button class="button square" data-close="configOverlay" aria-label="Close configuration">×</button>
+        </div>
+      </header>
+
+      <div class="config-body">
+        <aside class="config-sidebar">
+          <label class="search config-search">
+            <span>⌕</span>
+            <input id="configSearch" type="search" placeholder="Search every config key">
+          </label>
+          <label class="check-row"><input id="changedOnly" type="checkbox"> Only values I set</label>
+          <label class="check-row"><input id="showInactive" type="checkbox" checked> Include inactive / rejected</label>
+          <div class="config-section-list" id="configSectionList"></div>
+          <div class="schema-note" id="schemaNote"></div>
+        </aside>
+
+        <section class="config-fields-panel">
+          <header class="config-fields-head">
+            <span>
+              <h3 id="configSectionTitle">Required</h3>
+              <p id="configSectionMeta"></p>
+            </span>
+            <span class="badge-row" id="configBadges"></span>
+          </header>
+          <div class="config-fields" id="configFields"></div>
+        </section>
+
+        <aside class="raw-panel">
+          <header>
+            <strong>Flat .txt configuration</strong>
+            <small>form ↔ text</small>
+          </header>
+          <textarea id="configRaw" aria-label="Raw flat configuration" spellcheck="false"></textarea>
+          <div class="raw-actions">
+            <button class="button primary" id="parseRaw">Parse &amp; apply</button>
+            <button class="button" id="regenerateRaw">Regenerate text</button>
+          </div>
+          <div class="diagnostics" id="configDiagnostics"></div>
+        </aside>
+      </div>
+
+      <footer class="modal-foot">
+        <span>Form and .txt stay synchronized · preset changes show a diff · preflight remains authoritative.</span>
+        <span>
+          <button class="button" id="explainConfig">Explain config</button>
+          <button class="button" id="preflightConfig">Run preflight</button>
+          <button class="button primary" id="saveConfig">Save to block</button>
+        </span>
+      </footer>
+    </section>
+  </div>
+
+  <div class="overlay" id="studioOverlay" role="dialog" aria-modal="true" aria-labelledby="studioTitle">
+    <section class="studio-shell">
+      <header class="modal-head">
+        <div class="modal-heading">
+          <span class="modal-icon" id="studioIcon"></span>
+          <span>
+            <h2 id="studioTitle">Studio workspace</h2>
+            <p id="studioSubtitle">All suite capabilities in one place</p>
+          </span>
+        </div>
+        <div class="modal-actions">
+          <span class="coverage-pill">11 routes · 28 route modes · 10 trainable models</span>
+          <button class="button small" id="studioPipeline">Open block library</button>
+          <button class="button square" data-close="studioOverlay" aria-label="Close workspace">×</button>
+        </div>
+      </header>
+      <div class="studio-body">
+        <aside class="studio-sidebar" id="studioSidebar"></aside>
+        <main class="studio-main" id="studioMain"></main>
+      </div>
+    </section>
+  </div>
+
+  <div class="overlay" id="artifactOverlay" role="dialog" aria-modal="true" aria-labelledby="artifactTitle">
+    <section class="artifact-shell">
+      <header class="modal-head">
+        <div class="modal-heading">
+          <span class="modal-icon" id="artifactIcon"></span>
+          <span>
+            <h2 id="artifactTitle">Samples</h2>
+            <p id="artifactSubtitle">Inspect the selected artifact</p>
+          </span>
+        </div>
+        <div class="modal-actions">
+          <button class="button small primary" id="artifactAddDataset">+ Add dataset</button>
+          <button class="button small" id="artifactCompare">Compare</button>
+          <button class="button small" id="artifactDownload" disabled>Download sample</button>
+          <button class="button square" data-close="artifactOverlay" aria-label="Close samples">×</button>
+        </div>
+      </header>
+      <div class="artifact-body">
+        <aside class="sample-rail">
+          <label class="search"><span>⌕</span><input id="artifactSampleSearch" type="search" placeholder="Find sample"></label>
+          <div id="sampleList"></div>
+        </aside>
+        <section class="viewer">
+          <div class="viewer-toolbar">
+            <span>
+              <button data-view-mode="points" disabled>Points</button>
+              <button data-view-mode="mesh" disabled>Mesh</button>
+              <button data-view-mode="field" disabled>Field</button>
+            </span>
+            <div class="viewer-camera-tools">
+              <button id="viewerReset" aria-label="Reset sample camera" disabled>Reset view</button>
+              <span class="viewer-mode-meta" id="viewerModeMeta">No sample selected</span>
+            </div>
+          </div>
+          <div class="viewer-visual" id="viewerVisual" tabindex="0" aria-label="Interactive sample viewport"></div>
+          <div class="viewer-gesture-hint">Left-drag rotate · Right-drag pan · Wheel zoom · Double-click reset</div>
+          <div class="viewer-timeline"><button id="viewerPlay" aria-label="Play timestep animation" disabled>▶</button><span>t = 0 / 0</span><input type="range" min="0" max="0" value="0" disabled></div>
+        </section>
+        <aside class="sample-info" id="sampleInfo"></aside>
+      </div>
+      <section class="artifact-dataset-picker" id="artifactDatasetPicker" hidden aria-label="Add dataset">
+        <header>
+          <span><strong>Add dataset</strong><small>Open another repository artifact or upload a local file.</small></span>
+          <button class="button square" id="artifactDatasetPickerClose" aria-label="Close dataset picker">×</button>
+        </header>
+        <div class="artifact-dataset-picker-tools">
+          <label class="search"><span>⌕</span><input id="artifactDatasetSearch" type="search" placeholder="Filter HDF5, CAD, mesh, or VTK paths"></label>
+          <button class="button primary" id="artifactUploadDataset">Upload local file…</button>
+          <input id="artifactDatasetFile" type="file" accept=".h5,.hdf5,.stl,.ply,.obj,.off,.step,.stp,.iges,.igs,.brep,.vtk,.vtu,.vtp,.msh" hidden>
+        </div>
+        <div class="artifact-dataset-list" id="artifactDatasetList"></div>
+      </section>
+      <footer class="modal-foot">
+        <span>Geometry, topology, samples, and field values are read from the configured repository artifact through the local Studio API.</span>
+        <span><button class="button" id="artifactCopyId">Copy artifact ID</button><button class="button primary" id="artifactUseInPipeline">Use in pipeline</button></span>
+      </footer>
+    </section>
+  </div>
+
+  <div class="toast-stack" id="toastStack" aria-live="polite"></div>
+
+  <aside class="runtime-drawer" id="runtimeDrawer" aria-label="Live AI-CAE4ALL job">
+    <header class="runtime-head">
+      <span>
+        <i class="runtime-status-dot" id="runtimeStatusDot"></i>
+        <strong id="runtimeJobTitle">No active job</strong>
+        <small id="runtimeJobMeta">Actual launcher output appears here.</small>
+      </span>
+      <span class="runtime-head-actions">
+        <button class="button small" id="runtimeExperiments">All jobs</button>
+        <button class="button square" id="runtimeMinimize" aria-label="Minimize runtime log">—</button>
+      </span>
+    </header>
+    <pre class="runtime-log" id="runtimeLog">Connect with START_STUDIO.bat to enable the real AI-CAE4ALL runtime.</pre>
+    <footer class="runtime-actions">
+      <span id="runtimeStep">Idle</span>
+      <span>
+        <button class="button small" id="runtimeCopyLog">Copy log</button>
+        <button class="button small danger" id="runtimeCancel" disabled>Stop process</button>
+      </span>
+    </footer>
+  </aside>
+
+  <script type="module" src="./src/main.js"></script>
+</body>
+</html>

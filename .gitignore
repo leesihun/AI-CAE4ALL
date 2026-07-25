@@ -33,6 +33,11 @@ logs/
 train_logs/
 wandb/
 
+# PyInstaller build output for the inference bundle (regenerate with
+# `pyinstaller pyinstaller.spec` from inference/ -- hundreds of MB, never commit)
+inference/build/
+inference/dist/
+
 # Local environments and machine-specific settings
 .venv/
 venv/

@@ -1,0 +1,41 @@
+%   Routing
+model    mlp     # method selector -- routes to MLP/MLP_main.py
+mode     train   # run mode -- {train|inference}
+gpu_ids  0       # CUDA device id -- int or comma list; -1 = CPU (never mixed with CUDA ids)
+
+%   Datasets and outputs (paths resolve from the MLP/ repo root)
+dataset_dir   ../dataset/mlp/train.h5     # tabular HDF5 with X[S,N] and Y[S,M]
+modelpath     ../output/mlp/ex1/mlp.pth   # checkpoint save target
+log_file_dir  ../output/mlp/ex1/mlp.log   # log file path
+split_seed    42                          # RNG seed for the deterministic 80/10/10 split
+
+%   Problem shape: N inputs -> M outputs
+input_var   3   # number of input parameters (must equal X column count)
+output_var  2   # number of output quantities (must equal Y column count)
+
+%   Architecture
+hidden_layers         256, 256, 128  # hidden widths -- comma list of positive ints (depth = length)
+activation            gelu           # {relu|gelu|silu|tanh}
+dropout               0.0            # dropout probability -- float in [0, 1)
+norm                  none           # per-layer normalization -- {none|batch|layer}
+input_normalization   standard       # input feature scaling -- {standard|minmax|none}
+output_normalization  standard       # target scaling -- {standard|minmax|none}
+output_activation     none           # final activation -- {none|relu|sigmoid|tanh|softplus}
+
+%   Optimization
+loss             mse     # regression loss -- {mse|mae|huber}
+training_epochs  200     # epoch count -- positive int
+batch_size       32      # DataLoader batch size -- positive int
+learningr        0.001   # AdamW learning rate -- positive float
+weight_decay     0.0001  # AdamW weight decay -- float >= 0
+warmup_epochs    3       # linear LR warmup epochs before cosine decay -- int >= 0
+num_workers      0       # DataLoader worker processes -- int >= 0
+max_grad_norm    3.0     # gradient-clipping max norm -- float
+
+%   Runtime / EMA / evaluation
+use_amp              False  # bfloat16 autocast on CUDA -- {True|False}
+use_ema              True   # maintain EMA weights (inference prefers them) -- {True|False}
+ema_decay            0.999  # EMA decay rate -- float in (0,1)
+use_compile          False  # torch.compile the model -- {True|False}
+val_interval         5      # validation/log cadence in epochs -- positive int
+checkpoint_interval  0      # extra periodic checkpoint cadence in epochs -- 0 disables

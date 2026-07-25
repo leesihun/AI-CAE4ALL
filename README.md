@@ -1,6 +1,6 @@
 # AI-CAE4ALL
 
-**A monorepo of five machine-learning-for-CAE method repositories, unified by
+**A monorepo of six machine-learning-for-CAE method repositories, unified by
 one config-driven launcher.** Pick a method by writing one word in a text
 config; a single command validates the whole config up front and launches the
 right native runtime.
@@ -18,7 +18,7 @@ error remains.
 
 ---
 
-## The five methods
+## The six methods
 
 Each method is self-contained (own tests, own entrypoint, runnable directly) and
 selected purely by the `model` field in the config:
@@ -30,6 +30,8 @@ selected purely by the `model` field in the config:
 | `point_deeponet`, `deeponet`, `fno`, `gino` | Neural Operators | Four discretization-generalizing field-to-field operators (FNO/GINO implemented natively) |
 | `transolver` | Transolver | Transformer surrogate via learned Physics-Attention "slices" |
 | `sdfflow` | SDFFlow (Geometry generation) | Generates *new 3D shapes* via an SDF-VAE + flow matching |
+| `simulgenvae` | SimulGenVAE | Hierarchical VAE + latent conditioner: generates parametric simulation *fields* over a fixed mesh |
+| `mlp` | MLP Surrogate | Parametric regressor: **N scalar inputs → M scalar outputs** (tabular, no mesh) |
 
 Routing map:
 
@@ -40,6 +42,17 @@ Routing map:
 | `point_deeponet`, `deeponet`, `fno`, `gino` | `Neural_Operator/main.py` |
 | `transolver` | `Transolver/Transolver_main.py` |
 | `sdfflow` | `Geometry_generation/SDFFlow_main.py` |
+| `simulgenvae` | `SimulGenVAE/SimulGenVAE_main.py` |
+| `mlp` | `MLP/MLP_main.py` |
+
+> The mesh methods predict **fields on a mesh** and share one HDF5 mesh contract.
+> `simulgenvae` also reads that mesh contract but is a **fixed-geometry dense VAE**
+> (all samples must share node/timestep counts); it flattens the physical field
+> rows into a dense `[samples, channels, time]` tensor. `mlp` is the exception: a
+> **tabular** parameters→outputs regressor that uses a separate `X[S,N]`/`Y[S,M]`
+> HDF5 and needs no GPU. Another launcher `model`, `geometry_ingest`, is a non-ML
+> data-prep utility (CAD → mesh HDF5); see
+> [dataset/geometry_ingest/README.md](dataset/geometry_ingest/README.md).
 
 ---
 
@@ -126,10 +139,15 @@ MeshGraphNets - variational/  # model = meshgraphnets-v   (note: name has spaces
 Neural_Operator/              # model = point_deeponet | deeponet | fno | gino
 Transolver/                   # model = transolver
 Geometry_generation/          # model = sdfflow
+SimulGenVAE/                  # model = simulgenvae   (hierarchical field VAE + latent conditioner)
+MLP/                          # model = mlp   (tabular parametric surrogate)
 ```
 
-The mesh methods (all but SDFFlow) share one HDF5 data contract with **no
+The mesh methods (all but SDFFlow and MLP) share one HDF5 data contract with **no
 conversion step** — see [dataset/DATASET_FORMAT.md](dataset/DATASET_FORMAT.md).
+`simulgenvae` reads that same mesh HDF5 but flattens the physical field rows into a
+dense fixed-geometry tensor (uniform node/timestep counts). MLP instead reads a
+tabular `X`/`Y` HDF5 (same file, *Tabular Parametric Dataset* section).
 
 ---
 
@@ -151,6 +169,8 @@ meshgraphnets-v = "MeshGraphNets - variational/.venv/bin/python"
 neural_operator = "Neural_Operator/.venv/bin/python"
 transolver      = "Transolver/.venv/bin/python"
 sdfflow         = "Geometry_generation/.venv/bin/python"
+simulgenvae     = "SimulGenVAE/.venv/bin/python"
+mlp             = "MLP/.venv/bin/python"
 ```
 
 Interpreter precedence: `--python` → exact model ID → method ID →
@@ -167,10 +187,13 @@ repo's venv:
 ```bash
 cd Neural_Operator && pytest tests/          # fast, tiny synthetic HDF5 fixtures
 cd Geometry_generation && python -m pytest -q tests/test_sdfflow_pipeline.py
+cd SimulGenVAE && python -m pytest -q tests/test_fom_dataset.py   # HDF5-native FOM loader
+cd MLP && python -m pytest -q tests/         # synthetic X/Y → train → infer smoke test
 ```
 
 `Neural_Operator/` has the deepest coverage; `MeshGraphNets/` and its variational
-sibling ship AR-rollout and multiscale tests.
+sibling ship AR-rollout and multiscale tests; `MLP/` ships a fast CPU
+train→inference smoke test.
 
 ---
 
@@ -181,8 +204,11 @@ sibling ship AR-rollout and multiscale tests.
 | [REPOSITORY_OVERVIEW.md](REPOSITORY_OVERVIEW.md) | Full architecture guide: the launcher internals and a section on every method |
 | [CONFIGURATION_REFERENCE.md](CONFIGURATION_REFERENCE.md) | Exhaustive, live-code-backed catalog of every config key, its necessity, and known launcher/native mismatches |
 | [dataset/DATASET_FORMAT.md](dataset/DATASET_FORMAT.md) | The shared mesh HDF5 data contract |
+| [docs/prototypes/STUDIO_FUNCTIONAL_COVERAGE_RESEARCH.md](docs/prototypes/STUDIO_FUNCTIONAL_COVERAGE_RESEARCH.md) | Complete Studio capability audit and external workflow research |
+| [docs/prototypes/STUDIO_COMPLETE_IMPLEMENTATION_PLAN.md](docs/prototypes/STUDIO_COMPLETE_IMPLEMENTATION_PLAN.md) | Production Studio architecture, adapters, milestones, contracts, tests, and release gates |
+| [docs/methods/](docs/methods/) | Per-method deep-dive docs (one numbered file per method, incl. [12_MLP.md](docs/methods/12_MLP.md)) |
 | [CLAUDE.md](CLAUDE.md) | Condensed conventions for the root launcher |
-| `Neural_Operator/CLAUDE.md`, `Geometry_generation/CLAUDE.md` | Authoritative notes for those two methods |
+| `Neural_Operator/CLAUDE.md`, `Geometry_generation/CLAUDE.md`, `MLP/CLAUDE.md` | Authoritative notes for those methods |
 
 For any specific config key, `CONFIGURATION_REFERENCE.md` is authoritative; for a
 method's internals, that method's own docs and code are authoritative.

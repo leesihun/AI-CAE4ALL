@@ -1,0 +1,53 @@
+model	SimulGenVAE  # hierarchical VAE + latent conditioner for parametric simulation fields
+mode	train  # train (merged VAE->LC pipeline), train_vae, train_lc, reconstruct
+gpu_ids	0  # CUDA device id(s) -- int or comma list; -1 = CPU. parallel_mode ddp uses all listed
+parallel_mode	single  # single | ddp (in-process mp.spawn, one rank per GPU)
+'
+%   Sequential VAE -> LC pipeline
+pipeline_log_file	../output/simulgenvae/ex1/train.log  # pipeline start/reuse/complete banner log
+skip_completed_stages	True  # reuse a stage checkpoint when complete and config-compatible
+output_dir	../output/simulgenvae/ex1  # base dir for artifacts
+vae_modelpath	../output/simulgenvae/ex1/simulgenvae_vae.pth  # VAE checkpoint (also the LC stage's frozen encoder)
+lc_modelpath	../output/simulgenvae/ex1/simulgenvae_lc.pth  # latent-conditioner checkpoint
+'
+%   Shared dataset (shared mesh HDF5 contract; SimulGenVAE needs a FIXED geometry: uniform N and T)
+dataset_dir	../dataset/ex1.h5  # data/{id}/nodal_data [F,T,N]; physical field rows are used
+split_seed	42  # deterministic 80/10/10 split seed
+num_var	1  # number of physical field components fed to the VAE (channels = num_var * N)
+field_start_row	3  # first physical-field row (rows 0:3 are reference coordinates)
+node_start	0  # optional node-axis slice start
+node_end	0  # optional node-axis slice end (0 = all nodes)
+timesteps_reduced	0  # optional timestep truncation (0 = all timesteps)
+'
+%   VAE architecture and losses (hierarchical latent space)
+latent_dim	8  # per-level hierarchical latent dim
+latent_dim_end	32  # main latent dim
+num_filter_enc	1024 512 256 128  # encoder filter progression; hierarchical levels = len-1
+network_size	small  # small | large
+loss_type	1  # 1 MSE | 2 MAE | 3 smoothL1 | 4 Huber
+alpha	1000000  # reconstruction loss weight
+init_beta_divisor	4  # initial KL beta = 10^-divisor; warms up to beta_target
+'
+%   VAE stage training knobs (vae_* stripped to unprefixed for the stage worker)
+vae_training_epochs	2000  # VAE epochs
+vae_batch_size	16  # VAE batch size (per GPU under ddp)
+vae_learningr	0.001  # VAE learning rate
+vae_weight_decay	0.0  # VAE weight decay
+vae_warmup_epochs	100  # VAE LR warmup epochs
+vae_log_file_dir	../output/simulgenvae/ex1/vae.log  # VAE stage log
+'
+%   Latent conditioner architecture
+lc_filter	32 64 128 256 512 1024  # LC filter progression
+lc_data_type	csv  # csv (MLP over parametric conditions) | image (CNN)
+param_dir	../dataset/ex1_conditions.csv  # csv file (csv) or image directory (image); ordered by sorted sample id
+param_data_type	.png  # image extension when lc_data_type=image
+lc_dropout	0.2  # LC dropout rate
+use_spatial_attention	1  # image CNN spatial attention (1 on / 0 off)
+'
+%   LC stage training knobs
+lc_training_epochs	5000  # LC epochs
+lc_batch_size	64  # LC batch size
+lc_learningr	0.001  # LC learning rate
+lc_weight_decay	0.00001  # LC weight decay
+lc_warmup_epochs	100  # LC LR warmup epochs
+lc_log_file_dir	../output/simulgenvae/ex1/lc.log  # LC stage log

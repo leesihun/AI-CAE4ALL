@@ -1,0 +1,17 @@
+torch
+numpy
+pandas
+matplotlib
+torchinfo
+audiomentations
+scikit-learn
+librosa
+soxr
+audioread 
+torchsummaryX
+opencv-python
+tensorboard
+natsort
+torchvision
+pytorch_warmup
+scikit-image

@@ -1,0 +1,13 @@
+%   Routing
+model    mlp         # method selector -- routes to MLP/MLP_main.py
+mode     inference   # run mode -- {train|inference}
+gpu_ids  0           # CUDA device id -- int or comma list; -1 = CPU
+
+%   Model + data (paths resolve from the MLP/ repo root)
+modelpath             ../output/mlp/ex1/mlp.pth          # trained checkpoint to load
+infer_dataset         ../dataset/mlp/infer.h5            # tabular HDF5 with X[S,N] (Y optional -> metrics)
+inference_output_dir  ../output/mlp/ex1/predictions      # writes predictions.h5 (Y_pred[S,M])
+
+%   Problem shape (must match the checkpoint)
+input_var   3   # number of input parameters
+output_var  2   # number of output quantities

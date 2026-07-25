@@ -80,7 +80,7 @@ files) are deliberately large and heavily commented for exactly this reason.
 
 ## 2. Flat-text config grammar
 
-All five native loaders use the same basic parser behavior, and the suite parser
+All six native loaders use the same basic parser behavior, and the suite parser
 intentionally adds stricter diagnostics.
 
 ```text
@@ -871,6 +871,7 @@ shown as required are required by that utility, not by model training.
 | `MeshGraphNets - variational/MeshGraphNets_main.py` | `--config PATH` (default `config.txt`) |
 | `Neural_Operator/main.py` | `--config PATH` (default `config.txt`) |
 | `Transolver/Transolver_main.py` | `--config PATH` (default `config.txt`) |
+| `MLP/MLP_main.py` | `--config PATH` (required; no default) |
 
 ### 9.2 SDFFlow dataset builder
 
@@ -1001,6 +1002,119 @@ Checked-in templates: `configs/geometry_ingest/config_ingest_volume.txt` (CAD �
 volume, needs gmsh), `config_ingest_surface.txt` (STL/PLY → surface, trimesh only),
 and `config_inspect_surface.txt` (stats-only).
 
+### 9.10 MLP surrogate (launcher-routed tabular regressor)
+
+`MLP/` (`model mlp`, entrypoint `MLP_main.py`) is a plain fully-connected MLP that
+maps **N scalar parameters → M scalar quantities of interest** (a parametric
+surrogate for DOE / parameter-sweep data). It is the only method that is **not**
+mesh-based: it reads a tabular `X[S,N]`/`Y[S,M]` HDF5 (`dataset_kind
+table_hdf5`, see `dataset/DATASET_FORMAT.md` → *Tabular Parametric Dataset*), not
+the `data/{id}` contract. No GPU is required (`gpu_ids -1` runs on CPU). Modes:
+`train` and `inference`. Config paths resolve from the `MLP/` repo root. The
+launcher spec `cae_suite/specs/mlp.py` is the validation source of truth; there is
+no native probe (`native_probe False`), and normalization is stored in the
+checkpoint (the source HDF5 stays read-only).
+
+| Key | Need | Meaning |
+| --- | --- | --- |
+| `model` | R | `mlp`. |
+| `mode` | R | `train` or `inference`. |
+| `gpu_ids` | R | CUDA id(s) or `-1` for CPU. |
+| `dataset_dir` | R (train) | Training tabular HDF5 (`X[S,N]`, `Y[S,M]`). |
+| `infer_dataset` | R (inference) | Inference tabular HDF5 (`X[S,N]`; `Y` optional → MAE/RMSE). |
+| `modelpath` | R | Checkpoint save target (train) / load source (inference). |
+| `input_var` | R | N — input parameter count; must equal `X` column count. |
+| `output_var` | R | M — output quantity count; must equal `Y` column count. |
+| `training_epochs` / `batch_size` / `learningr` | R (train) | Optimizer basics (AdamW). |
+| `inference_output_dir` | O (`outputs/predictions`) | Writes `predictions.h5` (`X`, `Y_pred[S,M]`, `Y_true` if given). |
+| `hidden_layers` | O (`256,256,128`) | Hidden widths — comma list of positive ints (depth = length). |
+| `activation` | O (`gelu`) | `relu` \| `gelu` \| `silu` \| `tanh`. |
+| `dropout` | O (`0.0`) | Dropout probability — float in `[0,1)`. |
+| `norm` | O (`none`) | Per-layer normalization — `none` \| `batch` \| `layer`. |
+| `input_normalization` / `output_normalization` | O (`standard`) | `standard` \| `minmax` \| `none`; fit on the train split only. |
+| `output_activation` | O (`none`) | `none` \| `relu` \| `sigmoid` \| `tanh` \| `softplus`. |
+| `loss` | O (`mse`) | `mse` \| `mae` \| `huber`. |
+| `weight_decay` / `warmup_epochs` / `max_grad_norm` | O | AdamW decay; linear-warmup→cosine LR; grad clip. |
+| `num_workers` / `prefetch_factor` | O | DataLoader workers (`prefetch_factor` used only when workers > 0). |
+| `use_amp` | O (`False`) | bf16 autocast on CUDA. |
+| `use_ema` / `ema_decay` | O (`False` / `0.999`) | EMA weights (decay-warmed so it stays useful on short runs; inference prefers them). |
+| `use_compile` | O (`False`) | `torch.compile` the model. |
+| `val_interval` / `checkpoint_interval` | O | Validation/log cadence; extra periodic checkpoint cadence (`0` disables). |
+| `split_seed` | O (`42`) | Deterministic 80/10/10 train/val/test split seed. |
+| `log_file_dir` | O | Accepted for parity. |
+
+Dependencies (checked in the method environment): `torch`, `h5py`, `numpy`.
+Checked-in templates: `configs/MLP/ex1/config_train_mlp.txt` and
+`config_infer_mlp.txt`; a sample dataset generator is `dataset/mlp/make_sample.py`.
+
+### 9.11 SimulGenVAE (launcher-routed hierarchical field VAE + latent conditioner)
+
+`SimulGenVAE/` (`model simulgenvae`, entrypoint `SimulGenVAE_main.py`) is a
+hierarchical VAE that reconstructs/generates parametric simulation *fields*, plus
+a **latent conditioner (LC)** that maps physical parameters (csv) or images to the
+VAE's latent space. Structurally it mirrors `sdfflow`: a VAE stage + a second
+stage, with the same stage-prefixed config scheme, `mp.spawn`-based in-process
+multi-GPU (`general_modules/distributed.py`, copied from SDFFlow), and a dict
+checkpoint payload (`{stage, epoch, model_state, config, normalization}`) so
+`checkpoint_probe` can validate it. Modes: `train` (merged VAE→LC pipeline,
+`training_profiles/train_pipeline.py`), `train_vae`, `train_lc`, `reconstruct`.
+
+It reads the **shared mesh HDF5** (`dataset_kind mesh_hdf5`, same `data/{id}/
+nodal_data[F,T,N]` contract as the mesh methods) but is a **fixed-geometry dense
+FOM model**: `general_modules/fom_dataset.py` selects physical field rows
+`[field_start_row : field_start_row + num_var]` and flattens them into a dense
+`[num_samples, num_var*num_nodes, num_timesteps]` tensor, so every sample must
+share the same node and timestep counts (a mismatch is a hard `ValueError`, not a
+launcher diagnostic — the probe only checks the first sample's shape). The VAE's
+hierarchical latent space is a **main** latent (`latent_dim_end`) plus a stack of
+**hierarchical** latents (`latent_dim` per level, `len(num_filter_enc) - 1`
+levels); the LC regresses both.
+
+| Key | Need | Meaning |
+| --- | --- | --- |
+| `model` | R | `simulgenvae`. |
+| `mode` | R | `train` \| `train_vae` \| `train_lc` \| `reconstruct`. |
+| `gpu_ids` | R | CUDA id(s) or `-1` for CPU. |
+| `parallel_mode` | O (`single`) | `single` \| `ddp` \| `fsdp`; `ddp`/`fsdp` self-spawn one rank per listed GPU. |
+| `dataset_dir` | R | Mesh HDF5 (`data/{id}/nodal_data`); fixed geometry required. |
+| `split_seed` | O (`42`) | Deterministic 80/10/10 split seed. |
+| `num_var` | O (`1`) | Physical field components fed to the VAE; channels = `num_var * num_nodes`. |
+| `field_start_row` | O (`3`) | First physical-field row (rows `0:3` are reference coordinates). |
+| `node_start` / `node_end` | O (`0`/all) | Optional node-axis slice. |
+| `timesteps_reduced` | O (`0`=all) | Optional timestep truncation. |
+| `latent_dim` | R | Per-level hierarchical latent dim. |
+| `latent_dim_end` | R | Main latent dim. |
+| `num_filter_enc` | R | Encoder filter progression (list); hierarchical levels = `len - 1`. |
+| `network_size` | O (`small`) | `small` \| `large`. |
+| `loss_type` | O (`1`) | `1` MSE \| `2` MAE \| `3` smoothL1 \| `4` Huber. |
+| `alpha` | O (`1.0`) | Reconstruction loss weight. |
+| `init_beta_divisor` | O (`4`) | Initial KL beta = `10^-divisor`; warms up to `beta_target`. |
+| `vae_modelpath` | R | VAE checkpoint — save target (`train`/`train_vae`) / load source (`train_lc`/`reconstruct`). |
+| `lc_modelpath` | R (train\*/reconstruct) | LC checkpoint — save target (`train`/`train_lc`) / load source (`reconstruct`). |
+| `lc_filter` | R (train\*/reconstruct) | LC filter progression (list). |
+| `lc_data_type` | R (train\*/reconstruct) | `csv` (MLP) \| `image` (CNN). |
+| `param_dir` | R (train\*/reconstruct) | csv file (`lc_data_type csv`) or image directory (`image`); rows/images ordered by sorted sample id. |
+| `param_data_type` | O (`.png`) | Image extension when `lc_data_type image`. |
+| `lc_dropout` | O (`0.3`) | LC dropout rate. |
+| `use_spatial_attention` | O (`1`) | Image-CNN spatial attention. |
+| `vae_training_epochs` / `lc_training_epochs` | R (per stage) | Stage epoch counts (stripped to `training_epochs` per worker). |
+| `vae_batch_size` / `lc_batch_size` | R (per stage) | Stage batch sizes. |
+| `vae_learningr` / `lc_learningr` | R (per stage) | Stage learning rates. |
+| `vae_weight_decay` / `lc_weight_decay`, `vae_warmup_epochs` / `lc_warmup_epochs` | O | AdamW decay; LR warmup epochs, per stage. |
+| `vae_use_amp` / `lc_use_amp`, `vae_use_ema` / `lc_use_ema` / `*_ema_decay` | O (`False`) | AMP / EMA, per stage. |
+| `vae_log_file_dir` / `lc_log_file_dir` | O | Per-stage text log. |
+| `output_dir` | O | Base dir for pipeline/reconstruct artifacts. |
+| `pipeline_log_file` | O | `train` mode's pipeline banner log. |
+| `skip_completed_stages` | O (`True`) | Reuse a stage checkpoint when complete and config-compatible. |
+
+Dependencies (checked in the method environment): `torch`, `h5py`, `numpy`,
+`scikit-learn` (MinMax scaling); heavier deps (`audiomentations`, `librosa`,
+`opencv-python`, `torchsummaryX`, `pytorch_warmup`, `scikit-image`) live in the
+method venv only and are not probed. Checked-in templates:
+`configs/SimulGenVAE/ex1/config_train.txt`, `config_train_vae.txt`,
+`config_train_lc.txt`, `config_reconstruct.txt`. Tests: `SimulGenVAE/tests/
+test_fom_dataset.py` (HDF5-native loader + checkpoint round-trip).
+
 ## 10. Shell-script and environment configuration
 
 ### 10.1 Variational sweep runners
@@ -1090,6 +1204,14 @@ The snapshot contains **117** `config*.txt` files, all under root `configs/`
 launcher** and **6 are official/paper-reproduction configs with no `model` key**
 that drive a separate reference harness (section 11.7) and are not launcher
 inputs.
+
+> **Post-snapshot addition (2026-07-24): MLP surrogate (`model mlp`, section
+> 9.10).** Two launcher-routed templates were added after the audit above —
+> `configs/MLP/ex1/config_train_mlp.txt` and `config_infer_mlp.txt` — bringing the
+> live total to **119** (`113` launcher-routed). Both pass structural preflight (0
+> errors); the train file emits `CFG-DEFAULT-001` notices only. The audit counts
+> and pass/fail breakdown in this section reflect the 2026-07-23 snapshot and were
+> not re-run for this addition.
 
 | Family | Count | Structural preflight (skip fs/native/env/dataset) |
 | --- | ---: | --- |

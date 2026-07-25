@@ -26,6 +26,7 @@ docs describe the implementation.
 | 9 | [09_Transolver.md](09_Transolver.md) | `transolver` | `Transolver/` | Transformer operator |
 | 10 | [10_SDFFlow.md](10_SDFFlow.md) | `sdfflow` | `Geometry_generation/` | Generative geometry |
 | 11 | [11_Geometry_Ingest.md](11_Geometry_Ingest.md) | `geometry_ingest` | `dataset/geometry_ingest/` | Data-prep utility (not an ML method) |
+| 12 | [12_MLP.md](12_MLP.md) | `mlp` | `MLP/` | Parametric MLP surrogate (tabular, no mesh) |
 
 > **`geometry_ingest` is a data-prep utility, not an ML method.** It is included
 > here because it is a launcher-routed `model`, but it trains nothing: it meshes
@@ -67,6 +68,7 @@ python AI_CAE4ALL_main.py --describe <model>                        # per-mode r
 | Irregular geometry with a discretization-convergent operator story | **GINO** | Kernel-integral GNO in/out of a latent FNO grid |
 | Attention-based operator, one architecture, huge meshes | **Transolver** | Physics-Attention with linear-in-N slice tokens |
 | *Generate new 3D shapes* (not simulate a field) | **SDFFlow** | SDF-VAE + latent flow matching, conditioned on shape descriptors |
+| Predict a few **scalar** quantities from **scalar** design parameters (no mesh/field) | **MLP** | Plain N→M fully-connected regressor over a tabular DOE / parameter sweep |
 
 See each method's own doc for the detailed strengths/weaknesses and the full
 config catalog.

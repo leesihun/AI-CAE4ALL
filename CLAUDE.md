@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this repository is
 
-AI-CAE4ALL is a **monorepo of five independent ML-for-CAE method repositories**
+AI-CAE4ALL is a **monorepo of six independent ML-for-CAE method repositories**
 unified by one config-driven launcher. The launcher (`cae_suite/`, the
 `ai-cae4all` console script, `AI_CAE4ALL_main.py`) reads a native flat-text
 config, routes on its `model` field to the right method repo, runs a layered
@@ -21,13 +21,31 @@ also runnable directly. The specs live in [cae_suite/specs/](cae_suite/specs/):
 | `point_deeponet`, `deeponet`, `fno`, `gino` | `Neural_Operator/` | `main.py` | [yes](Neural_Operator/CLAUDE.md) |
 | `transolver` | `Transolver/` | `Transolver_main.py` | — |
 | `sdfflow` | `Geometry_generation/` | `SDFFlow_main.py` | [yes](Geometry_generation/CLAUDE.md) |
+| `simulgenvae` | `SimulGenVAE/` | `SimulGenVAE_main.py` | [yes](SimulGenVAE/CLAUDE.md) |
+| `mlp` | `MLP/` | `MLP_main.py` | [yes](MLP/CLAUDE.md) |
 | `geometry_ingest` | `dataset/geometry_ingest/` | `main.py` | [yes](dataset/geometry_ingest/README.md) |
 
-The first five are the ML methods. **`geometry_ingest` is a non-ML data-prep
-utility** routed through the same launcher: it meshes CAD/geometry (STEP/IGES/STL)
-into the shared mesh HDF5 contract (graph for MeshGraphNets, point cloud for the
-operators/Transolver). Its spec sets `native_probe=False` and `dataset_kind=None`,
-its modes are `ingest`/`inspect`, and it needs no GPU. See
+The first seven are the ML methods. **`simulgenvae`** is a hierarchical VAE +
+latent conditioner for parametric simulation fields; structurally it mirrors
+`sdfflow` (a VAE stage + a second stage), with modes `train` (VAE→LC pipeline),
+`train_vae`, `train_lc`, and `reconstruct`, in-process multi-GPU via `mp.spawn`,
+and stage-prefixed `vae_*`/`lc_*` config keys. It reads the **shared mesh HDF5**
+(`dataset_kind=mesh_hdf5`) but is a **fixed-geometry dense FOM** model: it flattens
+the physical field rows into a dense `[samples, channels, time]` tensor, so every
+sample must share the same node and timestep counts. See
+[SimulGenVAE/CLAUDE.md](SimulGenVAE/CLAUDE.md) and CONFIGURATION_REFERENCE.md section 9.11.
+
+**`mlp` is the odd one out among them**: a parametric surrogate (N scalar inputs →
+M scalar outputs) that is **tabular, not mesh** — it reads an `X[S,N]`/`Y[S,M]`
+HDF5 (`dataset_kind=table_hdf5`, `native_probe=False`), not the shared mesh
+contract, and needs no GPU. See [MLP/CLAUDE.md](MLP/CLAUDE.md) and
+CONFIGURATION_REFERENCE.md section 9.10.
+
+**`geometry_ingest` is a non-ML data-prep utility** routed through the same
+launcher: it meshes CAD/geometry (STEP/IGES/STL) into the shared mesh HDF5
+contract (graph for MeshGraphNets, point cloud for the operators/Transolver). Its
+spec sets `native_probe=False` and `dataset_kind=None`, its modes are
+`ingest`/`inspect`, and it needs no GPU. See
 [dataset/geometry_ingest/README.md](dataset/geometry_ingest/README.md) and
 CONFIGURATION_REFERENCE.md section 9.9.
 
@@ -73,8 +91,10 @@ cd Neural_Operator && pytest tests/        # fast, tiny synthetic HDF5 fixtures
 cd Geometry_generation && python -m pytest -q tests/test_sdfflow_pipeline.py
 ```
 
-`MeshGraphNets/`, `MeshGraphNets - variational/`, and `Neural_Operator/` ship
-`tests/`; consult a repo's own CLAUDE.md for its exact validation command set.
+`MeshGraphNets/`, `MeshGraphNets - variational/`, `Neural_Operator/`, and `MLP/`
+ship `tests/`; consult a repo's own CLAUDE.md for its exact validation command
+set. `MLP/` runs `cd MLP && python -m pytest -q tests/` (CPU, tiny synthetic
+fixture).
 
 ## Launcher architecture (`cae_suite/`)
 

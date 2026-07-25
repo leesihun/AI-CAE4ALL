@@ -10,3 +10,5 @@
 # neural_operator = "Neural_Operator/.venv/bin/python"
 # transolver = "Transolver/.venv/bin/python"
 # sdfflow = "Geometry_generation/.venv/bin/python"
+# simulgenvae = "SimulGenVAE/.venv/bin/python"
+# mlp = "MLP/.venv/bin/python"

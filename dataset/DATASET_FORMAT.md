@@ -12,6 +12,20 @@ triangles or volume tets) and writes this contract with solution-field rows
 zero-filled — i.e. an inference initial condition, not a training pair. See
 [geometry_ingest/README.md](geometry_ingest/README.md).
 
+**SimulGenVAE** (`model simulgenvae`) also reads this `data/{id}/nodal_data`
+layout, but as a **fixed-geometry dense FOM**: it selects the physical field rows
+`[field_start_row : field_start_row + num_var]` (default `field_start_row 3`) and
+flattens them into a dense `[num_samples, num_var*num_nodes, num_timesteps]` tensor
+for its hierarchical VAE. Because that tensor is dense, **every sample must share
+the same node count and timestep count** (mismatches are a hard error). `mesh_edge`
+is required by the shared contract but ignored by SimulGenVAE. See
+[../SimulGenVAE/CLAUDE.md](../SimulGenVAE/CLAUDE.md).
+
+> The **MLP surrogate** (`model mlp`) is the exception: it is a tabular
+> parameters→outputs regressor with no mesh, so it uses a separate **tabular
+> `X`/`Y` HDF5** contract, documented in *Tabular Parametric Dataset* at the end
+> of this file — not the `data/{id}` layout below.
+
 ## File Layout
 
 ```text
@@ -301,3 +315,32 @@ Before training, check:
 - `mesh_edge` uses valid node indices for each sample
 - `edge_var` is `8`
 - `num_timesteps` is consistent with static vs temporal training intent
+
+## Tabular Parametric Dataset (MLP surrogate)
+
+The `mlp` method (`MLP/`, `model mlp`) is a parametric surrogate — **N scalar
+inputs → M scalar outputs**, no mesh. It uses its own tabular HDF5, unrelated to
+the `data/{id}` mesh layout above:
+
+```text
+table.h5
+  X             float [num_samples, N]   input parameters   (must equal input_var)
+  Y             float [num_samples, M]   output quantities  (must equal output_var)
+  input_names   str   [N]                optional column labels
+  output_names  str   [M]                optional column labels
+```
+
+- `X` and `Y` are top-level datasets (rank 2) sharing the sample axis. `Y` is
+  **optional for inference** — when present, `infer.py` reports per-output
+  MAE/RMSE. There are no edges, timesteps, node types, or positional features.
+- The launcher validates this with `dataset_kind="table_hdf5"`
+  (`cae_suite/dataset_probe.py`) and cross-checks `X`/`Y` widths against
+  `input_var`/`output_var` before launch (`DATASET-FEATURES-001/002`).
+- **Normalization is not stored in the dataset.** Input/output scaling is fit on
+  the train split and saved into the checkpoint, so the source HDF5 stays
+  read-only (mirroring the operators' `write_preprocessing False` stance).
+- A tiny sample generator is at `dataset/mlp/make_sample.py` (writes `train.h5`
+  and `infer.h5`; the shipped `configs/MLP/ex1` templates point at them).
+
+**Before training an MLP, check:** `X` has exactly `input_var` columns, `Y` has
+exactly `output_var` columns, and both share the same number of rows.

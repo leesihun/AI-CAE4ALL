@@ -9,8 +9,10 @@ from .specs import (
     MethodSpec,
     build_geometry_ingest_spec,
     build_meshgraphnets_spec,
+    build_mlp_spec,
     build_neural_operator_spec,
     build_sdfflow_spec,
+    build_simulgenvae_spec,
     build_transolver_spec,
     build_variational_spec,
 )
@@ -33,7 +35,9 @@ class MethodRegistry:
             build_neural_operator_spec(),
             build_transolver_spec(),
             build_sdfflow_spec(),
+            build_simulgenvae_spec(),
             build_geometry_ingest_spec(),
+            build_mlp_spec(),
         )
         self._by_model: dict[str, MethodSpec] = {}
         for spec in self.specs:

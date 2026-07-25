@@ -1,7 +1,7 @@
 # AI-CAE4ALL — Repository Overview & Architecture Guide
 
 > A comprehensive, code-grounded tour of the whole repository: what it is, how
-> it is laid out, how the unified launcher works, and what each of the five ML
+> it is laid out, how the unified launcher works, and what each of the six ML
 > method repositories does. This document is the **map**; three companion docs
 > are the **territory**:
 >
@@ -21,13 +21,13 @@
 
 ## 1. What this repository is
 
-**AI-CAE4ALL is a monorepo of five independent machine-learning-for-CAE
+**AI-CAE4ALL is a monorepo of six independent machine-learning-for-CAE
 (Computer-Aided Engineering) method repositories, unified by a single
 config-driven launcher.** The intent is that an engineer picks a method by
 writing one word in a text config, and one command validates and runs it — no
-matter which of five very different ML codebases actually executes.
+matter which of six very different ML codebases actually executes.
 
-The five methods span the major families of ML surrogate modeling for
+The six methods span the major families of ML surrogate modeling for
 simulation:
 
 | Family | Method | What it predicts |
@@ -37,8 +37,17 @@ simulation:
 | Neural operators | Neural_Operator (4 architectures) | Field-to-field mappings that generalize across discretizations |
 | Transformer surrogate | Transolver | Mesh fields via learned "physics slices" + attention |
 | Generative geometry | Geometry_generation / SDFFlow | *New 3D shapes* via an SDF-VAE and flow matching |
+| Parametric regression | MLP | **N scalar inputs → M scalar outputs** (tabular DOE surrogate, no mesh) |
 
-Alongside the five ML methods, the same launcher routes one **non-ML data-prep
+Five of the six predict **fields on a mesh** and share one HDF5 mesh contract;
+**MLP is the exception** — a tabular parameters→outputs regressor
+(`MLP/`, modes `train`/`inference`) that reads a separate `X[S,N]`/`Y[S,M]` HDF5,
+stores normalization in its checkpoint, and needs no GPU. See
+[MLP/CLAUDE.md](MLP/CLAUDE.md),
+[docs/methods/12_MLP.md](docs/methods/12_MLP.md), and CONFIGURATION_REFERENCE.md
+§9.10.
+
+Alongside the six ML methods, the same launcher routes one **non-ML data-prep
 utility**, `geometry_ingest` (`dataset/geometry_ingest/`, modes `ingest`/`inspect`):
 it meshes CAD/geometry (STEP/IGES/STL) into the shared mesh HDF5 contract — a graph
 for MeshGraphNets and a point cloud for the operators/Transolver — so a raw part can
@@ -47,7 +56,7 @@ feed any method with no conversion step. It trains nothing and needs no GPU. See
 [docs/methods/11_Geometry_Ingest.md](docs/methods/11_Geometry_Ingest.md), and
 CONFIGURATION_REFERENCE.md §9.9.
 
-### 1.1 The core idea: one launcher, five native runtimes
+### 1.1 The core idea: one launcher, six native runtimes
 
 The launcher (`cae_suite/`, invoked via `AI_CAE4ALL_main.py` or the `ai-cae4all`
 console script) does **not** import any ML code. Its job is:
@@ -79,6 +88,10 @@ templates and a handful of shell/HTML helpers. Approximate per-area Python size:
 | `Neural_Operator/` | ~11,600 | Four operator architectures |
 | `Transolver/` | ~4,600 | Transformer surrogate |
 | `Geometry_generation/` | ~2,600 | SDFFlow generative geometry |
+| `MLP/` | ~500 | Tabular parametric surrogate (N→M) |
+
+(The headline totals above predate the MLP addition; the per-area rows are
+otherwise current.)
 
 ---
 
@@ -112,13 +125,16 @@ AI-CAE4ALL/
 │       ├── meshgraphnets_variational.py
 │       ├── neural_operator.py
 │       ├── transolver.py
-│       └── sdfflow.py
+│       ├── sdfflow.py
+│       ├── geometry_ingest.py
+│       └── mlp.py
 │
 ├── MeshGraphNets/                # METHOD 1  (model = meshgraphnets)
 ├── MeshGraphNets - variational/  # METHOD 2  (model = meshgraphnets-v)  ← name has spaces
 ├── Neural_Operator/              # METHOD 3  (model = point_deeponet|deeponet|fno|gino)
 ├── Transolver/                   # METHOD 4  (model = transolver)
 ├── Geometry_generation/          # METHOD 5  (model = sdfflow)
+├── MLP/                          # METHOD 6  (model = mlp)  ← tabular, not mesh
 │
 ├── configs/                      # centralized config templates (see §11)
 │   ├── MeshGraphNets/{ex1,ex2}/
@@ -126,12 +142,14 @@ AI-CAE4ALL/
 │   ├── Neural_Operator/{ex1,ex2}/
 │   ├── Transolver/{ex1,ex2}/
 │   ├── Geometry_generation/
+│   ├── MLP/ex1/                  # mlp train/infer templates
 │   └── benchmarks/{elasticity,plasticity,fno_darcy,gino_carcfd,deeponet_fractional2d}/
 │
 ├── dataset/                      # shared data + format spec + benchmark data
 │   ├── DATASET_FORMAT.md
 │   ├── ex1.h5, ex2.h5            # canonical mesh datasets (ex1 planar, ex2 true-3D)
 │   ├── deepjeb.h5                # SDFFlow geometry dataset
+│   ├── mlp/make_sample.py        # generator for the MLP tabular X/Y sample
 │   ├── hex_dataset.h5, hex_GT.h5
 │   └── benchmarks/…              # per-paper validation datasets
 │
@@ -147,7 +165,7 @@ concatenation.
 
 ## 3. The unified launcher (`cae_suite/`)
 
-The launcher is the piece that makes "one command for five methods" real. It is
+The launcher is the piece that makes "one command for six methods" real. It is
 pure orchestration and validation — it never imports torch or any ML module in
 its own process.
 
@@ -198,7 +216,7 @@ breakdown.
 | --- | --- |
 | [cli.py](cae_suite/cli.py) | Arg parsing; the standalone subcommands (`--list-models`, `--describe`, `--audit-configs`); rendering the route + report; and the diagnostic-prefix → exit-code mapping. |
 | [config_parser.py](cae_suite/config_parser.py) | Parses flat `key value` text into a `ParsedConfig` (values, raw values, per-key `SourceLocation`, duplicate list). **Deliberately mirrors the native parsers' quirks** (§4) while adding stricter diagnostics (duplicate keys, BOM, malformed lines). |
-| [registry.py](cae_suite/registry.py) | `MethodRegistry` builds a `model_id → MethodSpec` map from the five `build_*_spec()` functions. Aliased IDs (the four neural-operator names) share one spec. `resolve()` emits `ROUTE-*` errors for missing/unknown models and missing repos/entrypoints, with `difflib` "did you mean" hints. |
+| [registry.py](cae_suite/registry.py) | `MethodRegistry` builds a `model_id → MethodSpec` map from the registered `build_*_spec()` functions. Aliased IDs (the four neural-operator names) share one spec. `resolve()` emits `ROUTE-*` errors for missing/unknown models and missing repos/entrypoints, with `difflib` "did you mean" hints. |
 | [specs/base.py](cae_suite/specs/base.py) | Defines `MethodSpec` (the per-method validation contract), `PathRule`/`PathKind`, `SpecValidationContext`, and shared value validators (`validate_common_values` — gpu_ids rules, positive-int/number checks, `feature_loss_weights` length). |
 | [specs/*.py](cae_suite/specs/) | One spec per method: `known_keys`, required/recommended/default fields (per mode and per model), `PathRule`s, `import_modules`, `dataset_kind`, and custom `validators`. **This is the single source of truth for config validation.** |
 | [preflight.py](cae_suite/preflight.py) | `run_preflight` — the layered pipeline above — plus the four probe helpers and the dataset/config cross-checks. Builds the final `command`. |
@@ -309,7 +327,7 @@ error class:
 
 ## 4. The config system
 
-All five native loaders read the same flat `key value` text format, and the
+All six native loaders read the same flat `key value` text format, and the
 suite parser mirrors that format's quirks exactly (with stricter diagnostics on
 top). Getting these quirks right matters because the same file is passed
 unchanged to the native process.
@@ -365,9 +383,10 @@ per-key table for every method.
 
 ## 5. Conventions shared across the method repos
 
-Four of the five method repos (all but the generative one) share the same
-*structural skeleton* and the same **mesh HDF5 data contract** — a deliberate
-design so that switching methods rarely means relearning the plumbing.
+Four of the six method repos (all but SDFFlow, which is generative, and MLP,
+which is tabular) share the same *structural skeleton* and the same **mesh HDF5
+data contract** — a deliberate design so that switching methods rarely means
+relearning the plumbing.
 
 ### 5.1 The common repo skeleton
 
@@ -749,6 +768,8 @@ in sync:
 | `point_deeponet`, `deeponet`, `fno`, `gino` | `Neural_Operator/` | `main.py` | train, inference |
 | `transolver` | `Transolver/` | `Transolver_main.py` | train, inference |
 | `sdfflow` | `Geometry_generation/` | `SDFFlow_main.py` | train, train_vae, train_fm, sample, reconstruct, interpolate |
+| `mlp` | `MLP/` | `MLP_main.py` | train, inference |
+| `geometry_ingest` | `dataset/geometry_ingest/` | `main.py` | ingest, inspect (non-ML data-prep) |
 
 ---
 

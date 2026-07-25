@@ -25,7 +25,15 @@ SCHEMA_VERSION = "deeponet_repo_v1"
 
 
 def run(checkpoint: str, input: str, output: str, device: torch.device,
-        timesteps: int = None, query_chunk_size: int = 0, **_ignored) -> str:
+        timesteps: int = None, query_chunk_size: int = 0, split_seed: int = None,
+        **_ignored) -> str:
+    """`split_seed` (default 42, matching Neural_Operator/training_profiles/
+    setup.py's default): point_deeponet's sensor sampling is deterministic
+    from `stable_hash(split_seed, ...)`, but `split_seed` is NOT one of the
+    checkpoint's saved keys (INFERENCE_BUNDLE_PLAN.md section 9, landmine 2).
+    If a checkpoint was trained with a non-default split_seed, pass it here
+    (or via `--split-seed` if that's ever wired into the CLI) to reproduce
+    training's exact sensor selection; otherwise the default is used."""
 
     print(f"Loading checkpoint: {checkpoint}")
     ckpt = torch.load(checkpoint, map_location="cpu", weights_only=False)
@@ -38,6 +46,8 @@ def run(checkpoint: str, input: str, output: str, device: torch.device,
 
     selected_model = ckpt["selected_model"]
     config = {"model": selected_model}
+    if split_seed is not None:
+        config["split_seed"] = int(split_seed)
     print(f"  Family: neural_operator / model: {selected_model}")
 
     model, data_spec, coordinate_domain = build_model_from_checkpoint(config, ckpt)

@@ -16,7 +16,7 @@ def resolve_device(config):
     # In a spawned distributed run the process group is already initialized and
     # this rank's GPU is pinned; use the current device rather than gpu_ids[0].
     if D.is_dist():
-        if torch.cuda.is_available():
+        if D.cuda_enabled():
             device = torch.device(f'cuda:{torch.cuda.current_device()}')
         else:
             device = torch.device('cpu')

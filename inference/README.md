@@ -60,6 +60,8 @@ picks the right forward pass. No filename convention, no `--model` flag:
 --seed N                 sdfflow only: sampler seed.
 --cond-values "a,b,c"    sdfflow only: comma-separated target condition values, in the
                          checkpoint's cond_names order. Omit for unconditional generation.
+--split-seed N           neural_operator (point_deeponet) only, advanced: see "Known
+                         limitations" below.
 ```
 
 Each family driver ignores flags it doesn't use.
@@ -144,6 +146,62 @@ Produces `dist/run_inference/run_inference.exe` (a one-folder build — faster
 startup than one-file, and easier to inspect if something's missing). Copy
 the whole `dist/run_inference/` folder to hand off; it needs no Python
 install on the target machine.
+
+## Verification
+
+Every family was checked against its native repo's own inference code on a
+real trained checkpoint (or, for `meshgraphnets_v`, a synthetic checkpoint
+built with the live model classes, since no trained variational checkpoint
+exists in this repo yet), forcing both sides onto the same torch build and
+device (CPU). Results:
+
+| Family | Checkpoint used | Result |
+| --- | --- | --- |
+| neural_operator (point_deeponet, deeponet, fno, gino) | `output/benchmarks/elasticity/smoke/smoke_20260719/<model>/model.pth` | bit-exact (incl. chunked `--query-chunk-size` decode) |
+| transolver | `output/benchmarks/elasticity/smoke/smoke_20260719/transolver/model.pth` | matches to ~5e-6 relative error (see below) |
+| meshgraphnets | `output/benchmarks/plasticity/meshgraphnets/model.pth`, 100 rollout scenes x 19 steps | bit-exact |
+| meshgraphnets_v | synthetic checkpoint (VAE enabled, N(0,I) prior), matched RNG seed | bit-exact |
+| geometry (sdfflow) | `output/geometry_generation/ex1/{sdfflow_vae,sdfflow_fm}.pth` via the merge helper | bit-exact (identical mesh vertices) |
+
+## Known limitations
+
+- **Cross-environment floating-point drift.** Comparing bundle output against
+  a reference generated on a *different* torch build or GPU vs CPU produces
+  small (~1e-6 relative) differences — this is ordinary fp32 kernel
+  non-associativity, not a bug. Pin your torch version (see
+  `requirements.txt`) if you need reproducible numbers across machines.
+- **Transolver's ~5e-6 relative residual even on a matched torch build/device**
+  (see the table above) is believed to come from a benign difference in numpy
+  array memory layout (contiguous vs transposed-view) feeding torch's
+  attention kernels, not an algorithmic difference — the graph-construction
+  code was verified line-for-line against the live `rollout.py`. Treat outputs
+  as correct to ~1e-5 relative, not bit-exact, for this family.
+- **`point_deeponet` sensor-sampling seed (`split_seed`) is not stored in the
+  checkpoint** (Neural_Operator's `data_config`/`model_config` never export
+  it). The driver defaults to `42` (the training default); pass
+  `--split-seed` if a checkpoint was trained with a non-default value, or
+  results will use different (but still deterministic) sensor subsets than
+  training did.
+- **`coarse_world_edges` (MeshGraphNets / MeshGraphNets-variational) is not
+  stored in the checkpoint either**, but it changes weight *shapes* at
+  multiscale levels > 0 (`HybridNodeBlock` vs `NodeBlock`) when
+  `use_multiscale=True` and `use_world_edges=True`. The driver defaults it to
+  `False` (matching the native default); pass
+  `infer(checkpoint, ..., coarse_world_edges=True)` if a checkpoint needs it
+  — if you get the wrong value, `load_state_dict(strict=True)` will fail
+  loudly with a shape mismatch rather than silently misloading.
+- **GINO's neighbor search always uses the scipy `cKDTree` backend** (this
+  bundle never ships `torch_cluster`). If a checkpoint was trained with the
+  `torch_cluster` radius backend, re-validate parity before trusting it — the
+  two backends are not guaranteed bit-identical (`INFERENCE_BUNDLE_PLAN.md`
+  section 9, landmine 1).
+- **`meshgraphnets_v` has no real trained checkpoint to validate against in
+  this repo** (verified instead with a synthetic one, see the table above).
+  The vendored model/general_modules files are byte-identical to the source
+  repo, and the driver's VAE/prior-sampling logic was checked against the
+  live `rollout.py` line-for-line (including a plan-doc correction: the prior
+  latent is sampled **once per trajectory and held fixed**, not resampled
+  every step).
 
 ## Rebuilding this bundle from the main repo
 

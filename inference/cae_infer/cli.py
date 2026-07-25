@@ -35,6 +35,11 @@ def build_parser() -> argparse.ArgumentParser:
                     help="sdfflow only: Marching Cubes grid resolution.")
     p.add_argument("--seed", type=int, default=None,
                     help="sdfflow only: sampler seed for reproducibility.")
+    p.add_argument("--split-seed", type=int, default=None, dest="split_seed",
+                    help="neural_operator (point_deeponet) only, advanced: sensor-sampling "
+                         "seed. This is NOT stored in the checkpoint (a known gap -- see "
+                         "README) -- only pass this if the checkpoint was trained with a "
+                         "non-default split_seed (default is 42).")
     p.add_argument("--cond-values", default=None, dest="cond_values",
                     help="sdfflow only: comma-separated target condition values, in the "
                          "checkpoint's cond_names order (e.g. '0.4,0.2,0.01,0.6'). "

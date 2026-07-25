@@ -35,6 +35,28 @@ def _mesh_report(handle):
     return {"errors": errors, "warnings": warnings, "metadata": metadata}
 
 
+def _table_report(handle):
+    """Tabular parametric contract: root datasets ``X [S, N]`` and ``Y [S, M]``."""
+    errors = []
+    warnings = []
+    metadata = {}
+    for name in ("X", "Y"):
+        if name not in handle:
+            errors.append(f"Missing root dataset {name!r} (tabular X/Y contract).")
+    if errors:
+        return {"errors": errors, "warnings": warnings, "metadata": metadata}
+    x_shape = tuple(int(v) for v in handle["X"].shape)
+    y_shape = tuple(int(v) for v in handle["Y"].shape)
+    metadata.update({"x_shape": x_shape, "y_shape": y_shape, "sample_count": x_shape[0] if x_shape else 0})
+    if len(x_shape) != 2:
+        errors.append(f"X must have rank 2 [S,N]; got {x_shape}.")
+    if len(y_shape) != 2:
+        errors.append(f"Y must have rank 2 [S,M]; got {y_shape}.")
+    if len(x_shape) == 2 and len(y_shape) == 2 and x_shape[0] != y_shape[0]:
+        errors.append(f"X and Y must share the sample axis; got {x_shape[0]} vs {y_shape[0]} rows.")
+    return {"errors": errors, "warnings": warnings, "metadata": metadata}
+
+
 def _sdf_report(handle):
     errors = []
     warnings = []
@@ -62,14 +84,16 @@ def _sdf_report(handle):
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     if len(argv) != 2:
-        print(json.dumps({"errors": ["usage: dataset_probe.py <mesh_hdf5|sdf_hdf5> <path>"], "warnings": [], "metadata": {}}))
+        print(json.dumps({"errors": ["usage: dataset_probe.py <mesh_hdf5|sdf_hdf5|table_hdf5> <path>"], "warnings": [], "metadata": {}}))
         return 2
     kind, raw_path = argv
     path = Path(raw_path)
+    reporters = {"mesh_hdf5": _mesh_report, "sdf_hdf5": _sdf_report, "table_hdf5": _table_report}
+    reporter = reporters.get(kind, _mesh_report)
     try:
         import h5py
         with h5py.File(path, "r") as handle:
-            result = _mesh_report(handle) if kind == "mesh_hdf5" else _sdf_report(handle)
+            result = reporter(handle)
     except Exception as exc:
         result = {"errors": [f"Could not inspect HDF5: {type(exc).__name__}: {exc}"], "warnings": [], "metadata": {}}
     print(json.dumps(result))
