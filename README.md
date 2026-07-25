@@ -31,7 +31,7 @@ selected purely by the `model` field in the config:
 | `transolver` | Transolver | Transformer surrogate via learned Physics-Attention "slices" |
 | `sdfflow` | SDFFlow (Geometry generation) | Generates *new 3D shapes* via an SDF-VAE + flow matching |
 | `simulgenvae` | SimulGenVAE | Hierarchical VAE + latent conditioner: generates parametric simulation *fields* over a fixed mesh |
-| `mlp` | MLP Surrogate | Parametric regressor: **N scalar inputs → M scalar outputs** (tabular, no mesh) |
+| `mlp` | MLP Surrogate | Parametric regressor: **N scalar inputs → M scalar outputs** (tabular, no mesh)|
 
 Routing map:
 
