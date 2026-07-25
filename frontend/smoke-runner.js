@@ -181,17 +181,19 @@ function assert(condition, message) {
       await page.waitForFunction(() => document.querySelector("#sampleInfo")?.textContent.includes("actual mean"));
       assert((await page.locator("#artifactSubtitle").innerText()).includes("actual repository values"), "Sample viewer is not using actual repository data");
       assert(await page.locator('[data-view-mode="field"]').evaluate(element => element.classList.contains("active")), "Field mode is not the default");
-      assert(await page.locator("#viewerVisual svg line").count() > 0, "Field view did not render real mesh edges");
-      assert((await page.locator("#viewerModeMeta").innerText()).includes("mesh edges"), "Mesh topology metadata is missing");
+      const drawn = () => page.evaluate(() => ({ ...window.__AI_CAE_FRONTEND__.state.viewerDraw }));
+      assert((await drawn()).drewFaces, "Field view did not render reconstructed elements");
+      assert((await page.locator("#viewerModeMeta").innerText()).includes("elements"), "Mesh topology metadata is missing");
 
       await page.locator('[data-view-mode="mesh"]').click();
       assert(await page.locator('[data-view-mode="mesh"]').evaluate(element => element.classList.contains("active")), "Mesh mode did not activate");
-      assert(await page.locator("#viewerVisual svg line").count() > 0, "Mesh view did not render real mesh edges");
+      assert((await drawn()).drewEdges, "Mesh view did not render real mesh edges");
 
       await page.locator('[data-view-mode="points"]').click();
       assert(await page.locator('[data-view-mode="points"]').evaluate(element => element.classList.contains("active")), "Points mode did not activate");
-      assert(await page.locator("#viewerVisual svg line").count() === 0, "Points mode should not render mesh edges");
-      assert(await page.locator("#viewerVisual svg circle").count() > 0, "Points mode did not render sampled nodes");
+      const pointDraw = await drawn();
+      assert(!pointDraw.drewEdges && !pointDraw.drewFaces, "Points mode should not render mesh topology");
+      assert(pointDraw.drewPoints, "Points mode did not render sampled nodes");
 
       await page.locator('[data-view-mode="field"]').click();
       await page.screenshot({ path: path.join(__dirname, "runtime", "mesh-field-viewer.png"), fullPage: false });

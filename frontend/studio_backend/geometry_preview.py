@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from studio_backend.mesh_topology import normalize_edges
 from studio_backend.paths import relative
 
 
@@ -163,10 +164,11 @@ def _finite_list(values: Any) -> list[float | None]:
     return [float(value) if np.isfinite(value) else None for value in flat]
 
 
-def _triangle_payload(vertices: Any, faces: Any, face_limit: int) -> dict[str, Any] | None:
+def _surface_payload(vertices: Any, faces: Any, face_limit: int) -> tuple[Any, dict[str, Any] | None]:
+    """Return the display vertices plus indexed triangles and their edges."""
     np = _imports()
     if not faces.size:
-        return None
+        return vertices, None
     valid = np.all((faces >= 0) & (faces < vertices.shape[0]), axis=1)
     faces = faces[valid]
     total_faces = int(faces.shape[0])
@@ -181,6 +183,8 @@ def _triangle_payload(vertices: Any, faces: Any, face_limit: int) -> dict[str, A
                 faces,
                 target_count=face_limit,
             )
+            display_vertices = np.asarray(display_vertices, dtype=np.float64)
+            display_faces = np.asarray(display_faces, dtype=np.int64)
         except (ImportError, RuntimeError, ValueError):
             # Keeping a complete surface is preferable to striding faces, which
             # creates fake holes.  The browser can still handle this bounded
@@ -190,23 +194,24 @@ def _triangle_payload(vertices: Any, faces: Any, face_limit: int) -> dict[str, A
                     "This mesh is too dense for a faithful browser preview. "
                     "Install fast-simplification or ingest a decimated surface."
                 )
-    tri = display_vertices[display_faces]
-    return {
-        "total_edges": 0,
-        "returned_edges": 0,
-        "total_faces": total_faces,
+    edges = normalize_edges(
+        np.concatenate(
+            [display_faces[:, [0, 1]], display_faces[:, [1, 2]], display_faces[:, [2, 0]]],
+            axis=0,
+        ),
+        int(display_vertices.shape[0]),
+    )
+    return display_vertices, {
+        "indexed": True,
+        "element_kind": "triangle",
+        "reduced": bool(display_faces.shape[0] != total_faces),
+        "total_edges": int(edges.shape[0]),
+        "returned_edges": int(edges.shape[0]),
+        "edges": edges.reshape(-1).tolist(),
         "returned_faces": int(display_faces.shape[0]),
-        "triangles": {
-            "x1": _finite_list(tri[:, 0, 0]),
-            "y1": _finite_list(tri[:, 0, 1]),
-            "z1": _finite_list(tri[:, 0, 2]),
-            "x2": _finite_list(tri[:, 1, 0]),
-            "y2": _finite_list(tri[:, 1, 1]),
-            "z2": _finite_list(tri[:, 1, 2]),
-            "x3": _finite_list(tri[:, 2, 0]),
-            "y3": _finite_list(tri[:, 2, 1]),
-            "z3": _finite_list(tri[:, 2, 2]),
-        },
+        "faces": np.asarray(display_faces, dtype=np.int64).reshape(-1).tolist(),
+        "returned_elements": int(display_faces.shape[0]),
+        "total_elements": total_faces,
     }
 
 
@@ -225,10 +230,12 @@ def geometry_sample(
         vertices, faces, metadata = _load_trimesh(selected)
 
     count = int(vertices.shape[0])
-    stride = max(1, (count + max(1, point_limit) - 1) // max(1, point_limit))
-    indices = np.arange(0, count, stride, dtype=np.int64)
-    points = vertices[indices]
-    mesh = _triangle_payload(vertices, faces, face_limit)
+    display_vertices, mesh = _surface_payload(vertices, faces, face_limit)
+    if mesh is None:
+        # A bare point cloud has no topology to protect, so striding is safe.
+        stride = max(1, (count + max(1, point_limit) - 1) // max(1, point_limit))
+        display_vertices = vertices[np.arange(0, count, stride, dtype=np.int64)]
+    points = np.asarray(display_vertices, dtype=np.float64)
     sample_name = selected.name if path.is_file() else selected.relative_to(path.resolve()).as_posix()
     metadata.update(
         {
@@ -247,6 +254,8 @@ def geometry_sample(
         "feature": 0,
         "feature_count": 1,
         "feature_name": "surface",
+        "feature_names": ["surface"],
+        "parameters": [],
         "timestep": 0,
         "timestep_count": 1,
         "total_points": count,

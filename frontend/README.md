@@ -78,13 +78,25 @@ Useful review URLs:
 - Repository-backed Models, Data, Experiments, Benchmarks, Artifacts, System,
   and Docs workspaces
 - One configured-artifact viewer for CAD/mesh files and every supported HDF5
-  contract. It renders real triangle faces, `mesh_edge` topology, SDFFlow
-  `shapes/{id}` surface points, operator grids, table rows, scalar channels,
-  and timesteps without substituting another repository file. Open Samples
-  starts with no default sample, can switch to another repository dataset or
-  upload a local HDF5/CAD/mesh/VTK file in place, and shares left-drag orbit,
-  right-drag pan, wheel zoom, keyboard camera controls, and view reset across
-  every visualization contract.
+  contract, drawn through an opaque, depth-buffered WebGL viewport (Canvas 2D
+  fallback). It renders real triangle faces, complete `mesh_edge` topology,
+  SDFFlow `shapes/{id}` surface points, operator grids, table rows, scalar
+  channels, and timesteps without substituting another repository file. Open
+  Samples starts with no default sample, can switch to another repository
+  dataset or upload a local HDF5/CAD/mesh/VTK file in place, and shares
+  left-drag orbit, right-drag pan, wheel zoom, keyboard camera controls, and
+  view reset across every visualization contract.
+- Mesh elements are reconstructed from the shared contract's `mesh_edge`
+  graph, which stores no cells: 3-cliques recover triangles and 4-cycles
+  recover quads, so Field mode is a flat, element-coloured contour rather than
+  a wireframe. Oversized meshes are reduced by **vertex clustering**, never by
+  striding the edge list - decimation keeps every surviving element connected.
+  See [studio_backend/mesh_topology.py](studio_backend/mesh_topology.py).
+- The dataset's own names travel with the data: `metadata/feature_names`,
+  SDFFlow `cond_names`, and tabular `input_names`/`output_names` drive the
+  named channel picker and the sample-parameter table in the right rail, and
+  **Use in pipeline** writes them onto the source block and every block
+  downstream of it (`feature_names`, `condition_names`) for parametric work.
 - Real HDF5 field evaluation (relative L2, MAE, RMSE, maximum error, and R²),
   real CSV cross-model ranking, Pareto/crowding optimization, and downloadable
   file or ZIP exports

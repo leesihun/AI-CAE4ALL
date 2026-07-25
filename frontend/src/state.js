@@ -33,6 +33,7 @@ export const state = {
   viewerPlaying: false,
   viewerPlayTimer: null,
   viewerCamera: { yaw: 0, pitch: 0, zoom: 1, panX: 0, panY: 0 },
+  viewerDraw: null,
   viewerPointer: null,
   viewerDatasetChoices: [],
   realArtifact: null,

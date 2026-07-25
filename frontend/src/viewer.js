@@ -4,6 +4,9 @@ import { BLOCK_SPECS, ICONS } from "./constants.js";
 import { apiRequest } from "./api.js";
 import { previewGraphic } from "./graphics.js";
 import { openStudio } from "./studio.js";
+import { createRenderer, createFallbackRenderer, defaultCamera, fieldColor, turboColor } from "./render3d.js";
+
+export { fieldColor };
 
 const HDF5_EXTENSIONS = [".h5", ".hdf5"];
 const GEOMETRY_EXTENSIONS = [
@@ -12,182 +15,66 @@ const GEOMETRY_EXTENSIONS = [
 ];
 const PREVIEW_EXTENSIONS = [...HDF5_EXTENSIONS, ...GEOMETRY_EXTENSIONS];
 
-export function fieldColor(value, low, high) {
-  const numeric = Number.isFinite(value) ? value : low;
-  const ratio = Math.max(0, Math.min(1, (numeric - low) / (high - low || 1)));
-  return `hsl(${(225 - ratio * 225).toFixed(0)} 82% ${48 + ratio * 10}%)`;
-}
+let viewport = null;
+let renderer = null;
 
-function finiteNumbers(values = []) {
-  return values.filter(Number.isFinite);
-}
-
-function sceneProjection(sample, camera = state.viewerCamera) {
-  const coordinates = {
-    x: sample.x || [],
-    y: sample.y || [],
-    z: sample.z || []
+/** Build the persistent canvas + HUD once; a WebGL context must not churn. */
+function ensureViewport() {
+  const host = $("#viewerVisual");
+  if (viewport && host.contains(viewport.canvas)) return viewport;
+  host.innerHTML = `
+    <canvas class="viewer-canvas" aria-label="Sample geometry viewport"></canvas>
+    <div class="viewer-hud">
+      <div class="viewer-hud-title"></div>
+      <div class="viewer-hud-bottom">
+        <div class="viewer-hud-legend" hidden>
+          <span class="viewer-hud-legend-low"></span>
+          <span class="viewer-hud-legend-bar"></span>
+          <span class="viewer-hud-legend-high"></span>
+        </div>
+        <div class="viewer-hud-foot"></div>
+      </div>
+    </div>
+    <div class="viewer-message live-empty" hidden></div>`;
+  viewport = {
+    canvas: host.querySelector(".viewer-canvas"),
+    hud: host.querySelector(".viewer-hud"),
+    title: host.querySelector(".viewer-hud-title"),
+    legend: host.querySelector(".viewer-hud-legend"),
+    legendLow: host.querySelector(".viewer-hud-legend-low"),
+    legendBar: host.querySelector(".viewer-hud-legend-bar"),
+    legendHigh: host.querySelector(".viewer-hud-legend-high"),
+    foot: host.querySelector(".viewer-hud-foot"),
+    message: host.querySelector(".viewer-message")
   };
-  const axes = Object.entries(coordinates).map(([name, values]) => {
-    const finite = finiteNumbers(values);
-    const low = finite.length ? Math.min(...finite) : 0;
-    const high = finite.length ? Math.max(...finite) : 0;
-    return { name, low, high, center: (low + high) / 2, range: high - low };
-  });
-  const maxRange = Math.max(...axes.map(axis => axis.range), 1);
-  const active = [...axes].sort((left, right) => right.range - left.range);
-  const planar = active[2].range <= maxRange * 1e-6;
-  const center = Object.fromEntries(axes.map(axis => [axis.name, axis.center]));
-  const horizontalAxis = active[0];
-  const verticalAxis = active[1];
-  const depthAxis = active[2];
-  const rawProject = (x, y, z) => {
-    const point = { x, y, z };
-    const horizontal = point[horizontalAxis.name] - center[horizontalAxis.name];
-    const vertical = point[verticalAxis.name] - center[verticalAxis.name];
-    const depth = point[depthAxis.name] - center[depthAxis.name];
-    const baseX = horizontal + (planar ? 0 : depth * 0.22);
-    const baseY = vertical - (planar ? 0 : depth * 0.3);
-    const yawCos = Math.cos(camera.yaw);
-    const yawSin = Math.sin(camera.yaw);
-    const pitchCos = Math.cos(camera.pitch);
-    const pitchSin = Math.sin(camera.pitch);
-    const yawX = baseX * yawCos + depth * yawSin;
-    const yawDepth = -baseX * yawSin + depth * yawCos;
-    return {
-      x: yawX,
-      y: baseY * pitchCos - yawDepth * pitchSin,
-      depth: baseY * pitchSin + yawDepth * pitchCos
-    };
-  };
-  const projected = coordinates.x.map((x, index) =>
-    rawProject(x, coordinates.y[index], coordinates.z[index])
-  ).filter(point => [point.x, point.y, point.depth].every(Number.isFinite));
-  const xExtent = Math.max(...projected.map(point => Math.abs(point.x)), 1);
-  const yExtent = Math.max(...projected.map(point => Math.abs(point.y)), 1);
-  const scale = Math.min(345 / xExtent, 198 / yExtent);
-  const orientation = planar
-    ? `${horizontalAxis.name.toUpperCase()}–${verticalAxis.name.toUpperCase()} plane`
-    : `isometric ${horizontalAxis.name.toUpperCase()}${verticalAxis.name.toUpperCase()}${depthAxis.name.toUpperCase()}`;
-  return {
-    label: `${orientation} · yaw ${Math.round(camera.yaw * 180 / Math.PI)}° · pitch ${Math.round(camera.pitch * 180 / Math.PI)}° · ${Math.round(camera.zoom * 100)}%`,
-    project(x, y, z) {
-      const point = rawProject(x, y, z);
-      return {
-        x: 400 + camera.panX + point.x * scale * camera.zoom,
-        y: 247 + camera.panY - point.y * scale * camera.zoom,
-        depth: point.depth
-      };
-    }
-  };
+  renderer?.dispose();
+  renderer = createRenderer(viewport.canvas) || createFallbackRenderer(viewport.canvas);
+  return viewport;
 }
 
-function triangleGraphic(mesh, projection, mode, valueLow, valueHigh) {
-  const triangles = mesh?.triangles;
-  const count = Number(mesh?.returned_faces || 0);
-  if (!triangles || !count) return "";
-  const polygons = [];
-  for (let index = 0; index < count; index += 1) {
-    const raw = [
-      [triangles.x1?.[index], triangles.y1?.[index], triangles.z1?.[index]],
-      [triangles.x2?.[index], triangles.y2?.[index], triangles.z2?.[index]],
-      [triangles.x3?.[index], triangles.y3?.[index], triangles.z3?.[index]]
-    ];
-    if (!raw.flat().every(Number.isFinite)) continue;
-    const points = raw.map(point => projection.project(...point));
-    const signedArea = (
-      (points[1].x - points[0].x) * (points[2].y - points[0].y)
-      - (points[1].y - points[0].y) * (points[2].x - points[0].x)
-    );
-    if (Math.abs(signedArea) < 0.03) continue;
-    const shade = Math.max(0, Math.min(1, 0.44 + Math.abs(signedArea) / 900));
-    const fieldValue = Number(mesh.values?.[index]);
-    const fill = mode === "field" && Number.isFinite(fieldValue)
-      ? fieldColor(fieldValue, valueLow, valueHigh)
-      : `hsl(159 24% ${Math.round(35 + shade * 24)}%)`;
-    polygons.push({
-      depth: points.reduce((sum, point) => sum + point.depth, 0) / 3,
-      markup: `<polygon points="${points.map(point => `${point.x.toFixed(1)},${point.y.toFixed(1)}`).join(" ")}" fill="${fill}" stroke="${mode === "mesh" ? "#b9d1c7" : "#6f9184"}" stroke-width="${mode === "mesh" ? ".52" : ".34"}" opacity="${mode === "mesh" ? ".9" : ".82"}"/>`
-    });
-  }
-  return polygons.sort((left, right) => left.depth - right.depth).map(item => item.markup).join("");
+export function showViewerMessage(text) {
+  const view = ensureViewport();
+  view.message.textContent = text;
+  view.message.hidden = false;
+  view.canvas.hidden = true;
+  view.hud.hidden = true;
 }
 
-function edgeGraphic(mesh, projection, mode, valueLow, valueHigh) {
-  if (!mesh?.returned_edges) return "";
-  const lines = [];
-  for (let index = 0; index < mesh.returned_edges; index += 1) {
-    const raw = [
-      [mesh.x1?.[index], mesh.y1?.[index], mesh.z1?.[index]],
-      [mesh.x2?.[index], mesh.y2?.[index], mesh.z2?.[index]]
-    ];
-    if (!raw.flat().every(Number.isFinite)) continue;
-    const [start, end] = raw.map(point => projection.project(...point));
-    const color = mode === "field"
-      ? fieldColor(mesh.values?.[index], valueLow, valueHigh)
-      : "#a9c0b6";
-    lines.push(
-      `<line x1="${start.x.toFixed(1)}" y1="${start.y.toFixed(1)}" x2="${end.x.toFixed(1)}" y2="${end.y.toFixed(1)}" stroke="${color}" stroke-width="${mode === "field" ? "1.28" : ".92"}" opacity="${mode === "field" ? ".68" : ".55"}"/>`
-    );
-  }
-  return lines.join("");
+function formatValue(value) {
+  return Number.isFinite(value) ? Number(value).toPrecision(4) : "—";
 }
 
-export function realMeshFieldGraphic(sample, mode = "field") {
-  const coordinates = { x: sample.x || [], y: sample.y || [], z: sample.z || [] };
-  const values = sample.values || [];
-  if (!coordinates.x.length) {
-    return `<div class="live-empty">The selected sample has no plottable values.</div>`;
-  }
-  const projection = sceneProjection(sample, state.viewerCamera);
-  const finiteValues = finiteNumbers(values);
-  const valueLow = Number.isFinite(sample.stats?.min)
-    ? sample.stats.min
-    : (finiteValues.length ? Math.min(...finiteValues) : 0);
-  const valueHigh = Number.isFinite(sample.stats?.max)
-    ? sample.stats.max
-    : (finiteValues.length ? Math.max(...finiteValues) : 1);
+function topologyLabel(sample) {
   const mesh = sample.mesh;
-  const faces = mode === "points" ? "" : triangleGraphic(mesh, projection, mode, valueLow, valueHigh);
-  const lines = mode === "points" ? "" : edgeGraphic(mesh, projection, mode, valueLow, valueHigh);
-
-  const pointLimit = mode === "mesh" ? 900 : 1800;
-  const pointStride = Math.max(1, Math.ceil(coordinates.x.length / pointLimit));
-  const circles = [];
-  const seriesPoints = [];
-  for (let index = 0; index < coordinates.x.length; index += pointStride) {
-    const raw = [coordinates.x[index], coordinates.y[index], coordinates.z[index]];
-    if (!raw.every(Number.isFinite)) continue;
-    const point = projection.project(...raw);
-    const color = mode === "mesh" || !sample.supports?.field
-      ? "#e5f1ec"
-      : fieldColor(values[index], valueLow, valueHigh);
-    seriesPoints.push(`${point.x.toFixed(1)},${point.y.toFixed(1)}`);
-    circles.push(
-      `<circle cx="${point.x.toFixed(1)}" cy="${point.y.toFixed(1)}" r="${mode === "points" ? "2.65" : mode === "field" ? "2.0" : "1.45"}" fill="${color}" stroke="${mode === "mesh" ? "#385a4e" : "none"}" stroke-width=".7" opacity="${mode === "mesh" ? ".72" : ".9"}"/>`
-    );
+  if (!mesh) return "point cloud";
+  const parts = [];
+  if (mesh.returned_elements) {
+    parts.push(`${mesh.returned_elements.toLocaleString()} / ${Number(mesh.total_elements || mesh.returned_elements).toLocaleString()} elements`);
   }
-  const series = sample.preview_kind === "series" && mode !== "points"
-    ? `<polyline points="${seriesPoints.join(" ")}" fill="none" stroke="#8fd5bd" stroke-width="1.65" opacity=".82"/>`
-    : "";
-  const meshLabel = mesh?.returned_faces
-    ? `${mesh.returned_faces.toLocaleString()} / ${mesh.total_faces.toLocaleString()} faces`
-    : mesh?.returned_edges
-      ? `${mesh.returned_edges.toLocaleString()} / ${mesh.total_edges.toLocaleString()} edges`
-      : "point cloud";
-  const legend = mode === "field" && sample.supports?.field
-    ? `<defs><linearGradient id="field-legend" x1="0" x2="1"><stop stop-color="${fieldColor(valueLow, valueLow, valueHigh)}"/><stop offset=".5" stop-color="${fieldColor((valueLow + valueHigh) / 2, valueLow, valueHigh)}"/><stop offset="1" stop-color="${fieldColor(valueHigh, valueLow, valueHigh)}"/></linearGradient></defs><rect x="574" y="474" width="192" height="8" rx="4" fill="url(#field-legend)"/><text x="574" y="468" fill="#bcd0c7" font-size="9" font-family="monospace">${Number(valueLow).toPrecision(4)}</text><text x="766" y="468" text-anchor="end" fill="#bcd0c7" font-size="9" font-family="monospace">${Number(valueHigh).toPrecision(4)}</text>`
-    : "";
-  const sourceLabel = sample.source_kind === "geometry" ? "GEOMETRY" : "HDF5";
-  return `<svg viewBox="0 0 800 500" role="img" aria-label="Actual ${sourceLabel} ${escapeHtml(mode)} visualization">
-    <rect width="800" height="500" rx="12" fill="#13251f"/>
-    ${legend}
-    <g>${faces}</g>
-    <g>${lines}${series}</g>
-    <g>${circles.join("")}</g>
-    <text x="24" y="27" fill="#e1f0e9" font-size="12" font-family="monospace">${escapeHtml(mode.toUpperCase())} · actual ${escapeHtml(sample.dataset)}${sample.supports?.field ? ` · ${escapeHtml(sample.feature_name || `feature ${sample.feature}`)} · t=${sample.timestep}` : ""}</text>
-    <text x="24" y="486" fill="#a9c0b6" font-size="10" font-family="monospace">${escapeHtml(projection.label)} · ${meshLabel} · ${sample.returned_points.toLocaleString()} / ${sample.total_points.toLocaleString()} points</text>
-  </svg>`;
+  if (mesh.returned_edges) {
+    parts.push(`${mesh.returned_edges.toLocaleString()} / ${Number(mesh.total_edges).toLocaleString()} edges`);
+  }
+  return parts.join(" · ") || "point cloud";
 }
 
 function supportedMode(sample, mode) {
@@ -216,20 +103,56 @@ export function renderViewerMode() {
     button.classList.toggle("active", supported && button.dataset.viewMode === state.viewerMode);
     button.title = supported ? "" : `${button.dataset.viewMode} view is not available for this sample`;
   });
+
+  const view = ensureViewport();
+  if (!renderer) {
+    showViewerMessage("This browser cannot open a canvas viewport for the sample geometry.");
+    return;
+  }
+  if (!sample.x?.length) {
+    showViewerMessage("The selected sample has no plottable coordinates.");
+    return;
+  }
+  view.message.hidden = true;
+  view.canvas.hidden = false;
+  view.hud.hidden = false;
+
+  const drawn = renderer.draw(sample, state.viewerMode, state.viewerCamera);
+  state.viewerDraw = { ...drawn, renderer: renderer.kind, mode: state.viewerMode };
+  const showField = state.viewerMode === "field" && sample.supports?.field;
+  view.title.textContent = [
+    state.viewerMode.toUpperCase(),
+    sample.dataset,
+    sample.supports?.field ? sample.feature_name : null,
+    sample.timestep_count > 1 ? `t = ${sample.timestep}` : null,
+    showField && drawn.constant ? "uniform" : null
+  ].filter(Boolean).join("  ·  ");
+  view.legend.hidden = !showField;
+  if (showField) {
+    const [low, high] = drawn.domain;
+    view.legendLow.textContent = formatValue(low);
+    view.legendHigh.textContent = formatValue(high);
+    view.legendBar.style.background = `linear-gradient(90deg, ${
+      [0, 0.25, 0.5, 0.75, 1].map(stop => `${turboColor(stop)} ${stop * 100}%`).join(", ")
+    })`;
+  }
+  view.foot.textContent = [
+    `${drawn.planar ? "planar" : "3D"} · yaw ${Math.round(state.viewerCamera.yaw * 180 / Math.PI)}° · pitch ${Math.round(state.viewerCamera.pitch * 180 / Math.PI)}° · ${Math.round(state.viewerCamera.zoom * 100)}%`,
+    topologyLabel(sample),
+    `${sample.returned_points.toLocaleString()} / ${sample.total_points.toLocaleString()} nodes`
+  ].join("  ·  ");
+
   $("#viewerModeMeta").textContent = state.viewerMode === "points"
-    ? `${sample.returned_points.toLocaleString()} sampled points`
-    : sample.mesh?.returned_faces
-      ? `${sample.mesh.returned_faces.toLocaleString()} mesh faces`
-      : sample.mesh?.returned_edges
-        ? `${sample.mesh.returned_edges.toLocaleString()} mesh edges${sample.supports?.field ? ` · ${sample.feature_name}` : ""}`
-        : sample.supports?.field
-          ? `${sample.returned_points.toLocaleString()} field points · ${sample.feature_name}`
-          : `${sample.returned_points.toLocaleString()} surface points`;
-  $("#viewerVisual").innerHTML = realMeshFieldGraphic(sample, state.viewerMode);
+    ? `${sample.returned_points.toLocaleString()} nodes`
+    : drawn.drewFaces
+      ? `${sample.mesh.returned_elements.toLocaleString()} ${sample.mesh.element_kind === "quad" ? "quad" : "triangular"} elements`
+      : drawn.drewEdges
+        ? `${sample.mesh.returned_edges.toLocaleString()} mesh edges`
+        : `${sample.returned_points.toLocaleString()} nodes`;
 }
 
 export function resetViewerCamera(render = true) {
-  state.viewerCamera = { yaw: 0, pitch: 0, zoom: 1, panX: 0, panY: 0 };
+  state.viewerCamera = defaultCamera(state.realArtifact?.currentSample);
   if (render && state.realArtifact?.currentSample) renderViewerMode();
 }
 
@@ -271,9 +194,8 @@ export function bindViewerInteractions() {
       state.viewerCamera.yaw += dx * 0.008;
       state.viewerCamera.pitch = Math.max(-1.45, Math.min(1.45, state.viewerCamera.pitch + dy * 0.008));
     } else {
-      const bounds = visual.getBoundingClientRect();
-      state.viewerCamera.panX += dx * 800 / Math.max(bounds.width, 1);
-      state.viewerCamera.panY += dy * 500 / Math.max(bounds.height, 1);
+      state.viewerCamera.panX += dx;
+      state.viewerCamera.panY += dy;
     }
     renderViewerMode();
   });
@@ -314,8 +236,8 @@ function renderEmptyViewer(message = "Choose a sample from the left to visualize
     button.classList.remove("active");
   });
   $("#viewerModeMeta").textContent = "No sample selected";
-  $("#viewerVisual").innerHTML = `<div class="live-empty">${escapeHtml(message)}</div>`;
-  $("#sampleInfo").innerHTML = `<section class="info-block"><h3>No sample selected</h3><p>The dataset is ready. Select a sample explicitly to read and render it.</p></section>`;
+  showViewerMessage(message);
+  $("#sampleInfo").innerHTML = `<section class="info-block"><h3>No sample selected</h3><p>The dataset is ready. Select a sample explicitly to read and render it.</p></section>${catalogNamesBlock()}`;
   const timeline = $(".viewer-timeline input");
   timeline.min = "0";
   timeline.max = "0";
@@ -368,6 +290,52 @@ function sampleShape(sample) {
   return Array.isArray(sample.shape) && sample.shape.length ? ` [${sample.shape.join(" × ")}]` : "";
 }
 
+/** Names the dataset declares, shown before any sample has been read. */
+function catalogNamesBlock() {
+  const artifact = state.realArtifact;
+  const features = artifact?.feature_names || [];
+  const conditions = artifact?.condition_names || [];
+  if (!features.length && !conditions.length) return "";
+  const list = (title, names) => (names.length
+    ? `<div class="section-title">${title}</div><ol class="name-list">${
+      names.map(name => `<li><span>${escapeHtml(name)}</span></li>`).join("")
+    }</ol>`
+    : "");
+  return `<section class="info-block">${list("Feature channels", features)}${list("Condition parameters", conditions)}</section>`;
+}
+
+/** Named channel picker plus the full channel list for the loaded sample. */
+function featureBlock(sample) {
+  const names = sample.feature_names?.length
+    ? sample.feature_names
+    : Array.from({ length: sample.feature_count }, (unused, index) => `feature ${index}`);
+  const options = names.map((name, index) =>
+    `<option value="${index}"${index === sample.feature ? " selected" : ""}>${index} · ${escapeHtml(name)}</option>`
+  ).join("");
+  return `<section class="info-block"><div class="section-title">Field selector</div>
+    <label class="config-help" for="realFeature">Feature channel</label>
+    <select class="config-control" id="realFeature"${names.length <= 1 ? " disabled" : ""}>${options}</select>
+    <label class="config-help" for="realTimestep">Timestep</label>
+    <input class="config-control" id="realTimestep" type="number" min="0" max="${Math.max(0, sample.timestep_count - 1)}" value="${sample.timestep}"${sample.timestep_count <= 1 ? " disabled" : ""}>
+    <button class="button primary" id="loadRealField" style="width:100%;margin-top:8px">Load actual field</button>
+    <div class="section-title" style="margin-top:14px">Feature channels</div>
+    <ol class="name-list">${names.map((name, index) =>
+      `<li${index === sample.feature ? ' class="active"' : ""}><button type="button" data-load-feature="${index}">${escapeHtml(name)}</button></li>`
+    ).join("")}</ol>
+  </section>`;
+}
+
+/** Per-sample scalar conditions - the parametric-study inputs of a sample. */
+function parameterBlock(sample) {
+  const parameters = sample.parameters || [];
+  if (!parameters.length) return "";
+  return `<section class="info-block"><div class="section-title">Sample parameters</div><table class="param-table"><tbody>${
+    parameters.map(item =>
+      `<tr><th>${escapeHtml(item.name)}</th><td>${formatStat(Number(item.value))}</td></tr>`
+    ).join("")
+  }</tbody></table></section>`;
+}
+
 export async function renderRealArtifactSample(sampleIndex, feature = null, timestep = 0) {
   const artifact = state.realArtifact;
   if (!artifact) return;
@@ -380,12 +348,15 @@ export async function renderRealArtifactSample(sampleIndex, feature = null, time
   renderArtifactCatalog($("#artifactSampleSearch")?.value || "");
   $("#artifactDownload").disabled = true;
   $("#viewerReset").disabled = true;
-  $("#viewerVisual").innerHTML = `<div class="live-empty">Reading actual sample ${escapeHtml(selected.id)}…</div>`;
+  showViewerMessage(`Reading actual sample ${selected.id}…`);
   try {
     const sample = await apiRequest(
       `/api/preview/sample?path=${encodeURIComponent(artifact.path)}&sample=${encodeURIComponent(selected.id)}&feature=${requestedFeature}&timestep=${timestep}`
     );
     state.realArtifact.currentSample = sample;
+    // A new sample chooses its own orientation; reloading a feature or
+    // timestep on the same sample must not throw the camera away.
+    if (changingSample) state.viewerCamera = defaultCamera(sample);
     state.viewerMode = chooseViewerMode(sample, artifact.default_mode);
     renderViewerMode();
     $("#artifactDownload").disabled = false;
@@ -394,26 +365,28 @@ export async function renderRealArtifactSample(sampleIndex, feature = null, time
     const spec = BLOCK_SPECS[artifact.node.type];
     $("#artifactTitle").textContent = `${spec.label} · actual samples`;
     $("#artifactSubtitle").textContent = `${artifact.path} · actual repository values`;
-    const metadata = sample.metadata || {};
-    const topology = metadata.total_faces != null
-      ? `<br>faces=${Number(metadata.total_faces).toLocaleString()}`
-      : sample.mesh?.total_edges != null
-        ? `<br>edges=${Number(sample.mesh.total_edges).toLocaleString()}`
-        : "";
+    const mesh = sample.mesh;
+    const topology = mesh
+      ? `<br>elements=${Number(mesh.returned_elements || 0).toLocaleString()} / ${Number(mesh.total_elements || 0).toLocaleString()} (${escapeHtml(mesh.element_kind || "none")})<br>edges=${Number(mesh.returned_edges || 0).toLocaleString()} / ${Number(mesh.total_edges || 0).toLocaleString()}`
+      : "";
     $("#sampleInfo").innerHTML = `<section class="info-block"><h3>Sample ${escapeHtml(sample.sample)}</h3><p>${escapeHtml(sample.path)} · ${escapeHtml(sample.dataset)}${sampleShape(sample)}</p><div class="stat-grid">
       <span class="stat-card"><strong>${sample.supports?.field ? formatStat(stats.min) : "—"}</strong><small>${sample.supports?.field ? "actual minimum" : "field unavailable"}</small></span>
       <span class="stat-card"><strong>${sample.supports?.field ? formatStat(stats.max) : "—"}</strong><small>${sample.supports?.field ? "actual maximum" : "field unavailable"}</small></span>
       <span class="stat-card"><strong>${sample.supports?.field ? formatStat(stats.mean) : "—"}</strong><small>${sample.supports?.field ? "actual mean" : "field unavailable"}</small></span>
-      <span class="stat-card"><strong>${sample.total_points.toLocaleString()}</strong><small>points / values</small></span>
+      <span class="stat-card"><strong>${sample.total_points.toLocaleString()}</strong><small>nodes / values</small></span>
     </div></section>
-    ${sample.supports?.field ? `<section class="info-block"><div class="section-title">Field selector</div>
-      <label class="config-help">Feature channel</label><input class="config-control" id="realFeature" type="number" min="0" max="${Math.max(0, sample.feature_count - 1)}" value="${sample.feature}"${sample.feature_count <= 1 ? " disabled" : ""}>
-      <label class="config-help">Timestep</label><input class="config-control" id="realTimestep" type="number" min="0" max="${Math.max(0, sample.timestep_count - 1)}" value="${sample.timestep}"${sample.timestep_count <= 1 ? " disabled" : ""}>
-      <button class="button primary" id="loadRealField" style="width:100%;margin-top:8px">Load actual field</button>
-    </section>` : `<section class="info-block"><div class="section-title">Surface geometry</div><p>This sample has geometry but no scalar field. Point mode preserves the real coordinates${sample.mesh ? "; Mesh mode also preserves the available topology" : ""}.</p></section>`}
-    <section class="info-block"><div class="section-title">Provenance</div><p>source=${escapeHtml(sample.path)}<br>sample=${escapeHtml(sample.sample)}<br>reader=${escapeHtml(sample.source_kind)}<br>downsample=${sample.returned_points}/${sample.total_points}${topology}</p></section>`;
+    ${sample.supports?.field
+      ? featureBlock(sample)
+      : `<section class="info-block"><div class="section-title">Surface geometry</div><p>This sample has geometry but no scalar field. Point mode preserves the real coordinates${sample.mesh ? "; Mesh mode also preserves the real topology" : ""}.</p></section>`}
+    ${parameterBlock(sample)}
+    <section class="info-block"><div class="section-title">Provenance</div><p>source=${escapeHtml(sample.path)}<br>sample=${escapeHtml(sample.sample)}<br>reader=${escapeHtml(sample.source_kind)}<br>nodes=${sample.returned_points.toLocaleString()} / ${sample.total_points.toLocaleString()}${sample.metadata?.node_reduction ? ` (${escapeHtml(sample.metadata.node_reduction)})` : ""}${topology}</p></section>`;
     $("#loadRealField")?.addEventListener("click", () =>
       renderRealArtifactSample(sampleIndex, Number($("#realFeature").value), Number($("#realTimestep").value))
+    );
+    $$("[data-load-feature]").forEach(button =>
+      button.addEventListener("click", () =>
+        renderRealArtifactSample(sampleIndex, Number(button.dataset.loadFeature), sample.timestep)
+      )
     );
     const timeline = $(".viewer-timeline input");
     const playButton = $("#viewerPlay");
@@ -427,7 +400,7 @@ export async function renderRealArtifactSample(sampleIndex, feature = null, time
     state.realArtifact.currentSample = null;
     $("#artifactDownload").disabled = true;
     $("#viewerReset").disabled = true;
-    $("#viewerVisual").innerHTML = `<div class="live-empty">Could not visualize this real sample: ${escapeHtml(error.message)}</div>`;
+    showViewerMessage(`Could not visualize this real sample: ${error.message}`);
     $("#sampleInfo").innerHTML = `<section class="info-block"><h3>Reader error</h3><p>${escapeHtml(error.message)}</p></section>`;
   }
 }
@@ -655,7 +628,7 @@ export async function openArtifact(nodeId) {
   $("#artifactSubtitle").textContent = "Resolving the configured artifact…";
   $("#artifactOverlay").classList.add("open");
   $("#sampleList").innerHTML = `<div class="live-empty">Scanning the configured source…</div>`;
-  $("#viewerVisual").innerHTML = `<div class="live-empty">Waiting for an actual sample…</div>`;
+  showViewerMessage("Waiting for an actual sample…");
   $("#sampleInfo").innerHTML = "";
   $("#artifactSampleSearch").value = "";
   try {
@@ -668,7 +641,7 @@ export async function openArtifact(nodeId) {
     renderEmptyViewer();
   } catch (error) {
     $("#sampleList").innerHTML = "";
-    $("#viewerVisual").innerHTML = `<div class="live-empty">${escapeHtml(error.message)}</div>`;
+    showViewerMessage(error.message);
     $("#sampleInfo").innerHTML = `<section class="info-block"><h3>No actual preview available</h3><p>${escapeHtml(error.message)}</p></section>`;
     toast(`Actual sample viewer: ${error.message}`, "error");
   }
@@ -725,6 +698,9 @@ export function downloadCurrentSample() {
     sample: sample.sample,
     dataset: sample.dataset,
     feature: sample.feature,
+    feature_name: sample.feature_name,
+    feature_names: sample.feature_names,
+    parameters: sample.parameters,
     timestep: sample.timestep,
     shape: sample.shape,
     stats: sample.stats,
@@ -774,7 +750,41 @@ export function useArtifactInPipeline(addBlock, selectNode) {
     node = state.nodes.find(item => item.id === state.selectedNode);
     node.config.path = path;
   }
+  // Carry the dataset's own names into the graph so downstream blocks - a
+  // parametric study above all - name their channels instead of numbering them.
+  const features = artifact.feature_names || [];
+  const conditions = artifact.condition_names || [];
+  if (features.length) node.config.feature_names = features.join(", ");
+  if (conditions.length) node.config.condition_names = conditions.join(", ");
+  propagateNames(node.id, features, conditions);
   $("#artifactOverlay").classList.remove("open");
   selectNode(node.id);
-  toast(`${path} is available as a pipeline source block.`);
+  const named = [
+    features.length ? `${features.length} feature names` : "",
+    conditions.length ? `${conditions.length} condition names` : ""
+  ].filter(Boolean).join(" and ");
+  toast(`${path} is available as a pipeline source block${named ? ` with ${named}` : ""}.`);
+}
+
+/** Push the source's channel names onto every block fed by it. */
+function propagateNames(sourceId, features, conditions) {
+  if (!features.length && !conditions.length) return;
+  const visited = new Set([sourceId]);
+  const queue = [sourceId];
+  while (queue.length) {
+    const current = queue.shift();
+    for (const edge of state.edges.filter(item => item.fromNode === current)) {
+      if (visited.has(edge.toNode)) continue;
+      visited.add(edge.toNode);
+      queue.push(edge.toNode);
+      const target = state.nodes.find(item => item.id === edge.toNode);
+      if (!target) continue;
+      if (features.length && !target.config.feature_names) {
+        target.config.feature_names = features.join(", ");
+      }
+      if (conditions.length && !target.config.condition_names) {
+        target.config.condition_names = conditions.join(", ");
+      }
+    }
+  }
 }

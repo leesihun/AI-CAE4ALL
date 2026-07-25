@@ -621,7 +621,31 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .viewer-visual { position: absolute; inset: 48px 22px 59px; display: grid; place-items: center; outline: 0; cursor: grab; touch-action: none; user-select: none; }
 .viewer-visual.camera-dragging { cursor: grabbing; }
 .viewer-visual:focus-visible { box-shadow: inset 0 0 0 2px rgba(143,213,189,.55); }
-.viewer-visual svg { width: 92%; height: 92%; filter: drop-shadow(0 18px 22px rgba(0,0,0,.24)); }
+.viewer-canvas { grid-area: 1/1; width: 100%; height: 100%; border-radius: 12px; background: #0e1f1a; box-shadow: 0 18px 22px rgba(0,0,0,.24); }
+.viewer-canvas[hidden] { display: none; }
+.viewer-hud { grid-area: 1/1; display: grid; align-content: space-between; width: 100%; height: 100%; padding: 12px 14px; pointer-events: none; }
+.viewer-hud[hidden] { display: none; }
+.viewer-hud-title { color: #e1f0e9; font: 700 10px/1.4 ui-monospace, SFMono-Regular, Consolas, monospace; text-shadow: 0 1px 3px rgba(0,0,0,.6); }
+.viewer-hud-bottom { display: grid; gap: 8px; }
+.viewer-hud-legend { display: grid; grid-template-columns: auto minmax(0,1fr) auto; align-items: center; gap: 8px; justify-self: end; width: min(260px, 60%); }
+.viewer-hud-legend[hidden] { display: none; }
+.viewer-hud-legend-bar { height: 9px; border: 1px solid rgba(255,255,255,.28); border-radius: 5px; }
+.viewer-hud-legend-low, .viewer-hud-legend-high { color: #cfe2da; font: 9px/1 ui-monospace, SFMono-Regular, Consolas, monospace; text-shadow: 0 1px 3px rgba(0,0,0,.6); }
+.viewer-hud-foot { color: #a9c0b6; font: 9px/1.4 ui-monospace, SFMono-Regular, Consolas, monospace; text-shadow: 0 1px 3px rgba(0,0,0,.6); }
+.viewer-message { grid-area: 1/1; align-self: center; justify-self: center; max-width: 76%; color: #cfe2da; background: rgba(14,31,26,.92); }
+.viewer-message[hidden] { display: none; }
+.name-list { margin: 0; padding: 0; list-style: none; counter-reset: channel -1; }
+.name-list li { display: flex; align-items: center; gap: 8px; padding: 4px 0; border-bottom: 1px solid var(--line); font-size: 10px; }
+.name-list li:last-child { border-bottom: 0; }
+.name-list li::before { counter-increment: channel; content: counter(channel); min-width: 16px; color: var(--muted); font: 700 9px/1 ui-monospace, SFMono-Regular, Consolas, monospace; }
+.name-list li button { padding: 0; border: 0; color: inherit; background: transparent; font: inherit; text-align: left; cursor: pointer; }
+.name-list li button:hover { color: var(--acid-ink, #126b57); text-decoration: underline; }
+.name-list li.active { font-weight: 800; }
+.name-list li.active::before { color: var(--acid-ink, #126b57); }
+.param-table { width: 100%; border-collapse: collapse; font-size: 10px; }
+.param-table th { padding: 4px 0; border-bottom: 1px solid var(--line); color: var(--muted); font-weight: 600; text-align: left; }
+.param-table td { padding: 4px 0; border-bottom: 1px solid var(--line); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; text-align: right; }
+.param-table tr:last-child th, .param-table tr:last-child td { border-bottom: 0; }
 .viewer-gesture-hint { position: absolute; right: 30px; bottom: 62px; left: 30px; color: rgba(215,232,224,.5); font: 8px/1.2 ui-monospace, SFMono-Regular, Consolas, monospace; text-align: center; pointer-events: none; }
 .viewer-timeline { position: absolute; right: 80px; bottom: 15px; left: 80px; display: grid; grid-template-columns: auto auto minmax(0,1fr); align-items: center; gap: 8px; padding: 7px 9px; border: 1px solid rgba(255,255,255,.15); border-radius: 8px; color: rgba(255,255,255,.72); background: rgba(10,24,19,.7); font-size: 7px; }
 .viewer-timeline button { border: 0; color: #fff; background: transparent; }
@@ -819,6 +843,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .sample-item small { font-size: 10px; }
 .viewer-toolbar button { height: 32px; padding: 0 12px; font-size: 11px; }
 .viewer-timeline { font-size: 10px; }
+.viewer-hud-title { font-size: 12px; }
+.viewer-hud-foot, .viewer-hud-legend-low, .viewer-hud-legend-high { font-size: 10px; }
 .info-block > p { font-size: 10px; }
 .stat-card small { font-size: 10px; }
 .field-row { font-size: 10px; }

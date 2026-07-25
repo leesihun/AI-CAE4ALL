@@ -7,6 +7,7 @@ import { validateGraph } from "./validate.js";
 import { openConfig } from "./config.js";
 import { openStudio } from "./studio.js";
 import { openArtifact } from "./viewer.js";
+import { defaultCamera } from "./render3d.js";
 import { bindEvents } from "./events.js";
 
 function initialize() {
@@ -41,7 +42,8 @@ window.__AI_CAE_FRONTEND__ = {
   validateGraph,
   openConfig,
   openStudio,
-  openArtifact
+  openArtifact,
+  defaultCamera
 };
 
 initialize();
