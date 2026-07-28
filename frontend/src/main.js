@@ -2,13 +2,16 @@ import { $ } from "./dom.js";
 import { state } from "./state.js";
 import { BLOCK_SPECS, MODEL_CATALOG, TEMPLATES } from "./constants.js";
 import { connectRuntime } from "./api.js";
-import { paletteRender, loadTemplate, selectNode } from "./graph.js";
+import { paletteRender, loadTemplate, render, selectNode } from "./graph.js";
 import { validateGraph } from "./validate.js";
 import { openConfig } from "./config.js";
 import { openStudio } from "./studio.js";
 import { openArtifact } from "./viewer.js";
 import { defaultCamera } from "./render3d.js";
+import { renderRuntimeJob, dismissRuntimeJob } from "./run.js";
 import { bindEvents } from "./events.js";
+import { restorePipelineState, savePipelineState } from "./persistence.js";
+import { applyGraphAutofill, autoFillMeta, markManualConfigValue } from "./autofill.js";
 
 function initialize() {
   paletteRender();
@@ -16,8 +19,16 @@ function initialize() {
   const params = new URLSearchParams(location.search);
   const review = params.get("review");
   const template = review === "optimization" ? "generative" : "simulgen";
-  $("#templateSelect").value = template;
-  loadTemplate(template, false);
+  const restored = !review && restorePipelineState();
+  if (restored) {
+    $("#templateSelect").value = "saved";
+    render();
+    savePipelineState();
+  } else {
+    $("#templateSelect").value = template;
+    loadTemplate(template, false);
+    savePipelineState();
+  }
   if (review === "optimization") {
     window.setTimeout(() => {
       const node = state.nodes.find(item => item.type === "optimize.design");
@@ -43,7 +54,12 @@ window.__AI_CAE_FRONTEND__ = {
   openConfig,
   openStudio,
   openArtifact,
-  defaultCamera
+  defaultCamera,
+  renderRuntimeJob,
+  dismissRuntimeJob,
+  applyGraphAutofill,
+  autoFillMeta,
+  markManualConfigValue
 };
 
 initialize();

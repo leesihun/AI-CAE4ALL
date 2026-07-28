@@ -60,8 +60,13 @@ before opening `http://127.0.0.1:8080/index.html`.
    and native checks. Downstream filesystem/native checks are deferred until
    their upstream artifacts exist.
 8. Each step runs through the existing suite launcher.
-9. stdout, stderr, PID, exit code, status, and timestamps are persisted.
+9. stdout, stderr, PID, exit code, status, timestamps, target node ID, and each
+   executable step's exact node ID/type are persisted.
 10. Cancellation terminates the launched process tree.
+11. The browser persists a versioned graph document containing the pipeline
+    name, viewport, exact block configs, artifact/report lineage, and typed
+    edges. Import validates block/port types, single-input cardinality, IDs,
+    and acyclicity before replacing current state.
 
 Native graph steps:
 
@@ -124,7 +129,9 @@ topology.
 ### Experiments
 
 List persisted jobs, live status, route steps, logs, return codes, and
-cancellation state.
+cancellation state. Parse actual epoch/step metrics, show all series by
+default, allow per-series exclusion and visual smoothing, preserve raw CSV
+download, and reach metrics directly from a model or job row.
 
 ### Evaluation
 
@@ -141,14 +148,22 @@ rows, compare overlapping timesteps, and write:
 
 ### Cross-model comparison
 
-Read a real comparison/evaluation CSV, choose a group column, metric column,
-and min/max direction, rank numeric rows, retain source rows, and save JSON.
+Resolve multiple metrics inputs from the open Compare Models block to exact
+persisted runs, overlay common metric histories, and rank last raw values.
+Training losses without a shared key are not silently treated as comparable.
+For qualified cross-family accuracy, read one or more real
+comparison/evaluation CSVs, inspect their common schema, select an actual
+numeric metric and suggested group column, choose min/max direction, rank
+numeric rows, retain source rows, and save JSON. The browser never assumes a
+fixed `model` or `mean_relative_l2` field.
 
 ### Optimization
 
 Read numeric candidate rows, apply hard inequality constraints, calculate the
 feasible non-dominated set, compute crowding distance, select a diverse top-k,
-and persist the evidence report.
+and persist the evidence report. Before execution, inspect the actual CSV
+schema, exclude identifier/metadata columns from objective suggestions, and
+require explicit objective and direction selection.
 
 The current native engine evaluates a fixed candidate table. Iterative DOE,
 NSGA-II, constrained Bayesian optimization, solver verification, and active
@@ -196,6 +211,11 @@ Before handoff:
 15. Assert that Mesh and Field modes render real `mesh_edge` lines and that
     Points mode renders nodes without topology.
 16. Audit Git status and confirm implementation changes stay in `frontend/`.
+17. Save/reload a graph and Design Parameter cell edits; reject invalid imported
+    graph JSON without mutating the current pipeline.
+18. Select/delete an edge, keyboard-operate a block menu, bind a repository
+    file into the graph, inspect optimization schema, and preflight a checked-in
+    benchmark config.
 
 ## 8. Remaining roadmap
 

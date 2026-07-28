@@ -14,6 +14,7 @@ export const state = {
   nodes: [],
   edges: [],
   selectedNode: null,
+  selectedEdge: null,
   pendingPort: null,
   history: [],
   view: { x: 22, y: 34, scale: .9 },
@@ -26,7 +27,10 @@ export const state = {
   configSection: "Required",
   configSearch: "",
   configMessages: [],
+  configRejectedNode: null,
+  configRejectedField: null,
   studioSection: "models",
+  studioNode: null,
   artifactNode: null,
   artifactSample: null,
   viewerMode: "field",
@@ -37,6 +41,8 @@ export const state = {
   viewerPointer: null,
   viewerDatasetChoices: [],
   realArtifact: null,
+  pendingEvaluationPrediction: "",
+  pendingComparisonPaths: [],
   api: {
     connected: false,
     health: null,
@@ -47,9 +53,16 @@ export const state = {
   }
 };
 
+let mutationHook = null;
+
+export function registerMutationHook(hook) {
+  mutationHook = typeof hook === "function" ? hook : null;
+}
+
 export function snapshot() {
   state.history.push(JSON.stringify({ nodes: state.nodes, edges: state.edges }));
   if (state.history.length > 25) state.history.shift();
   const savedState = document.getElementById("savedState");
   if (savedState) savedState.textContent = "Unsaved changes";
+  queueMicrotask(() => mutationHook?.());
 }

@@ -2,7 +2,8 @@ import { toast } from "./dom.js";
 import { state } from "./state.js";
 import { BLOCK_SPECS, MODEL_CATALOG, TYPE_META } from "./constants.js";
 import { apiRequest, requireRuntime } from "./api.js";
-import { rawConfig } from "./config.js";
+import { normalizeConfigValues, rawConfig } from "./config.js";
+import { applyGraphAutofill, toGeometryPath } from "./autofill.js";
 
 export function typeColor(type) {
   return (TYPE_META[type] || TYPE_META.artifact).color;
@@ -16,44 +17,19 @@ export function configTextForNode(node, overrides = {}) {
   const spec = BLOCK_SPECS[node.type];
   if (!spec?.isModel) return "";
   const model = MODEL_CATALOG[spec.modelId];
-  const values = { ...node.config, ...overrides, model: spec.modelId };
-  const linkedSources = state.edges
-    .filter(edge => edge.toNode === node.id)
-    .map(edge => state.nodes.find(candidate => candidate.id === edge.fromNode))
-    .filter(Boolean);
-  const datasetSource = linkedSources.find(source => source.type === "source.hdf5");
-  const parameterSource = linkedSources.find(source => source.type === "source.parameters");
-  const checkpointSource = linkedSources.find(source => source.type === "source.checkpoint");
-  const toMethodPath = value => {
-    const text = String(value || "").replaceAll("\\", "/");
-    if (!text || text.startsWith("../") || /^[A-Za-z]:\//.test(text)) return text;
-    return `../${text.replace(/^\.\//, "")}`;
-  };
-  if (datasetSource?.config.path) {
-    if (values.mode === "inference" && model.keys.includes("infer_dataset")) values.infer_dataset = toMethodPath(datasetSource.config.path);
-    else if (model.keys.includes("dataset_dir")) values.dataset_dir = toMethodPath(datasetSource.config.path);
-  }
-  if (parameterSource?.config.binding && model.keys.includes("param_dir")) {
-    const binding = String(parameterSource.config.binding).trim();
-    if (/\.(csv|png|jpg|jpeg)$/i.test(binding) || /^[A-Za-z]:[\\/]/.test(binding)) values.param_dir = toMethodPath(binding);
-  }
-  if (checkpointSource?.config.path && model.keys.includes("modelpath")) {
-    values.modelpath = toMethodPath(checkpointSource.config.path);
-  }
+  applyGraphAutofill();
+  const values = normalizeConfigValues({ ...node.config, ...overrides, model: spec.modelId });
   return `${rawConfig(values, model.keys)}\n`;
 }
 
 export function geometryConfigText(node) {
+  applyGraphAutofill();
   const upstream = state.edges
     .filter(edge => edge.toNode === node.id)
     .map(edge => state.nodes.find(candidate => candidate.id === edge.fromNode))
     .find(candidate => candidate?.type === "source.cad");
-  const rawInput = String(upstream?.config.path || node.config.input_geometry || "").replaceAll("\\", "/");
-  const inputGeometry = /^[A-Za-z]:\//.test(rawInput)
-    ? rawInput
-    : rawInput.startsWith("dataset/")
-      ? `../${rawInput.slice("dataset/".length)}`
-      : `../../${rawInput.replace(/^\.\//, "")}`;
+  const rawInput = String(node.config.input_geometry || upstream?.config.path || "").replaceAll("\\", "/");
+  const inputGeometry = toGeometryPath(rawInput);
   const values = {
     model: "geometry_ingest",
     mode: node.config.mode || "inspect",

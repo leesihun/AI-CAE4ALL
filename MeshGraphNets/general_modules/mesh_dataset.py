@@ -26,6 +26,20 @@ try:
 except ImportError:
     HAS_COARSENING = False
 
+
+def _copy_edge_stat(entry):
+    """Deep-copy one level's coarse edge mean/std entry.
+
+    A normal level's entry is a single ndarray; a multi-partition level's
+    entry (ATTENTION_TRANSFER_DESIGN.md Part II) is a list of per-branch
+    ndarrays instead -- copy each branch's array too rather than relying on
+    list.copy()'s shallow copy sharing the underlying arrays.
+    """
+    if isinstance(entry, list):
+        return [a.copy() for a in entry]
+    return entry.copy()
+
+
 class MeshGraphDataset(Dataset):
 
     def __init__(self, h5_file: str, config: Dict):
@@ -114,6 +128,33 @@ class MeshGraphDataset(Dataset):
         if len(self.voronoi_clusters) == 1 and self.multiscale_levels > 1:
             self.voronoi_clusters = self.voronoi_clusters * self.multiscale_levels
 
+        # Multi-partition coarsening (ATTENTION_TRANSFER_DESIGN.md Part II):
+        # per-level branch count. Default 1 everywhere reproduces today's
+        # single-partition hierarchy exactly (build_multiscale_hierarchy takes
+        # a code path that never even constructs branch-suffixed attributes).
+        raw_vb = config.get('voronoi_branches', None)
+        if raw_vb is None:
+            self.voronoi_branches: List[int] = [1] * self.multiscale_levels
+        elif isinstance(raw_vb, list):
+            self.voronoi_branches = [int(v) for v in raw_vb]
+        else:
+            self.voronoi_branches = [int(raw_vb)]
+        if len(self.voronoi_branches) == 1 and self.multiscale_levels > 1:
+            self.voronoi_branches = self.voronoi_branches * self.multiscale_levels
+        for lvl, kb in enumerate(self.voronoi_branches):
+            if kb > 1 and lvl != self.multiscale_levels - 1:
+                raise ValueError(
+                    f"voronoi_branches > 1 is only supported on the last configured "
+                    f"level ({self.multiscale_levels - 1}); got {kb} branches at level {lvl}. "
+                    f"Branches don't chain into a further level."
+                )
+        if any(kb > 1 for kb in self.voronoi_branches) and config.get('coarse_world_edges', False):
+            raise ValueError(
+                "voronoi_branches > 1 does not support coarse_world_edges True: "
+                "which branch would receive the lifted contact edges is not "
+                "defined. Set coarse_world_edges False, or use a single partition."
+            )
+
         # Time integration scheme (see training_profiles/ar_rollout.py).
         #   ar_ot — one-step / teacher-forced training (the historical behavior)
         #   ar_rt — autoregressive rollout training over a window of timesteps
@@ -129,6 +170,8 @@ class MeshGraphDataset(Dataset):
             print(f"  coarsening_types: {self.coarsening_types}")
             if any(t.startswith('voronoi') for t in self.coarsening_types):
                 print(f"  voronoi_clusters: {self.voronoi_clusters}")
+                if any(kb > 1 for kb in self.voronoi_branches):
+                    print(f"  voronoi_branches: {self.voronoi_branches}")
         if self.use_world_edges:
             print(f"  world_radius_multiplier: {self.world_radius_multiplier}")
             print(f"  world_max_num_neighbors: {self.world_max_num_neighbors}")
@@ -205,6 +248,7 @@ class MeshGraphDataset(Dataset):
         return build_multiscale_hierarchy(
             edge_index, num_nodes, ref_pos,
             self.multiscale_levels, self.coarsening_types, self.voronoi_clusters,
+            getattr(self, 'voronoi_branches', None),
         )
 
     def _sanity_check_mesh_topology(self) -> None:
@@ -364,8 +408,8 @@ class MeshGraphDataset(Dataset):
         )
         self.world_edge_radius = source_dataset.world_edge_radius
         self.min_edge_length = source_dataset.min_edge_length
-        self.coarse_edge_means = [m.copy() for m in source_dataset.coarse_edge_means]
-        self.coarse_edge_stds = [s.copy() for s in source_dataset.coarse_edge_stds]
+        self.coarse_edge_means = [_copy_edge_stat(m) for m in source_dataset.coarse_edge_means]
+        self.coarse_edge_stds = [_copy_edge_stat(s) for s in source_dataset.coarse_edge_stds]
 
     def write_preprocessing_to_hdf5(self, split_seed: int) -> None:
         """Persist train-derived preprocessing statistics to the HDF5 dataset."""
@@ -432,6 +476,7 @@ class MeshGraphDataset(Dataset):
         subset.multiscale_levels = self.multiscale_levels
         subset.coarsening_types = self.coarsening_types
         subset.voronoi_clusters = self.voronoi_clusters
+        subset.voronoi_branches = self.voronoi_branches
         subset.coarse_edge_means = []
         subset.coarse_edge_stds = []
         subset._coarse_cache = {}
@@ -510,6 +555,36 @@ class MeshGraphDataset(Dataset):
         if not warnings:
             print('  All normalization statistics look reasonable')
 
+    def _accumulate_coarse_edge_stats(self, entry, cur_ref, cur_def, sum_arr, sumsq_arr):
+        """One partition's contribution to coarse edge z-score stats.
+
+        Mutates `sum_arr`/`sumsq_arr` IN PLACE (numpy `+=` is `__iadd__`, so
+        the caller's accumulator array is updated without reassignment).
+        Returns (coarse_ref, coarse_def, num_edges_added): the positions let
+        an unbranched caller chain to the next level, and the count is
+        returned rather than accumulated here because a plain Python int
+        can't be mutated by reference.
+        """
+        ftc, c_ei, n_c = entry['ftc'], entry['c_ei'], entry['n_c']
+        seeds, mode = entry.get('seeds'), entry.get('mode', 'centroid')
+
+        if mode in ('inherit', 'seedmean') and seeds is not None:
+            coarse_ref = cur_ref[seeds].astype(np.float64)
+            coarse_def = cur_def[seeds].astype(np.float64)
+        else:
+            coarse_ref = compute_coarse_centroids(cur_ref, ftc, n_c)
+            coarse_def = compute_coarse_centroids(cur_def, ftc, n_c)
+
+        added = 0
+        if c_ei.shape[1] > 0:
+            c_edge_attr = compute_edge_attr(
+                coarse_ref.astype(np.float32), coarse_def.astype(np.float32), c_ei,
+            )
+            sum_arr += np.sum(c_edge_attr, axis=0)
+            sumsq_arr += np.sum(c_edge_attr ** 2, axis=0)
+            added = c_edge_attr.shape[0]
+        return coarse_ref, coarse_def, added
+
     def _compute_coarse_edge_stats(self) -> None:
         """
         Compute z-score normalization stats for coarse edge features and pre-populate
@@ -522,16 +597,38 @@ class MeshGraphDataset(Dataset):
             fine_to_coarse_{i}: level i → level i+1 (NOT composed)
             coarse_edge_index_{i}: edge topology at level i+1
             num_coarse_{i}: node count at level i+1
+
+        A multi-partition level (ATTENTION_TRANSFER_DESIGN.md Part II) has
+        `entry == {'branches': [...]}` instead of a flat entry; that level's
+        accumulator becomes a *list* of per-branch (sum, sumsq, count)
+        triples, and `self.coarse_edge_means[level]` / `coarse_edge_stds[level]`
+        end up as a list of per-branch arrays rather than one array (branch
+        detection is driven entirely by inspecting each `entry`, never by
+        `self.voronoi_branches`, so this also works for hand-built dataset
+        objects in tests that skip `__init__`).
         """
         import time as _time
         n_samples = len(self.sample_ids)
         L = self.multiscale_levels
         print(f'Computing coarse edge normalization statistics ({n_samples} samples, {L} levels)...')
 
-        # Per-level accumulators for edge feature stats
-        level_sum = [np.zeros(self.edge_dim, dtype=np.float64) for _ in range(L)]
-        level_sumsq = [np.zeros(self.edge_dim, dtype=np.float64) for _ in range(L)]
-        level_count = [0] * L
+        # Sized from voronoi_branches when available; falls back to 1
+        # branch/level (today's shape) and grows lazily from whatever the
+        # hierarchy entries actually contain otherwise.
+        configured_branches = getattr(self, 'voronoi_branches', None) or [1] * L
+        def _n_branches(level):
+            return configured_branches[level] if level < len(configured_branches) else 1
+
+        level_sum = [[np.zeros(self.edge_dim, dtype=np.float64) for _ in range(_n_branches(l))] for l in range(L)]
+        level_sumsq = [[np.zeros(self.edge_dim, dtype=np.float64) for _ in range(_n_branches(l))] for l in range(L)]
+        level_count = [[0] * _n_branches(l) for l in range(L)]
+
+        def _ensure_capacity(level, num_branches):
+            while len(level_sum[level]) < num_branches:
+                level_sum[level].append(np.zeros(self.edge_dim, dtype=np.float64))
+                level_sumsq[level].append(np.zeros(self.edge_dim, dtype=np.float64))
+                level_count[level].append(0)
+
         t_start = _time.time()
 
         with h5py.File(self.h5_file, 'r') as f:
@@ -558,7 +655,6 @@ class MeshGraphDataset(Dataset):
                 hierarchy = self._get_hierarchy(
                     sid, edge_idx, num_nodes, level_ref_pos,
                 )
-                actual_levels = len(hierarchy)
 
                 # Collect coarse edge stats per level — 10 timesteps is sufficient
                 max_t = min(10, self.num_timesteps)
@@ -574,44 +670,47 @@ class MeshGraphDataset(Dataset):
 
                     cur_ref, cur_def = ref_pos, deformed_pos
                     for level, entry in enumerate(hierarchy):
-                        ftc_l = entry['ftc']
-                        c_ei_l = entry['c_ei']
-                        n_c_l = entry['n_c']
-                        seeds_l = entry.get('seeds')
-                        mode_l = entry.get('mode', 'centroid')
-
-                        if mode_l in ('inherit', 'seedmean') and seeds_l is not None:
-                            coarse_ref = cur_ref[seeds_l].astype(np.float64)
-                            coarse_def = cur_def[seeds_l].astype(np.float64)
+                        if 'branches' in entry:
+                            _ensure_capacity(level, len(entry['branches']))
+                            for b, sub in enumerate(entry['branches']):
+                                _, _, added = self._accumulate_coarse_edge_stats(
+                                    sub, cur_ref, cur_def,
+                                    level_sum[level][b], level_sumsq[level][b],
+                                )
+                                level_count[level][b] += added
+                            # Branched level is always terminal (see
+                            # build_multiscale_hierarchy): no cur_ref/cur_def chaining.
                         else:
-                            coarse_ref = compute_coarse_centroids(cur_ref, ftc_l, n_c_l)
-                            coarse_def = compute_coarse_centroids(cur_def, ftc_l, n_c_l)
-
-                        if c_ei_l.shape[1] > 0:
-                            c_edge_attr = compute_edge_attr(
-                                coarse_ref.astype(np.float32),
-                                coarse_def.astype(np.float32),
-                                c_ei_l
+                            coarse_ref, coarse_def, added = self._accumulate_coarse_edge_stats(
+                                entry, cur_ref, cur_def,
+                                level_sum[level][0], level_sumsq[level][0],
                             )
-                            level_sum[level] += np.sum(c_edge_attr, axis=0)
-                            level_sumsq[level] += np.sum(c_edge_attr ** 2, axis=0)
-                            level_count[level] += c_edge_attr.shape[0]
-
-                        cur_ref, cur_def = coarse_ref, coarse_def
+                            level_count[level][0] += added
+                            cur_ref, cur_def = coarse_ref, coarse_def
 
         elapsed = _time.time() - t_start
         self.coarse_edge_means = []
         self.coarse_edge_stds = []
         for level in range(L):
-            if level_count[level] == 0:
-                print(f'  Level {level}: no coarse edge stats; falling back to fine edge stats')
-                self.coarse_edge_means.append(self.edge_mean.copy())
-                self.coarse_edge_stds.append(self.edge_std.copy())
-            else:
-                mean, std = finalize_moments(level_sum[level], level_sumsq[level], level_count[level])
-                self.coarse_edge_means.append(mean)
-                self.coarse_edge_stds.append(std)
-                print(f'  Level {level} coarse edge stats: mean={mean}, std={std}')
+            n_b = len(level_sum[level])
+            means_b, stds_b = [], []
+            for b in range(n_b):
+                label = f'Level {level}' + (f' branch {b}' if n_b > 1 else '')
+                if level_count[level][b] == 0:
+                    print(f'  {label}: no coarse edge stats; falling back to fine edge stats')
+                    means_b.append(self.edge_mean.copy())
+                    stds_b.append(self.edge_std.copy())
+                else:
+                    mean, std = finalize_moments(
+                        level_sum[level][b], level_sumsq[level][b], level_count[level][b]
+                    )
+                    means_b.append(mean)
+                    stds_b.append(std)
+                    print(f'  {label} coarse edge stats: mean={mean}, std={std}')
+            # Unbranched (the common case): keep the flat-array shape today's
+            # readers (attach_coarse_levels_to_graph, ar_rollout.py) expect.
+            self.coarse_edge_means.append(means_b[0] if n_b == 1 else means_b)
+            self.coarse_edge_stds.append(stds_b[0] if n_b == 1 else stds_b)
         print(f'  Coarse edge stats done in {elapsed:.1f}s')
 
     def _compute_node_type_info(self) -> None:

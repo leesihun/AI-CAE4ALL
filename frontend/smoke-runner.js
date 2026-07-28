@@ -35,8 +35,8 @@ function assert(condition, message) {
     assert(contract.simulgenKeys === 67, "Expected all 67 SimulGen keys");
     assert(contract.simulgenModes === 4, "Expected all four SimulGen modes");
 
-    assert(await page.locator(".node").count() === 6, "Expected six blocks in the SimulGen pipeline");
-    assert(await page.locator("#edgeLayer path.edge").count() === 8, "Expected eight semantically valid default links");
+    assert(await page.locator(".node").count() === 7, "Expected seven blocks in the SimulGen pipeline");
+    assert(await page.locator("#edgeLayer path.edge").count() === 9, "Expected nine semantically valid default links");
     assert(
       await page.locator("#edgeLayer").evaluate(element => getComputedStyle(element).transform === "none"),
       "Edge layer must not apply the canvas transform twice"
@@ -146,6 +146,24 @@ function assert(condition, message) {
     assert(zoomAfter > zoomBefore, `Mouse-wheel zoom did not change scale: ${zoomBefore} -> ${zoomAfter}`);
     assert((await page.locator("#zoomLevel").innerText()).includes("%"), "Visible zoom percentage is missing");
 
+    await page.evaluate(async () => {
+      const { renderRuntimeJob } = await import("./src/run.js");
+      renderRuntimeJob({ id: "drawer-poll-smoke", label: "Drawer polling smoke", status: "running", current_step: 1, total_steps: 2, log: "running" });
+    });
+    await page.locator("#runtimeMinimize").click();
+    assert(await page.locator("#runtimeDrawer").evaluate(element => element.classList.contains("minimized")), "Runtime drawer did not minimize");
+    await page.evaluate(async () => {
+      const { applyJobStatus } = await import("./src/run.js");
+      applyJobStatus({ id: "drawer-poll-smoke", label: "Drawer polling smoke", status: "running", current_step: 2, total_steps: 2, log: "poll update" });
+    });
+    assert(await page.locator("#runtimeDrawer").evaluate(element => element.classList.contains("minimized")), "Polling reopened the minimized runtime drawer");
+    assert(await page.locator("#runtimeMinimize").innerText() === "+", "Minimized runtime control was reset by polling");
+    await page.evaluate(async () => {
+      const { applyJobStatus, dismissRuntimeJob } = await import("./src/run.js");
+      applyJobStatus({ id: "drawer-poll-smoke", label: "Drawer polling smoke", status: "completed", current_step: 2, total_steps: 2, log: "completed", finished_at: "now" });
+      dismissRuntimeJob();
+    });
+
     await page.locator("#openFullConfig").click();
     assert(await page.locator("#configOverlay").evaluate(element => element.classList.contains("open")), "Configuration did not open");
     assert((await page.locator("#configBadges").innerText()).includes("67 accepted"), "Accepted-key count is wrong");
@@ -153,6 +171,18 @@ function assert(condition, message) {
     assert((await page.locator("#configRaw").inputValue()).includes("vae_modelpath"), "VAE checkpoint key is missing");
     assert((await page.locator("#configRaw").inputValue()).includes("lc_modelpath"), "LC checkpoint key is missing");
     await page.screenshot({ path: path.join(__dirname, "runtime", "config-v2.png"), fullPage: false });
+    await page.locator("#configRaw").fill("MODEL SimulGenVAE\nMoDe TRAIN_VAE\nBATCH_SIZE 7\nbatch_size 9\nDATASET_DIR ../Dataset/CaseSensitive.H5");
+    await page.locator("#parseRaw").click();
+    const caseInsensitiveConfig = await page.evaluate(() => {
+      const node = window.__AI_CAE_FRONTEND__.state.nodes.find(item => item.id === "simulgen");
+      return { config: node.config, keys: Object.keys(node.config) };
+    });
+    assert(caseInsensitiveConfig.config.model === "simulgenvae", "Model value was not normalized case-insensitively");
+    assert(caseInsensitiveConfig.config.mode === "train_vae", "Mode value was not normalized case-insensitively");
+    assert(caseInsensitiveConfig.config.batch_size === "9", "Case-insensitive duplicate keys did not use the last value");
+    assert(caseInsensitiveConfig.config.dataset_dir === "../Dataset/CaseSensitive.H5", "Free-form path casing was not preserved");
+    assert(!caseInsensitiveConfig.keys.some(key => /[A-Z]/.test(key)), "Config keys were not canonicalized to lowercase");
+    assert((await page.locator("#configDiagnostics").innerText()).includes("case-insensitive"), "Case-insensitive duplicate diagnostic is missing");
 
     if (liveRuntime) {
       await page.locator("#configPreset").selectOption("smoke");
@@ -197,7 +227,11 @@ function assert(condition, message) {
 
       await page.locator('[data-view-mode="field"]').click();
       await page.screenshot({ path: path.join(__dirname, "runtime", "mesh-field-viewer.png"), fullPage: false });
-      await page.locator('[data-close="artifactOverlay"]').click();
+      const comparedArtifactPath = await page.evaluate(() => window.__AI_CAE_FRONTEND__.state.realArtifact?.path);
+      await page.locator("#artifactCompare").click();
+      await page.waitForSelector("#evaluationPrediction");
+      assert(await page.locator("#evaluationPrediction").inputValue() === comparedArtifactPath, "Artifact Compare did not carry the current HDF5 into Evaluation");
+      await page.locator('[data-close="studioOverlay"]').click();
 
       await page.locator('[data-section="models"]').click();
       await page.waitForFunction(() => document.querySelector("#studioMain")?.textContent.includes("registered routes"));
@@ -259,11 +293,17 @@ function assert(condition, message) {
         { timeout: 30000 }
       );
       assert((await page.locator("#runtimeLog").innerText()).includes("[studio] Pipeline completed"), "Geometry ingest did not execute through the real launcher");
+      const lineage = await page.evaluate(() => ({
+        target: window.__AI_CAE_FRONTEND__.state.api.activeJob?.target_node_id,
+        nodeId: window.__AI_CAE_FRONTEND__.state.api.activeJob?.steps?.[0]?.node_id,
+        nodeType: window.__AI_CAE_FRONTEND__.state.api.activeJob?.steps?.[0]?.node_type
+      }));
+      assert(lineage.target === "ingest" && lineage.nodeId === "ingest" && lineage.nodeType === "prep.geometry", `Job lost exact pipeline-node lineage: ${JSON.stringify(lineage)}`);
 
       await page.evaluate(() => window.__AI_CAE_FRONTEND__.openStudio("evaluation"));
       assert((await page.locator("#studioMain").innerText()).includes("Actual HDF5 field comparison"), "Evaluation workspace is not live");
       await page.evaluate(() => window.__AI_CAE_FRONTEND__.openStudio("comparison"));
-      assert((await page.locator("#studioMain").innerText()).includes("Evidence-backed model ranking"), "Comparison workspace is not live");
+      assert((await page.locator("#studioMain").innerText()).includes("Connected run comparison"), "Comparison workspace is not live");
       await page.evaluate(() => window.__AI_CAE_FRONTEND__.openStudio("export"));
       assert((await page.locator("#studioMain").innerText()).includes("Isolated artifact handoff"), "Export workspace is not live");
     }
@@ -296,7 +336,8 @@ function assert(condition, message) {
       await page.locator('[data-close="studioOverlay"]').click();
     }
 
-    const compactPage = await browser.newPage({ viewport: { width: 1366, height: 768 } });
+    const compactContext = await browser.newContext({ viewport: { width: 1366, height: 768 } });
+    const compactPage = await compactContext.newPage();
     compactPage.on("pageerror", error => browserErrors.push(`compact pageerror: ${error.message}`));
     compactPage.on("console", message => {
       if (message.type() === "error") browserErrors.push(`compact console: ${message.text()}`);
@@ -313,9 +354,9 @@ function assert(condition, message) {
     }));
     assert(compactLayout.scrollWidth <= compactLayout.innerWidth, `Compact layout overflows horizontally: ${JSON.stringify(compactLayout)}`);
     assert(compactLayout.workspaceWidth >= 950, `Pipeline canvas is too narrow at 1366px: ${compactLayout.workspaceWidth}`);
-    assert(compactLayout.nodes === 6, "Compact pipeline did not render all six blocks");
+    assert(compactLayout.nodes === 7, "Compact pipeline did not render all seven blocks");
     await compactPage.screenshot({ path: path.join(__dirname, "runtime", "pipeline-1366.png"), fullPage: false });
-    await compactPage.close();
+    await compactContext.close();
 
     assert(browserErrors.length === 0, `Browser reported errors: ${browserErrors.join(" | ")}`);
     console.log(`PASS: ${liveRuntime ? "live runtime, real preflight, real HDF5 samples, geometry ingest, " : ""}SimulGen config, Evaluation, Comparison, Export, and Optimization`);

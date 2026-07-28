@@ -109,6 +109,16 @@ class RolloutContext:
                 "lifted contact edges would have to be re-derived per level per step. "
                 "Set coarse_world_edges False, or train this config with ar_ot."
             )
+        raw_vb = config.get('voronoi_branches', None)
+        branches = raw_vb if isinstance(raw_vb, list) else ([raw_vb] if raw_vb is not None else [])
+        if self.use_multiscale and any(int(v) > 1 for v in branches):
+            raise ValueError(
+                "time_integration ar_rt does not support voronoi_branches > 1 "
+                "(multi-partition coarsening, ATTENTION_TRANSFER_DESIGN.md Part II): "
+                "_refresh_multiscale below only knows the unbranched per-level "
+                "attribute names. Set voronoi_branches to all 1s, or train this "
+                "config with ar_ot."
+            )
 
 
 def _coarse_positions(fine_pos, graph, level, num_coarse_total):

@@ -1,3 +1,41 @@
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]));
+}
+
+/**
+ * Design Parameters has no preview data of its own — it is a placeholder for
+ * whichever input/output names arrive via `condition_names`/`feature_names`
+ * (set when a real dataset is wired into the pipeline with "Use in
+ * pipeline"). Until that happens the table is honestly blank rather than
+ * showing a decorative graphic that implies data which isn't there.
+ */
+export function parametersTableGraphic(node, compact = false) {
+  try {
+    const table = JSON.parse(node?.config?.parameter_table || "null");
+    if (table && Array.isArray(table.columns) && Array.isArray(table.rows) && table.columns.length) {
+      const visibleColumns = compact ? table.columns.slice(0, 2) : table.columns;
+      const visibleRows = compact ? table.rows.slice(0, 2) : table.rows;
+      const header = `<th>Sample</th>${visibleColumns.map(column => `<th>${escapeHtml(column.name || column.id)}</th>`).join("")}`;
+      const rows = visibleRows.map((row, index) => `<tr><td>${escapeHtml(row.sample_label || row.sample_id || index + 1)}</td>${visibleColumns.map(column => `<td>${escapeHtml(row.values?.[column.id] || "")}</td>`).join("")}</tr>`).join("");
+      const more = compact && (table.rows.length > visibleRows.length || table.columns.length > visibleColumns.length)
+        ? `<tr class="parameters-table-more"><td colspan="${visibleColumns.length + 1}">+${Math.max(0, table.rows.length - visibleRows.length)} rows · +${Math.max(0, table.columns.length - visibleColumns.length)} columns</td></tr>`
+        : "";
+      return `<table class="parameters-table" aria-label="Dataset-aligned design parameters"><thead><tr>${header}</tr></thead><tbody>${rows}${more}</tbody></table>`;
+    }
+  } catch {
+    // Fall through to the legacy name-only preview.
+  }
+  const inputs = String(node?.config?.condition_names || "").split(",").map(item => item.trim()).filter(Boolean);
+  const outputs = String(node?.config?.feature_names || "").split(",").map(item => item.trim()).filter(Boolean);
+  const rowCount = Math.max(1, inputs.length, outputs.length);
+  const visibleRows = compact ? Math.min(3, rowCount) : rowCount;
+  const rows = Array.from({ length: visibleRows }, (unused, index) =>
+    `<tr><td>${escapeHtml(inputs[index] || "")}</td><td>${escapeHtml(outputs[index] || "")}</td></tr>`
+  ).join("");
+  const overflow = compact && rowCount > visibleRows ? `<tr class="parameters-table-more"><td colspan="2">+${rowCount - visibleRows} more</td></tr>` : "";
+  return `<table class="parameters-table" aria-label="Design parameters input/output"><thead><tr><th>Input</th><th>Output</th></tr></thead><tbody>${rows}${overflow}</tbody></table>`;
+}
+
 export function previewGraphic(kind, seed = 0, large = false) {
   const width = large ? 680 : 220;
   const height = large ? 410 : 80;

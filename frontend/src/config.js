@@ -1,17 +1,29 @@
 import { $, $$, escapeHtml, toast, closeOverlay } from "./dom.js";
 import { keys } from "./text.js";
-import { state } from "./state.js";
+import { state, snapshot } from "./state.js";
 import {
   ICONS, BLOCK_SPECS, MODEL_CATALOG, REQUIRED, CHOICES, BOOLEAN_KEYS,
   OPERATOR_REMOVED, TRANSOLVER_REJECTED, CONFIG_SECTIONS, HELP
 } from "./constants.js";
 import { apiRequest, requireRuntime } from "./api.js";
 import { addBlock, selectNode } from "./graph.js";
+import {
+  applyGraphAutofill, autoFillCount, autoFillMeta,
+  markManualConfigValue, resetManualConfigValues
+} from "./autofill.js";
+
+function retainExplicitConfig(node) {
+  resetManualConfigValues(node);
+  Object.entries(node.config).forEach(([key, value]) => markManualConfigValue(node, key, value));
+  applyGraphAutofill();
+}
 
 export function requiredFor(modelId, mode) {
-  const modelRequired = REQUIRED[modelId]?.[mode];
+  const canonicalModel = String(modelId || "").toLowerCase();
+  const canonicalMode = String(mode || "").toLowerCase();
+  const modelRequired = REQUIRED[canonicalModel]?.[canonicalMode];
   if (modelRequired) return new Set(modelRequired);
-  return new Set(mode === "inference"
+  return new Set(canonicalMode === "inference"
     ? keys(`model mode gpu_ids modelpath infer_dataset input_var output_var`)
     : keys(`model mode gpu_ids dataset_dir modelpath input_var output_var training_epochs batch_size learningr`));
 }
@@ -51,10 +63,31 @@ export function choicesFor(modelId, key) {
   return CHOICES[key] || null;
 }
 
+function canonicalConfigValue(key, value) {
+  const text = String(value ?? "").trim();
+  if (key === "model" || key === "mode") return text.toLowerCase();
+  if ((BOOLEAN_KEYS.has(key) || /^use_/.test(key)) && /^(true|false)$/i.test(text)) {
+    return text.toLowerCase() === "true" ? "True" : "False";
+  }
+  const choices = CHOICES[key];
+  return choices?.find(choice => String(choice).toLowerCase() === text.toLowerCase()) ?? text;
+}
+
+/** Match the authoritative suite parser: config keys are case-insensitive. */
+export function normalizeConfigValues(values = {}) {
+  const normalized = {};
+  Object.entries(values).forEach(([rawKey, value]) => {
+    const key = String(rawKey).trim().toLowerCase();
+    if (key) normalized[key] = canonicalConfigValue(key, value);
+  });
+  return normalized;
+}
+
 export function rawConfig(values, catalog) {
-  const ordered = catalog.filter(key => Object.hasOwn(values, key));
-  const unknown = Object.keys(values).filter(key => !catalog.includes(key)).sort();
-  return [...ordered, ...unknown].map(key => `${key.padEnd(29, " ")}${values[key]}`).join("\n");
+  const normalized = normalizeConfigValues(values);
+  const ordered = catalog.filter(key => Object.hasOwn(normalized, key));
+  const unknown = Object.keys(normalized).filter(key => !catalog.includes(key)).sort();
+  return [...ordered, ...unknown].map(key => `${key.padEnd(29, " ")}${normalized[key]}`).join("\n");
 }
 
 export function parseConfig(text) {
@@ -70,9 +103,10 @@ export function parseConfig(text) {
       messages.push({ type: "warn", text: `Line ${index + 1} could not be parsed: ${trimmed}` });
       return;
     }
-    if (seen.has(match[1])) messages.push({ type: "warn", text: `Duplicate ${match[1]} on line ${index + 1}; last value wins.` });
-    seen.add(match[1]);
-    values[match[1]] = match[2].trim();
+    const key = match[1].toLowerCase();
+    if (seen.has(key)) messages.push({ type: "warn", text: `Duplicate ${key} on line ${index + 1}; config keys are case-insensitive and the last value wins.` });
+    seen.add(key);
+    values[key] = canonicalConfigValue(key, match[2]);
   });
   return { values, messages };
 }
@@ -89,6 +123,8 @@ export function openConfig(nodeId) {
   const node = state.nodes.find(item => item.id === nodeId);
   const spec = node && BLOCK_SPECS[node.type];
   if (!node || !spec?.isModel) return;
+  node.config = normalizeConfigValues(node.config);
+  applyGraphAutofill();
   state.configNode = nodeId;
   state.configSection = "Required";
   state.configSearch = "";
@@ -109,9 +145,13 @@ export function openConfig(nodeId) {
 export function renderConfig() {
   const node = state.nodes.find(item => item.id === state.configNode);
   if (!node) return;
+  applyGraphAutofill();
   const spec = BLOCK_SPECS[node.type];
   const model = MODEL_CATALOG[spec.modelId];
-  const mode = $("#configMode").value || node.config.mode || model.modes[0];
+  node.config = normalizeConfigValues(node.config);
+  const configuredMode = String(node.config.mode || "").toLowerCase();
+  const mode = model.modes.includes(configuredMode) ? configuredMode : $("#configMode").value || model.modes[0];
+  $("#configMode").value = mode;
   node.config.model = spec.modelId;
   node.config.mode = mode;
   const required = requiredFor(spec.modelId, mode);
@@ -126,6 +166,11 @@ export function renderConfig() {
     if (search && !key.toLowerCase().includes(search)) return;
     groups[sectionFor(spec.modelId, key, required)].push(key);
   });
+  Object.keys(node.config).filter(key => !model.keys.includes(key)).forEach(key => {
+    if (!showInactive) return;
+    if (search && !key.toLowerCase().includes(search)) return;
+    groups["Inactive / rejected"].push(key);
+  });
   if (!groups[state.configSection]?.length && search) state.configSection = CONFIG_SECTIONS.find(section => groups[section].length) || "Required";
 
   $("#configSectionList").innerHTML = CONFIG_SECTIONS.map(section => `<button class="config-section-button${state.configSection === section ? " active" : ""}" data-config-section="${section}"><span>${section}</span><small>${groups[section].length}</small></button>`).join("");
@@ -137,27 +182,40 @@ export function renderConfig() {
   const visible = groups[state.configSection];
   $("#configSectionTitle").textContent = state.configSection;
   $("#configSectionMeta").textContent = `${visible.length} visible keys · ${mode} mode`;
-  $("#configBadges").innerHTML = `<span class="badge">${model.keys.length} accepted</span><span class="badge warn">${required.size} required</span>`;
+  const automaticCount = autoFillCount(node);
+  $("#configBadges").innerHTML = `<span class="badge">${model.keys.length} accepted</span><span class="badge warn">${required.size} required</span>${automaticCount ? `<span class="badge auto">${automaticCount} graph-filled</span>` : ""}`;
   $("#schemaNote").innerHTML = `<strong>${model.keys.length} live keys</strong><br>All MethodSpec keys are present. Closed choices use dropdowns; paths, widths, lists, and open family values remain manual.<br><br>${spec.modelId === "simulgenvae" ? "The live SimulGen route has separate VAE, LC, combined, and reconstruction requirements." : "Shared-family inactive and rejected keys remain visible for diagnostic honesty."}`;
 
   $("#configFields").innerHTML = visible.length ? visible.map(key => {
-    const disposition = keyDisposition(spec.modelId, key);
+    const accepted = model.keys.includes(key);
+    const disposition = accepted ? keyDisposition(spec.modelId, key) : "unknown";
     const set = Object.hasOwn(node.config, key);
     const requiredKey = required.has(key);
-    const status = disposition === "removed" ? "rejected" : disposition === "inactive" ? "inactive" : disposition === "runtime" ? "runtime" : requiredKey ? "required" : set ? "set" : "optional";
+    const rejectedByPreflight = state.configRejectedNode === node.id && state.configRejectedField === key;
+    const status = rejectedByPreflight || disposition === "removed" || disposition === "unknown" ? "rejected" : disposition === "inactive" ? "inactive" : disposition === "runtime" ? "runtime" : requiredKey ? "required" : set ? "set" : "optional";
     const value = set ? node.config[key] : "";
+    const automatic = autoFillMeta(node, key);
     const choices = choicesFor(spec.modelId, key);
     const disabled = disposition === "removed" || disposition === "runtime";
     const control = choices
       ? `<select class="config-control full-config-control" data-key="${key}"${disabled ? " disabled" : ""}><option value="">— not set —</option>${choices.map(choice => `<option value="${escapeHtml(choice)}"${String(value).toLowerCase() === String(choice).toLowerCase() ? " selected" : ""}>${escapeHtml(choice)}</option>`).join("")}</select>`
       : `<input class="config-control full-config-control" data-key="${key}" value="${escapeHtml(value)}" placeholder="manual value"${disabled ? " disabled" : ""}>`;
-    const help = HELP[key] || (disposition === "removed" ? "Known by a shared diagnostic schema, but rejected for this selected model." : disposition === "inactive" ? "Accepted by the shared family schema but configures a different variant." : "Manual input is retained because the live spec does not publish a closed value set for this field.");
-    return `<article class="config-card ${disposition}"><header class="config-card-head"><span class="config-key">${key}</span><span class="config-status ${status}">${status}</span></header>${control}<p class="config-help">${escapeHtml(help)}</p></article>`;
+    const help = automatic
+      ? `Auto-filled from ${automatic.sourceLabel}: ${automatic.reason}. Edit it to keep a manual override, or clear it to follow the graph again.`
+      : HELP[key] || (disposition === "unknown" ? "This key is not accepted by the selected model. Clear its value to remove it before running preflight again." : disposition === "removed" ? "Known by a shared diagnostic schema, but rejected for this selected model." : disposition === "inactive" ? "Accepted by the shared family schema but configures a different variant." : "Manual input is retained because the live spec does not publish a closed value set for this field.");
+    return `<article class="config-card ${disposition}${automatic ? " graph-autofilled" : ""}${rejectedByPreflight ? " preflight-rejected" : ""}"><header class="config-card-head"><span class="config-key">${key}</span><span class="config-card-states">${automatic ? `<span class="config-status autofill">auto · ${escapeHtml(automatic.sourceLabel)}</span>` : ""}<span class="config-status ${status}">${status}</span></span></header>${control}<p class="config-help">${escapeHtml(help)}</p></article>`;
   }).join("") : `<div class="inspect-empty" style="height:auto;grid-column:1/-1"><p>No keys match this filter.</p></div>`;
 
   $$(".full-config-control").forEach(control => control.addEventListener("change", () => {
+    snapshot();
     if (control.value === "") delete node.config[control.dataset.key];
     else node.config[control.dataset.key] = control.value;
+    markManualConfigValue(node, control.dataset.key, control.value);
+    applyGraphAutofill();
+    if (state.configRejectedNode === node.id && state.configRejectedField === control.dataset.key) {
+      state.configRejectedNode = null;
+      state.configRejectedField = null;
+    }
     $("#savedState").textContent = "Unsaved changes";
     $("#configRaw").value = rawConfig(node.config, model.keys);
     renderConfig();
@@ -187,7 +245,9 @@ export async function applyPreset() {
     try {
       const fixture = await apiRequest("/api/simulgen/smoke-fixture", { method: "POST", body: {} });
       const parsed = parseConfig(fixture.config);
+      snapshot();
       node.config = { ...parsed.values };
+      retainExplicitConfig(node);
       $("#configMode").value = fixture.mode;
       state.configSection = "Required";
       state.configMessages = [
@@ -229,6 +289,7 @@ export async function applyPreset() {
   }
   const preview = changes.slice(0, 9).map(([key, value]) => `${key} → ${value}`).join("\n");
   if (!window.confirm(`Apply ${changes.length} preset changes?\n\n${preview}${changes.length > 9 ? "\n…" : ""}\n\nOther manual values are preserved.`)) return;
+  snapshot();
   Object.assign(node.config, values);
   if (values.mode) $("#configMode").value = values.mode;
   state.configMessages = [{ type: "", text: `Applied ${preset} with ${changes.length} explicit changes.` }];
@@ -250,7 +311,9 @@ export async function loadConfigExample(modelId, path) {
       addBlock(type);
       node = state.nodes.find(item => item.id === state.selectedNode);
     }
+    snapshot();
     node.config = { ...parsed.values };
+    retainExplicitConfig(node);
     node.loadedConfigPath = path;
     closeOverlay("studioOverlay");
     selectNode(node.id);
@@ -283,6 +346,87 @@ export function explainMessages(payload) {
     { type: payload.unknown_keys.length ? "warn" : "", text: list("Unknown keys", payload.unknown_keys) },
     { type: payload.malformed_lines.length ? "error" : "", text: `Malformed lines (${payload.malformed_lines.length}): ${payload.malformed_lines.length ? payload.malformed_lines.map(item => `line ${item.line}`).join(", ") : "<none>"}` }
   ];
+}
+
+export async function configureViaLlm() {
+  const node = state.nodes.find(item => item.id === state.configNode);
+  if (!node || !requireRuntime()) return;
+  const instruction = window.prompt("Describe the change you want the LLM to make to this configuration:");
+  if (!instruction || !instruction.trim()) return;
+  const modelId = BLOCK_SPECS[node.type].modelId;
+  const text = `${rawConfig(node.config, MODEL_CATALOG[modelId].keys)}\n`;
+  const button = $("#llmConfigure");
+  const original = button.textContent;
+  button.disabled = true;
+  button.textContent = "Asking LLM…";
+  try {
+    const result = await apiRequest("/api/llm/configure", {
+      method: "POST",
+      body: { config_text: text, instruction: instruction.trim() }
+    });
+    const preview = result.text.length > 700 ? `${result.text.slice(0, 700)}\n…` : result.text;
+    if (!window.confirm(`Apply the LLM's updated configuration for this block?\n\n${preview}`)) {
+      toast("LLM suggestion discarded.");
+      return;
+    }
+    const parsed = parseConfig(result.text);
+    snapshot();
+    node.config = { ...parsed.values, model: modelId, mode: parsed.values.mode || node.config.mode };
+    retainExplicitConfig(node);
+    state.configMessages = [
+      { type: "", text: `LLM applied instruction: ${instruction.trim()}` },
+      ...parsed.messages
+    ];
+    $("#configMode").value = node.config.mode;
+    $("#savedState").textContent = "Unsaved changes · LLM edited";
+    renderConfig();
+    toast("LLM updated the configuration. Review it before saving.");
+  } catch (error) {
+    toast(`LLM configure failed: ${error.message}`, "error");
+  } finally {
+    button.disabled = false;
+    button.textContent = original;
+  }
+}
+
+/**
+ * Selects the block behind a failed-preflight diagnostic and, for a model
+ * block, opens its full config editor scrolled to the exact failing field so
+ * a rejected run can be fixed immediately instead of hunting for it.
+ */
+export function jumpToFailingField(nodeId, field) {
+  const node = state.nodes.find(item => item.id === nodeId);
+  if (!node) return;
+  selectNode(nodeId);
+  const spec = BLOCK_SPECS[node.type];
+  if (!spec?.isModel || !field) {
+    toast(field ? `Selected the failing block for "${field}".` : "Selected the failing block.", "warn");
+    return;
+  }
+  field = String(field).toLowerCase();
+  const modelId = spec.modelId;
+  const model = MODEL_CATALOG[modelId];
+  openConfig(nodeId);
+  state.configRejectedNode = nodeId;
+  state.configRejectedField = field;
+  const mode = node.config.mode || model.modes[0];
+  const required = requiredFor(modelId, mode);
+  state.configSearch = "";
+  $("#configSearch").value = "";
+  state.configSection = model.keys.includes(field) ? sectionFor(modelId, field, required) : "Inactive / rejected";
+  renderConfig();
+  requestAnimationFrame(() => {
+    const control = document.querySelector(`.full-config-control[data-key="${CSS.escape(field)}"]`);
+    const card = control?.closest(".config-card");
+    if (!card) {
+      toast(`Opened ${modelId} configuration; "${field}" is not a listed key.`, "warn");
+      return;
+    }
+    card.scrollIntoView({ block: "center", behavior: "smooth" });
+    card.classList.add("field-flash");
+    control.focus();
+    setTimeout(() => card.classList.remove("field-flash"), 1800);
+  });
 }
 
 export async function explainConfig() {

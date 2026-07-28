@@ -361,6 +361,7 @@ class StudioState:
         *,
         label: str,
         strict: bool,
+        target_node_id: str = "",
     ) -> dict[str, Any]:
         if not steps:
             raise ValueError("The pipeline has no executable model steps.")
@@ -369,6 +370,8 @@ class StudioState:
         for index, step in enumerate(steps):
             text = str(step.get("config", ""))
             step_label = str(step.get("label") or f"step-{index + 1}")
+            node_id = str(step.get("node_id", "")).strip()[:200]
+            node_type = str(step.get("node_type", "")).strip()[:200]
             payload, path, result = self.preflight(
                 text,
                 label=step_label,
@@ -377,7 +380,16 @@ class StudioState:
                 skip_native=index > 0,
             )
             payload["deferred_dependency_checks"] = index > 0
-            prepared.append({"label": step_label, "path": path, "preflight": payload, "result": result})
+            prepared.append(
+                {
+                    "label": step_label,
+                    "path": path,
+                    "preflight": payload,
+                    "result": result,
+                    "node_id": node_id,
+                    "node_type": node_type,
+                }
+            )
             if not payload["ok"]:
                 failures.append({"step": index, "label": step_label, "preflight": payload})
         if failures:
@@ -400,11 +412,14 @@ class StudioState:
             "total_steps": len(prepared),
             "step_label": None,
             "cancel_requested": False,
+            "target_node_id": str(target_node_id or "").strip()[:200],
             "log_path": job_dir / "run.log",
             "metadata_path": job_dir / "job.json",
             "steps": [
                 {
                     "label": item["label"],
+                    "node_id": item["node_id"],
+                    "node_type": item["node_type"],
                     "config_path": relative(item["path"]),
                     "route": item["preflight"]["route"],
                     "summary": item["preflight"]["report"]["summary"],
@@ -632,6 +647,23 @@ class StudioState:
             if job is None:
                 raise KeyError(job_id)
             return self.public_job(job, include_log=True)
+
+    def read_job_log(self, job_id: str) -> str:
+        """Read the complete persisted log for metrics/history extraction.
+
+        The interactive log drawer intentionally returns only a recent tail,
+        but metric history must not silently lose early epochs on long runs.
+        """
+
+        with self.lock:
+            job = self.jobs.get(job_id)
+            if job is None:
+                raise KeyError(job_id)
+            path = job["log_path"]
+        try:
+            return path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return ""
 
 
 STATE = StudioState()

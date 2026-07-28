@@ -353,22 +353,36 @@ def hdf5_samples(path: Path, limit: int = 100) -> dict[str, Any]:
             {"name": name, "shape": list(item.shape), "dtype": str(item.dtype)}
             for name, item in datasets[:30]
         ]
-        samples = [
-            {
+        input_names = _text_list(handle, "input_names")
+        output_names = _text_list(handle, "output_names")
+        column_names = input_names + output_names
+        value_sources = [
+            handle[name]
+            for name in ("X", "Y")
+            if name in handle and getattr(handle[name], "ndim", 0) >= 2 and int(handle[name].shape[0]) == count
+        ]
+        samples = []
+        for index in range(min(count, limit)):
+            sample = {
                 "id": str(index),
                 "label": f"row {index}",
                 "datasets": records,
                 "default_feature": 0,
             }
-            for index in range(min(count, limit))
-        ]
+            if column_names and value_sources:
+                values: list[float | None] = []
+                for source in value_sources:
+                    values.extend(_finite_list(source[index]))
+                sample["parameter_values"] = values[: len(column_names)]
+            samples.append(sample)
         return {
             "path": relative(path),
             "source_kind": "hdf5",
             "contract": "table",
             "default_mode": "field",
-            "feature_names": _table_column_names(handle),
-            "condition_names": _text_list(handle, "input_names"),
+            "feature_names": column_names,
+            "condition_names": input_names,
+            "output_names": output_names,
             "samples": samples,
             "truncated": count > limit,
             "total_samples": count,

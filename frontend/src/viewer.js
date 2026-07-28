@@ -1,10 +1,12 @@
 import { $, $$, escapeHtml, toast } from "./dom.js";
-import { state } from "./state.js";
+import { state, snapshot } from "./state.js";
 import { BLOCK_SPECS, ICONS } from "./constants.js";
 import { apiRequest } from "./api.js";
-import { previewGraphic } from "./graphics.js";
+import { previewGraphic, parametersTableGraphic } from "./graphics.js";
 import { openStudio } from "./studio.js";
 import { createRenderer, createFallbackRenderer, defaultCamera, fieldColor, turboColor } from "./render3d.js";
+import { schedulePipelineSave } from "./persistence.js";
+import { applyGraphAutofill } from "./autofill.js";
 
 export { fieldColor };
 
@@ -17,6 +19,328 @@ const PREVIEW_EXTENSIONS = [...HDF5_EXTENSIONS, ...GEOMETRY_EXTENSIONS];
 
 let viewport = null;
 let renderer = null;
+
+const PARAMETER_SHEET_MIN_ROWS = 14;
+const PARAMETER_CATALOG_LIMIT = 10000;
+const PARAMETER_TABLE_VERSION = 2;
+
+function commaNames(node, key) {
+  return String(node?.config?.[key] || "")
+    .split(",")
+    .map(name => name.trim())
+    .filter(Boolean);
+}
+
+function parameterColumnId(kind, columns) {
+  let index = 1;
+  while (columns.some(column => column.id === `${kind}_${index}`)) index += 1;
+  return `${kind}_${index}`;
+}
+
+function addParameterColumn(columns, kind, name = "") {
+  const id = parameterColumnId(kind, columns);
+  columns.push({ id, kind, name: name || `${kind === "input" ? "Input" : "Output"} ${id.split("_").pop()}` });
+  return id;
+}
+
+function parameterContext(node) {
+  const outgoing = state.edges
+    .filter(edge => edge.fromNode === node.id)
+    .map(edge => state.nodes.find(candidate => candidate.id === edge.toNode))
+    .filter(Boolean);
+  let modelNode = outgoing.find(candidate => BLOCK_SPECS[candidate.type]?.isModel);
+  let datasetNode = outgoing.find(candidate => candidate.type === "source.hdf5");
+  if (!modelNode && datasetNode) {
+    modelNode = state.edges
+      .filter(edge => edge.fromNode === datasetNode.id)
+      .map(edge => state.nodes.find(candidate => candidate.id === edge.toNode))
+      .find(candidate => candidate && BLOCK_SPECS[candidate.type]?.isModel);
+  }
+  if (!datasetNode && modelNode) {
+    datasetNode = state.edges
+      .filter(edge => edge.toNode === modelNode.id)
+      .map(edge => state.nodes.find(candidate => candidate.id === edge.fromNode))
+      .find(candidate => candidate?.type === "source.hdf5");
+  }
+  const modelSpec = modelNode && BLOCK_SPECS[modelNode.type];
+  const modelId = modelSpec?.modelId || "conditions";
+  return {
+    modelId,
+    modelLabel: modelSpec?.label || "Condition",
+    paired: modelId === "mlp",
+    datasetPath: String(node.config.parameter_dataset || datasetNode?.config?.path || (/\.(h5|hdf5)$/i.test(node.config.binding || "") ? node.config.binding : ""))
+  };
+}
+
+function storedParameterTable(node) {
+  try {
+    const parsed = JSON.parse(node?.config?.parameter_table || "null");
+    if (!parsed || !Array.isArray(parsed.columns) || !Array.isArray(parsed.rows)) return null;
+    return {
+      version: PARAMETER_TABLE_VERSION,
+      dataset_path: String(parsed.dataset_path || node.config.parameter_dataset || ""),
+      total_samples: Number(parsed.total_samples) || parsed.rows.length,
+      truncated: Boolean(parsed.truncated),
+      columns: parsed.columns
+        .filter(column => column && ["input", "output"].includes(column.kind))
+        .map(column => ({ id: String(column.id), kind: column.kind, name: String(column.name || column.id) })),
+      rows: parsed.rows.map((row, index) => ({
+        sample_id: String(row?.sample_id ?? index),
+        sample_label: String(row?.sample_label || `Dataset row ${index + 1}`),
+        values: row?.values && typeof row.values === "object"
+          ? Object.fromEntries(Object.entries(row.values).map(([key, value]) => [key, String(value ?? "")]))
+          : {}
+      }))
+    };
+  } catch {
+    return null;
+  }
+}
+
+function initialParameterColumns(node, context) {
+  const columns = [];
+  commaNames(node, "condition_names").forEach(name => addParameterColumn(columns, "input", name));
+  if (context.paired) commaNames(node, "feature_names").forEach(name => addParameterColumn(columns, "output", name));
+  if (!columns.some(column => column.kind === "input")) addParameterColumn(columns, "input");
+  if (context.paired && !columns.some(column => column.kind === "output")) addParameterColumn(columns, "output");
+  return columns;
+}
+
+function blankParameterRows(count = PARAMETER_SHEET_MIN_ROWS) {
+  return Array.from({ length: count }, (unused, index) => ({
+    sample_id: `pending:${index}`,
+    sample_label: `Dataset row ${index + 1}`,
+    values: {}
+  }));
+}
+
+function parameterTableFor(node, catalog = null) {
+  const context = parameterContext(node);
+  const stored = storedParameterTable(node);
+  const table = stored || {
+    version: PARAMETER_TABLE_VERSION,
+    profile: context.paired ? "mlp_paired" : "conditions",
+    dataset_path: "",
+    total_samples: PARAMETER_SHEET_MIN_ROWS,
+    truncated: false,
+    columns: initialParameterColumns(node, context),
+    rows: blankParameterRows()
+  };
+  table.profile = context.paired ? "mlp_paired" : "conditions";
+  if (!table.columns.some(column => column.kind === "input")) addParameterColumn(table.columns, "input");
+  if (context.paired && !table.columns.some(column => column.kind === "output")) addParameterColumn(table.columns, "output");
+  if (!catalog?.samples) return table;
+
+  const placeholderOnly = !table.dataset_path
+    && table.columns.every(column => /^(Input|Output) \d+$/.test(column.name))
+    && table.rows.every(row => Object.values(row.values).every(value => !String(value).trim()));
+  if (placeholderOnly) table.columns = [];
+  const catalogInputs = catalog.condition_names || [];
+  const catalogOutputs = context.paired
+    ? (catalog.output_names || (catalog.feature_names || []).filter(name =>
+        !new Set(catalogInputs.map(input => String(input).trim().toLowerCase())).has(String(name).trim().toLowerCase())
+      ))
+    : [];
+  const knownColumns = new Set(table.columns.map(column => `${column.kind}:${column.name.trim().toLowerCase()}`));
+  const catalogColumns = [["input", catalogInputs]];
+  if (context.paired) catalogColumns.push(["output", catalogOutputs]);
+  for (const [kind, names] of catalogColumns) {
+    for (const name of names) {
+      const key = `${kind}:${String(name).trim().toLowerCase()}`;
+      if (!knownColumns.has(key)) {
+        addParameterColumn(table.columns, kind, String(name));
+        knownColumns.add(key);
+      }
+    }
+  }
+  if (!table.columns.some(column => column.kind === "input")) addParameterColumn(table.columns, "input");
+  if (context.paired && !table.columns.some(column => column.kind === "output")) addParameterColumn(table.columns, "output");
+
+  const sameDataset = Boolean(table.dataset_path && table.dataset_path === catalog.path);
+  const previousById = new Map(table.rows.map(row => [row.sample_id, row]));
+  table.rows = catalog.samples.map((sample, index) => {
+    const previous = sameDataset ? previousById.get(String(sample.id)) : !table.dataset_path ? table.rows[index] : null;
+    const values = previous?.values ? { ...previous.values } : {};
+    const declaredColumns = [
+      ...catalogInputs.map(name => ({ kind: "input", name })),
+      ...catalogOutputs.map(name => ({ kind: "output", name }))
+    ];
+    (sample.parameter_values || []).slice(0, declaredColumns.length).forEach((value, valueIndex) => {
+      const declared = declaredColumns[valueIndex];
+      const column = table.columns.find(candidate =>
+        candidate.kind === declared.kind
+        && candidate.name.trim().toLowerCase() === String(declared.name).trim().toLowerCase()
+      );
+      if (column && values[column.id] === undefined) values[column.id] = value == null ? "" : String(value);
+    });
+    return {
+      sample_id: String(sample.id),
+      sample_label: String(sample.label || `Dataset sample ${index + 1}`),
+      values
+    };
+  });
+  table.dataset_path = String(catalog.path || node.config.binding || "");
+  table.total_samples = Number(catalog.total_samples) || table.rows.length;
+  table.truncated = Boolean(catalog.truncated);
+  return table;
+}
+
+function saveParameterTable(node, table) {
+  node.config.parameter_table = JSON.stringify(table);
+  const inputs = table.columns.filter(column => column.kind === "input").map(column => column.name.trim()).filter(Boolean);
+  const outputs = table.columns.filter(column => column.kind === "output").map(column => column.name.trim()).filter(Boolean);
+  if (inputs.length) node.config.condition_names = inputs.join(", ");
+  else delete node.config.condition_names;
+  if (outputs.length) node.config.feature_names = outputs.join(", ");
+  else delete node.config.feature_names;
+  if (table.dataset_path) node.config.parameter_dataset = table.dataset_path;
+  applyGraphAutofill();
+  refreshParameterCardPreview(node);
+  refreshParameterSheetInfo(node, table);
+  schedulePipelineSave();
+}
+
+function parameterSheetRow(table, row, index) {
+  return `<tr data-parameter-row="${index}" data-sample-id="${escapeHtml(row.sample_id)}">
+    <th scope="row">${index + 1}</th>
+    <td class="parameter-sample-cell"><strong>${escapeHtml(row.sample_label)}</strong><small>ID: ${escapeHtml(row.sample_id)}</small></td>
+    ${table.columns.map(column => `<td><input class="parameter-sheet-value" data-column-id="${escapeHtml(column.id)}" data-row="${index}" value="${escapeHtml(row.values[column.id] || "")}" aria-label="${escapeHtml(column.name)}, dataset row ${index + 1}" autocomplete="off" spellcheck="false"></td>`).join("")}
+  </tr>`;
+}
+
+function refreshParameterCardPreview(node) {
+  const preview = $(`[data-preview="${node.id}"] .parameters-table`);
+  if (preview) preview.outerHTML = parametersTableGraphic(node, true);
+}
+
+function refreshParameterSheetInfo(node, table = storedParameterTable(node) || parameterTableFor(node)) {
+  const context = parameterContext(node);
+  const inputs = table.columns.filter(column => column.kind === "input");
+  const outputs = table.columns.filter(column => column.kind === "output");
+  const source = table.dataset_path || node.config.parameter_dataset || parameterContext(node).datasetPath || "No HDF5 dataset selected";
+  const info = $("#parameterSheetInfo");
+  if (!info) return;
+  info.innerHTML = `<section class="info-block">
+    <h3>${context.paired ? "MLP paired dataset" : `${escapeHtml(context.modelLabel)} conditions`}</h3>
+    <p>${context.paired ? "Each row is one MLP training pair: inputs and target outputs share the same HDF5 sample." : "Each row supplies conditions for the HDF5 sample at the same position; outputs remain owned by the dataset/model."}</p>
+    <div class="stat-grid">
+      <div class="stat-card"><strong>${table.rows.length}${table.total_samples > table.rows.length ? ` / ${table.total_samples}` : ""}</strong><small>matched rows</small></div>
+      <div class="stat-card"><strong>${table.columns.length}</strong><small>editable columns</small></div>
+      <div class="stat-card"><strong>${inputs.length}</strong><small>input columns</small></div>
+      <div class="stat-card"><strong>${outputs.length}</strong><small>output columns</small></div>
+    </div>
+    ${table.truncated ? `<p class="parameter-sheet-warning">Showing the first ${table.rows.length} of ${table.total_samples} samples.</p>` : ""}
+  </section>
+  <section class="info-block">
+    <div class="section-title">Dataset source</div>
+    <p class="parameter-sheet-source">${escapeHtml(source)}</p>
+    <p>Use <strong>+ Add dataset</strong> to lock rows to an HDF5 dataset.${context.paired ? " Add Input or Output columns as needed." : " Add condition Input columns as needed."}</p>
+  </section>`;
+}
+
+function bindParameterSheetCells(node, table) {
+  $$(".parameter-sheet-value").forEach(control => {
+    control.addEventListener("focus", () => {
+      if (control.dataset.historyCaptured === "true") return;
+      snapshot();
+      control.dataset.historyCaptured = "true";
+    });
+    control.addEventListener("input", () => {
+      const row = table.rows[Number(control.dataset.row)];
+      if (!row) return;
+      row.values[control.dataset.columnId] = control.value;
+      saveParameterTable(node, table);
+    });
+    control.addEventListener("keydown", event => {
+      if (event.key !== "Enter") return;
+      event.preventDefault();
+      const next = $(`.parameter-sheet-value[data-row="${Number(control.dataset.row) + 1}"][data-column-id="${control.dataset.columnId}"]`);
+      if (next) next.focus();
+    });
+  });
+  $$(".parameter-column-name").forEach(control => {
+    control.addEventListener("focus", () => {
+      if (control.dataset.historyCaptured === "true") return;
+      snapshot();
+      control.dataset.historyCaptured = "true";
+    });
+    control.addEventListener("input", () => {
+      const column = table.columns.find(item => item.id === control.dataset.columnId);
+      if (!column) return;
+      column.name = control.value;
+      saveParameterTable(node, table);
+    });
+  });
+  $$("[data-remove-parameter-column]").forEach(button => button.addEventListener("click", () => {
+    snapshot();
+    const columnId = button.dataset.removeParameterColumn;
+    table.columns = table.columns.filter(column => column.id !== columnId);
+    table.rows.forEach(row => delete row.values[columnId]);
+    saveParameterTable(node, table);
+    renderParameterSpreadsheet(node, state.realArtifact, table);
+  }));
+}
+
+function setParameterSheetMode(enabled) {
+  $(".artifact-body").classList.toggle("parameter-sheet-mode", enabled);
+  $("#artifactCompare").hidden = enabled;
+  $("#artifactDownload").hidden = enabled;
+  $("#artifactCopyId").hidden = enabled;
+  $("#artifactUseInPipeline").hidden = enabled;
+  $("#artifactDatasetFile").accept = enabled ? ".h5,.hdf5" : PREVIEW_EXTENSIONS.join(",");
+  const footerCopy = $(".artifact-shell > .modal-foot > span:first-child");
+  if (footerCopy) {
+    footerCopy.textContent = enabled
+      ? "Rows stay locked to the HDF5 sample order; editable column definitions and per-sample values are stored on this Design Parameters block."
+      : "Geometry, topology, samples, and field values are read from the configured repository artifact through the local Studio API.";
+  }
+}
+
+function renderParameterSpreadsheet(node, catalog = null, providedTable = null) {
+  stopViewerPlayback();
+  closeArtifactDatasetPicker();
+  state.artifactNode = node.id;
+  state.artifactSample = null;
+  state.realArtifact = catalog?.samples ? { ...catalog, node, currentSample: null } : null;
+  renderer?.dispose();
+  renderer = null;
+  viewport = null;
+  setParameterSheetMode(true);
+  $("#artifactAddDataset").hidden = false;
+  $("#artifactIcon").textContent = ICONS[BLOCK_SPECS[node.type].icon];
+  $("#artifactIcon").style.color = BLOCK_SPECS[node.type].accent;
+  $("#artifactOverlay").classList.add("open");
+  $("#sampleList").innerHTML = "";
+  $("#sampleInfo").innerHTML = `<div id="parameterSheetInfo"></div>`;
+
+  const table = providedTable || parameterTableFor(node, catalog);
+  const context = parameterContext(node);
+  $("#artifactTitle").textContent = context.paired ? "Design Parameters · MLP paired dataset" : `Design Parameters · ${context.modelLabel} conditions`;
+  $("#artifactSubtitle").textContent = context.paired
+    ? "Each row pairs the inputs and target outputs for the HDF5 sample at the same position"
+    : "Each row maps condition values to the HDF5 sample at the same position";
+  $("#viewerVisual").innerHTML = `<section class="parameter-sheet" aria-label="Design Parameters spreadsheet">
+    <header class="parameter-sheet-head">
+      <span><strong>${context.paired ? "MLP input / output pairs" : `${escapeHtml(context.modelLabel)} per-sample conditions`}</strong><small>${table.dataset_path ? `${table.rows.length} rows locked to HDF5 order` : "Add an HDF5 dataset to lock row order"}</small></span>
+      <span class="parameter-sheet-actions"><button class="button small" data-add-parameter-column="input" type="button">+ Input column</button>${context.paired ? `<button class="button small" data-add-parameter-column="output" type="button">+ Output column</button>` : ""}</span>
+    </header>
+    <div class="parameter-sheet-table-wrap">
+      <table class="parameter-sheet-table" aria-label="Dataset-aligned Design Parameters spreadsheet">
+        <thead><tr><th aria-label="Row number">#</th><th class="parameter-sample-heading">Dataset sample</th>${table.columns.map(column => `<th class="parameter-column-heading" data-column-heading="${escapeHtml(column.id)}"><div><span class="parameter-column-kind ${column.kind}">${column.kind}</span><input class="parameter-column-name" data-column-id="${escapeHtml(column.id)}" value="${escapeHtml(column.name)}" aria-label="Rename ${escapeHtml(column.kind)} column ${escapeHtml(column.name)}" autocomplete="off" spellcheck="false"><button type="button" data-remove-parameter-column="${escapeHtml(column.id)}" aria-label="Remove ${escapeHtml(column.name)} column">×</button></div></th>`).join("")}</tr></thead>
+        <tbody id="parameterSheetRows">${table.rows.map((row, index) => parameterSheetRow(table, row, index)).join("")}</tbody>
+      </table>
+    </div>
+  </section>`;
+  bindParameterSheetCells(node, table);
+  $$('[data-add-parameter-column]').forEach(button => button.addEventListener("click", () => {
+    snapshot();
+    const columnId = addParameterColumn(table.columns, button.dataset.addParameterColumn);
+    saveParameterTable(node, table);
+    renderParameterSpreadsheet(node, state.realArtifact, table);
+    $(`[data-column-heading="${columnId}"] .parameter-column-name`)?.focus();
+  }));
+  refreshParameterSheetInfo(node, table);
+}
 
 /** Build the persistent canvas + HUD once; a WebGL context must not churn. */
 function ensureViewport() {
@@ -461,8 +785,9 @@ function catalogKind(node, spec) {
   return "";
 }
 
-async function loadPreviewCatalog(path) {
-  const catalog = await apiRequest(`/api/preview/samples?path=${encodeURIComponent(path)}`);
+async function loadPreviewCatalog(path, limit = null) {
+  const limitQuery = limit == null ? "" : `&limit=${encodeURIComponent(limit)}`;
+  const catalog = await apiRequest(`/api/preview/samples?path=${encodeURIComponent(path)}${limitQuery}`);
   if (!catalog.samples?.length) throw new Error(`${path} contains no visualizable samples.`);
   return catalog;
 }
@@ -505,7 +830,17 @@ async function loadArtifactPath(path, showToast = true) {
   if (!node) throw new Error("The sample viewer is not attached to a pipeline block.");
   stopViewerPlayback();
   $("#artifactDatasetList").innerHTML = `<div class="live-empty">Reading ${escapeHtml(path)}…</div>`;
-  const catalog = await loadPreviewCatalog(path);
+  const catalog = await loadPreviewCatalog(path, node.type === "source.parameters" ? PARAMETER_CATALOG_LIMIT : null);
+  if (node.type === "source.parameters") {
+    snapshot();
+    const table = parameterTableFor(node, catalog);
+    saveParameterTable(node, table);
+    renderParameterSpreadsheet(node, catalog, table);
+    if (showToast) {
+      toast(`Matched ${table.rows.length} spreadsheet rows to ${catalog.path || path}.`);
+    }
+    return;
+  }
   state.realArtifact = { ...catalog, node, currentSample: null };
   state.artifactSample = null;
   state.viewerMode = catalog.default_mode || "field";
@@ -555,13 +890,16 @@ export async function openArtifactDatasetPicker() {
   $("#artifactDatasetSearch").value = "";
   $("#artifactDatasetList").innerHTML = `<div class="live-empty">Scanning repository datasets and geometry…</div>`;
   try {
+    const node = state.nodes.find(item => item.id === state.artifactNode);
+    const parametersOnly = node?.type === "source.parameters";
     const [datasets, geometry] = await Promise.all([
       apiRequest("/api/files?kind=dataset"),
-      apiRequest("/api/files?kind=geometry")
+      parametersOnly ? Promise.resolve({ items: [] }) : apiRequest("/api/files?kind=geometry")
     ]);
     const unique = new Map();
     [...(datasets.items || []), ...(geometry.items || [])]
       .filter(item => PREVIEW_EXTENSIONS.includes(String(item.extension || "").toLowerCase()))
+      .filter(item => !parametersOnly || HDF5_EXTENSIONS.includes(String(item.extension || "").toLowerCase()))
       .forEach(item => unique.set(item.path, item));
     state.viewerDatasetChoices = [...unique.values()].sort((left, right) =>
       left.path.localeCompare(right.path, undefined, { numeric: true })
@@ -580,6 +918,11 @@ export function closeArtifactDatasetPicker() {
 export async function uploadArtifactDataset(file) {
   if (!file || !state.api.connected) return;
   const lowerName = file.name.toLowerCase();
+  const node = state.nodes.find(item => item.id === state.artifactNode);
+  if (node?.type === "source.parameters" && !HDF5_EXTENSIONS.some(extension => lowerName.endsWith(extension))) {
+    toast("Design Parameters can import its input/output names from an HDF5 dataset.", "warn");
+    return;
+  }
   if (!hasPreviewExtension(lowerName)) {
     toast("Choose an HDF5, CAD, mesh, or VTK file.", "warn");
     return;
@@ -610,13 +953,34 @@ export async function uploadArtifactDataset(file) {
 export async function openArtifact(nodeId) {
   const node = state.nodes.find(item => item.id === nodeId);
   if (!node) return;
+  const spec = BLOCK_SPECS[node.type];
+  if (spec.isModel) {
+    const { openModelDetailWorkspace } = await import("./studio.js");
+    await openModelDetailWorkspace(spec.modelId);
+    return;
+  }
+  if (node.type === "source.parameters") {
+    renderParameterSpreadsheet(node);
+    const datasetPath = parameterContext(node).datasetPath;
+    if (state.api.connected && datasetPath) {
+      try {
+        const catalog = await loadPreviewCatalog(datasetPath, PARAMETER_CATALOG_LIMIT);
+        const table = parameterTableFor(node, catalog);
+        saveParameterTable(node, table);
+        renderParameterSpreadsheet(node, catalog, table);
+      } catch (error) {
+        toast(`Could not match Design Parameters to ${datasetPath}: ${error.message}`, "error");
+      }
+    }
+    return;
+  }
   if (!state.api.connected) {
     toast("Runtime is offline; actual samples cannot be read. Start with START_STUDIO.bat.", "error");
     return;
   }
   stopViewerPlayback();
   closeArtifactDatasetPicker();
-  const spec = BLOCK_SPECS[node.type];
+  setParameterSheetMode(false);
   state.artifactNode = nodeId;
   state.artifactSample = null;
   state.viewerMode = "field";
@@ -624,6 +988,13 @@ export async function openArtifact(nodeId) {
   resetViewerCamera(false);
   $("#artifactIcon").textContent = ICONS[spec.icon];
   $("#artifactIcon").style.color = spec.accent;
+  // A model has exactly one configured dataset_dir/infer_dataset, not a
+  // catalog to browse and add to — showing "+ Add dataset" here let a user
+  // pick a file that never actually got wired to the model.
+  $("#artifactAddDataset").hidden = Boolean(spec.isModel);
+  $("#artifactAddDataset").title = spec.isModel
+    ? "Set this model's dataset_dir/infer_dataset in its configuration instead."
+    : "";
   $("#artifactTitle").textContent = `${spec.label} · repository samples`;
   $("#artifactSubtitle").textContent = "Resolving the configured artifact…";
   $("#artifactOverlay").classList.add("open");
@@ -679,12 +1050,25 @@ export function stopViewerPlayback() {
 
 export function compareCurrentSample() {
   if (!state.realArtifact) {
-    toast("Open a sample before comparing.", "warn");
+    toast("Open an artifact before comparing.", "warn");
     return;
   }
+  const path = String(state.realArtifact.path || "");
+  const lower = path.toLowerCase();
   $("#artifactOverlay").classList.remove("open");
-  toast("Opening Compare — pick the other model/run's output CSV to rank them side by side.");
-  openStudio("comparison");
+  if (lower.endsWith(".csv")) {
+    state.pendingComparisonPaths = [path];
+    toast("Opening Compare with the current CSV retained as run 1.");
+    openStudio("comparison");
+    return;
+  }
+  if (lower.endsWith(".h5") || lower.endsWith(".hdf5")) {
+    state.pendingEvaluationPrediction = path;
+    toast("Opening Evaluation with the current HDF5 retained as the prediction source.");
+    openStudio("evaluation");
+    return;
+  }
+  toast("This artifact type has no numeric comparison contract. Export comparable CSV or HDF5 evidence first.", "warn");
 }
 
 export function downloadCurrentSample() {

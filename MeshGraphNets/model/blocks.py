@@ -1,6 +1,8 @@
+import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.utils import scatter
+from torch_geometric.utils import softmax as pyg_softmax
 from torch_geometric.data import Data
 
 
@@ -132,15 +134,82 @@ class HybridNodeBlock(nn.Module):
         )
 
 
+class AttentionPoolBlock(nn.Module):
+    """Learned restriction (fine -> coarse) via within-cluster attention.
+
+    Subsumes both fixed operators the dataset can produce: with the score head
+    zero-initialized (see MeshGraphNets.__init__), every fine node in a cluster
+    gets an equal score, softmax makes the weights uniform, and the output is
+    exactly `pool_features` (mean pooling) -- see ATTENTION_TRANSFER_DESIGN.md
+    section 4. Training can then depart from that baseline if the gradient
+    says to; it can never start below it.
+
+    Multi-head is the point, not a detail: a single head must pick one
+    representative statistic per cluster (mean-like or peak-like), the same
+    dilemma the fixed operators face. Splitting the latent into H heads lets
+    different heads specialize (see ATTENTION_TRANSFER_DESIGN.md section 1-3).
+    Each head's "value" is its own slice of h_fine (no separate value
+    projection) so that uniform attention reproduces the plain mean exactly,
+    per-slice, with no extra learned identity to get right.
+    """
+
+    def __init__(self, latent_dim: int, num_heads: int, build_mlp_fn):
+        super().__init__()
+        if latent_dim % num_heads != 0:
+            raise ValueError(
+                f"latent_dim ({latent_dim}) must be divisible by num_heads ({num_heads})"
+            )
+        self.num_heads = num_heads
+        self.head_dim = latent_dim // num_heads
+        # score_mlp: (h_i, rel_pos_to_anchor[3], log_scale[1]) -> per-head score.
+        # No LayerNorm on the score head: it would still be exactly zero at
+        # init (LayerNorm of an all-zero vector is zero for default affine
+        # params), but a raw Linear keeps that invariant obviously true rather
+        # than relying on a LayerNorm identity that's easy to break later.
+        self.score_mlp = build_mlp_fn(latent_dim + 4, latent_dim, num_heads, layer_norm=False)
+
+    def forward(self, h_fine, ftc, num_coarse, rel_pos, log_scale):
+        """
+        Args:
+            h_fine:     [N, D] fine node features
+            ftc:        [N] long, cluster id in [0, num_coarse)
+            num_coarse: int M
+            rel_pos:    [N, 3] node position relative to its cluster's anchor
+            log_scale:  [N, 1] log local mesh-size proxy
+        Returns:
+            h_coarse: [M, D] pooled coarse node features
+        """
+        # Score compute forced to fp32: softmax over ~10-100 cluster members
+        # needs more resolution than bf16 autocast gives, and at init the
+        # scores are exactly 0 everywhere -- bf16 rounding must not turn that
+        # into a non-uniform distribution.
+        with torch.autocast(device_type=h_fine.device.type, enabled=False):
+            score_in = torch.cat(
+                [h_fine.float(), rel_pos.float(), log_scale.float()], dim=-1
+            )
+            scores = self.score_mlp(score_in)                       # [N, H]
+        a = pyg_softmax(scores, ftc, num_nodes=num_coarse, dim=0)    # [N, H], fp32
+
+        v = h_fine.view(h_fine.shape[0], self.num_heads, self.head_dim)  # [N, H, Dh]
+        weighted = a.unsqueeze(-1).to(v.dtype) * v                       # [N, H, Dh]
+        pooled = scatter(weighted, ftc, dim=0, dim_size=num_coarse, reduce='sum')
+        return pooled.reshape(num_coarse, self.num_heads * self.head_dim)
+
+
 class UnpoolBlock(nn.Module):
     """Bipartite message passing from coarse to fine nodes (learned unpool)."""
 
-    def __init__(self, latent_dim: int, build_mlp_fn):
+    def __init__(self, latent_dim: int, build_mlp_fn, use_attention: bool = False):
         super().__init__()
         # EdgeMLP: (h_coarse, h_fine_skip, rel_pos) → message
         self.edge_mlp = build_mlp_fn(2 * latent_dim + 3, latent_dim, latent_dim)
         # NodeMLP: (h_fine_skip, aggregated_messages) → h_up
         self.node_mlp = build_mlp_fn(2 * latent_dim, latent_dim, latent_dim)
+        self.use_attention = use_attention
+        if use_attention:
+            # Same (h_coarse, h_fine_skip, rel_pos) inputs as edge_mlp, scores
+            # one weight per incoming source instead of a message.
+            self.attn_mlp = build_mlp_fn(2 * latent_dim + 3, latent_dim, 1, layer_norm=False)
 
     def forward(self, h_coarse, h_fine_skip, unpool_edge_index, rel_pos):
         """
@@ -158,6 +227,7 @@ class UnpoolBlock(nn.Module):
         runs the coarse/fine projections on M and N rows instead of E_up.
         """
         src_coarse, dst_fine = unpool_edge_index
+        num_fine = h_fine_skip.shape[0]
 
         h = _split_first_linear(self.edge_mlp, [
             (h_coarse, src_coarse),
@@ -166,8 +236,24 @@ class UnpoolBlock(nn.Module):
         ])
         messages = _run_mlp_tail(self.edge_mlp, h)
 
-        agg = scatter(messages, dst_fine, dim=0,
-                      dim_size=h_fine_skip.shape[0], reduce='sum')
+        if self.use_attention:
+            # Zero-initialized attn_mlp (see MeshGraphNets.__init__) makes
+            # every source score 0 -> softmax uniform at 1/deg_i -> the
+            # deg_i-scaled sum below equals the current plain sum exactly.
+            with torch.autocast(device_type=h_coarse.device.type, enabled=False):
+                hs = _split_first_linear(self.attn_mlp, [
+                    (h_coarse.float(), src_coarse),
+                    (h_fine_skip.float(), dst_fine),
+                    (rel_pos.float(), None),
+                ])
+                scores = _run_mlp_tail(self.attn_mlp, hs)            # [E_up, 1]
+            a = pyg_softmax(scores, dst_fine, num_nodes=num_fine, dim=0)  # [E_up, 1]
+            deg = scatter(torch.ones_like(scores), dst_fine, dim=0,
+                         dim_size=num_fine, reduce='sum').to(messages.dtype)  # [N, 1]
+            agg = deg * scatter(a.to(messages.dtype) * messages, dst_fine, dim=0,
+                                dim_size=num_fine, reduce='sum')
+        else:
+            agg = scatter(messages, dst_fine, dim=0, dim_size=num_fine, reduce='sum')
 
         h_up = _split_first_linear(self.node_mlp, [(h_fine_skip, None), (agg, None)])
         return _run_mlp_tail(self.node_mlp, h_up)

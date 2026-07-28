@@ -17,12 +17,15 @@ from urllib.parse import parse_qs, unquote, urlparse
 from studio_backend.artifact_preview import artifact_sample, artifact_samples
 from studio_backend.audit import audit_configs, explain_config
 from studio_backend.analysis import (
+    comparison_schema,
     export_artifact,
+    optimization_schema,
     run_field_evaluation,
     run_model_comparison,
     run_optimization,
 )
 from studio_backend.hdf5_preview import hdf5_sample, hdf5_samples, hdf5_summary
+from studio_backend.llm_configure import configure_via_llm, public_settings, save_settings
 from studio_backend.native_jobs import (
     UPLOAD_SUFFIXES,
     create_exe_build_job,
@@ -45,6 +48,7 @@ from studio_backend.paths import (
 from studio_backend.state import STATE, PreflightFailure
 from studio_backend.suite_bridge import config_catalog, documentation_catalog, file_catalog
 from studio_backend.system_info import deployment_status, gpu_inventory
+from studio_backend.training_metrics import training_metrics_catalog
 
 
 class StudioRequestHandler(SimpleHTTPRequestHandler):
@@ -169,7 +173,8 @@ class StudioRequestHandler(SimpleHTTPRequestHandler):
                 )
             elif parsed.path == "/api/preview/samples":
                 path = safe_repo_path(query.get("path", [""])[0], (SUITE_ROOT,))
-                self.send_json(artifact_samples(path))
+                limit = max(1, min(int(query.get("limit", ["100"])[0]), 10000))
+                self.send_json(artifact_samples(path, limit=limit))
             elif parsed.path == "/api/preview/sample":
                 path = safe_repo_path(query.get("path", [""])[0], (SUITE_ROOT,))
                 self.send_json(
@@ -182,8 +187,19 @@ class StudioRequestHandler(SimpleHTTPRequestHandler):
                 )
             elif parsed.path == "/api/jobs":
                 self.send_json({"items": STATE.list_jobs()})
+            elif parsed.path == "/api/training-metrics":
+                self.send_json(
+                    training_metrics_catalog(
+                        STATE,
+                        query.get("job_id", [""])[0],
+                        query.get("node_id", [""])[0],
+                        query.get("model_id", [""])[0],
+                    )
+                )
             elif parsed.path == "/api/deploy":
                 self.send_json(deployment_status())
+            elif parsed.path == "/api/llm/settings":
+                self.send_json(public_settings())
             elif parsed.path.startswith("/api/jobs/"):
                 job_id = parsed.path.rsplit("/", 1)[-1]
                 self.send_json(STATE.get_job(job_id))
@@ -240,6 +256,7 @@ class StudioRequestHandler(SimpleHTTPRequestHandler):
                     list(payload.get("steps") or []),
                     label=str(payload.get("label", "AI-CAE4ALL pipeline")),
                     strict=bool(payload.get("strict", False)),
+                    target_node_id=str(payload.get("target_node_id", "")),
                 )
                 self.send_json(job, HTTPStatus.CREATED)
             elif parsed.path == "/api/inference/run":
@@ -248,10 +265,20 @@ class StudioRequestHandler(SimpleHTTPRequestHandler):
                 self.send_json(create_exe_build_job(), HTTPStatus.CREATED)
             elif parsed.path == "/api/optimization/run":
                 self.send_json(run_optimization(payload), HTTPStatus.CREATED)
+            elif parsed.path == "/api/optimization/schema":
+                self.send_json(optimization_schema(payload))
             elif parsed.path == "/api/evaluation/run":
                 self.send_json(run_field_evaluation(payload), HTTPStatus.CREATED)
             elif parsed.path == "/api/comparison/run":
                 self.send_json(run_model_comparison(payload), HTTPStatus.CREATED)
+            elif parsed.path == "/api/comparison/schema":
+                self.send_json(comparison_schema(payload))
+            elif parsed.path == "/api/llm/configure":
+                self.send_json(
+                    configure_via_llm(str(payload.get("config_text", "")), str(payload.get("instruction", "")))
+                )
+            elif parsed.path == "/api/llm/settings":
+                self.send_json(save_settings(payload))
             elif parsed.path == "/api/export":
                 self.send_json(export_artifact(payload), HTTPStatus.CREATED)
             elif parsed.path == "/api/simulgen/smoke-fixture":

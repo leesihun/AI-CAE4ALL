@@ -203,13 +203,13 @@ export const BLOCK_SPECS = {
     label: "Design Parameters", category: "Sources", icon: "parameters", accent: "#b0713f", visual: "parameters", maturity: "adapter",
     description: "Bind named scalar, vector, profile, CSV, or image conditions to compatible dataset inputs.",
     inputs: [], outputs: [{ id: "parameters", type: "parameters", label: "parameter overlay" }],
-    defaults: { binding: "CSV condition columns", value: "0.50", range_policy: "warn outside training range" }, sampleLabel: "5 parameters"
+    defaults: { binding: "CSV condition columns", value: "0.50", range_policy: "warn outside training range" }, sampleLabel: "HDF5 input / output map"
   },
   "source.checkpoint": {
     label: "Saved ML Model", category: "Sources", icon: "model", accent: "#795991", visual: "checkpoint", maturity: "native",
     description: "Load a .pth checkpoint or compatible multi-stage model bundle with lineage.",
     inputs: [], outputs: [{ id: "model", type: "checkpoint", label: "saved model" }],
-    defaults: { path: "output/model.pth", version: "best", compatibility: "auto-detect" }, sampleLabel: "1 model bundle"
+    defaults: { path: "output/model.pth", version: "best", compatibility: "auto-detect" }, sampleLabel: "Select checkpoint", workspace: "deploy"
   },
   "prep.geometry": {
     label: "Geometry → HDF5 Dataset", category: "Preparation", icon: "prepare", accent: "#29745f", visual: "dataset", maturity: "native",
@@ -221,7 +221,7 @@ export const BLOCK_SPECS = {
       num_fields: "3", num_points: "4096", resample_method: "fps", seed: "42",
       output_dataset: "../../frontend/runtime/geometry-ingest/geometry.h5", limit: "0"
     },
-    sampleLabel: "Geometry ingest results"
+    sampleLabel: "Geometry ingest results", executable: true
   },
   "run.inference": {
     label: "Inference Run", category: "Execution", icon: "run", accent: "#b76b2a", visual: "field", maturity: "native",
@@ -232,14 +232,14 @@ export const BLOCK_SPECS = {
       { id: "parameters", type: "parameters", label: "parameters", required: false }
     ],
     outputs: [{ id: "prediction", type: "field", label: "predictions" }, { id: "metrics", type: "metrics", label: "run statistics" }],
-    defaults: { mode: "auto from saved model", batch_size: "16", viewer: "field + samples + distributions" }, sampleLabel: "20 reconstructions"
+    defaults: { mode: "auto from saved model", batch_size: "16", viewer: "field + samples + distributions" }, sampleLabel: "20 reconstructions", executable: true
   },
   "run.cad_generator": {
     label: "CAD Generator", category: "Execution", icon: "run", accent: "#817336", visual: "candidates", maturity: "native",
     description: "Conditionally generate, reconstruct, or blend CAD candidates with SDFFlow.",
     inputs: [{ id: "parameters", type: "parameters", label: "design parameters" }, { id: "model", type: "checkpoint", label: "SDFFlow model", required: true }],
     outputs: [{ id: "candidates", type: "candidates", label: "CAD candidates" }],
-    defaults: { mode: "conditional generation", candidates: "24", guidance: "2.5", geometry_checks: "connected + watertight + bounds" }, sampleLabel: "24 CAD candidates"
+    defaults: { mode: "conditional generation", candidates: "24", guidance: "2.5", geometry_checks: "connected + watertight + bounds" }, sampleLabel: "24 CAD candidates", executable: true
   },
   "optimize.design": {
     label: "Optimization", category: "Optimization", icon: "optimize", accent: "#8a613b", visual: "candidates", maturity: "adapter",
@@ -250,35 +250,43 @@ export const BLOCK_SPECS = {
       { id: "parameters", type: "parameters", label: "search variables", required: false }
     ],
     outputs: [{ id: "selected", type: "candidates", label: "Pareto designs" }, { id: "metrics", type: "metrics", label: "objective table" }, { id: "report", type: "report", label: "optimization report" }],
-    defaults: { mode: "evaluate fixed candidate batch", objectives: "min peak stress; min mass", constraints: "watertight; displacement ≤ limit", selection: "feasible Pareto + diverse top-k", top_k: "6" }, sampleLabel: "6 Pareto candidates"
+    defaults: { mode: "evaluate CSV candidate batch", csv_path: "", objectives: "", directions: "", constraints: "", selection: "feasible Pareto + diverse top-k", top_k: "6" }, sampleLabel: "No report yet", workspace: "optimization"
   },
   "evaluate.predictions": {
     label: "Evaluate Predictions", category: "Evaluation", icon: "evaluate", accent: "#1f7c66", visual: "training", maturity: "adapter",
     description: "Compute compatible scalar and field metrics, distributions, and synchronized error views.",
     inputs: [{ id: "prediction", type: "field", label: "predictions", required: true }, { id: "truth", type: "dataset", label: "ground truth", required: true }],
     outputs: [{ id: "metrics", type: "metrics", label: "metrics" }, { id: "report", type: "report", label: "evaluation report" }],
-    defaults: { metrics: "relative L2, MAE, RMSE", aggregate: "mean + median + p95", error_view: "absolute + relative" }, sampleLabel: "100 sample metrics"
+    defaults: { metrics: "relative L2, MAE, RMSE", aggregate: "mean + median + p95", error_view: "absolute + relative" }, sampleLabel: "100 sample metrics", workspace: "evaluation"
+  },
+  "evaluate.training_metrics": {
+    label: "Train Metrics", category: "Evaluation", icon: "evaluate", accent: "#167864", visual: "training", maturity: "native",
+    description: "Plot every metric discovered in a connected model run, with per-metric include and exclude controls.",
+    inputs: [{ id: "metrics", type: "metrics", label: "training metrics", required: true }],
+    outputs: [{ id: "metrics", type: "metrics", label: "selected metrics" }, { id: "report", type: "report", label: "metric plots" }],
+    defaults: { job_id: "", excluded_metrics: "", smoothing: "0" }, sampleLabel: "all discovered metrics",
+    isMetricsViewer: true
   },
   "evaluate.compare": {
-    label: "Compare Models", category: "Evaluation", icon: "evaluate", accent: "#5e6f90", visual: "training", maturity: "adapter",
-    description: "Compare accuracy, latency, throughput, VRAM, size, uncertainty, and synchronized samples.",
-    inputs: [{ id: "metrics", type: "metrics", label: "model runs", required: true }],
+    label: "Compare Models", category: "Evaluation", icon: "evaluate", accent: "#5e6f90", visual: "training", maturity: "native",
+    description: "Compare multiple graph-connected training runs or qualified evaluation CSVs without losing run lineage.",
+    inputs: [{ id: "metrics", type: "metrics", label: "model runs", required: true, multiple: true }],
     outputs: [{ id: "report", type: "report", label: "comparison" }],
-    defaults: { x: "relative L2", y: "throughput", qualification: "same held-out set" }, sampleLabel: "10 compared models"
+    defaults: { metric: "", direction: "min", qualification: "same held-out set" }, sampleLabel: "10 compared models", workspace: "comparison"
   },
   "output.export": {
     label: "Export Results", category: "Outputs", icon: "output", accent: "#596560", visual: "export", maturity: "adapter",
     description: "Export selected datasets, fields, CAD, metrics, reports, or model files with provenance.",
     inputs: [{ id: "input", type: "artifact", label: "artifact", required: true }],
     outputs: [{ id: "files", type: "artifact", label: "files" }],
-    defaults: { format: "auto: HDF5 / VTK / STL / CSV / JSON / HTML", path: "output/studio/run_001" }, sampleLabel: "13 files"
+    defaults: { format: "auto: HDF5 / VTK / STL / CSV / JSON / HTML", path: "output/studio/run_001" }, sampleLabel: "13 files", workspace: "export"
   },
   "deploy.api": {
     label: "API Deployment", category: "Deployment", icon: "output", accent: "#4d6874", visual: "export", maturity: "adapter",
     description: "Run the validated portable inference API or build the Windows inference executable.",
-    inputs: [{ id: "model", type: "checkpoint", label: "saved model", required: true }],
+    inputs: [{ id: "model", type: "checkpoint", label: "saved model", required: true }, { id: "data", type: "dataset", label: "sample data", required: false }],
     outputs: [{ id: "endpoint", type: "endpoint", label: "endpoint" }],
-    defaults: { target: "local / server", device: "CPU / GPU", auth: "token", openapi: "enabled" }, sampleLabel: "3 revisions"
+    defaults: { target: "local / server", device: "CPU / GPU", auth: "token", openapi: "enabled" }, sampleLabel: "3 revisions", workspace: "deploy"
   }
 };
 
@@ -299,7 +307,7 @@ Object.entries(MODEL_CATALOG).forEach(([modelId, model]) => {
     outputs: [{ id: "model", type: "checkpoint", label: modelId === "simulgenvae" ? "VAE + LC bundle" : "saved model" }, { id: "metrics", type: "metrics", label: "training metrics" }],
     defaults: { ...model.defaults },
     sampleLabel: modelId === "simulgenvae" ? "VAE stage 2 / 2" : "epoch 342 / 500",
-    modelId,
+    modelId, executable: true,
     isModel: true
   };
 });
@@ -311,6 +319,7 @@ export const TEMPLATES = {
       ["dataset", "source.hdf5", 35, 70, { path: "dataset/ex1.h5", compatibility: "fixed N and T required" }],
       ["conditions", "source.parameters", 35, 355, { binding: "dataset/ex1_conditions.csv" }],
       ["simulgen", "model.simulgenvae", 360, 145],
+      ["train_metrics", "evaluate.training_metrics", 705, 430],
       ["inference", "run.inference", 705, 145, { mode: "SimulGen-VAE reconstruct" }],
       ["evaluation", "evaluate.predictions", 1050, 145],
       ["export", "output.export", 1395, 145]
@@ -318,6 +327,7 @@ export const TEMPLATES = {
     edges: [
       ["dataset", "data", "simulgen", "data"],
       ["conditions", "parameters", "simulgen", "parameters"],
+      ["simulgen", "metrics", "train_metrics", "metrics"],
       ["dataset", "data", "inference", "data"],
       ["simulgen", "model", "inference", "model"],
       ["conditions", "parameters", "inference", "parameters"],
@@ -343,12 +353,14 @@ export const TEMPLATES = {
     nodes: [
       ["dataset", "source.hdf5", 35, 125],
       ["trainer", "model.meshgraphnets", 330, 70],
+      ["train_metrics", "evaluate.training_metrics", 625, 390],
       ["inference", "run.inference", 625, 70],
       ["evaluation", "evaluate.predictions", 920, 70],
       ["export", "output.export", 1215, 70]
     ],
     edges: [
       ["dataset", "data", "trainer", "data"],
+      ["trainer", "metrics", "train_metrics", "metrics"],
       ["dataset", "data", "inference", "data"],
       ["trainer", "model", "inference", "model"],
       ["inference", "prediction", "evaluation", "prediction"],
@@ -362,6 +374,7 @@ export const TEMPLATES = {
       ["parameters", "source.parameters", 35, 295],
       ["dataset", "source.hdf5", 35, 55, { path: "dataset/mlp/train.h5" }],
       ["mlp", "model.mlp", 330, 115],
+      ["train_metrics", "evaluate.training_metrics", 625, 430],
       ["inference", "run.inference", 625, 115],
       ["evaluation", "evaluate.predictions", 920, 115],
       ["export", "output.export", 1215, 115]
@@ -370,6 +383,7 @@ export const TEMPLATES = {
       ["parameters", "parameters", "dataset", "parameters"],
       ["dataset", "data", "mlp", "data"],
       ["parameters", "parameters", "mlp", "parameters"],
+      ["mlp", "metrics", "train_metrics", "metrics"],
       ["dataset", "data", "inference", "data"],
       ["mlp", "model", "inference", "model"],
       ["parameters", "parameters", "inference", "parameters"],
@@ -383,6 +397,7 @@ export const TEMPLATES = {
     nodes: [
       ["parameters", "source.parameters", 35, 300],
       ["generator_model", "model.sdfflow", 35, 55],
+      ["train_metrics", "evaluate.training_metrics", 330, 540],
       ["generator", "run.cad_generator", 330, 125],
       ["physics_model", "source.checkpoint", 330, 390, { path: "checkpoints/physics_surrogate.pth" }],
       ["optimization", "optimize.design", 625, 125],
@@ -390,6 +405,7 @@ export const TEMPLATES = {
     ],
     edges: [
       ["parameters", "parameters", "generator", "parameters"],
+      ["generator_model", "metrics", "train_metrics", "metrics"],
       ["generator_model", "model", "generator", "model"],
       ["generator", "candidates", "optimization", "candidates"],
       ["physics_model", "model", "optimization", "models"],
@@ -419,12 +435,12 @@ export const STUDIO_SECTIONS = {
     title: "Experiment workspace", description: "Training is durable work. Track sessions, GPU resources, checkpoints, stage reuse, comparisons, and restartable lineage.",
     stats: [["2", "active sessions"], ["44", "checkpoints"]],
     cards: [
-      ["Training sessions", "evaluate", "native", "Live loss, throughput, GPU memory, checkpoints, logs, stop, resume, and block ownership.", ["durable jobs", "resume", "logs"]],
+      ["Train Metrics", "evaluate", "native", "Plot every metric discovered in actual model-run logs, then include or exclude individual series.", ["all by default", "per-metric toggle", "actual logs"], "evaluate.training_metrics"],
       ["SimulGen staged training", "model", "native", "Train the merged VAE → latent-conditioner pipeline or execute either stage independently.", ["train", "train_vae", "train_lc"], "model.simulgenvae"],
       ["Stage compatibility", "model", "native", "Reuse completed VAE/LC checkpoints only when stage metadata and configuration remain compatible.", ["skip completed", "VAE", "LC"], "model.simulgenvae"],
       ["Hyperparameter sweeps", "parameters", "adapter", "Schedule child configurations and compare validation, resource, and reconstruction metrics.", ["grid", "random", "parent/child"]],
       ["Resource and VRAM", "system", "adapter", "Measure real peak allocated memory, throughput, batch feasibility, and multi-GPU behavior.", ["peak allocated", "DDP", "FSDP"]],
-      ["Cross-model comparison", "evaluate", "adapter", "Compare accuracy, latency, VRAM, parameter count, uncertainty, and sample views.", ["same test set", "qualification", "evidence"], "evaluate.compare"]
+      ["Cross-model comparison", "evaluate", "native", "Compare graph-connected run histories, then use qualified held-out outputs for cross-family ranking.", ["multiple runs", "same test set", "lineage"], "evaluate.compare"]
     ]
   },
   optimization: {
@@ -452,8 +468,8 @@ export const STUDIO_SECTIONS = {
   },
   comparison: {
     label: "Compare", icon: "evaluate", color: "#5e6f90", note: "Rank actual model results",
-    title: "Cross-model comparison", description: "Rank actual benchmark or evaluation CSV rows by a chosen numeric metric while preserving the source row and evidence path.",
-    stats: [["2", "directions"], ["200", "ranked rows"]],
+    title: "Cross-model comparison", description: "Resolve graph-connected run histories by persisted node lineage, and separately rank qualified benchmark or evaluation CSV rows.",
+    stats: [["12", "connected runs"], ["200", "ranked rows"]],
     cards: [
       ["Qualified metric ranking", "evaluate", "native", "Choose the model column, metric column, and min/max direction from an actual output CSV.", ["CSV", "rank", "source row"], "evaluate.compare"],
       ["Benchmark handoff", "evaluate", "native", "Use checked comparison.csv artifacts from benchmark campaigns without copying values into the UI.", ["benchmark", "evidence", "JSON"], "evaluate.compare"]

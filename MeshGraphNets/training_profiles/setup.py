@@ -173,6 +173,10 @@ def build_model_config(config) -> dict:
         'mp_per_level':      config.get('mp_per_level', None),
         'coarsening_type':   config.get('coarsening_type', 'bfs'),
         'voronoi_clusters':  config.get('voronoi_clusters', None),
+        'voronoi_branches':  config.get('voronoi_branches', None),
+        'pool_type':         config.get('pool_type', 'mean'),
+        'pool_heads':        config.get('pool_heads', 4),
+        'unpool_type':       config.get('unpool_type', 'sum'),
     }
 
 

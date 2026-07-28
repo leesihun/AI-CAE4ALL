@@ -48,8 +48,13 @@ Useful review URLs:
 ## Included
 
 - Draggable, linkable, typed pipeline blocks
+- Versioned browser persistence with debounced autosave, explicit Save,
+  validated JSON Import/Export, reload restoration, and persistent viewport,
+  block-config, report, and run-lineage state
 - Click-in-either-order and drag-to-link ports, compatible-port highlighting,
   larger connection targets, mouse-wheel cursor-centered zoom, and graph fit
+- Selectable/deletable connections plus keyboard-operable per-block
+  Open/Duplicate/Delete menus
 - Pipeline-first editor layout with a collapsible inspector, dependency-level
   auto layout, background drag-to-pan, typed connection colors, and subdued
   long-range data/parameter buses
@@ -57,15 +62,31 @@ Useful review URLs:
   every wire terminates at the exact visual socket center
 - Explicit CAD, HDF5, parameter, and saved-model inputs with repository
   browsing or local-file upload directly from each source block
+- Graph-aware automatic configuration with visible provenance: connected HDF5
+  paths populate `dataset_dir` or `infer_dataset`, Design Parameters populate
+  MLP `input_var`/`output_var` and SimulGen/SDFFlow condition settings,
+  checkpoints populate family-appropriate model paths, and downstream run,
+  evaluation, optimization, export, geometry-ingest, and deployment blocks
+  inherit the concrete artifacts connected to them
+- Auto-filled values follow source-path, mode, connection, import, and reload
+  changes. Editing one creates a persistent manual override; clearing it resumes
+  graph following, and disconnecting removes only values still owned by the
+  removed connection
 - All eleven live AI-CAE4ALL routes, including the geometry-ingest tool
 - SimulGen-VAE as a first-class block with `train`, `train_vae`, `train_lc`,
   and `reconstruct` modes
 - All 67 live SimulGen-VAE configuration keys, mode-specific required fields,
   obvious presets, manual values, and synchronized flat `.txt` input/output
+- Case-insensitive config keys and closed values, matching the authoritative
+  suite parser (`MODEL`, `Model`, and `model` resolve to one canonical key),
+  while free-form values such as filesystem paths retain their original case
 - Authoritative suite preflight with real diagnostic codes, paths, environment,
   dataset, checkpoint, and native-probe results
 - Actual `AI_CAE4ALL_main.py` execution with sequential pipeline steps, captured
-  logs, status polling, exit codes, and process-tree cancellation
+  logs, status polling, exit codes, process-tree cancellation, and exact
+  pipeline-node lineage (`target_node_id`, per-step `node_id` and `node_type`)
+- Runtime polling updates the process log without reopening a drawer the user
+  minimized; only a newly launched job or an explicit **Open log** reveals it
 - Dependency-ordered graph execution, including the native
   `geometry_ingest` route for the Geometry → HDF5 block
 - A repository-wide **Config audit** in the System workspace: runs the same
@@ -77,6 +98,9 @@ Useful review URLs:
   breakdown as `--explain-config`, without leaving the browser
 - Repository-backed Models, Data, Experiments, Benchmarks, Artifacts, System,
   and Docs workspaces
+- Data and Artifacts rows can create a correctly typed pipeline source bound to
+  the selected repository path; benchmark configs expose real preflight rather
+  than claiming execution from file presence
 - One configured-artifact viewer for CAD/mesh files and every supported HDF5
   contract, drawn through an opaque, depth-buffered WebGL viewport (Canvas 2D
   fallback). It renders real triangle faces, complete `mesh_edge` topology,
@@ -98,8 +122,14 @@ Useful review URLs:
   **Use in pipeline** writes them onto the source block and every block
   downstream of it (`feature_names`, `condition_names`) for parametric work.
 - Real HDF5 field evaluation (relative L2, MAE, RMSE, maximum error, and R²),
-  real CSV cross-model ranking, Pareto/crowding optimization, and downloadable
-  file or ZIP exports
+  graph-connected multi-run training-metric overlays, real CSV cross-model
+  ranking, Pareto/crowding optimization, and downloadable file or ZIP exports
+- Schema-driven optimization objective selection: the server inspects finite
+  CSV values, excludes identifier/metadata columns from objective suggestions,
+  and requires an explicit per-objective minimize/maximize choice
+- A **Train Metrics** block that discovers every scalar in persisted training
+  logs, plots all series by default, supports per-series exclusion and
+  visual-only smoothing, and downloads the selected raw observations as CSV
 - Portable CPU inference through `POST /api/inference/run`, persistent job
   logs, cancellation, and the existing or newly built Windows executable
 - Visible maturity labels (`native`, `adapter`, or `roadmap`) so future
@@ -117,8 +147,13 @@ The browser uses the following real local endpoints:
 - `POST /api/preflight`, `/api/config/explain`, `/api/config/save`, `/api/pipeline/run`
 - `POST /api/upload?kind=dataset|geometry|checkpoint`
 - `GET /api/jobs`, `/api/jobs/{id}` and `POST /api/jobs/{id}/cancel`
+- `GET /api/training-metrics` with optional `job_id`, `node_id`, or `model_id`
+  filters and persisted node/run lineage
 - `POST /api/inference/run`, `/api/build/exe`
-- `POST /api/evaluation/run`, `/api/comparison/run`, `/api/optimization/run`
+- `POST /api/evaluation/run`, `/api/comparison/schema`, `/api/comparison/run`,
+  `/api/optimization/schema`, `/api/optimization/run` — schema inspection
+  exposes actual finite numeric columns before ranking or Pareto selection, so
+  the UI does not guess CSV field names
 - `POST /api/export`, `/api/simulgen/smoke-fixture`
 
 This is a localhost development API, not a multi-user production deployment.
@@ -134,6 +169,8 @@ or launched but are not rewritten by the Studio.
 
 The implementation and verification roadmap is recorded in
 `IMPLEMENTATION_PLAN.md`.
+The research-backed workflow findings and requirement-by-requirement repair
+record are in `WORKFLOW_AUDIT.md`.
 
 The PNG files in this folder are reproducible visual-review captures of the
 SimulGen pipeline, full configuration workspace, and optimization pipeline.

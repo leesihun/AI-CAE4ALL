@@ -169,11 +169,18 @@ def bfs_bistride_coarsen(edge_index_np: np.ndarray, num_nodes: int):
 # FPS-Voronoi Coarsening
 # ---------------------------------------------------------------------------
 
-def _fps_euclidean(pos: np.ndarray, k: int) -> list:
+def _fps_euclidean(pos: np.ndarray, k: int, start: int = 0) -> list:
     """
     Farthest Point Sampling using Euclidean distance.  O(N·k) with numpy.
 
     Greedily selects k points that are maximally spread apart.
+
+    Args:
+        start: fine-node index to seed the greedy search from. Default 0 is
+               today's behavior. Multi-partition coarsening (voronoi_branches
+               in build_multiscale_hierarchy) varies this per branch so each
+               partition covers the mesh from a different starting point --
+               the source of the branches' complementary coverage.
     """
     N = pos.shape[0]
     if k >= N:
@@ -183,7 +190,7 @@ def _fps_euclidean(pos: np.ndarray, k: int) -> list:
     seeds = np.empty(k, dtype=np.intp)
     # Deterministic start: per-worker FPS must produce identical topology for
     # the same sample, otherwise val loss oscillates with worker assignment.
-    seeds[0] = 0
+    seeds[0] = start
 
     min_sq_dists = np.full(N, np.inf, dtype=np.float64)
 
@@ -210,13 +217,14 @@ def _bfs_distances(adj: csr_matrix, start: int, num_nodes: int) -> np.ndarray:
     return dists
 
 
-def _fps_geodesic(adj: csr_matrix, num_nodes: int, k: int) -> list:
+def _fps_geodesic(adj: csr_matrix, num_nodes: int, k: int, start: int = 0) -> list:
     """FPS using geodesic (hop) distance.  O(N·k) — slower fallback."""
     if k >= num_nodes:
         return list(range(num_nodes))
 
-    # Deterministic start: see _fps_euclidean for rationale.
-    seeds = [0]
+    # Deterministic start: see _fps_euclidean for rationale and the meaning
+    # of `start` (branch diversity).
+    seeds = [start]
     min_dists = _bfs_distances(adj, seeds[0], num_nodes)
     min_dists[seeds[0]] = -1
 
@@ -236,6 +244,7 @@ def fps_voronoi_coarsen(
     num_nodes: int,
     num_clusters: int,
     ref_pos: Optional[np.ndarray] = None,
+    seed_start: int = 0,
 ):
     """
     FPS-Voronoi coarsening: Farthest Point Sampling + Voronoi partition.
@@ -253,6 +262,9 @@ def fps_voronoi_coarsen(
         ref_pos:       [N, 3] float array — reference positions (optional).
                        If provided, Euclidean FPS is used (fast).
                        Otherwise, geodesic BFS FPS (slower).
+        seed_start:    fine-node index to start FPS from (default 0, today's
+                       behavior). See `_fps_euclidean` -- this is the knob
+                       multi-partition coarsening varies per branch.
 
     Returns:
         fine_to_coarse:    [N] int32 numpy array.
@@ -275,9 +287,9 @@ def fps_voronoi_coarsen(
 
     # --- Select seeds via FPS ---
     if ref_pos is not None:
-        seeds = _fps_euclidean(ref_pos, k)
+        seeds = _fps_euclidean(ref_pos, k, start=seed_start)
     else:
-        seeds = _fps_geodesic(adj, num_nodes, k)
+        seeds = _fps_geodesic(adj, num_nodes, k, start=seed_start)
 
     # --- Ensure every connected component has at least one seed ---
     n_comp, comp_labels = connected_components(adj, directed=False)
@@ -343,6 +355,7 @@ def coarsen_graph(
     method: str = 'bfs',
     num_clusters: Optional[int] = None,
     ref_pos: Optional[np.ndarray] = None,
+    seed_start: int = 0,
 ):
     """
     Dispatch to the appropriate coarsening method.
@@ -358,6 +371,9 @@ def coarsen_graph(
                        mean vs gather pool semantics).
         num_clusters:  Required for voronoi modes — number of coarse nodes.
         ref_pos:       [N, 3] positions — used by voronoi for Euclidean FPS.
+        seed_start:    FPS start node (voronoi modes only); see
+                       `fps_voronoi_coarsen`. Ignored by 'bfs', which has no
+                       seed-choice axis to vary.
 
     Returns:
         (fine_to_coarse [N], coarse_edge_index [2, E_c], num_coarse int, seeds [M])
@@ -368,7 +384,8 @@ def coarsen_graph(
     elif method in ('voronoi_centroid', 'voronoi_inherit', 'voronoi_seedmean'):
         if num_clusters is None:
             raise ValueError(f"num_clusters is required for '{method}' coarsening")
-        return fps_voronoi_coarsen(edge_index_np, num_nodes, num_clusters, ref_pos)
+        return fps_voronoi_coarsen(edge_index_np, num_nodes, num_clusters, ref_pos,
+                                   seed_start=seed_start)
     else:
         raise ValueError(
             f"Unknown coarsening method: '{method}'. "
@@ -485,11 +502,14 @@ def build_unpool_edges(
 # Custom Data class for proper PyG batching of multiscale attributes
 # ---------------------------------------------------------------------------
 
-# Regex to extract level index from attribute names like "fine_to_coarse_0"
+# Regex to extract level (and optional branch) index from attribute names
+# like "fine_to_coarse_0" (unbranched) or "fine_to_coarse_1_2" (level 1,
+# branch 2 -- multi-partition coarsening, only ever on the deepest level).
 _LEVEL_RE = re.compile(
     r'^(fine_to_coarse|coarse_world_edge_index|coarse_world_edge_attr'
     r'|coarse_edge_index|coarse_edge_attr|coarse_centroid'
-    r'|coarse_seed_idx|coarse_anchor_idx|unpool_edge_index|num_coarse)_(\d+)$'
+    r'|coarse_seed_idx|coarse_anchor_idx|unpool_edge_index|num_coarse)'
+    r'_(\d+)(?:_(\d+))?$'
 )
 
 
@@ -535,17 +555,31 @@ class MultiscaleData(Data):
     - coarse_seed_idx_{i} values are offset by cumulative fine-node counts
       (level 0 → num_nodes; level i>0 → num_coarse_{i-1})
     - num_coarse_{i} values are concatenated → [B] tensor
+
+    Multi-partition coarsening (ATTENTION_TRANSFER_DESIGN.md Part II) adds a
+    branch suffix to every attribute at the branched level: fine_to_coarse_{i}_{b},
+    num_coarse_{i}_{b}, etc., for branch b = 0 .. K-1. Only the deepest
+    configured level ever branches (general_modules/multiscale_helpers.py
+    enforces this), so the *fine*-side offset for those attributes is always
+    the unbranched level below -- only the *coarse* side needs the
+    branch-suffixed count.
     """
 
     def __inc__(self, key: str, value, *args, **kwargs):
         m = _LEVEL_RE.match(key)
         if m:
-            prefix, level = m.group(1), m.group(2)
+            prefix, level, branch = m.group(1), m.group(2), m.group(3)
+            # Branched attrs live in THIS branch's own coarse node space, so
+            # the coarse-side offset must use the branch-suffixed count. The
+            # fine side is always the (unbranched) level below -- only the
+            # deepest configured level ever branches, so `level - 1` is never
+            # itself branch-suffixed.
+            suffix = level if branch is None else f'{level}_{branch}'
             if prefix in ('fine_to_coarse', 'coarse_edge_index', 'coarse_world_edge_index'):
-                return int(self[f'num_coarse_{level}'])
+                return int(self[f'num_coarse_{suffix}'])
             if prefix == 'unpool_edge_index':
                 # Row 0 = coarse src (offset by num_coarse), Row 1 = fine dst (offset by fine node count)
-                coarse_inc = int(self[f'num_coarse_{level}'])
+                coarse_inc = int(self[f'num_coarse_{suffix}'])
                 fine_inc = self.num_nodes if int(level) == 0 else int(self[f'num_coarse_{int(level) - 1}'])
                 return torch.tensor([[coarse_inc], [fine_inc]])
             if prefix in ('coarse_seed_idx', 'coarse_anchor_idx'):

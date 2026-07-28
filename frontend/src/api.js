@@ -26,23 +26,29 @@ export function requireRuntime() {
   return false;
 }
 
-export async function refreshNavCounts() {
+export async function refreshNavCounts(prefetched = null) {
   try {
-    const jobs = await apiRequest("/api/jobs");
+    const jobs = prefetched || await apiRequest("/api/jobs");
     const active = jobs.items.filter(job => ["queued", "running"].includes(job.status)).length;
     const navCount = $(".nav-count");
-    if (navCount) navCount.textContent = String(active || jobs.items.length);
+    if (navCount) {
+      navCount.textContent = String(jobs.items.length);
+      navCount.title = active ? `${active} active · ${jobs.items.length} total` : `${jobs.items.length} total runs`;
+    }
+    return jobs;
   } catch {
     // Nav badge is a convenience; a failed refresh should not surface an error toast.
+    return null;
   }
 }
 
 export async function connectRuntime(onConnected) {
   const badge = $(".route-health");
   try {
-    const [health, models] = await Promise.all([
+    const [health, models, jobs] = await Promise.all([
       apiRequest("/api/health"),
-      apiRequest("/api/models")
+      apiRequest("/api/models"),
+      apiRequest("/api/jobs")
     ]);
     state.api.connected = Boolean(health.ok);
     state.api.health = health;
@@ -60,8 +66,13 @@ export async function connectRuntime(onConnected) {
     badge.innerHTML = `<i></i> ${healthy}/${state.api.models.length} routes live`;
     badge.title = `Connected to ${health.python} · ${health.gpus?.length || 0} GPU(s)`;
     $(".coverage-pill").textContent = `${state.api.models.length} live routes · ${state.api.models.reduce((sum, model) => sum + model.modes.length, 0)} route modes`;
-    refreshNavCounts();
+    refreshNavCounts(jobs);
     onConnected?.();
+    const activeJob = jobs.items.find(job => ["queued", "running"].includes(job.status));
+    if (activeJob) {
+      const { beginCommandJob } = await import("./run.js");
+      beginCommandJob(activeJob);
+    }
     return true;
   } catch (error) {
     state.api.connected = false;
@@ -72,4 +83,3 @@ export async function connectRuntime(onConnected) {
     return false;
   }
 }
-

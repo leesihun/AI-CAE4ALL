@@ -24,6 +24,11 @@ Layout (HDF5)
     root[str(sid)]
         .attrs['num_levels']      int  — actual hierarchy depth (<= multiscale_levels)
         ['x_pos']                 f32  [N, P]  (only if positional_features > 0)
+        .attrs['L{l}_num_branches'] int  — 1 for a normal level, K for a
+                                            multi-partition level (Part II);
+                                            the datasets/attrs below are then
+                                            keyed 'L{l}B{b}_...' for
+                                            b = 0 .. K-1 instead of 'L{l}_...'
         ['L{l}_ftc']              int  [N_l]
         ['L{l}_c_ei']             int64 [2, E_l]
         ['L{l}_seeds']            int64 [n_c]      (only if entry has seeds)
@@ -44,7 +49,7 @@ import numpy as np
 
 from general_modules.multiscale_helpers import build_multiscale_hierarchy
 
-FORMAT_VERSION = 1
+FORMAT_VERSION = 2  # bumped for multi-partition branch support (ATTENTION_TRANSFER_DESIGN.md Part II)
 
 # Lock files older than this (seconds) are treated as stale (builder crashed).
 _STALE_LOCK_SECONDS = 6 * 3600
@@ -76,10 +81,21 @@ def _coarse_params(config: dict) -> dict:
     if len(clusters) == 1 and levels > 1:
         clusters = clusters * levels
 
+    raw_vb = config.get('voronoi_branches', None)
+    if raw_vb is None:
+        branches = [1] * levels
+    elif isinstance(raw_vb, list):
+        branches = [int(v) for v in raw_vb]
+    else:
+        branches = [int(raw_vb)]
+    if len(branches) == 1 and levels > 1:
+        branches = branches * levels
+
     return {
         'levels': levels,
         'types': types,
         'clusters': clusters,
+        'branches': branches,
     }
 
 
@@ -121,24 +137,47 @@ def cache_path_for(h5_file: str, config: dict, signature: dict) -> str:
 # HDF5 read/write of a single hierarchy entry
 # ---------------------------------------------------------------------------
 
+def _write_one_branch(g: h5py.Group, prefix: str, entry) -> None:
+    g.create_dataset(f'{prefix}_ftc', data=np.asarray(entry['ftc']))
+    g.create_dataset(f'{prefix}_c_ei', data=np.asarray(entry['c_ei'], dtype=np.int64))
+    g.attrs[f'{prefix}_n_c'] = int(entry['n_c'])
+    g.attrs[f'{prefix}_mode'] = str(entry.get('mode', 'centroid'))
+    seeds = entry.get('seeds')
+    g.attrs[f'{prefix}_has_seeds'] = seeds is not None
+    if seeds is not None:
+        g.create_dataset(f'{prefix}_seeds', data=np.asarray(seeds, dtype=np.int64))
+    has_up = 'up_ei' in entry
+    g.attrs[f'{prefix}_has_up'] = has_up
+    if has_up:
+        g.create_dataset(f'{prefix}_up_ei', data=np.asarray(entry['up_ei'], dtype=np.int64))
+
+
+def _read_one_branch(g: h5py.Group, prefix: str):
+    entry = {
+        'ftc': g[f'{prefix}_ftc'][:],
+        'c_ei': g[f'{prefix}_c_ei'][:],
+        'n_c': int(g.attrs[f'{prefix}_n_c']),
+        'mode': str(g.attrs[f'{prefix}_mode']),
+    }
+    entry['seeds'] = g[f'{prefix}_seeds'][:] if g.attrs.get(f'{prefix}_has_seeds', False) else None
+    if g.attrs.get(f'{prefix}_has_up', False):
+        entry['up_ei'] = g[f'{prefix}_up_ei'][:]
+    return entry
+
+
 def _write_entry(root: h5py.Group, sid: int, hierarchy, x_pos) -> None:
     g = root.create_group(str(sid))
     g.attrs['num_levels'] = len(hierarchy)
     if x_pos is not None:
         g.create_dataset('x_pos', data=np.asarray(x_pos, dtype=np.float32))
     for l, entry in enumerate(hierarchy):
-        g.create_dataset(f'L{l}_ftc', data=np.asarray(entry['ftc']))
-        g.create_dataset(f'L{l}_c_ei', data=np.asarray(entry['c_ei'], dtype=np.int64))
-        g.attrs[f'L{l}_n_c'] = int(entry['n_c'])
-        g.attrs[f'L{l}_mode'] = str(entry.get('mode', 'centroid'))
-        seeds = entry.get('seeds')
-        g.attrs[f'L{l}_has_seeds'] = seeds is not None
-        if seeds is not None:
-            g.create_dataset(f'L{l}_seeds', data=np.asarray(seeds, dtype=np.int64))
-        has_up = 'up_ei' in entry
-        g.attrs[f'L{l}_has_up'] = has_up
-        if has_up:
-            g.create_dataset(f'L{l}_up_ei', data=np.asarray(entry['up_ei'], dtype=np.int64))
+        if 'branches' in entry:
+            g.attrs[f'L{l}_num_branches'] = len(entry['branches'])
+            for b, sub in enumerate(entry['branches']):
+                _write_one_branch(g, f'L{l}B{b}', sub)
+        else:
+            g.attrs[f'L{l}_num_branches'] = 1
+            _write_one_branch(g, f'L{l}', entry)
 
 
 def _read_entry(g: h5py.Group):
@@ -146,16 +185,13 @@ def _read_entry(g: h5py.Group):
     num_levels = int(g.attrs['num_levels'])
     hierarchy = []
     for l in range(num_levels):
-        entry = {
-            'ftc': g[f'L{l}_ftc'][:],
-            'c_ei': g[f'L{l}_c_ei'][:],
-            'n_c': int(g.attrs[f'L{l}_n_c']),
-            'mode': str(g.attrs[f'L{l}_mode']),
-        }
-        entry['seeds'] = g[f'L{l}_seeds'][:] if g.attrs.get(f'L{l}_has_seeds', False) else None
-        if g.attrs.get(f'L{l}_has_up', False):
-            entry['up_ei'] = g[f'L{l}_up_ei'][:]
-        hierarchy.append(entry)
+        num_branches = int(g.attrs.get(f'L{l}_num_branches', 1))
+        if num_branches == 1:
+            hierarchy.append(_read_one_branch(g, f'L{l}'))
+        else:
+            hierarchy.append({
+                'branches': [_read_one_branch(g, f'L{l}B{b}') for b in range(num_branches)]
+            })
     x_pos = g['x_pos'][:] if 'x_pos' in g else None
     return hierarchy, x_pos
 
@@ -190,7 +226,7 @@ def _build_one(sid: int):
 
     hierarchy = build_multiscale_hierarchy(
         edge_index, num_nodes, ref_pos,
-        cp['levels'], cp['types'], cp['clusters'],
+        cp['levels'], cp['types'], cp['clusters'], cp['branches'],
     )
 
     x_pos = None

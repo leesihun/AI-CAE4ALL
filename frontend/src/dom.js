@@ -8,10 +8,13 @@ export const escapeHtml = value => String(value ?? "").replace(/[&<>"']/g, char 
 })[char]);
 
 export function toast(message, type = "") {
+  const stack = $("#toastStack");
+  while (stack.children.length >= 4) stack.firstElementChild?.remove();
   const item = document.createElement("div");
   item.className = `toast ${type}`;
+  item.setAttribute("role", type === "error" ? "alert" : "status");
   item.textContent = message;
-  $("#toastStack").appendChild(item);
+  stack.appendChild(item);
   window.setTimeout(() => item.remove(), 3300);
 }
 

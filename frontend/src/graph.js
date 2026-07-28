@@ -4,11 +4,13 @@ import {
   ICONS, BLOCK_SPECS, MODEL_CATALOG, TYPE_META, TEMPLATES,
   NODE_WIDTH, PORT_START_Y, PORT_GAP
 } from "./constants.js";
-import { previewGraphic, nodeVisualLabel } from "./graphics.js";
+import { previewGraphic, nodeVisualLabel, parametersTableGraphic } from "./graphics.js";
 import { typeColor, compatible, validateGraph } from "./validate.js";
 import { openArtifact } from "./viewer.js";
 import { runGraph } from "./run.js";
 import { renderInspector } from "./inspector.js";
+import { schedulePipelineSave } from "./persistence.js";
+import { applyGraphAutofill } from "./autofill.js";
 
 export function paletteRender(query = "") {
   const normalized = query.trim().toLowerCase();
@@ -59,19 +61,23 @@ export function loadTemplate(name, saveHistory = true) {
     fromNode: edge[0], fromPort: edge[1], toNode: edge[2], toPort: edge[3]
   }));
   state.selectedNode = null;
+  state.selectedEdge = null;
   state.pendingPort = null;
   layoutGraph(false, false);
   state.view = { x: 26, y: 54, scale: .78 };
   $("#pipelineName").value = template.name;
-  $("#savedState").textContent = "Saved locally · just now";
   render();
+  schedulePipelineSave();
 }
 
 export function addBlock(type, position) {
   const spec = BLOCK_SPECS[type];
   if (!spec) return;
   snapshot();
-  const id = `${type.replaceAll(".", "_")}_${state.nodeCounter++}`;
+  let id;
+  do {
+    id = `${type.replaceAll(".", "_")}_${state.nodeCounter++}`;
+  } while (state.nodes.some(node => node.id === id));
   const existing = state.nodes.length;
   const visibleWorldLeft = -state.view.x / state.view.scale;
   const visibleWorldTop = -state.view.y / state.view.scale;
@@ -89,6 +95,7 @@ export function addBlock(type, position) {
     progress: 0
   });
   state.selectedNode = id;
+  state.selectedEdge = null;
   render();
   toast(`${spec.label} added. Click either socket first, then choose a highlighted compatible socket.`);
 }
@@ -105,10 +112,24 @@ export function duplicateNode(id) {
   copy.progress = 0;
   state.nodes.push(copy);
   state.selectedNode = copy.id;
+  state.selectedEdge = null;
   render();
 }
 
 export function deleteSelected() {
+  if (state.selectedEdge) {
+    const edge = state.edges.find(item => item.id === state.selectedEdge);
+    if (!edge) {
+      state.selectedEdge = null;
+      return;
+    }
+    snapshot();
+    state.edges = state.edges.filter(item => item.id !== edge.id);
+    state.selectedEdge = null;
+    render();
+    toast("Removed the selected connection.", "warn");
+    return;
+  }
   if (!state.selectedNode) return;
   snapshot();
   const id = state.selectedNode;
@@ -188,8 +209,38 @@ export function connectPortDetails(first, second) {
     toast(`Cannot link ${output.type} to ${input.type}. Compatible ports are highlighted in green.`, "error");
     return false;
   }
+  const reachesSource = new Set([input.nodeId]);
+  const queue = [input.nodeId];
+  while (queue.length) {
+    const current = queue.shift();
+    state.edges
+      .filter(edge => edge.fromNode === current)
+      .map(edge => edge.toNode)
+      .forEach(next => {
+        if (reachesSource.has(next)) return;
+        reachesSource.add(next);
+        queue.push(next);
+      });
+  }
+  if (reachesSource.has(output.nodeId)) {
+    state.pendingPort = null;
+    renderNodes();
+    renderEdges();
+    toast("That link would create a pipeline cycle, so it was not added.", "error");
+    return false;
+  }
   snapshot();
-  state.edges = state.edges.filter(edge => !(edge.toNode === input.nodeId && edge.toPort === input.portId));
+  const inputNode = state.nodes.find(node => node.id === input.nodeId);
+  const inputSpec = inputNode && BLOCK_SPECS[inputNode.type]?.inputs.find(port => port.id === input.portId);
+  if (!inputSpec?.multiple) {
+    state.edges = state.edges.filter(edge => !(edge.toNode === input.nodeId && edge.toPort === input.portId));
+  }
+  state.edges = state.edges.filter(edge => !(
+    edge.fromNode === output.nodeId
+    && edge.fromPort === output.portId
+    && edge.toNode === input.nodeId
+    && edge.toPort === input.portId
+  ));
   state.edges.push({
     id: `edge_${Date.now()}`,
     fromNode: output.nodeId,
@@ -203,10 +254,77 @@ export function connectPortDetails(first, second) {
   return true;
 }
 
+/** Opens the information surface that owns this block type. Models use their
+ * config/training workspace; only concrete artifacts use the sample viewer. */
+export async function openNodeDetails(nodeId) {
+  const node = state.nodes.find(item => item.id === nodeId);
+  const spec = node && BLOCK_SPECS[node.type];
+  if (!node || !spec) return;
+  if (spec.isModel) {
+    const { openModelDetailWorkspace } = await import("./studio.js");
+    await openModelDetailWorkspace(spec.modelId);
+    return;
+  }
+  if (spec.isMetricsViewer) {
+    const { openTrainingMetricsWorkspace } = await import("./studio.js");
+    await openTrainingMetricsWorkspace(nodeId);
+    return;
+  }
+  if (spec.workspace) {
+    const { openStudio } = await import("./studio.js");
+    await openStudio(spec.workspace, nodeId);
+    return;
+  }
+  await openArtifact(nodeId);
+}
+
+function compactPath(value) {
+  const text = typeof value === "string" ? value.trim().replaceAll("\\", "/") : "";
+  return text ? text.split("/").filter(Boolean).pop() || text : "";
+}
+
+export function nodeEvidenceLabel(node, spec) {
+  const config = node.config || {};
+  const evidence = compactPath(
+    config.export_path
+    || config.report_path
+    || config.metrics_csv
+    || node.optimizationReport
+  );
+  if (evidence) return evidence;
+  if (config.job_id) return `run ${String(config.job_id).slice(0, 12)}`;
+  if (spec.isModel) {
+    if (node.savedConfigPath) return `config · ${compactPath(node.savedConfigPath)}`;
+    if (node.loadedConfigPath) return `loaded · ${compactPath(node.loadedConfigPath)}`;
+    return "No run linked";
+  }
+  if (node.type === "source.parameters") return config.dataset_path ? `rows · ${compactPath(config.dataset_path)}` : "Bind an HDF5 dataset";
+  if (node.type === "evaluate.training_metrics") return "No metrics linked";
+  if (node.type === "evaluate.compare") return "Connect model runs";
+  if (node.type === "evaluate.predictions") return "No report yet";
+  if (node.type === "optimize.design") return "No report yet";
+  if (node.type === "output.export") return "No export yet";
+  if (node.type === "deploy.api") return compactPath(config.checkpoint_path) || "Select checkpoint";
+  if (node.type.startsWith("run.")) return "No run yet";
+  const path = compactPath(config.path || config.output_dataset);
+  return path ? `path · ${path}` : spec.sampleLabel;
+}
+
 export function renderNodes() {
   applyViewTransform();
   $("#nodeLayer").innerHTML = state.nodes.map(node => {
     const spec = BLOCK_SPECS[node.type];
+    const detailLabel = spec.isModel
+      ? `${spec.label} configuration and training status`
+      : spec.isMetricsViewer
+        ? `${spec.label} plots and metric selection`
+      : spec.workspace
+        ? `${spec.label} ${spec.workspace} workspace`
+      : node.type === "source.parameters"
+        ? `${spec.label} input and output spreadsheet`
+        : `${spec.label} samples`;
+    const openLabel = spec.isModel ? "Open model details" : spec.isMetricsViewer ? "Open training metrics" : spec.workspace ? `Open ${spec.workspace} workspace` : node.type === "source.parameters" ? "Open spreadsheet" : "Open samples";
+    const primaryLabel = spec.isModel ? "Train" : spec.executable ? "Run" : spec.isMetricsViewer ? "Metrics" : node.type === "source.parameters" ? "Sheet" : "Open";
     const portRows = nodePortRows(node);
     const inputs = spec.inputs.map((port, index) => `<button class="port input${portStateClass(node.id, port, "input")}" draggable="true" data-node="${node.id}" data-direction="input" data-port="${port.id}" data-port-type="${port.type}" style="top:${portTop(index) - 13}px;--port:${typeColor(port.type)}" aria-label="${escapeHtml(port.label)} input" title="Connect ${escapeHtml(port.label)} input"><span class="port-label">${escapeHtml(port.label)}${port.required ? " *" : ""}</span></button>`).join("");
     const outputs = spec.outputs.map((port, index) => `<button class="port output${portStateClass(node.id, port, "output")}" draggable="true" data-node="${node.id}" data-direction="output" data-port="${port.id}" data-port-type="${port.type}" style="top:${portTop(index) - 13}px;--port:${typeColor(port.type)}" aria-label="${escapeHtml(port.label)} output" title="Connect ${escapeHtml(port.label)} output"><span class="port-label">${escapeHtml(port.label)}</span></button>`).join("");
@@ -215,15 +333,22 @@ export function renderNodes() {
       <header class="node-head" data-drag-handle>
         <span class="node-icon">${ICONS[spec.icon]}</span>
         <span><span class="node-title">${escapeHtml(spec.label)}</span><span class="node-kind">${spec.isModel ? "Model · " + MODEL_CATALOG[spec.modelId].modes.join(" / ") : `${spec.category} · ${spec.maturity}`}</span></span>
-        <button class="node-menu" aria-label="More actions">•••</button>
+        <span class="node-menu-wrap">
+          <button class="node-menu" data-node-menu="${node.id}" aria-label="More actions for ${escapeHtml(spec.label)}" aria-haspopup="menu" aria-expanded="false">•••</button>
+          <span class="node-menu-popover" role="menu" aria-label="${escapeHtml(spec.label)} actions">
+            <button role="menuitem" data-menu-open="${node.id}">Open details</button>
+            <button role="menuitem" data-menu-duplicate="${node.id}">Duplicate</button>
+            <button role="menuitem" class="danger" data-menu-delete="${node.id}">Delete block</button>
+          </span>
+        </span>
       </header>
-      <div class="node-preview" data-preview="${node.id}">${previewGraphic(spec.visual, node.id.length)}<span class="preview-label">${escapeHtml(nodeVisualLabel(spec))}</span></div>
+      <div class="node-preview" data-preview="${node.id}" data-open-label="${escapeHtml(openLabel)}" role="button" tabindex="0" aria-label="Open ${escapeHtml(detailLabel)}">${node.type === "source.parameters" ? parametersTableGraphic(node, true) : previewGraphic(spec.visual, node.id.length)}<span class="preview-label">${escapeHtml(spec.isModel ? "config + training status" : spec.isMetricsViewer ? "all metrics · selectable plots" : spec.workspace ? `${spec.workspace} evidence + controls` : nodeVisualLabel(spec))}</span></div>
       <div class="node-port-space" style="height:${portRows * PORT_GAP + 6}px" aria-hidden="true"></div>
-      <div class="node-summary"><span class="status"><i></i>${node.status === "idle" ? "ready" : node.status}</span><span>${escapeHtml(spec.sampleLabel)}</span></div>
+      <div class="node-summary"><span class="status"><i></i>${node.status === "idle" ? "ready" : node.status}</span><span>${escapeHtml(nodeEvidenceLabel(node, spec))}</span></div>
       <div class="node-progress"><i></i></div>
       <div class="node-actions">
         <button class="button" data-inspect="${node.id}">Inspect</button>
-        <button class="button" data-run="${node.id}">${spec.isModel ? "Train" : "Run"}</button>
+        <button class="button" data-run="${node.id}">${primaryLabel}</button>
       </div>
     </article>`;
   }).join("");
@@ -234,11 +359,83 @@ export function renderNodes() {
       if (event.target.closest("button,.node-preview")) return;
       selectNode(id);
     });
-    $("[data-drag-handle]", element).addEventListener("pointerdown", event => startNodeDrag(event, id));
+    $("[data-drag-handle]", element).addEventListener("pointerdown", event => {
+      if (event.target.closest("button")) return;
+      startNodeDrag(event, id);
+    });
   });
-  $$("[data-preview]").forEach(element => element.addEventListener("click", () => openArtifact(element.dataset.preview)));
-  $$("[data-inspect]").forEach(button => button.addEventListener("click", () => openArtifact(button.dataset.inspect)));
-  $$("[data-run]").forEach(button => button.addEventListener("click", () => runGraph(button.dataset.run)));
+  const closeNodeMenus = () => {
+    $$(".node-menu-popover.open").forEach(menu => menu.classList.remove("open"));
+    $$(".node.menu-open").forEach(node => node.classList.remove("menu-open"));
+    $$("[data-node-menu]").forEach(button => button.setAttribute("aria-expanded", "false"));
+  };
+  $$('[data-node-menu]').forEach(button => {
+    button.addEventListener("pointerdown", event => event.stopPropagation());
+    button.addEventListener("click", event => {
+      event.stopPropagation();
+      const menu = button.nextElementSibling;
+      const willOpen = !menu.classList.contains("open");
+      closeNodeMenus();
+      if (!willOpen) return;
+      menu.classList.add("open");
+      button.closest(".node").classList.add("menu-open");
+      button.setAttribute("aria-expanded", "true");
+      menu.querySelector('[role="menuitem"]')?.focus();
+    });
+  });
+  $$('[data-menu-open]').forEach(button => button.addEventListener("click", () => {
+    closeNodeMenus();
+    openNodeDetails(button.dataset.menuOpen);
+  }));
+  $$('[data-menu-duplicate]').forEach(button => button.addEventListener("click", () => {
+    closeNodeMenus();
+    duplicateNode(button.dataset.menuDuplicate);
+  }));
+  $$('[data-menu-delete]').forEach(button => button.addEventListener("click", () => {
+    state.selectedNode = button.dataset.menuDelete;
+    state.selectedEdge = null;
+    closeNodeMenus();
+    deleteSelected();
+  }));
+  $$(".node-menu-popover").forEach(menu => menu.addEventListener("keydown", event => {
+    const trigger = menu.previousElementSibling;
+    const items = $$('[role="menuitem"]', menu);
+    const index = items.indexOf(document.activeElement);
+    if (event.key === "Escape" || event.key === "Tab") {
+      closeNodeMenus();
+      if (event.key === "Escape") {
+        event.preventDefault();
+        trigger.focus();
+      }
+      return;
+    }
+    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    const next = event.key === "Home"
+      ? 0
+      : event.key === "End"
+        ? items.length - 1
+        : event.key === "ArrowDown"
+          ? (index + 1 + items.length) % items.length
+          : (index - 1 + items.length) % items.length;
+    items[next]?.focus();
+  }));
+  $$("[data-preview]").forEach(element => {
+    element.addEventListener("click", () => openNodeDetails(element.dataset.preview));
+    element.addEventListener("keydown", event => {
+      if (!["Enter", " "].includes(event.key)) return;
+      event.preventDefault();
+      openNodeDetails(element.dataset.preview);
+    });
+  });
+  $$("[data-inspect]").forEach(button => button.addEventListener("click", () => openNodeDetails(button.dataset.inspect)));
+  $$("[data-run]").forEach(button => button.addEventListener("click", () => {
+    const node = state.nodes.find(item => item.id === button.dataset.run);
+    const spec = node && BLOCK_SPECS[node.type];
+    if (!node || !spec) return;
+    if (spec.executable) runGraph(node.id);
+    else openNodeDetails(node.id);
+  }));
   $$(".port").forEach(port => {
     port.addEventListener("click", event => handlePortClick(event, port));
     port.addEventListener("dragstart", event => {
@@ -296,12 +493,38 @@ export function renderEdges() {
       const bend = Math.max(58, Math.abs(span) * .44);
       path = `M${x1} ${y1} C${x1 + bend} ${y1},${x2 - bend} ${y2},${x2} ${y2}`;
     }
-    const selected = state.selectedNode && (edge.fromNode === state.selectedNode || edge.toNode === state.selectedNode);
+    const selected = state.selectedEdge === edge.id || (state.selectedNode && (edge.fromNode === state.selectedNode || edge.toNode === state.selectedNode));
     const color = typeColor(sourcePort?.type || "artifact");
-    return `<path class="edge-shadow${isBus ? " bus" : ""}" d="${path}"/><path class="edge${isBus ? " bus" : ""}${selected ? " selected" : ""}" style="--edge-color:${color}" d="${path}"/>`;
+    const sourceLabel = sourcePort?.label || edge.fromPort;
+    const targetPort = targetSpec.inputs[inIndex];
+    const targetLabel = targetPort?.label || edge.toPort;
+    const ariaLabel = `Connection from ${sourceSpec.label} ${sourceLabel} to ${targetSpec.label} ${targetLabel}`;
+    return `<path class="edge-shadow${isBus ? " bus" : ""}" d="${path}"/><path class="edge${isBus ? " bus" : ""}${selected ? " selected" : ""}" style="--edge-color:${color}" d="${path}"/><path class="edge-hit" data-edge-id="${escapeHtml(edge.id)}" d="${path}" tabindex="0" role="button" aria-label="${escapeHtml(ariaLabel)}"/>`;
   }).join("");
   $("#edgeLayer").innerHTML = `<defs><marker id="edgeArrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 10 5 0 10Z" fill="context-stroke"/></marker></defs>${paths}`;
   $("#edgeLayer").style.transform = "none";
+  $$("[data-edge-id]").forEach(path => {
+    const select = event => {
+      event.stopPropagation();
+      state.selectedEdge = path.dataset.edgeId;
+      state.selectedNode = null;
+      state.pendingPort = null;
+      setPanelVisibility("inspector", true);
+      renderEdges();
+      renderInspector();
+    };
+    path.addEventListener("click", select);
+    path.addEventListener("keydown", event => {
+      if (["Enter", " "].includes(event.key)) {
+        event.preventDefault();
+        select(event);
+      } else if (["Delete", "Backspace"].includes(event.key)) {
+        event.preventDefault();
+        state.selectedEdge = path.dataset.edgeId;
+        deleteSelected();
+      }
+    });
+  });
 }
 
 export function startNodeDrag(event, id) {
@@ -311,6 +534,7 @@ export function startNodeDrag(event, id) {
   const node = state.nodes.find(item => item.id === id);
   if (!node) return;
   state.selectedNode = id;
+  state.selectedEdge = null;
   setPanelVisibility("inspector", true);
   state.drag = {
     id,
@@ -348,6 +572,7 @@ export function dragNode(event) {
 }
 
 export function stopNodeDrag() {
+  if (state.drag?.started) schedulePipelineSave();
   state.drag = null;
 }
 
@@ -385,13 +610,16 @@ export function panCanvas(event) {
 export function stopCanvasPan(event) {
   if (!state.pan || (event?.pointerId !== undefined && event.pointerId !== state.pan.pointerId)) return;
   const wasClick = !state.pan.moved;
+  const moved = state.pan.moved;
   state.pan = null;
   $("#stage").classList.remove("panning");
   if (wasClick) {
     state.selectedNode = null;
+    state.selectedEdge = null;
     state.pendingPort = null;
     render();
   }
+  if (moved) schedulePipelineSave();
 }
 
 export function setPanelVisibility(panel, visible) {
@@ -420,6 +648,7 @@ export function handlePortClick(event, element) {
 
 export function selectNode(id) {
   state.selectedNode = id;
+  state.selectedEdge = null;
   setPanelVisibility("inspector", true);
   renderNodes();
   renderEdges();
@@ -447,6 +676,7 @@ export function renderGraphMeta() {
 }
 
 export function render() {
+  applyGraphAutofill();
   renderNodes();
   renderEdges();
   renderInspector();
@@ -512,12 +742,14 @@ export function setZoom(value, anchor = null) {
   }
   state.view.scale = next;
   applyViewTransform();
+  schedulePipelineSave();
 }
 
 export function fitGraphView() {
   if (!state.nodes.length) {
     state.view = { x: 22, y: 34, scale: 1 };
     applyViewTransform();
+    schedulePipelineSave();
     return;
   }
   const minX = Math.min(...state.nodes.map(node => node.x));
@@ -533,4 +765,5 @@ export function fitGraphView() {
   state.view.x = (rect.width - (maxX - minX) * scale) / 2 - minX * scale;
   state.view.y = (rect.height - (maxY - minY) * scale) / 2 - minY * scale;
   applyViewTransform();
+  schedulePipelineSave();
 }

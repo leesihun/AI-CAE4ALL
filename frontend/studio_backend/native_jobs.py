@@ -140,7 +140,7 @@ def create_inference_job(payload: dict[str, Any]) -> dict[str, Any]:
     ]
     input_value = str(payload.get("input", "")).strip()
     if input_value:
-        input_path = safe_repo_path(input_value, (SUITE_ROOT / "dataset",))
+        input_path = safe_repo_path(input_value, (SUITE_ROOT / "dataset", RUNTIME_ROOT))
         if not input_path.is_file():
             raise ValueError("Selected inference input does not exist.")
         command.extend(["--input", str(input_path)])
