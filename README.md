@@ -69,7 +69,7 @@ No code changes, no format conversion, no per-method CLI to memorize.
 
 | `model` value(s) | Method | Modes | What it does |
 | --- | --- | --- | --- |
-| `meshgraphnets` | **MeshGraphNets** | `train`, `inference` | Encode–process–decode GNN mesh simulator with a multiscale V-cycle processor, world edges, and learned attention transfer operators |
+| `meshgraphnets` | **MeshGraphNets and HI-MGN** | `train`, `inference` | Encode–process–decode GNN mesh simulator with a multiscale V-cycle processor, world edges, and learned attention transfer operators |
 | `meshgraphnets-v` | **MeshGraphNets (variational)** | `train`, `inference` | Probabilistic superset: VAE latent path + a **learned conditional prior** (flow-matching or GMM) → a *distribution* of plausible trajectories |
 | `point_deeponet` | **Point-DeepONet** | `train`, `inference` | PointNet branch + SIREN trunk with early fusion; arbitrary query points |
 | `deeponet` | **DeepONet** | `train`, `inference` | Canonical fixed-sensor branch/trunk operator |
