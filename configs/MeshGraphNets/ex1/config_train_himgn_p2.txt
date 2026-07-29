@@ -1,11 +1,17 @@
 model	MeshGraphNets   # MeshGraphNets, MeshGraphNets-V, point_deeponet, deeponet, fno, gino, transolver, sdfflow
 mode	train  # Train / Inference
-gpu_ids	0  # ablation reference "orig" (ex1) -- shares GPU with base
+gpu_ids	2  # ablation arm p2 (ex1) -- one GPU, no DDP
 parallel_mode	ddp     # ddp, model_split
-log_file_dir	../../output/meshgraphnets/ex1/train_himgn.log
-modelpath	../output/meshgraphnets/ex1/model_himgn.pth
-%   Datasets (same split as configs/MeshGraphNets/ex1/config_train_meshgraphnets.txt; this is the
-%   hierarchical Hi-MGN baseline -- flat/vanilla uses config_train_meshgraphnets.txt instead)
+log_file_dir	../../output/meshgraphnets/ex1/train_himgn_p2.log
+modelpath	../output/meshgraphnets/ex1/model_himgn_p2.pth
+%   ABLATION ARM p2 for the transfer-operator / multi-partition study.
+%
+%   GENERATED from config_train_himgn_base.txt -- edit that file and re-run the
+%   generator rather than editing this one, so the arms cannot drift apart.
+%   This file is the baseline verbatim plus the single feature block near the
+%   bottom (marked "ARM DIFFERENCE"). Read the baseline for why the shared
+%   settings are what they are, including which time_integration this ex uses.
+%   See MeshGraphNets/ATTENTION_TRANSFER_DESIGN.md.
 dataset_dir	../dataset/ex1.h5
 infer_dataset	../dataset/hex_dataset.h5
 infer_timesteps	1
@@ -17,8 +23,7 @@ feature_loss_weights	1.0, 1.0, 1.0, 1.0  # Per-feature loss weights for [x_disp,
 edge_var	8  # deformed dx/dy/dz/dist + reference dx/dy/dz/dist
 positional_features	4  # Rotation-invariant node features: [centroid_dist, mean_edge_len, + encoding]
 '
-%   Network parameters (Hi-MGN canonical baseline -- hierarchical multiscale processor;
-%   mirrors config_train1.txt's voronoi_seedmean leg at time of creation)
+%   Network parameters
 message_passing_num	15  # Only used for non-multiscale modes (vanilla MeshGraphNets only)
 Training_epochs	2000
 Batch_size	1
@@ -44,7 +49,7 @@ val_interval	5  # Run val eval every N epochs
 use_node_types	True  # Add one-hot encoded node types to node features
 '
 %   World Edge Parameters
-use_world_edges	False   # World edges for contacts
+use_world_edges	True   # World edges for contacts
 '
 %   Test set control
 test_batch_idx	0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 33, 34
@@ -57,5 +62,17 @@ voronoi_clusters	5000, 100       # HI-MGN parameters
 multiscale_levels	2               # HI-MGN parameters
 mp_per_level	4, 6, 8, 6, 4       # Overides message_passing_num if use_multiscale=True
 '
+%   ==== ARM DIFFERENCE: Part II -- multi-partition coarse representation ====
+%   4 parallel Voronoi partitions of the coarsest (100-cluster) level instead
+%   of 1. Level 0 stays single-partition; only the LAST level may branch.
+%   Measured on ex2 sample 0 at k=100: 4 partitions carry ~32% more field
+%   information than 1 (broadcast-recon RMSE 0.4831 -> 0.3277) while the
+%   coarse-graph diameter only goes 5 -> 6. K=4 over K=8/16 because it is the
+%   cheapest setting with a real gain, so a win is hard to dismiss as capacity.
+%   +1.05% parameters vs baseline (4,716,804 vs 4,667,652).
+%   NOTE: changes the hierarchy-cache signature -> a separate .mscache.*.h5 is
+%   built on first run (shared with the _p12 arm).
+voronoi_branches	1, 4
+'
 %   Time integration (CONFIGURATION_REFERENCE.md section 3.5)
-time_integration	ar_ot  # ar_ot = one-step/teacher-forced (default); ar_rt = full-trajectory autoregressive rollout training
+time_integration	ar_ot  # forced: ex1 is num_timesteps=1, ar_rt is impossible (see header)

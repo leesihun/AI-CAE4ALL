@@ -19,6 +19,12 @@ MGN_ROOT = Path(__file__).resolve().parents[1]
 if str(MGN_ROOT) not in sys.path:
     sys.path.insert(0, str(MGN_ROOT))
 
+from general_modules.edge_features import (  # noqa: E402
+    DEFORMED_FEATURE_DIM,
+    EDGE_FEATURE_DIM,
+    REFERENCE_SLICE,
+    deformed_edge_attr_torch,
+)
 from general_modules.mesh_dataset import MeshGraphDataset  # noqa: E402
 from general_modules.time_integration import (  # noqa: E402
     resolve_rollout_window,
@@ -125,7 +131,28 @@ GEOMETRY_CASES = {
                     "world_edge_backend": "scipy_kdtree"},
     "multiscale": {"use_multiscale": True, "multiscale_levels": 1,
                    "coarsening_type": "bfs", "mp_per_level": [1, 1, 1]},
+    # Multi-partition coarsening (ATTENTION_TRANSFER_DESIGN.md Part II): the
+    # rollout must refresh every branch of a branched level, each keyed
+    # `*_{level}_{branch}` rather than `*_{level}`.
+    "multiscale_branched": {"use_multiscale": True, "multiscale_levels": 1,
+                            "coarsening_type": "voronoi_seedmean",
+                            "voronoi_clusters": [4], "voronoi_branches": [3],
+                            "mp_per_level": [1, 1, 1]},
 }
+
+
+def _coarse_attr_keys(geometry):
+    """Coarse edge-attr keys a given geometry case is expected to produce."""
+    levels = int(geometry["multiscale_levels"])
+    branches = geometry.get("voronoi_branches") or [1] * levels
+    keys = []
+    for level in range(levels):
+        k = branches[level] if level < len(branches) else 1
+        if k > 1:
+            keys.extend(f"coarse_edge_attr_{level}_{b}" for b in range(k))
+        else:
+            keys.append(f"coarse_edge_attr_{level}")
+    return keys
 
 
 @pytest.mark.parametrize("case", sorted(GEOMETRY_CASES))
@@ -152,7 +179,14 @@ def test_ar_rt_rebuilds_the_features_the_dataloader_would_produce(tmp_path, case
     graph.ptr = torch.tensor([0, NUM_NODES], dtype=torch.long)
 
     static_tail = graph.x[:, INPUT_VAR:]
-    reference_edge_attr = graph.edge_attr[:, 4:]
+    reference_edge_attr = graph.edge_attr[:, REFERENCE_SLICE]
+
+    # Snapshot the dataloader's t=0 coarse features so the branched case can
+    # prove the rollout actually overwrote them (see the assertion below).
+    baseline_coarse = {
+        key: graph[key].clone()
+        for key in (_coarse_attr_keys(geometry) if geometry.get("use_multiscale") else [])
+    }
 
     windows = ot_dataset._windows_per_sample()
     for step in range(1, NUM_TIMESTEPS - 1):
@@ -172,16 +206,57 @@ def test_ar_rt_rebuilds_the_features_the_dataloader_would_produce(tmp_path, case
             )
 
         if geometry.get("use_multiscale"):
-            for level in range(int(geometry["multiscale_levels"])):
+            keys = _coarse_attr_keys(geometry)
+            assert keys, "expected at least one coarse edge-attr key"
+            for key in keys:
+                assert key in expected, (
+                    f"dataloader did not produce {key}; the case's expected "
+                    f"branch layout and the dataset disagree"
+                )
                 torch.testing.assert_close(
-                    graph[f"coarse_edge_attr_{level}"],
-                    expected[f"coarse_edge_attr_{level}"],
-                    rtol=1e-5, atol=1e-5,
+                    graph[key], expected[key], rtol=1e-5, atol=1e-5,
+                )
+            if geometry.get("voronoi_branches"):
+                # Guard against this case passing vacuously: a branched level
+                # must publish ONLY suffixed keys, and _refresh_multiscale must
+                # have actually rewritten each branch (not silently early-returned,
+                # which would leave the t=0 values in place and still "match" if
+                # the trajectory happened to be static).
+                assert "coarse_edge_attr_0" not in expected, (
+                    "a branched level must not also publish the unsuffixed key"
+                )
+                assert len(keys) == geometry["voronoi_branches"][0]
+                assert not torch.allclose(graph[keys[0]], baseline_coarse[keys[0]]), (
+                    "branch 0 was never refreshed from the rolled-out state"
                 )
 
 
 def _edge_key_set(edge_index):
     return {(int(src), int(dst)) for src, dst in zip(edge_index[0], edge_index[1])}
+
+
+def test_edge_half_constants_match_the_actual_feature_layout():
+    """DEFORMED/REFERENCE slices are only useful if they track the real layout.
+
+    They are consumed as `edge_attr[:, REFERENCE_SLICE]` in the rollout, so a
+    constant that drifted from what `deformed_edge_attr_torch` actually emits
+    would silently mis-slice every rollout step rather than raise.
+    """
+    pos = torch.tensor([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 2.0, 0.0]])
+    edge_index = torch.tensor([[0, 1, 2], [1, 2, 0]], dtype=torch.long)
+
+    deformed = deformed_edge_attr_torch(pos, edge_index)
+    assert deformed.shape[1] == DEFORMED_FEATURE_DIM
+
+    from general_modules.edge_features import compute_edge_attr
+    full = compute_edge_attr(pos.numpy(), pos.numpy(), edge_index.numpy())
+    assert full.shape[1] == EDGE_FEATURE_DIM
+    # The two halves must partition the feature, with the deformed half first.
+    assert full[:, REFERENCE_SLICE].shape[1] == EDGE_FEATURE_DIM - DEFORMED_FEATURE_DIM
+    torch.testing.assert_close(
+        torch.from_numpy(full[:, :DEFORMED_FEATURE_DIM]), deformed,
+        rtol=1e-6, atol=1e-6,
+    )
 
 
 def test_single_step_ar_rt_matches_ar_ot_loss(tmp_path):

@@ -94,15 +94,9 @@ independently (a model can be reconstructed from a checkpoint's
 raises it a third time, as early as possible, before any HDF5 or cache work
 starts.
 
-Three further scope cuts, each with a corresponding guard rather than a silent
+Two further scope cuts, each with a corresponding guard rather than a silent
 gap:
 
-- **AR-OT only.** `training_profiles/ar_rollout.py`'s `_refresh_multiscale`
-  only knows unbranched per-level attribute names; extending it to rebuild K
-  branches' worth of coarse edge features on-device, every unrolled step, was
-  out of scope here. `RolloutContext.__init__` raises if `voronoi_branches`
-  has anything `> 1` under `time_integration ar_rt` — mirrors the existing
-  `coarse_world_edges` guard right above it.
 - **No `coarse_world_edges`.** Which branch would receive a lifted contact
   edge is not a well-defined question (a contact could plausibly belong to
   several branches' clusters at once), so this is rejected at
@@ -115,6 +109,21 @@ gap:
   than silently misbehaving — but it does fail. Only `parallel_mode ddp` (the
   default single-GPU/DDP path through `model/MeshGraphNets.py`) supports
   `voronoi_branches > 1` right now.
+
+**AR-RT is supported** (added after the initial Part II landing, which had
+shipped an AR-OT-only guard). `_refresh_multiscale` detects a branched level by
+probing for `num_coarse_{level}_0` and refreshes every branch from the same
+upstream positions; `_coarse_positions` and the new `_refresh_one_partition`
+take a `{level}_{branch}` key instead of a level index. The subtle half was
+`RolloutContext`: a branched level's entry in `coarse_edge_means` is a *list*
+of per-branch arrays, and the deformed-half slice has to be applied to each
+array — applied to the list it would slice the branch axis and yield a
+silently wrong `[K, 8]` normalization constant rather than raising. That slice
+is now `DEFORMED_SLICE` / `REFERENCE_SLICE` from
+[`general_modules/edge_features.py`](general_modules/edge_features.py) instead
+of a bare `4` repeated at seven call sites, with `EDGE_FEATURE_DIM` derived
+from the two half-widths and a test pinning the constants to what
+`deformed_edge_attr_torch` actually emits.
 
 Branch merging ships as **§7 option 1 only** (concat + `skip_projs`, widened
 from `2*latent_dim` to `(1+K)*latent_dim` input — a plain `nn.Linear` learns
@@ -132,12 +141,14 @@ Files touched beyond Part I's list:
 | [`model/coarsening.py`](model/coarsening.py) | `_fps_euclidean`/`_fps_geodesic`/`fps_voronoi_coarsen`/`coarsen_graph` gain a `seed_start`/`start` param (default 0 = today's behavior exactly); `MultiscaleData`'s `_LEVEL_RE` and `__inc__` extended for an optional branch suffix |
 | [`general_modules/multiscale_helpers.py`](general_modules/multiscale_helpers.py) | `build_multiscale_hierarchy` gains `voronoi_branches`, produces `{'branches': [...]}` entries; `attach_coarse_levels_to_graph` refactored around a new `_attach_one_partition` helper, called once per branch when present |
 | [`general_modules/multiscale_cache.py`](general_modules/multiscale_cache.py) | `FORMAT_VERSION` bumped to 2 (defensive — the new `voronoi_branches` signature key already forces a fresh cache path); `_write_entry`/`_read_entry` refactored around `_write_one_branch`/`_read_one_branch`, keyed `L{l}B{b}_...` only for an actually-branched level |
-| [`general_modules/mesh_dataset.py`](general_modules/mesh_dataset.py) | `voronoi_branches` parsing + the three validation guards above; `_compute_coarse_edge_stats` rewritten around per-branch accumulator lists (a new `_accumulate_coarse_edge_stats` helper); `_create_subset`/`inherit_preprocessing_from` carry the per-level mean/std lists through splits (`_copy_edge_stat` handles the list-of-arrays case) |
+| [`general_modules/mesh_dataset.py`](general_modules/mesh_dataset.py) | `voronoi_branches` parsing + two validation guards (last-level-only, no `coarse_world_edges`); `_compute_coarse_edge_stats` rewritten around per-branch accumulator lists (a new `_accumulate_coarse_edge_stats` helper); `_create_subset`/`inherit_preprocessing_from` carry the per-level mean/std lists through splits (`_copy_edge_stat` handles the list-of-arrays case) |
 | [`model/MeshGraphNets.py`](model/MeshGraphNets.py) | `voronoi_branches` parsing + guard in `_build_multiscale_processor`; `skip_projs` width scales with branch count; `_extract_level_data` detects a branched level from the presence of a `_{i}_0`-suffixed attribute; new `_pool_one` (factored out, byte-identical to the old inline pooling logic) and `_unpool_merge_branched_level`; `_forward_multiscale`'s loops branch on `'branches' in ld` |
-| [`training_profiles/ar_rollout.py`](training_profiles/ar_rollout.py) | AR-RT guard above |
+| [`general_modules/edge_features.py`](general_modules/edge_features.py) | `DEFORMED_FEATURE_DIM` / `REFERENCE_FEATURE_DIM` / `DEFORMED_SLICE` / `REFERENCE_SLICE`; `EDGE_FEATURE_DIM` now derived from the two halves instead of a literal 8 |
+| [`training_profiles/ar_rollout.py`](training_profiles/ar_rollout.py) | branch-aware `_refresh_multiscale` + new `_refresh_one_partition`; `_coarse_positions` keyed by `{level}_{branch}`; `RolloutContext.coarse_edge_stat()` unwraps per-branch stat lists; all seven bare `4` slices replaced with the named slices |
 | [`training_profiles/setup.py`](training_profiles/setup.py) | `build_model_config` carries `voronoi_branches` |
 | `cae_suite/specs/meshgraphnets.py` (parent repo) | `voronoi_branches` added to `MGN_KEYS` |
-| [`tests/test_multi_partition.py`](tests/test_multi_partition.py) (new) | K=1-explicit-vs-unset equivalence, single- and two-level forward pass, **batching/no-cross-sample-leakage** (the design's own flagged highest-risk item), a gradient step confirming every branch's slice of `skip_projs`' input gets a nonzero gradient every step (not just eventually), the two hierarchy-build validation guards, the model-construction guard, the AR-RT guard, and composition with Part I attention |
+| [`tests/test_multi_partition.py`](tests/test_multi_partition.py) (new) | K=1-explicit-vs-unset equivalence, single- and two-level forward pass, **batching/no-cross-sample-leakage** (the design's own flagged highest-risk item), a gradient step confirming every branch's slice of `skip_projs`' input gets a nonzero gradient every step (not just eventually), the two hierarchy-build validation guards, the model-construction guard, per-branch stat unwrapping in `RolloutContext`, and composition with Part I attention |
+| [`tests/test_ar_rollout.py`](tests/test_ar_rollout.py) | new `multiscale_branched` geometry case in `GEOMETRY_CASES` (rebuilt-vs-dataloader feature fidelity, per branch) with assertions that it cannot pass vacuously, plus a test pinning the edge-half constants to `deformed_edge_attr_torch`'s real output |
 
 The `k_branches <= 1` code path in every touched function is, line for line,
 the code that existed before Part II — not "equivalent to," literally the
@@ -149,7 +160,10 @@ the model level with `atol=0, rtol=0` (exact equality, not the 1e-4/1e-5
 tolerance Part I's attention equivalence needed — there's no softmax
 rounding here, K=1 truly is the old code path).
 
-Validation performed: all 10 new tests plus the existing 16 pass — 26/26.
+Validation performed: 28/28 tests pass. The AR-RT branch support was
+additionally checked by sabotaging `_refresh_multiscale`'s branch path and
+confirming the `multiscale_branched` case fails — an equivalence-style test
+that cannot detect a no-op is worth very little.
 
 To try it, add to a `himgn`-style config (2-level example):
 ```
@@ -158,10 +172,10 @@ voronoi_clusters     5000, 100
 voronoi_branches     1, 4          # 4 partitions of the coarsest (100-cluster) level
 ```
 `voronoi_branches` defaults to `1` at every level if omitted. Combine freely
-with `pool_type`/`unpool_type attention` from Part I. Not compatible with
-`time_integration ar_rt`, `coarse_world_edges True`, or `parallel_mode
-model_split` (all three raise a clear error rather than running incorrectly)
-— use `ar_ot`, `coarse_world_edges False`, and `parallel_mode ddp`.
+with `pool_type`/`unpool_type attention` from Part I, and with either
+`time_integration`. Not compatible with `coarse_world_edges True` or
+`parallel_mode model_split` (both raise a clear error rather than running
+incorrectly) — use `coarse_world_edges False` and `parallel_mode ddp`.
 
 One operational note: since `voronoi_branches` is a new key in the cache
 signature, the **first run after upgrading will rebuild `.mscache.*.h5`

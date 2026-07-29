@@ -1,3 +1,7 @@
+import contextlib
+import os
+import time
+
 import h5py
 import numpy as np
 import torch
@@ -25,6 +29,48 @@ try:
     HAS_COARSENING = True
 except ImportError:
     HAS_COARSENING = False
+
+
+@contextlib.contextmanager
+def _exclusive_lock(lock_path: str, timeout: float = 1800.0, stale_after: float = 3600.0):
+    """Cross-process exclusive lock via O_CREAT|O_EXCL, mirroring the pattern in
+    general_modules/multiscale_cache.py::ensure_cache.
+
+    A lock older than `stale_after` is assumed to belong to a crashed process
+    and is broken, so one bad run cannot wedge every later run. On timeout the
+    lock is ignored rather than raising: the caller's work (writing
+    normalization stats) is idempotent across jobs that share a split_seed, so
+    proceeding unserialized is a better failure mode than aborting a training
+    run that is otherwise fine.
+    """
+    deadline = time.time() + timeout
+    fd = None
+    while True:
+        try:
+            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            break
+        except FileExistsError:
+            try:
+                if time.time() - os.path.getmtime(lock_path) > stale_after:
+                    os.remove(lock_path)
+                    continue
+            except OSError:
+                continue
+            if time.time() >= deadline:
+                print(f'  WARNING: timed out waiting for {lock_path}; proceeding unserialized')
+                break
+            time.sleep(2.0)
+    try:
+        if fd is not None:
+            os.write(fd, f'{os.getpid()} {time.time()}'.encode())
+            os.close(fd)
+        yield
+    finally:
+        if fd is not None:
+            try:
+                os.remove(lock_path)
+            except OSError:
+                pass
 
 
 def _copy_edge_stat(entry):
@@ -412,7 +458,20 @@ class MeshGraphDataset(Dataset):
         self.coarse_edge_stds = [_copy_edge_stat(s) for s in source_dataset.coarse_edge_stds]
 
     def write_preprocessing_to_hdf5(self, split_seed: int) -> None:
-        """Persist train-derived preprocessing statistics to the HDF5 dataset."""
+        """Persist train-derived preprocessing statistics to the HDF5 dataset.
+
+        Serialized across processes by an exclusive lock file, because this is
+        the one place training *writes* to the shared source dataset. DDP
+        already restricts the call to rank 0, but several independent jobs on
+        the same dataset (the ablation sweep runs eight at once) would
+        otherwise open it 'r+' concurrently. HDF5's own file locking does not
+        stop that here — verified: a second 'r+' open succeeds while the first
+        is held — and concurrent non-SWMR writers can corrupt the file.
+
+        Jobs sharing a `split_seed` and dataset write byte-identical values, so
+        serializing rather than skipping is enough; the last writer wins with
+        the same content.
+        """
         if any(value is None for value in (
             self.node_mean, self.node_std,
             self.edge_mean, self.edge_std,
@@ -420,6 +479,10 @@ class MeshGraphDataset(Dataset):
         )):
             raise RuntimeError("Cannot write preprocessing stats before prepare_preprocessing()")
 
+        with _exclusive_lock(self.h5_file + '.statlock'):
+            self._write_preprocessing_locked(split_seed)
+
+    def _write_preprocessing_locked(self, split_seed: int) -> None:
         with h5py.File(self.h5_file, 'r+') as f:
             metadata = f.require_group('metadata')
             norm_group = metadata.require_group('normalization_params')

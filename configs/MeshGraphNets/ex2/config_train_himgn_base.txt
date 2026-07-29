@@ -1,11 +1,15 @@
 model	MeshGraphNets
 mode	train  # Train / Inference
-gpu_ids	4  # ablation reference "orig" (ex2) -- shares GPU with base
+gpu_ids	4  # ablation base (ex2) -- one GPU, no DDP
 parallel_mode	ddp
-log_file_dir	../../output/meshgraphnets/ex2/train_himgn.log
-modelpath	../output/meshgraphnets/ex2/model_himgn.pth
-%   Datasets (ex2.h5: 50 samples x 50 timesteps, 3D mesh -> multi-step delta training;
-%   hierarchical Hi-MGN baseline -- flat/vanilla uses config_train_meshgraphnets.txt instead)
+log_file_dir	../../output/meshgraphnets/ex2/train_himgn_base.log
+modelpath	../output/meshgraphnets/ex2/model_himgn_base.pth
+%   ABLATION BASELINE for the transfer-operator / multi-partition study.
+%   Differs from config_train_himgn.txt in exactly ONE setting:
+%   time_integration (ar_ot -> ar_rt). use_world_edges was already True there,
+%   and Batch_size stays 4. The _p1/_p2/_p12 arms are this file plus one
+%   feature block each, so every arm shares this exact configuration.
+%   See MeshGraphNets/ATTENTION_TRANSFER_DESIGN.md.
 dataset_dir	../dataset/ex2.h5
 infer_dataset	../dataset/ex2.h5
 infer_timesteps	49  # 50 stored timesteps -> 49 autoregressive rollout steps
@@ -17,23 +21,25 @@ feature_loss_weights	1.0, 1.0, 1.0, 1.0  # Per-feature loss weights for [x_disp,
 edge_var	8  # deformed dx/dy/dz/dist + reference dx/dy/dz/dist
 positional_features	4  # Rotation-invariant node features: [centroid_dist, mean_edge_len, + encoding]
 '
-%   Network parameters (Hi-MGN canonical baseline -- hierarchical multiscale processor;
-%   mirrors config_train1.txt's voronoi_seedmean leg at time of creation)
+%   Network parameters
 message_passing_num	15
 Training_epochs	500
+%   AR-RT keeps all 49 unrolled steps in the autograd graph, which is what
+%   makes this heavy; batch 4 x 200k nodes is affordable on the B300 this runs
+%   on. Kept at 4 to match config_train_himgn.txt exactly.
 Batch_size	4
+grad_accum_steps	1
 LearningR	0.0001
 Latent_dim	128  # MeshGraphNets latent dimension
 num_workers	12  # pin_memory off, so workers are the real limit now
 prefetch_factor	2  # himgn batches are ~550MB (incl. 11.5M unpool edges); 8x4 prefetch would pin ~26GB
 pin_memory	True  # 0.5GB variable-shape batches: pinning serializes in the parent (0.67s/batch vs 0.26s off)
-std_noise	0.01  # input-noise injection for autoregressive stability (multi-step)
+std_noise	0.01  # INERT under ar_rt: rollout_loss calls the model with add_noise=False
 weight_decay	0.0001  # AdamW decoupled weight decay (decimal form only)
 augment_geometry	True  # kept ON for ex2 parity across all baselines (isotropy caveat overridden)
-grad_accum_steps	1
 '
 %   Memory Optimization
-use_checkpointing	True
+use_checkpointing	True  # AR-RT additionally gradient-checkpoints every unrolled step
 '
 %   Performance Optimization
 use_amp	True  # Mixed precision training with bfloat16
@@ -46,7 +52,7 @@ val_interval	5  # Run val eval every N epochs
 use_node_types	True  # Add one-hot encoded node types to node features
 '
 %   World Edge Parameters
-use_world_edges	True
+use_world_edges	True   # fine-level contact edges, rebuilt from the predicted state each rollout step
 '
 %   Test set control
 test_batch_idx	0, 10, 20, 30, 40, 100, 200, 500, 1000
@@ -59,5 +65,6 @@ voronoi_clusters	5000, 100
 multiscale_levels	2
 mp_per_level	2, 3, 5, 3, 2
 '
-%   Time integration (CONFIGURATION_REFERENCE.md section 3.5)
-time_integration	ar_ot  # ar_ot = one-step/teacher-forced (default); ar_rt = full-trajectory autoregressive rollout training
+%   Time integration -- AR-RT: unroll all 49 steps, backprop through the whole
+%   trajectory, gradient-checkpoint each step, no injected noise.
+time_integration	ar_rt

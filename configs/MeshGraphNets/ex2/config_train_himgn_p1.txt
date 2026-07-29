@@ -1,11 +1,17 @@
 model	MeshGraphNets
 mode	train  # Train / Inference
-gpu_ids	4  # ablation reference "orig" (ex2) -- shares GPU with base
+gpu_ids	5  # ablation arm p1 (ex2) -- one GPU, no DDP
 parallel_mode	ddp
-log_file_dir	../../output/meshgraphnets/ex2/train_himgn.log
-modelpath	../output/meshgraphnets/ex2/model_himgn.pth
-%   Datasets (ex2.h5: 50 samples x 50 timesteps, 3D mesh -> multi-step delta training;
-%   hierarchical Hi-MGN baseline -- flat/vanilla uses config_train_meshgraphnets.txt instead)
+log_file_dir	../../output/meshgraphnets/ex2/train_himgn_p1.log
+modelpath	../output/meshgraphnets/ex2/model_himgn_p1.pth
+%   ABLATION ARM p1 for the transfer-operator / multi-partition study.
+%
+%   GENERATED from config_train_himgn_base.txt -- edit that file and re-run the
+%   generator rather than editing this one, so the arms cannot drift apart.
+%   This file is the baseline verbatim plus the single feature block near the
+%   bottom (marked "ARM DIFFERENCE"). Read the baseline for why the shared
+%   settings are what they are, including which time_integration this ex uses.
+%   See MeshGraphNets/ATTENTION_TRANSFER_DESIGN.md.
 dataset_dir	../dataset/ex2.h5
 infer_dataset	../dataset/ex2.h5
 infer_timesteps	49  # 50 stored timesteps -> 49 autoregressive rollout steps
@@ -17,23 +23,25 @@ feature_loss_weights	1.0, 1.0, 1.0, 1.0  # Per-feature loss weights for [x_disp,
 edge_var	8  # deformed dx/dy/dz/dist + reference dx/dy/dz/dist
 positional_features	4  # Rotation-invariant node features: [centroid_dist, mean_edge_len, + encoding]
 '
-%   Network parameters (Hi-MGN canonical baseline -- hierarchical multiscale processor;
-%   mirrors config_train1.txt's voronoi_seedmean leg at time of creation)
+%   Network parameters
 message_passing_num	15
 Training_epochs	500
+%   AR-RT keeps all 49 unrolled steps in the autograd graph, which is what
+%   makes this heavy; batch 4 x 200k nodes is affordable on the B300 this runs
+%   on. Kept at 4 to match config_train_himgn.txt exactly.
 Batch_size	4
+grad_accum_steps	1
 LearningR	0.0001
 Latent_dim	128  # MeshGraphNets latent dimension
 num_workers	12  # pin_memory off, so workers are the real limit now
 prefetch_factor	2  # himgn batches are ~550MB (incl. 11.5M unpool edges); 8x4 prefetch would pin ~26GB
 pin_memory	True  # 0.5GB variable-shape batches: pinning serializes in the parent (0.67s/batch vs 0.26s off)
-std_noise	0.01  # input-noise injection for autoregressive stability (multi-step)
+std_noise	0.01  # INERT under ar_rt: rollout_loss calls the model with add_noise=False
 weight_decay	0.0001  # AdamW decoupled weight decay (decimal form only)
 augment_geometry	True  # kept ON for ex2 parity across all baselines (isotropy caveat overridden)
-grad_accum_steps	1
 '
 %   Memory Optimization
-use_checkpointing	True
+use_checkpointing	True  # AR-RT additionally gradient-checkpoints every unrolled step
 '
 %   Performance Optimization
 use_amp	True  # Mixed precision training with bfloat16
@@ -46,7 +54,7 @@ val_interval	5  # Run val eval every N epochs
 use_node_types	True  # Add one-hot encoded node types to node features
 '
 %   World Edge Parameters
-use_world_edges	True
+use_world_edges	True   # fine-level contact edges, rebuilt from the predicted state each rollout step
 '
 %   Test set control
 test_batch_idx	0, 10, 20, 30, 40, 100, 200, 500, 1000
@@ -59,5 +67,15 @@ voronoi_clusters	5000, 100
 multiscale_levels	2
 mp_per_level	2, 3, 5, 3, 2
 '
-%   Time integration (CONFIGURATION_REFERENCE.md section 3.5)
-time_integration	ar_ot  # ar_ot = one-step/teacher-forced (default); ar_rt = full-trajectory autoregressive rollout training
+%   ==== ARM DIFFERENCE: Part I -- learned inter-level transfer operators ====
+%   Both reduce EXACTLY to the baseline's fixed mean-pool / sum-unpool at
+%   initialization (zero-init score heads), so this run starts from the
+%   baseline model and departs only if the gradient says to.
+%   +5.31% parameters vs baseline (3,332,238 vs 3,164,292).
+pool_type	attention   # mean (baseline) | attention
+unpool_type	attention   # sum (baseline) | attention
+pool_heads	4           # latent_dim 128 / 4 heads = 32 dims per head
+'
+%   Time integration -- AR-RT: unroll all 49 steps, backprop through the whole
+%   trajectory, gradient-checkpoint each step, no injected noise.
+time_integration	ar_rt

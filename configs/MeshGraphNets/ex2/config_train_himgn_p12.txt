@@ -1,0 +1,84 @@
+model	MeshGraphNets
+mode	train  # Train / Inference
+gpu_ids	7  # ablation arm p12 (ex2) -- one GPU, no DDP
+parallel_mode	ddp
+log_file_dir	../../output/meshgraphnets/ex2/train_himgn_p12.log
+modelpath	../output/meshgraphnets/ex2/model_himgn_p12.pth
+%   ABLATION ARM p12 for the transfer-operator / multi-partition study.
+%
+%   GENERATED from config_train_himgn_base.txt -- edit that file and re-run the
+%   generator rather than editing this one, so the arms cannot drift apart.
+%   This file is the baseline verbatim plus the single feature block near the
+%   bottom (marked "ARM DIFFERENCE"). Read the baseline for why the shared
+%   settings are what they are, including which time_integration this ex uses.
+%   See MeshGraphNets/ATTENTION_TRANSFER_DESIGN.md.
+dataset_dir	../dataset/ex2.h5
+infer_dataset	../dataset/ex2.h5
+infer_timesteps	49  # 50 stored timesteps -> 49 autoregressive rollout steps
+split_seed	42
+%   Common params
+input_var	4  # number of input variables: x_disp, y_disp, z_disp, stress (excluding node types)
+output_var	4  # number of output variables: x_disp, y_disp, z_disp, stress (z_disp is REAL for ex2)
+feature_loss_weights	1.0, 1.0, 1.0, 1.0  # Per-feature loss weights for [x_disp, y_disp, z_disp, stress]
+edge_var	8  # deformed dx/dy/dz/dist + reference dx/dy/dz/dist
+positional_features	4  # Rotation-invariant node features: [centroid_dist, mean_edge_len, + encoding]
+'
+%   Network parameters
+message_passing_num	15
+Training_epochs	500
+%   AR-RT keeps all 49 unrolled steps in the autograd graph, which is what
+%   makes this heavy; batch 4 x 200k nodes is affordable on the B300 this runs
+%   on. Kept at 4 to match config_train_himgn.txt exactly.
+Batch_size	4
+grad_accum_steps	1
+LearningR	0.0001
+Latent_dim	128  # MeshGraphNets latent dimension
+num_workers	12  # pin_memory off, so workers are the real limit now
+prefetch_factor	2  # himgn batches are ~550MB (incl. 11.5M unpool edges); 8x4 prefetch would pin ~26GB
+pin_memory	True  # 0.5GB variable-shape batches: pinning serializes in the parent (0.67s/batch vs 0.26s off)
+std_noise	0.01  # INERT under ar_rt: rollout_loss calls the model with add_noise=False
+weight_decay	0.0001  # AdamW decoupled weight decay (decimal form only)
+augment_geometry	True  # kept ON for ex2 parity across all baselines (isotropy caveat overridden)
+'
+%   Memory Optimization
+use_checkpointing	True  # AR-RT additionally gradient-checkpoints every unrolled step
+'
+%   Performance Optimization
+use_amp	True  # Mixed precision training with bfloat16
+use_ema	True  # EMA shadow model for validation/inference
+ema_decay	0.99
+test_interval	10  # Run test/visualization every N epochs
+val_interval	5  # Run val eval every N epochs
+'
+%   Node Type Parameters
+use_node_types	True  # Add one-hot encoded node types to node features
+'
+%   World Edge Parameters
+use_world_edges	True   # fine-level contact edges, rebuilt from the predicted state each rollout step
+'
+%   Test set control
+test_batch_idx	0, 10, 20, 30, 40, 100, 200, 500, 1000
+plot_feature_idx	-1  # Feature index to visualize in plots (-1 = last feature, i.e., stress)
+'
+%   Multi-Scale / Hierarchical Parameters -- ON (Hi-MGN backbone)
+use_multiscale	True
+coarsening_type	voronoi_seedmean
+voronoi_clusters	5000, 100
+multiscale_levels	2
+mp_per_level	2, 3, 5, 3, 2
+'
+%   ==== ARM DIFFERENCE: Part I + Part II together ====
+%   Lowest priority of the four arms -- only interpretable once you know what
+%   each feature does alone. But this is what Part III predicts should win:
+%   multi-partition supplies information a single partition cannot carry at any
+%   head count, and attention is the mechanism that extracts it.
+%   +6.86% parameters vs baseline (3,381,390 vs 3,164,292).
+%   Shares the _p2 arm's hierarchy cache (same voronoi_branches signature).
+pool_type	attention   # mean (baseline) | attention
+unpool_type	attention   # sum (baseline) | attention
+pool_heads	4           # latent_dim 128 / 4 heads = 32 dims per head
+voronoi_branches	1, 4    # 4 partitions of the coarsest level; level 0 unbranched
+'
+%   Time integration -- AR-RT: unroll all 49 steps, backprop through the whole
+%   trajectory, gradient-checkpoint each step, no injected noise.
+time_integration	ar_rt

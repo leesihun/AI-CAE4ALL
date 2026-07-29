@@ -2,7 +2,28 @@ import numpy as np
 import torch
 
 
-EDGE_FEATURE_DIM = 8
+_POS_DIM = 3  # dx, dy, dz
+
+# An edge feature is two structurally identical halves, each a relative-position
+# vector plus its norm:
+#
+#   [deformed_dx, deformed_dy, deformed_dz, deformed_dist | ref_dx, ref_dy, ref_dz, ref_dist]
+#    <---------------- DEFORMED ---------------->  <---------------- REFERENCE ------------->
+#
+# The split matters because the two halves have different lifetimes: the
+# deformed half moves every timestep, the reference half is fixed for a whole
+# trajectory. AR-RT and inference exploit that by rebuilding only the deformed
+# half per rollout step and reusing the reference half from the dataloader
+# (see deformed_edge_attr_torch below). Both halves are named here so that
+# split does not appear as a bare `4` at each call site.
+DEFORMED_FEATURE_DIM = _POS_DIM + 1
+REFERENCE_FEATURE_DIM = _POS_DIM + 1
+EDGE_FEATURE_DIM = DEFORMED_FEATURE_DIM + REFERENCE_FEATURE_DIM  # 8
+
+# Ready-made slices for the two halves, so callers index by meaning:
+#   edge_attr[:, DEFORMED_SLICE]   edge_attr[:, REFERENCE_SLICE]
+DEFORMED_SLICE = slice(0, DEFORMED_FEATURE_DIM)
+REFERENCE_SLICE = slice(DEFORMED_FEATURE_DIM, EDGE_FEATURE_DIM)
 
 # Guards the gradient of ||r|| at r == 0 (coincident nodes). d/dr sqrt(r.r) is
 # undefined there and produces NaN, which would poison an AR-RT unroll the
@@ -31,14 +52,15 @@ def compute_edge_attr(reference_pos: np.ndarray, deformed_pos: np.ndarray, edge_
 
 
 def deformed_edge_attr_torch(deformed_pos: torch.Tensor, edge_index: torch.Tensor) -> torch.Tensor:
-    """Differentiable GPU counterpart of `compute_edge_attr`'s first 4 channels.
+    """Differentiable GPU counterpart of `compute_edge_attr`'s DEFORMED_SLICE.
 
-    During an AR-RT unroll only the deformed half of the 8-D edge feature
-    changes -- reference geometry is fixed for the whole trajectory -- so the
-    rollout recomputes these 4 channels per step and reuses the reference half
-    that the dataloader already produced.
+    During an AR-RT unroll only the deformed half of the edge feature changes
+    -- reference geometry is fixed for the whole trajectory -- so the rollout
+    recomputes these channels per step and reuses the reference half that the
+    dataloader already produced.
 
-    Returns [E, 4] = [deformed_dx, deformed_dy, deformed_dz, deformed_dist].
+    Returns [E, DEFORMED_FEATURE_DIM] =
+        [deformed_dx, deformed_dy, deformed_dz, deformed_dist].
     """
     src_idx, dst_idx = edge_index[0], edge_index[1]
     rel = deformed_pos[dst_idx] - deformed_pos[src_idx]

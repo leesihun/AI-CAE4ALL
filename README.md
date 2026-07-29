@@ -32,11 +32,12 @@ frontend\START_STUDIO.bat
 - [Cross-cutting capabilities](#cross-cutting-capabilities)
 - [Paper-fidelity validation](#paper-fidelity-validation)
 - [Ship it: the portable inference bundle](#ship-it-the-portable-inference-bundle)
-- [Quick start](#quick-start)
+- [Quick start](#quick-start) — [installing](#installing) · [running](#running)
 - [Config format](#config-format)
 - [Repository layout](#repository-layout)
 - [Per-method Python environments](#per-method-python-environments)
 - [Testing](#testing)
+- [Known gaps — the honest list](#known-gaps--the-honest-list)
 - [Documentation map](#documentation-map)
 - [Scale](#scale)
 
@@ -230,12 +231,9 @@ python AI_CAE4ALL_main.py --describe transolver            # route, modes, requi
 Ctrl-C is forwarded and escalated cleanly across the process group on both
 Windows and POSIX.
 
-> **Known gap:** `--audit-configs` currently walks `suite_root / spec.repository`
-> (each *method repo*), but every checked-in config lives in the top-level
-> `configs/` tree — so the CLI reports `Auditing 0 configs`. The Studio's System
-> workspace runs the identical checks against the correct root and does cover all
-> 127 files; see the note in
-> [frontend/studio_backend/audit.py](frontend/studio_backend/audit.py).
+> **Known gap:** `--audit-configs` scans the wrong root today and reports
+> `files=0` — see [Known gaps](#known-gaps--the-honest-list). Use the Studio's
+> System workspace, which runs the identical checks over all 127 files.
 
 ---
 
@@ -271,6 +269,23 @@ point-cloud resampling) — so nothing downstream changes.
 
 Full spec: [dataset/DATASET_FORMAT.md](dataset/DATASET_FORMAT.md).
 
+### Data that ships with the repo
+
+| File | Used by | Notes |
+| --- | --- | --- |
+| `dataset/ex1.h5` | mesh methods, SimulGenVAE | **Planar** geometry — `operator_dim` resolves to 2 |
+| `dataset/ex2.h5` | mesh methods | Genuinely **3D** geometry (~200k nodes/sample) |
+| `dataset/ex*.mscache.*.h5` | MeshGraphNets | Prebuilt multiscale hierarchy caches |
+| `dataset/deepjeb.h5` | SDFFlow | Geometry-generation shapes + 5 descriptors |
+| `dataset/hex_dataset.h5`, `hex_GT.h5` | mesh methods | Hex-mesh dataset + ground truth |
+| `dataset/mlp/` | MLP | Tabular `X`/`Y` sample + its generator |
+| `dataset/benchmarks/` | Neural_Operator, Transolver | Five per-paper validation suites |
+
+Planar vs. 3D is **discovered from the geometry**, never hardcoded — which is
+why `ex1` and `ex2` both work through the same configs. HDF5 and checkpoint
+files are git-ignored; builders live under `dataset/` and in the method repos
+(e.g. `Geometry_generation/build_dataset.py`).
+
 ---
 
 ## Cross-cutting capabilities
@@ -301,11 +316,26 @@ Operators. `time_integration ar_ot` (default) or `ar_rt`:
 | `model_split` | MGN, MGN-V, FNO, GINO | 1F1B pipeline across ≥2 GPUs; **merged checkpoints load like single-GPU ones** |
 | `node_shard` | Transolver | One mesh's nodes split across ≥2 GPUs; slice aggregates autograd-aware SUM all-reduced, **reproducing single-process results bit-for-bit** |
 
-### Multiscale graph learning
+### Multiscale graph learning — three published architectures, one route
 
-MeshGraphNets ships an optional hierarchical V-cycle processor: `bfs` or three
-`voronoi_*` coarsening strategies, a down-arm/coarsest/up-arm block layout, and
-per-worker **plus on-disk hierarchy caching** so you build the hierarchy once.
+`model meshgraphnets` is not one architecture. Two config keys select between
+three, with **identical** encoder, decoder, training loop, and rollout:
+
+| Architecture | Config | Coarsening |
+| --- | --- | --- |
+| **Flat MGN** | `use_multiscale False` | — (flat message-passing stack) |
+| **HI-MGN** | `use_multiscale True`, `coarsening_type voronoi_seedmean` | FPS-Voronoi clustering to a fixed target count per level |
+| **BSMS-GNN** | `use_multiscale True`, `coarsening_type bfs` | Bi-stride multi-source BFS (Cao et al., ICML 2023) |
+
+The V-cycle pools *down* to the coarsest level and unpools back *up*, so
+long-range interactions cross the whole mesh in a handful of blocks rather than
+one layer per hop. Unpooling is a **learned bipartite message-passing step**
+conditioned on relative position — not a naive broadcast. World edges can
+propagate hierarchically too (`coarse_world_edges`), and the expensive
+coarsening is cached **per worker and on disk**, so you build each hierarchy
+once. Deep dives: [02_HI-MGN.md](docs/methods/02_HI-MGN.md),
+[03_BSMS-GNN.md](docs/methods/03_BSMS-GNN.md).
+
 Recent work adds **learned attention transfer operators** — attention-based
 restriction and prolongation (`pool_type` / `unpool_type` / `pool_heads`) that
 are provably identical to the fixed mean/sum operators *at initialization*, so
@@ -395,6 +425,37 @@ a single `.pth` is a complete, self-contained, hand-it-to-anyone artifact.
 
 ## Quick start
 
+### Installing
+
+The launcher itself is deliberately tiny: **Python ≥ 3.10** and, on 3.10 only,
+`tomli`. It has no ML dependencies at all — that is what lets it validate a
+config for a method whose environment it does not share.
+
+```bash
+python -m pip install -e .        # optional; also provides the `ai-cae4all` command
+python AI_CAE4ALL_main.py --list-models   # confirms which method repos are installable
+```
+
+Each method brings its own dependencies, installed into that method's venv —
+there is intentionally **no root `requirements.txt`**:
+
+```bash
+python -m pip install -r Geometry_generation/requirements.txt   # sdfflow
+python -m pip install -r SimulGenVAE/requirements.txt           # simulgenvae
+python -m pip install -r MLP/requirements.txt                   # mlp (CPU-only)
+python -m pip install -r inference/requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
+```
+
+The mesh/operator methods need PyTorch matched to your CUDA build; GINO
+optionally uses `torch_cluster` for neighbor search and falls back to a scipy
+`cKDTree` path without it. `geometry_ingest` needs `trimesh` for surface meshes
+and `gmsh` for volume tet meshes. `--list-models` reports install health per
+route, and preflight's environment layer tells you what a specific config is
+missing before it launches. The Studio needs nothing beyond a browser and the
+launcher's own Python.
+
+### Running
+
 `--config` selects the file; **`mode` (train / inference / sample / …) lives
 inside the config**, not on the CLI.
 
@@ -408,9 +469,6 @@ python AI_CAE4ALL_main.py --config configs/Neural_Operator/ex1/config_train_fno.
 # A clean preflight auto-launches the native process:
 python AI_CAE4ALL_main.py --config configs/MeshGraphNets/ex1/config_train1.txt
 ```
-
-Installing the root package (`python -m pip install -e .`) also provides the
-`ai-cae4all` console script.
 
 ### The Studio
 
@@ -552,6 +610,38 @@ UX, plus Python tests for the analysis and metric backends.
 
 There is **no root-level test suite** — the `testpaths = ["tests"]` entry in
 [pyproject.toml](pyproject.toml) is stale.
+
+---
+
+## Known gaps — the honest list
+
+A platform this wide has seams, and they are written down rather than left to be
+rediscovered the hard way. The short version:
+
+- **`--audit-configs` reports `files=0`.** It walks `suite_root /
+  spec.repository`, but every checked-in config lives in the top-level
+  `configs/` tree. The Studio's System workspace runs the identical checks
+  against the correct root and does cover all 127 files.
+- **`num_workers` is runtime-required but not preflight-required** for
+  mesh/operator training — a config omitting it can pass validation and fail
+  natively. Same story for `infer_timesteps` on static `T=1` data.
+- **Benchmark-intent keys** (`split_strategy`, `loss_type`,
+  `relative_l2_epsilon`) are accepted but not implemented in the stable runtime.
+- **Schema-gap keys** — a handful (Neural_Operator `use_parallel_stats` /
+  `train_eval_subset_size`, Transolver `test_batch_idx`, GINO
+  `gino_transform_type`) are read by code but missing from a key registry, so
+  they cannot currently be authored cleanly.
+- **Variational MGN ignores `weight_decay`** (it constructs `Adam`), and its
+  training tree lags the deterministic one on several hot-path optimizations.
+- The Studio is a **localhost development API** — no authentication, request
+  isolation, quotas, or rollback. Not a multi-user deployment.
+- Studio blocks labelled `roadmap` (parts of the optimization search layer) are
+  design, not implementation — the labels are visible in the UI for exactly this
+  reason.
+
+Authoritative and exhaustive:
+[CONFIGURATION_REFERENCE.md](CONFIGURATION_REFERENCE.md) and
+[REPOSITORY_OVERVIEW.md §14](REPOSITORY_OVERVIEW.md).
 
 ---
 

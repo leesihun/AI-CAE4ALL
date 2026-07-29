@@ -264,6 +264,69 @@ def test_multi_partition_gradient_step_uses_all_branches():
     assert losses[-1] < losses[0] * 0.8, f"loss did not drop: {losses[0]:.4f} -> {losses[-1]:.4f}"
 
 
+def test_inference_rebuilds_the_branch_layout_the_checkpoint_was_trained_with():
+    """A branched checkpoint must be loadable by the inference path.
+
+    `skip_projs` is sized for (1 + K) merge inputs, so if inference rebuilds an
+    UNBRANCHED hierarchy for a branched checkpoint the unpool merge feeds a
+    2*latent_dim tensor into a (1+K)*latent_dim Linear and dies. This walks the
+    same three steps inference_profiles/rollout.py does -- read
+    voronoi_branches out of the checkpoint's model_config, rebuild the
+    hierarchy with it, run the model -- so the wiring between them is checked
+    rather than assumed.
+    """
+    from training_profiles.setup import build_model_config
+
+    levels, clusters, branches = 1, (6,), (4,)
+    mp_per_level = [2, 2, 2]
+    train_config = _base_config(
+        multiscale_levels=levels, voronoi_clusters=list(clusters),
+        mp_per_level=mp_per_level, voronoi_branches=list(branches),
+        pool_type='attention', unpool_type='attention', pool_heads=4,
+    )
+    torch.manual_seed(0)
+    model = MeshGraphNets(train_config, device='cpu')
+    model.eval()
+
+    # What save_checkpoint() would persist, and what rollout.py merges back in.
+    model_config = build_model_config(train_config)
+    assert model_config['voronoi_branches'] == [1 * b for b in branches], (
+        'voronoi_branches must survive into the checkpoint, or inference '
+        'cannot know the branch layout'
+    )
+
+    # rollout.py's parsing of that value (mirrored here).
+    raw_vb = model_config['voronoi_branches']
+    infer_branches = [int(v) for v in raw_vb] if isinstance(raw_vb, list) else [int(raw_vb)]
+    if len(infer_branches) == 1 and levels > 1:
+        infer_branches = infer_branches * levels
+
+    edge_index, ref_pos = _grid_mesh(n=6)
+    hierarchy = build_multiscale_hierarchy(
+        edge_index, ref_pos.shape[0], ref_pos, levels,
+        ['voronoi_seedmean'] * levels, list(clusters), infer_branches,
+    )
+    assert 'branches' in hierarchy[0] and len(hierarchy[0]['branches']) == branches[0]
+
+    rng = np.random.default_rng(0)
+    deformed_pos = ref_pos + rng.normal(scale=0.05, size=ref_pos.shape).astype(np.float32)
+    graph = MultiscaleData(
+        x=torch.from_numpy(rng.normal(size=(ref_pos.shape[0], 4)).astype(np.float32)),
+        pos=torch.from_numpy(ref_pos),
+        edge_index=torch.from_numpy(edge_index).long(),
+        edge_attr=torch.from_numpy(compute_edge_attr(ref_pos, deformed_pos, edge_index)),
+    )
+    attach_coarse_levels_to_graph(
+        graph, hierarchy, ref_pos, deformed_pos,
+        [[np.zeros(8, dtype=np.float32)] * branches[0]],
+        [[np.ones(8, dtype=np.float32)] * branches[0]],
+    )
+    with torch.no_grad():
+        pred, _ = model(graph, add_noise=False)
+    assert pred.shape == (ref_pos.shape[0], 4)
+    assert torch.isfinite(pred).all()
+
+
 def test_bfs_branching_rejected_at_hierarchy_build():
     edge_index, ref_pos = _grid_mesh(n=6)
     with pytest.raises(ValueError, match="bfs"):
@@ -289,7 +352,18 @@ def test_branching_non_last_level_rejected_at_model_construction():
         ), device='cpu')
 
 
-def test_ar_rt_rejects_voronoi_branches():
+def test_ar_rt_unwraps_per_branch_coarse_edge_stats():
+    """AR-RT supports branched levels; the subtle part is the stats shape.
+
+    A branched level's entry in `coarse_edge_means` is a LIST of per-branch
+    arrays, not one array. The deformed-half slice has to be applied to each
+    array -- applied to the list it would slice the branch axis and yield a
+    silently wrong [K, 8] constant instead of a [4] one. End-to-end rollout
+    fidelity for branched levels is covered by test_ar_rollout.py's
+    `multiscale_branched` geometry case.
+    """
+    from general_modules.edge_features import DEFORMED_FEATURE_DIM
+
     config = {
         'input_var': 4, 'output_var': 4,
         'use_multiscale': True, 'multiscale_levels': 2,
@@ -298,9 +372,22 @@ def test_ar_rt_rejects_voronoi_branches():
             'node_mean': np.zeros(4), 'node_std': np.ones(4),
             'edge_mean': np.zeros(8), 'edge_std': np.ones(8),
             'delta_mean': np.zeros(4), 'delta_std': np.ones(4),
-            'coarse_edge_means': [np.zeros(8), np.zeros(8)],
-            'coarse_edge_stds': [np.ones(8), np.ones(8)],
+            # level 0 unbranched -> one array; level 1 branched -> 4 arrays.
+            'coarse_edge_means': [np.zeros(8), [np.zeros(8)] * 4],
+            'coarse_edge_stds': [np.ones(8), [np.ones(8)] * 4],
         },
     }
-    with pytest.raises(ValueError, match="voronoi_branches"):
-        RolloutContext(config, torch.device('cpu'))
+    ctx = RolloutContext(config, torch.device('cpu'))
+
+    mean0, std0 = ctx.coarse_edge_stat(0)
+    assert mean0.shape == (DEFORMED_FEATURE_DIM,)
+    assert std0.shape == (DEFORMED_FEATURE_DIM,)
+    for b in range(4):
+        mean1, std1 = ctx.coarse_edge_stat(1, b)
+        assert mean1.shape == (DEFORMED_FEATURE_DIM,), (
+            f'branch {b} stat has shape {tuple(mean1.shape)}; the branch list '
+            f'was sliced instead of each branch array'
+        )
+        assert std1.shape == (DEFORMED_FEATURE_DIM,)
+    # Past the end of the stats list means "skip normalization".
+    assert ctx.coarse_edge_stat(9) == (None, None)

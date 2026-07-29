@@ -21,7 +21,7 @@ MGN_KEYS = frozenset(
         "dataset_dir", "infer_dataset", "inference_output_dir", "infer_timesteps",
         "split_seed", "input_var", "output_var", "feature_loss_weights", "edge_var",
         "positional_features", "message_passing_num", "training_epochs", "batch_size",
-        "learningr", "latent_dim", "num_workers", "prefetch_factor", "std_noise",
+        "learningr", "latent_dim", "num_workers", "prefetch_factor", "pin_memory", "std_noise",
         "noise_gamma", "noise_std_ratio", "weight_decay", "warmup_epochs",
         "augment_geometry", "grad_accum_steps", "use_checkpointing",
         "use_amp", "use_ema", "ema_decay", "use_compile", "test_interval",

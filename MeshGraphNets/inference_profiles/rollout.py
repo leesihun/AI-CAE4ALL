@@ -202,6 +202,22 @@ def run_rollout(config, config_filename='config.txt'):
         if len(voronoi_clusters) == 1 and multiscale_levels > 1:
             voronoi_clusters = voronoi_clusters * multiscale_levels
 
+        # Multi-partition coarsening (ATTENTION_TRANSFER_DESIGN.md Part II).
+        # The checkpoint's model_config carries voronoi_branches and is merged
+        # into `config` above, so this reproduces the branch layout the model
+        # was BUILT for -- skip_projs is sized for (1 + K) inputs, so an
+        # unbranched hierarchy here would not merely be a different topology,
+        # it would not fit the weights.
+        raw_vb = config.get('voronoi_branches', None)
+        if raw_vb is None:
+            voronoi_branches = [1] * multiscale_levels
+        elif isinstance(raw_vb, list):
+            voronoi_branches = [int(v) for v in raw_vb]
+        else:
+            voronoi_branches = [int(raw_vb)] * multiscale_levels
+        if len(voronoi_branches) == 1 and multiscale_levels > 1:
+            voronoi_branches = voronoi_branches * multiscale_levels
+
         coarse_hierarchy = None
         if use_multiscale:
             if not HAS_COARSENING:
@@ -209,10 +225,16 @@ def run_rollout(config, config_filename='config.txt'):
             coarse_hierarchy = build_multiscale_hierarchy(
                 edge_index, num_nodes, ref_pos,
                 multiscale_levels, coarsening_types, voronoi_clusters,
+                voronoi_branches,
             )
             current_n_report = num_nodes
             for level, entry in enumerate(coarse_hierarchy):
                 method = coarsening_types[level] if level < len(coarsening_types) else 'bfs'
+                if 'branches' in entry:
+                    sizes = [b['n_c'] for b in entry['branches']]
+                    print(f"  Coarsening level {level} ({method}): {current_n_report} -> "
+                          f"{len(sizes)} x {sizes} nodes (multi-partition)")
+                    break  # a branched level is always terminal
                 n_c = entry['n_c']
                 print(f"  Coarsening level {level} ({method}): {current_n_report} -> {n_c} nodes ({n_c/current_n_report*100:.1f}%)")
                 current_n_report = n_c

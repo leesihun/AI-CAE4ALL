@@ -37,7 +37,11 @@ forms mid-rollout is seen during training.
 import torch
 from torch.utils.checkpoint import checkpoint
 
-from general_modules.edge_features import deformed_edge_attr_torch
+from general_modules.edge_features import (
+    DEFORMED_SLICE,
+    REFERENCE_SLICE,
+    deformed_edge_attr_torch,
+)
 from general_modules.time_integration import AR_RT, resolve_time_integration
 from general_modules.world_edges import compute_world_edges_torch
 
@@ -78,17 +82,27 @@ class RolloutContext:
         # node-type one-hot are geometry-static and reused from the dataloader).
         self.node_mean = to_tensor(stats['node_mean'])[:self.input_var]
         self.node_std = to_tensor(stats['node_std'])[:self.input_var]
-        # Edge features are [deformed_dx, dy, dz, dist | ref_dx, dy, dz, dist];
-        # only the deformed half moves during a rollout.
-        self.edge_mean_def = to_tensor(stats['edge_mean'])[:4]
-        self.edge_std_def = to_tensor(stats['edge_std'])[:4]
+        # Only the deformed half of an edge feature moves during a rollout
+        # (see general_modules/edge_features.py for the layout).
+        self.edge_mean_def = to_tensor(stats['edge_mean'])[DEFORMED_SLICE]
+        self.edge_std_def = to_tensor(stats['edge_std'])[DEFORMED_SLICE]
         self.edge_mean = to_tensor(stats['edge_mean'])
         self.edge_std = to_tensor(stats['edge_std'])
         self.delta_mean = to_tensor(stats['delta_mean'])
         self.delta_std = to_tensor(stats['delta_std'])
 
-        self.coarse_edge_means = [to_tensor(m)[:4] for m in stats.get('coarse_edge_means', [])]
-        self.coarse_edge_stds = [to_tensor(s)[:4] for s in stats.get('coarse_edge_stds', [])]
+        # A multi-partition level (ATTENTION_TRANSFER_DESIGN.md Part II) stores
+        # a LIST of per-branch stat arrays where every other level stores one
+        # array. DEFORMED_SLICE selects channels, so it must be applied to each
+        # array individually -- applied to the list it would slice the branch
+        # axis instead and silently produce a wrongly-shaped constant.
+        def to_stat(value):
+            if isinstance(value, list):
+                return [to_tensor(v)[DEFORMED_SLICE] for v in value]
+            return to_tensor(value)[DEFORMED_SLICE]
+
+        self.coarse_edge_means = [to_stat(m) for m in stats.get('coarse_edge_means', [])]
+        self.coarse_edge_stds = [to_stat(s) for s in stats.get('coarse_edge_stds', [])]
 
         self.use_world_edges = bool(config.get('use_world_edges', False))
         self.world_edge_radius = stats.get('world_edge_radius', None)
@@ -109,35 +123,64 @@ class RolloutContext:
                 "lifted contact edges would have to be re-derived per level per step. "
                 "Set coarse_world_edges False, or train this config with ar_ot."
             )
-        raw_vb = config.get('voronoi_branches', None)
-        branches = raw_vb if isinstance(raw_vb, list) else ([raw_vb] if raw_vb is not None else [])
-        if self.use_multiscale and any(int(v) > 1 for v in branches):
-            raise ValueError(
-                "time_integration ar_rt does not support voronoi_branches > 1 "
-                "(multi-partition coarsening, ATTENTION_TRANSFER_DESIGN.md Part II): "
-                "_refresh_multiscale below only knows the unbranched per-level "
-                "attribute names. Set voronoi_branches to all 1s, or train this "
-                "config with ar_ot."
-            )
+    def coarse_edge_stat(self, level, branch=None):
+        """Deformed-half normalization stats for one coarse partition.
+
+        Returns (None, None) past the end of the stats list, which is the
+        signal to skip normalization -- the same condition the single-partition
+        code expressed inline as `if level < len(ctx.coarse_edge_means)`.
+        """
+        if level >= len(self.coarse_edge_means):
+            return None, None
+        mean = self.coarse_edge_means[level]
+        std = self.coarse_edge_stds[level]
+        if isinstance(mean, list):          # multi-partition level
+            idx = 0 if branch is None else branch
+            return mean[idx], std[idx]
+        return mean, std
 
 
-def _coarse_positions(fine_pos, graph, level, num_coarse_total):
-    """Positions of one coarse level, derived from the level below.
+def _coarse_positions(fine_pos, graph, key, num_coarse_total):
+    """Positions of one coarse partition, derived from the level below.
 
     Mirrors `multiscale_helpers.attach_coarse_levels_to_graph`: seed-anchored
-    levels take their anchor's position (exported as `coarse_anchor_idx_{l}`),
+    levels take their anchor's position (exported as `coarse_anchor_idx_{key}`),
     every other level takes the arithmetic centroid of its cluster.
+
+    `key` is `str(level)` for a normal level, or `f'{level}_{branch}'` for one
+    branch of a multi-partition level -- the same keying the dataset writes.
     """
-    anchors = graph.get(f'coarse_anchor_idx_{level}', None)
+    anchors = graph.get(f'coarse_anchor_idx_{key}', None)
     if anchors is not None:
         return fine_pos[anchors]
 
-    fine_to_coarse = graph[f'fine_to_coarse_{level}']
+    fine_to_coarse = graph[f'fine_to_coarse_{key}']
     summed = fine_pos.new_zeros((num_coarse_total, fine_pos.shape[1]))
     summed.index_add_(0, fine_to_coarse, fine_pos)
     counts = fine_pos.new_zeros((num_coarse_total, 1))
     counts.index_add_(0, fine_to_coarse, torch.ones_like(fine_pos[:, :1]))
     return summed / counts.clamp(min=1.0)
+
+
+def _refresh_one_partition(graph, key, current_pos, mean, std):
+    """Rebuild one coarse partition's deformed edge features in place.
+
+    Returns that partition's coarse positions so a single-partition caller can
+    chain them into the next level.
+    """
+    num_coarse = int(graph[f'num_coarse_{key}'].sum())
+    coarse_pos = _coarse_positions(current_pos, graph, key, num_coarse)
+
+    coarse_edge_index = graph[f'coarse_edge_index_{key}']
+    previous_attr = graph[f'coarse_edge_attr_{key}']
+    if coarse_edge_index.shape[1] > 0:
+        deformed_half = deformed_edge_attr_torch(coarse_pos, coarse_edge_index)
+        if mean is not None:
+            deformed_half = (deformed_half - mean) / std
+        graph[f'coarse_edge_attr_{key}'] = torch.cat(
+            [deformed_half, previous_attr[:, REFERENCE_SLICE]], dim=1
+        )
+    return coarse_pos
 
 
 def _refresh_multiscale(graph, deformed_pos, ctx):
@@ -146,23 +189,28 @@ def _refresh_multiscale(graph, deformed_pos, ctx):
     Cluster topology, reference anchors and the reference half of each level's
     edge features are trajectory-invariant, so only the deformed half is
     rebuilt — the same split the fine mesh uses.
+
+    A multi-partition level (ATTENTION_TRANSFER_DESIGN.md Part II) writes no
+    unsuffixed `*_{level}` attributes at all, only `*_{level}_{branch}`, so it
+    is detected by probing for branch 0. Every branch partitions the same
+    upstream node set, so they all refresh from the same `current_pos`; such a
+    level is always terminal, so there is nothing to chain afterwards.
     """
     current_pos = deformed_pos
     for level in range(ctx.multiscale_levels):
-        num_coarse = int(graph[f'num_coarse_{level}'].sum())
-        coarse_pos = _coarse_positions(current_pos, graph, level, num_coarse)
-
-        coarse_edge_index = graph[f'coarse_edge_index_{level}']
-        previous_attr = graph[f'coarse_edge_attr_{level}']
-        if coarse_edge_index.shape[1] > 0:
-            deformed_half = deformed_edge_attr_torch(coarse_pos, coarse_edge_index)
-            if level < len(ctx.coarse_edge_means):
-                deformed_half = ((deformed_half - ctx.coarse_edge_means[level])
-                                 / ctx.coarse_edge_stds[level])
-            graph[f'coarse_edge_attr_{level}'] = torch.cat(
-                [deformed_half, previous_attr[:, 4:]], dim=1
-            )
-        current_pos = coarse_pos
+        if graph.get(f'num_coarse_{level}_0', None) is not None:
+            branch = 0
+            while graph.get(f'num_coarse_{level}_{branch}', None) is not None:
+                mean, std = ctx.coarse_edge_stat(level, branch)
+                _refresh_one_partition(graph, f'{level}_{branch}', current_pos, mean, std)
+                branch += 1
+            return
+        if graph.get(f'num_coarse_{level}', None) is None:
+            # Coarsening saturated before multiscale_levels (n_c <= 1 or no
+            # coarse edges), so the dataset stopped emitting levels here.
+            return
+        mean, std = ctx.coarse_edge_stat(level)
+        current_pos = _refresh_one_partition(graph, str(level), current_pos, mean, std)
 
 
 def _apply_state(graph, state, ctx, static_node_features, reference_edge_attr):
@@ -219,7 +267,7 @@ def rollout_loss(model, graph, ctx, loss_fn, training=True):
     steps = int(graph.y_seq.shape[1])
     state = graph.state0
     static_node_features = graph.x[:, ctx.input_var:]
-    reference_edge_attr = graph.edge_attr[:, 4:]
+    reference_edge_attr = graph.edge_attr[:, REFERENCE_SLICE]
     output_var = ctx.output_var
 
     total_loss = None
