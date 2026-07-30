@@ -24,6 +24,8 @@ TRANSOLVER_KEYS = frozenset(
         "split_seed", "input_var", "output_var", "feature_loss_weights",
         "positional_features", "use_node_types", "coordinate_normalization", "latent_dim",
         "num_layers", "num_heads", "slice_num", "attention_kernel", "chunk_size",
+        # Amortized (two-stream) training -- CONFIGURATION_REFERENCE.md 9.6.
+        "amortized_training", "amortized_cache_nodes", "amortized_query_nodes",
         "infer_mode", "infer_chunk_size", "mlp_ratio", "dropout", "temperature_init",
         "temperature_min", "temperature_max", "small_output_init", "training_epochs",
         "batch_size", "learningr", "weight_decay", "warmup_epochs", "num_workers",
@@ -47,6 +49,58 @@ TRANSOLVER_MGN_KEYS = frozenset(
 )
 
 
+def _validate_amortized(ctx: SpecValidationContext, kernel: str) -> None:
+    """Amortized (two-stream) training: build each layer's physics tokens from a
+    subsampled cache stream, decode a smaller query stream, put the loss there.
+    Mirrors Transolver/general_modules/config_validation.py::_validate_amortized."""
+    values = ctx.values
+    if values.get("amortized_training", False) is not True:
+        return
+
+    if kernel != "slice_space":
+        ctx.add(
+            "TRANS-AMORT-001",
+            Severity.ERROR,
+            "amortized_training requires attention_kernel=slice_space; only that kernel "
+            "exposes the aggregate/deslice split amortization is built on.",
+            field_name="attention_kernel",
+        )
+
+    cache = integer(values.get("amortized_cache_nodes", 0)) or 0
+    query = integer(values.get("amortized_query_nodes", 0)) or 0
+    if cache == 0 and query == 0:
+        ctx.add(
+            "TRANS-AMORT-002",
+            Severity.ERROR,
+            "amortized_training=True needs amortized_cache_nodes > 0 or "
+            "amortized_query_nodes > 0; with both at 0 (= full mesh) it computes what the "
+            "ordinary forward computes while running two node streams instead of one.",
+            field_name="amortized_query_nodes",
+        )
+
+    scheme = str(values.get("time_integration", "ar_ot")).lower().replace("-", "_")
+    if scheme in {"ar_rt", "arrt"}:
+        ctx.add(
+            "TRANS-AMORT-003",
+            Severity.ERROR,
+            "amortized_training is incompatible with time_integration=ar_rt: the rollout "
+            "feeds each step's prediction back as the next step's full node state, but the "
+            "amortized forward only predicts the sampled query nodes.",
+            field_name="time_integration",
+        )
+
+    parallel = str(values.get("parallel_mode", "ddp")).lower()
+    if parallel in {"node_shard", "model_split"}:
+        ctx.add(
+            "TRANS-AMORT-004",
+            Severity.ERROR,
+            "amortized_training is incompatible with parallel_mode=node_shard: sharding "
+            "all-reduces slice aggregates assuming the ranks partition one whole mesh, "
+            "which independently subsampled per-rank streams do not.",
+            field_name="parallel_mode",
+        )
+
+
 def validate_transolver(ctx: SpecValidationContext) -> None:
     validate_common_values(ctx)
     values = ctx.values
@@ -61,13 +115,25 @@ def validate_transolver(ctx: SpecValidationContext) -> None:
     if latent is not None and heads is not None and heads > 0 and latent % heads != 0:
         ctx.add("TRANS-HEADS-001", Severity.ERROR, f"latent_dim ({latent}) must be divisible by num_heads ({heads}).", field_name="num_heads")
 
-    kernel = str(values.get("attention_kernel", "naive")).lower()
+    kernel = str(values.get("attention_kernel", "slice_space")).lower()
     if kernel not in {"naive", "slice_space"}:
         ctx.add("TRANS-KERNEL-001", Severity.ERROR, "attention_kernel must be 'naive' or 'slice_space'.", field_name="attention_kernel")
-    validate_nonnegative_int_fields(ctx, ("chunk_size", "infer_chunk_size", "max_train_batches", "max_val_batches"), "TRANS-CHUNK-VALUE")
+    validate_nonnegative_int_fields(
+        ctx,
+        ("chunk_size", "infer_chunk_size", "max_train_batches", "max_val_batches",
+         "amortized_cache_nodes", "amortized_query_nodes"),
+        "TRANS-CHUNK-VALUE",
+    )
     chunk = integer(values.get("chunk_size", 0))
     if chunk is not None and chunk > 0 and kernel != "slice_space":
         ctx.add("TRANS-CHUNK-001", Severity.ERROR, "chunk_size > 0 requires attention_kernel=slice_space.", field_name="chunk_size")
+    # chunk_size and use_checkpointing are INDEPENDENT knobs and are not
+    # cross-validated: a tiled forward streams on its own (each tile's
+    # [heads, tile, slice_num] is dropped and rebuilt in backward), so
+    # chunk_size > 0 with use_checkpointing False is the normal, recommended
+    # configuration. See CONFIGURATION_REFERENCE.md 8.4.
+
+    _validate_amortized(ctx, kernel)
 
     infer_mode = str(values.get("infer_mode", "direct")).lower()
     if infer_mode not in {"direct", "decoupled"}:
@@ -130,7 +196,7 @@ def build_transolver_spec() -> MethodSpec:
             "inference": frozenset({"modelpath", "infer_dataset", "input_var", "output_var"}),
         },
         recommended_by_mode={"train": frozenset({"feature_loss_weights", "split_seed", "parallel_mode", "write_preprocessing"})},
-        defaults={"parallel_mode": "ddp", "attention_kernel": "naive", "infer_mode": "direct", "chunk_size": 0, "infer_chunk_size": 0, "coordinate_normalization": "centered_isotropic"},
+        defaults={"parallel_mode": "ddp", "attention_kernel": "slice_space", "infer_mode": "direct", "chunk_size": 0, "infer_chunk_size": 0, "amortized_training": False, "amortized_cache_nodes": 0, "amortized_query_nodes": 0, "coordinate_normalization": "centered_isotropic"},
         defaults_by_mode={"inference": {"inference_output_dir": "outputs/rollout"}},
         path_rules=(
             PathRule("dataset_dir", PathKind.INPUT_FILE, frozenset({"train"})),

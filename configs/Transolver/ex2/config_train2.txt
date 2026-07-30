@@ -31,8 +31,26 @@ latent_dim                256               # hidden width -- positive int, must
 num_layers                6                  # Transolver block count -- positive int
 num_heads                 8                   # attention heads -- positive int, must divide latent_dim
 slice_num                 128                  # Physics-Attention learned slice count -- positive int
-attention_kernel          naive               # attention kernel -- {naive|slice_space}; chunking and node_shard require slice_space; default naive
-chunk_size                0                   # attention tiling size -- int >= 0, 0 = untiled; positive requires attention_kernel slice_space; default 0
+attention_kernel          slice_space         # attention kernel -- {naive|slice_space}; slice_space = Transolver-3 aggregate-then-project, the only kernel that can tile / shard / amortize; naive = v1 order, numerically identical (misc/verify_v3.py L1)
+chunk_size                16384               # attention tiling size in nodes -- int >= 0, 0 = untiled. THIS is the memory lever here: a tiled forward streams, so the [heads, N, slice_num] term leaves retained memory and peak becomes near-independent of slice_num. Independent of use_checkpointing.
+'
+%   Amortized training (Transolver-3 two-stream). Build each layer's physics tokens from a
+%   subsampled CACHE stream, decode only a smaller QUERY stream, and compute the loss there.
+%   Retained activations drop from O(layers x N x latent_dim) to O(layers x (cache + query) x
+%   latent_dim). The tokens are sums over nodes normalized by a sum over the same nodes, so a
+%   uniform subsample estimates them consistently at the 1/sqrt(k) Monte Carlo rate
+%   (misc/verify_v3.py L4) -- consistent, not exact, so it applies to TRAINING ONLY:
+%   validation, periodic test and inference always run the full mesh.
+%
+%   OFF for this sweep, and not needed: tiling alone already fits every cell (worst is
+%   cell 3 at ~131 GB of a B300's 288 GB -- see the MEMORY section in gen_sweep_configs.py).
+%   Amortization is the only knob here that changes the training OBJECTIVE rather than just
+%   its memory footprint, so leaving it off keeps these cells comparable both to each other
+%   and to ex2 runs from before the Transolver-3 switch. Turn it on for a run of its own.
+amortized_training        False               # enable two-stream amortized training -- {True|False}; default False
+amortized_cache_nodes     32768               # nodes/graph feeding the token cache -- int >= 0, 0 = full mesh
+amortized_query_nodes     8192                # nodes/graph decoded, and the only ones the loss sees -- int >= 0, 0 = full mesh
+'
 infer_mode                direct              # inference mode -- {direct|decoupled}; default direct
 infer_chunk_size          0                   # decoupled-inference chunk size -- int >= 0; default 0
 mlp_ratio                 4                   # block MLP expansion ratio -- PINNED at the anchor value, not an axis in this sweep
@@ -58,7 +76,7 @@ std_noise          0.01   # lower than ex1 -- input-noise injection for autoregr
 noise_gamma        1      # target-correction multiplier matching injected input noise -- default 1
 augment_geometry   True   # kept ON for ex2 parity across all baselines (isotropy caveat overridden); matches MeshGraphNets ex2
 use_amp            True   # bfloat16 autocast on supported CUDA -- {True|False}; native bf16 tensor cores on B300, no Turing MAGMA-fallback penalty
-use_checkpointing  True   # precautionary at this star's sizes (worst cell ~130-200 GB without it on 200k-node graphs); also matches the existing ex2 config
+use_checkpointing  False  # block-level activation checkpointing -- OFF: chunk_size already streams the attention term, and this would cost 30-75% wall-clock (CONFIGURATION_REFERENCE.md 8.4)
 use_ema            True   # maintain EMA weights (inference prefers EMA when stored) -- {True|False}; default False
 ema_decay          0.99   # EMA decay rate -- float in (0,1); default 0.999
 use_compile        False  # torch.compile(dynamic=True) on the model -- {True|False}; default False

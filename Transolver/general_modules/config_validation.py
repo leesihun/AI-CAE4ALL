@@ -12,6 +12,8 @@ Section 8 of IMPLEMENTATION_PLAN.md is the authoritative spec for every rule bel
 
 import os
 
+from general_modules.time_integration import AR_RT, resolve_time_integration
+
 VALID_MODES = {'train', 'inference'}
 VALID_ATTENTION_KERNELS = {'naive', 'slice_space'}
 VALID_INFER_MODES = {'direct', 'decoupled'}
@@ -42,6 +44,49 @@ def _format_list(values):
 
 def _as_list(value):
     return value if isinstance(value, list) else [value]
+
+
+def _validate_amortized(config, source, attention_kernel, parallel_mode):
+    """Amortized (two-stream) training rules -- see model/amortized.py."""
+    budgets = {}
+    for key in ('amortized_cache_nodes', 'amortized_query_nodes'):
+        value = config.get(key, 0)
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise ValueError(f"{source}: {key} must be a non-negative integer, got {value!r}")
+        budgets[key] = value
+
+    if not config.get('amortized_training', False):
+        return
+
+    if attention_kernel != 'slice_space':
+        raise ValueError(
+            f"{source}: amortized_training requires attention_kernel == 'slice_space'. "
+            f"Amortization splits that kernel's two passes -- aggregate into tokens, then "
+            f"deslice onto a different node set -- which the naive kernel does not expose; "
+            f"got attention_kernel='{attention_kernel}'."
+        )
+
+    if budgets['amortized_cache_nodes'] == 0 and budgets['amortized_query_nodes'] == 0:
+        raise ValueError(
+            f"{source}: amortized_training True needs amortized_cache_nodes > 0 or "
+            f"amortized_query_nodes > 0. With both at 0 (= full mesh) it computes exactly "
+            f"what the ordinary forward computes while running two node streams instead of "
+            f"one, so it is pure overhead."
+        )
+
+    if resolve_time_integration(config) == AR_RT:
+        raise ValueError(
+            f"{source}: amortized_training is incompatible with time_integration 'ar_rt'. "
+            f"AR-RT feeds each step's prediction back in as the next step's full node state, "
+            f"and the amortized forward only predicts the sampled query nodes."
+        )
+
+    if parallel_mode == 'node_shard':
+        raise ValueError(
+            f"{source}: amortized_training is incompatible with parallel_mode 'node_shard'. "
+            f"Sharding all-reduces slice aggregates assuming the ranks partition one whole "
+            f"mesh; independently subsampled per-rank streams break that partition."
+        )
 
 
 def validate_config(config, source='configuration'):
@@ -87,7 +132,7 @@ def validate_config(config, source='configuration'):
             f"(alias: {sorted(PARALLEL_MODE_ALIASES)}); got '{parallel_mode}'."
         )
     if parallel_mode == 'node_shard':
-        kernel = config.get('attention_kernel', 'naive')
+        kernel = config.get('attention_kernel', 'slice_space')
         if kernel != 'slice_space':
             raise ValueError(
                 f"{source}: parallel_mode 'node_shard' requires attention_kernel "
@@ -124,7 +169,7 @@ def validate_config(config, source='configuration'):
                 f"num_heads ({config['num_heads']})"
             )
 
-    attention_kernel = config.get('attention_kernel', 'naive')
+    attention_kernel = config.get('attention_kernel', 'slice_space')
     if attention_kernel not in VALID_ATTENTION_KERNELS:
         raise ValueError(
             f"{source}: attention_kernel must be one of {sorted(VALID_ATTENTION_KERNELS)}, "
@@ -145,6 +190,14 @@ def validate_config(config, source='configuration'):
             f"(the naive kernel materializes node-space projections and cannot tile); "
             f"got attention_kernel='{attention_kernel}', chunk_size={chunk_size}"
         )
+    # chunk_size and use_checkpointing are INDEPENDENT. Tiling never costs
+    # memory -- it changes when each tile's [heads, tile, slice_num] assignment
+    # matrix is built, not whether it is kept -- so tiling without recompute is
+    # a perfectly valid configuration. It just caps the transient working set
+    # rather than removing retention, which is a smaller win at high
+    # num_layers. See CONFIGURATION_REFERENCE.md 8.4 for the measured table.
+
+    _validate_amortized(config, source, attention_kernel, parallel_mode)
 
     infer_mode = config.get('infer_mode', 'direct')
     if infer_mode not in VALID_INFER_MODES:

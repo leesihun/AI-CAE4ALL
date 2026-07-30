@@ -22,6 +22,7 @@ from torch.utils.data import Subset
 from torch_geometric.loader import DataLoader
 
 from general_modules.time_integration import resolve_rollout_window
+from model.amortized import describe_amortized
 from training_profiles.ar_rollout import (
     RolloutContext,
     ar_rt_enabled,
@@ -116,8 +117,15 @@ def log_training_config(config):
         print(f"Per-feature loss weights (normalized):  {[f'{v:.4f}' for v in w_normalized]}")
     else:
         print("Per-feature loss weights: equal (default)")
-    print(f"attention_kernel: {config.get('attention_kernel', 'naive')}, "
-          f"chunk_size: {config.get('chunk_size', 0)}")
+    chunk_size = int(config.get('chunk_size', 0))
+    print(f"attention_kernel: {config.get('attention_kernel', 'slice_space')}, "
+          f"chunk_size: {chunk_size or 'untiled'}, "
+          f"per-tile recompute: {bool(config.get('use_checkpointing', False))}")
+    if config.get('amortized_training', False):
+        print(describe_amortized(int(config.get('amortized_cache_nodes', 0)),
+                                 int(config.get('amortized_query_nodes', 0))))
+    else:
+        print("Amortized training: OFF (every training step decodes the full mesh)")
     if ar_rt_enabled(config):
         print(describe_ar_rt(resolve_rollout_window(config, int(config.get('num_timesteps', 1)))))
     else:

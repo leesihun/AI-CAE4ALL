@@ -249,7 +249,7 @@ def shard_worker(rank, world_size, config, gpu_ids, config_filename='config.txt'
     is_main = rank == 0
     print(f'[rank {rank}] node_shard on device {device}')
 
-    if config.get('attention_kernel') != 'slice_space':
+    if config.get('attention_kernel', 'slice_space') != 'slice_space':
         raise ValueError("node_shard requires attention_kernel 'slice_space'.")
 
     # ---- Dataset (all ranks build identically from the same split_seed) ----

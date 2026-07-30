@@ -8,9 +8,14 @@ Usage:
     python misc/bench_attention_kernels.py --dataset dataset/ex1.h5 --chunk-size 8000
 
 Expectation from section 6.3: naive is faster (fewer attention FLOPs at this
-profile), slice_space uses less peak memory. `naive` stays the shipped
-default at ex1 scale; if slice_space is NOT lighter, that contradicts the
-theory and should be investigated before relying on the memory ladder.
+profile), slice_space uses less peak memory.
+
+Tiling is the memory lever and it needs no `--use-checkpointing`: a tiled
+forward streams, dropping each tile's [heads, tile, slice_num] weights once they
+are folded into the aggregates and rebuilding them in backward. So expect
+untiled-vs-tiled to show a large gap on its own. Use this script to pick
+`--chunk-size` for a given profile rather than to choose a kernel; `slice_space`
+is the shipped default. CONFIGURATION_REFERENCE.md 8.4 has the whole-model table.
 """
 import argparse
 import os

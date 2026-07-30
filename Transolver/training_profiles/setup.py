@@ -168,7 +168,12 @@ def build_model_config(config) -> dict:
         'num_layers': config.get('num_layers'),
         'num_heads': config.get('num_heads'),
         'slice_num': config.get('slice_num'),
-        'attention_kernel': config.get('attention_kernel', 'naive'),
+        'attention_kernel': config.get('attention_kernel', 'slice_space'),
+        # Recorded so a checkpoint says how it was trained, and so reloading it
+        # cannot silently switch kernels when the repo default moves again.
+        'amortized_training': config.get('amortized_training', False),
+        'amortized_cache_nodes': config.get('amortized_cache_nodes', 0),
+        'amortized_query_nodes': config.get('amortized_query_nodes', 0),
         'mlp_ratio': config.get('mlp_ratio', 1),
         'dropout': config.get('dropout', 0.0),
         'temperature_init': config.get('temperature_init', 0.5),

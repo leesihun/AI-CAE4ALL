@@ -206,21 +206,33 @@ class PhysicsAttentionIrregular(nn.Module):
 
         return self.dropout(self.to_out(out_x))
 
-    def _forward_slice_space(self, x_g: torch.Tensor, tile_ranges: List[Tuple[int, int]],
-                              use_checkpointing: bool = False) -> torch.Tensor:
-        """Transolver-3's two-pass form. tile_ranges == [(0, Ng)] is the exact
-        single-tile special case (section 6.3)."""
-        fused_w, fused_b = self._fused_slice_weights()
-        do_checkpoint = use_checkpointing and self.training and x_g.requires_grad
+    def _accumulate_tokens(self, x_g: torch.Tensor, tile_ranges: List[Tuple[int, int]],
+                            fused_w: torch.Tensor, fused_b: torch.Tensor,
+                            do_checkpoint: bool, keep_weights: bool = False):
+        """Pass 1: tile-summed slice aggregates -> tokens [H, M, D], stable dtype.
 
+        Shared by `_forward_slice_space` and `compute_layer_tokens` so the
+        ordinary forward and the two-stage (decoupled / amortized) forward
+        cannot drift: they run literally the same reduction.
+
+        Returns `(tokens, tile_weights)`. `tile_weights` is the per-tile
+        [H, tile, M] assignment matrix, or None when checkpointing (where it
+        must NOT be kept -- discarding it is the whole point) or when the
+        caller cannot reuse it. Handing it back costs nothing: the `agg` einsum
+        in `_chunk_stats` already pins it in the autograd graph for backward,
+        so a Python reference to it adds no allocation.
+        """
         num_acc = den_acc = None
+        tile_weights = [] if (keep_weights and not do_checkpoint) else None
         for (s, e) in tile_ranges:
             xt = x_g[s:e]
             if do_checkpoint:
                 num_t, den_t, _ = checkpoint(
                     self._chunk_stats, xt, fused_w, fused_b, use_reentrant=False)
             else:
-                num_t, den_t, _ = self._chunk_stats(xt, fused_w, fused_b)
+                num_t, den_t, w_t = self._chunk_stats(xt, fused_w, fused_b)
+                if tile_weights is not None:
+                    tile_weights.append(w_t)
             num_acc = num_t if num_acc is None else num_acc + num_t
             den_acc = den_t if den_acc is None else den_acc + den_t
 
@@ -229,49 +241,108 @@ class PhysicsAttentionIrregular(nn.Module):
             # reduce to the whole-graph aggregates before normalizing.
             num_acc, den_acc = _shard_all_reduce_sum(num_acc, den_acc, self.shard_group)
 
-        tokens = num_acc / (den_acc[:, :, None] + EPS)   # stable dtype
-        tokens = tokens.to(x_g.dtype)
-        out_tok = self._slice_attend(tokens)              # [H, M, D]
+        return num_acc / (den_acc[:, :, None] + EPS), tile_weights
 
+    def _deslice_tiles(self, x_g: torch.Tensor, out_tok: torch.Tensor,
+                        fused_w: torch.Tensor, fused_b: torch.Tensor,
+                        tile_ranges: List[Tuple[int, int]],
+                        do_checkpoint: bool, tile_weights=None) -> torch.Tensor:
+        """Pass 2: project the attended tokens back onto x_g's nodes, tile by
+        tile. Shared by the ordinary and two-stage forwards for the same reason
+        as `_accumulate_tokens`.
+
+        `tile_weights` from pass 1 is reused when available. Only the ordinary
+        forward can supply it -- the two-stage paths deslice a DIFFERENT node
+        set than the one that built the tokens, so their assignment weights are
+        genuinely different and must be computed here.
+        """
         outs = []
-        for (s, e) in tile_ranges:
+        for i, (s, e) in enumerate(tile_ranges):
             xt = x_g[s:e]
+            w_t = None if tile_weights is None else tile_weights[i]
             if do_checkpoint:
                 out_t = checkpoint(
-                    self._deslice, xt, out_tok, None, fused_w, fused_b, use_reentrant=False)
+                    self._deslice, xt, out_tok, w_t, fused_w, fused_b, use_reentrant=False)
             else:
-                out_t = self._deslice(xt, out_tok, None, fused_w, fused_b)
+                out_t = self._deslice(xt, out_tok, w_t, fused_w, fused_b)
             outs.append(out_t)
         return torch.cat(outs, dim=0)
 
+    def _forward_slice_space(self, x_g: torch.Tensor, tile_ranges: List[Tuple[int, int]],
+                              use_checkpointing: bool = False) -> torch.Tensor:
+        """Transolver-3's two-pass form. tile_ranges == [(0, Ng)] is the exact
+        single-tile special case (section 6.3).
+
+        Both passes need the same node->slice assignment matrix, and there are
+        two opposite right answers depending on whether we are tiling:
+
+        - UNTILED there is nothing to stream, so pass 1's matrix is handed to
+          pass 2. That is free (autograd already pins it) and avoids allocating
+          a second [H, N, M], the largest tensor in the layer.
+        - TILED, each tile's [H, tile, M] is dropped as soon as it has been
+          folded into the aggregates and rebuilt during backward. THIS is what
+          makes tiling a memory technique at all: it takes the N-scaled
+          attention term out of retained memory entirely, leaving only the
+          [N, C] residual stream. Keeping the tiles instead just reassembles
+          the untiled footprint one slab at a time.
+
+        So per-tile recompute follows `chunk_size`, NOT `use_checkpointing` --
+        the latter is block-level checkpointing (model/checkpointing.py) and is
+        orthogonal. `use_checkpointing` here only force-enables recompute for
+        the untiled case, which is rarely what you want (the rebuilt whole-mesh
+        matrix then becomes the transient and peak barely moves).
+        """
+        fused_w, fused_b = self._fused_slice_weights()
+        tiled = len(tile_ranges) > 1
+        do_checkpoint = (tiled or use_checkpointing) and self.training and x_g.requires_grad
+
+        tokens, tile_weights = self._accumulate_tokens(
+            x_g, tile_ranges, fused_w, fused_b, do_checkpoint, keep_weights=True)
+        out_tok = self._slice_attend(tokens.to(x_g.dtype))   # [H, M, D]
+        return self._deslice_tiles(x_g, out_tok, fused_w, fused_b, tile_ranges,
+                                   do_checkpoint, tile_weights)
+
     # ------------------------------------------------------------------
-    # decoupled two-stage inference (section 11, Appendix A.4): split the
+    # decoupled two-stage forward (section 11, Appendix A.4): split the
     # slice_space kernel's own two passes across a cache-building call and a
     # decode call, so the physics tokens for one layer can be computed from
     # one set of chunks and applied to a different set of query coordinates.
+    #
+    # Used by inference (`infer_mode decoupled`) and, with gradients enabled,
+    # by amortized training -- see model/amortized.py.
     # ------------------------------------------------------------------
 
     def compute_layer_tokens(self, x_g: torch.Tensor,
-                              tile_ranges: List[Tuple[int, int]]) -> torch.Tensor:
-        """Stage 1 (pass 1 only): x_g -> tokens [H, M, D], residual dtype."""
+                              tile_ranges: List[Tuple[int, int]],
+                              use_checkpointing: bool = False) -> torch.Tensor:
+        """Stage 1 (pass 1 only): x_g -> tokens [H, M, D], residual dtype.
+
+        Tiling implies per-tile recompute here for the same reason it does in
+        `_forward_slice_space`: streaming is the point of cutting tiles.
+        """
         fused_w, fused_b = self._fused_slice_weights()
-        num_acc = den_acc = None
-        for (s, e) in tile_ranges:
-            num_t, den_t, _ = self._chunk_stats(x_g[s:e], fused_w, fused_b)
-            num_acc = num_t if num_acc is None else num_acc + num_t
-            den_acc = den_t if den_acc is None else den_acc + den_t
-        tokens = num_acc / (den_acc[:, :, None] + EPS)
+        do_checkpoint = ((len(tile_ranges) > 1 or use_checkpointing)
+                         and self.training and x_g.requires_grad)
+        tokens, _ = self._accumulate_tokens(x_g, tile_ranges, fused_w, fused_b, do_checkpoint)
         return tokens.to(x_g.dtype)
 
     def decode_with_tokens(self, x_g: torch.Tensor, cached_tokens: torch.Tensor,
-                            tile_ranges: List[Tuple[int, int]]) -> torch.Tensor:
+                            tile_ranges: List[Tuple[int, int]],
+                            use_checkpointing: bool = False) -> torch.Tensor:
         """Stage 2: attend on an already-built token cache, then deslice
         x_g's own chunks against it. x_g may be a different coordinate set
-        than the one that produced cached_tokens."""
+        than the one that produced cached_tokens.
+
+        Tiling implies per-tile recompute, as in `compute_layer_tokens`. There
+        is no pass-1 matrix to reuse on this path either way: the tokens were
+        built from a different node set, so these assignment weights are
+        genuinely new.
+        """
         out_tok = self._slice_attend(cached_tokens)
         fused_w, fused_b = self._fused_slice_weights()
-        outs = [self._deslice(x_g[s:e], out_tok, None, fused_w, fused_b) for (s, e) in tile_ranges]
-        return torch.cat(outs, dim=0)
+        do_checkpoint = ((len(tile_ranges) > 1 or use_checkpointing)
+                         and self.training and x_g.requires_grad)
+        return self._deslice_tiles(x_g, out_tok, fused_w, fused_b, tile_ranges, do_checkpoint)
 
     # ------------------------------------------------------------------
     # packed, ptr-segmented entry point

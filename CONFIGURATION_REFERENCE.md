@@ -276,6 +276,17 @@ correct its own accumulated error. It follows NVIDIA/GM's crash-dynamics study
 gradient-checkpoint every step so that fits, and inject no noise. There are no
 further knobs — `time_integration ar_rt` selects the whole recipe.
 
+Verified against the reference source: it fixes `rollout_steps =
+num_time_steps - 1` with no rollout-length curriculum, uses Adam at
+`start_lr 1e-4` cosine-annealed to `3e-7` over 10,000 epochs, and applies **no
+gradient clipping** — it does not need any, because its loss is on raw
+positions and so does not grow with trajectory length. Two deliberate
+differences remain here: the reference predicts **acceleration** and integrates
+twice (`vel += dt*acc; y += dt*vel`) from a normalized-velocity input, which
+only makes sense for kinematic channels, whereas this repo predicts a
+first-order state delta so the same path covers stress; and the loss is
+normalized rather than raw (next bullet).
+
 Practical notes:
 
 - **Item count changes.** This repository's AR-OT gives each `(t, t+1)` pair its
@@ -296,13 +307,34 @@ Practical notes:
 - **Validation follows training.** Under `ar_rt` the reported validation loss is
   the rollout loss, so best-checkpoint selection optimizes rollout accuracy.
   Periodic test-set output stays one-step (it is the visualization path).
-- **Loss scale is preserved.** Each step's target is the correction back onto
-  the ground truth in the same normalized-delta space AR-OT uses, so a
-  single-step trajectory is numerically identical to `ar_ot`.
+- **Loss is scored in state space.** Each step compares the predicted next
+  *state* to the true next state, both divided by the **state** spread
+  (`node_std`). The reference implementation
+  ([`rollout.py`](https://github.com/NVIDIA/physicsnemo/blob/main/examples/structural_mechanics/crash/rollout.py),
+  [`train.py`](https://github.com/NVIDIA/physicsnemo/blob/main/examples/structural_mechanics/crash/train.py))
+  applies `MSELoss` to **raw absolute positions** (`node_target = pos_seq[1:]`),
+  whose magnitude is fixed by the physical position spread; this repo predicts
+  four heterogeneous channels (displacement ~1e1, stress ~1e-7 on ex2) so a raw
+  MSE would ignore stress, and `node_std` is the multi-channel analogue of that
+  fixed scale.
+
+  It is **not** the one-step `delta_std`, which an earlier version used.
+  Dividing an error that accumulates over `k` steps by a one-step spread makes
+  the loss grow linearly with the step index — measured on ex2, initial MSE 260
+  vs AR-OT's 0.31, with gradient norms ~700x AR-OT's that `clip_grad_norm_(3.0)`
+  then flattened into pure direction. A consequence of the fix: a single-step
+  trajectory is **no longer numerically identical** to `ar_ot`; it equals
+  AR-OT's loss rescaled per channel by `(delta_std / node_std)**2`. That earlier
+  identity is precisely why the problem was invisible at `K=1`. The reported
+  train/val loss for `ar_rt` is therefore on a different scale than for
+  `ar_ot` — compare `ar_rt` runs to each other, not to `ar_ot` runs.
 - **MeshGraphNets rebuilds geometry per step.** Mesh edge features, world
   (contact) edges, and multiscale coarse-level features are all recomputed
   on-device from each predicted state, matching inference. `coarse_world_edges
-  True` is rejected under `ar_rt`.
+  True` is rejected under `ar_rt`. Multi-partition levels
+  (`voronoi_branches > 1`) are supported: every branch is refreshed from the
+  same upstream positions, and its own per-branch normalization statistics are
+  used.
 - **`std_noise` / `noise_gamma` are inert under `ar_rt`.** The rollout supplies
   the input perturbation they stood in for, and measures its target from the
   unperturbed state.
@@ -496,6 +528,10 @@ Use `model meshgraphnets`. Files are under `configs/MeshGraphNets/`.
 | `mp_per_level` | C | none | Exactly `2 * multiscale_levels + 1` block counts: down arm, coarsest, up arm. |
 | `coarsening_type` | C | `bfs` | Scalar/repeated list of `bfs`, `voronoi_centroid`, `voronoi_inherit`, or `voronoi_seedmean`. Bare `voronoi` is removed. |
 | `voronoi_clusters` | C | none | Required for Voronoi levels. One reusable count or one count per level. |
+| `voronoi_branches` | O | all `1` | **Multi-partition coarsening.** Per-level count of *parallel* Voronoi partitions of the same node set (each uses a different FPS start), merged by a widened `skip_projs`. One reusable value or one per level; `1` everywhere reproduces the single-partition hierarchy exactly. Only the **last** configured level may exceed `1` — an earlier level raises, because branches do not chain into a further level. Requires a `voronoi_*` `coarsening_type` (`bfs` has no seed-choice axis to vary). Rejected together with `coarse_world_edges True`. Changes the hierarchy-cache signature, so enabling it builds a new `.mscache.*.h5`. |
+| `pool_type` | O | `mean` | Restriction (fine→coarse) operator. `mean` is the historical fixed mean-pool; `attention` learns per-cluster weights. Zero-initialized score heads make `attention` reduce to `mean` exactly at step 0, so it can only depart from the baseline if training says to. |
+| `unpool_type` | O | `sum` | Prolongation aggregation. `sum` is the historical plain sum over each fine node's coarse sources; `attention` learns a normalized weight per source (making prolongation an interpolation). Also exactly baseline-equivalent at initialization. |
+| `pool_heads` | C | `4` | Attention heads for `pool_type attention`; must divide `latent_dim`. Multiple heads let one carry a mean-like and another a peak-like summary of the same cluster. Inert when `pool_type` is `mean`. |
 | `coarse_cache_per_worker` | O | `500` | Per-worker in-memory hierarchy cache cap. |
 | `use_world_edges` | O | `False` | Add non-mesh radius edges. |
 | `world_radius_multiplier` | C | `1.5` | Radius multiplier based on mesh-edge scale. |
@@ -512,7 +548,7 @@ Use `model meshgraphnets`. Files are under `configs/MeshGraphNets/`.
 | `profile_batches` | O | `0` | Number of early batches to profile; `0` disables. |
 | `train_eval_subset_size` | O | `128` | DDP-only train subset used for periodic train-set evaluation. |
 | `use_parallel_stats` | O | `True` | Parallel preprocessing-stat scan. |
-| `pin_memory` | **G** | native `True` | Live: both `single_training.py` and `distributed_training.py` read `bool(config.get('pin_memory', True)) and torch.cuda.is_available()`. Setting `pin_memory False` opts DataLoaders out of pinned host memory — a real win for the large variable-shape ex2 batches, where pinning serializes in the parent. **Schema gap:** the key is *not* in the suite `MGN_KEYS` set, so suite preflight emits `CFG-UNKNOWN-001` and strict mode rejects it. It is authored in the two `config_*_himgn.txt` / `config_*_meshgraphnets.txt` ex2 templates and works in direct native runs; add it to `MGN_KEYS` to author it cleanly through the launcher. Distinct from the runtime-derived `_pin_memory`. |
+| `pin_memory` | O | native `True` | Live: both `single_training.py` and `distributed_training.py` read `bool(config.get('pin_memory', True)) and torch.cuda.is_available()`. Setting `pin_memory False` opts DataLoaders out of pinned host memory — a real win for the large variable-shape ex2 batches, where pinning serializes in the parent. Distinct from the runtime-derived `_pin_memory`. *(Was a schema gap: the key was missing from the suite `MGN_KEYS` set and raised `CFG-UNKNOWN-001` on the ex2 templates that author it. Now registered, so it validates cleanly.)* |
 | `augment_geometry` | O | `False` | Training-only random geometry transform. |
 | `std_noise` | O | `0` | Physical-input noise. |
 | `noise_gamma` | O | `1` | Delta-target noise correction. |
@@ -811,8 +847,11 @@ chosen direct-static path treats the output as one field.
 | `num_layers` | R train | none | Transolver block count; positive. |
 | `num_heads` | R train | none | Attention heads; positive and divides `latent_dim`. |
 | `slice_num` | R train | none | Physics-Attention learned slice count; positive. |
-| `attention_kernel` | R train | `naive` | `naive` or `slice_space`. Chunking/node sharding requires `slice_space`. |
-| `chunk_size` | O | `0` | Training/model attention tiling size; nonnegative. Positive requires `slice_space`. |
+| `attention_kernel` | R train | `slice_space` | `slice_space` (Transolver-3 aggregate-then-project) or `naive` (v1 project-then-aggregate). Tiling, node sharding and amortized training all require `slice_space`. The two kernels are numerically equivalent — see section 8.4. |
+| `chunk_size` | O | `0` | Attention tiling size in nodes; nonnegative, `0` = untiled. Positive requires `slice_space`, and needs `use_checkpointing True` to lower memory rather than raise it (suite emits `TRANS-CHUNK-002` otherwise). |
+| `amortized_training` | O | `False` | Two-stream training: tokens from a subsampled cache stream, loss on a smaller query stream. See section 8.4. |
+| `amortized_cache_nodes` | O | `0` | Nodes per graph feeding the token cache; `0` = full mesh. |
+| `amortized_query_nodes` | O | `0` | Nodes per graph decoded, and the only ones the loss sees; `0` = full mesh. |
 | `mlp_ratio` | O | `1` | Block MLP expansion ratio; positive. |
 | `dropout` | O | `0.0` | Block dropout. |
 | `temperature_init` | O | `0.5` | Initial slice-assignment temperature. |
@@ -838,6 +877,100 @@ chosen direct-static path treats the output as one field.
 | `use_parallel_stats` | O | `True` | Parallel normalization scan. |
 | `use_world_edges` | X except `False` | `False` | Transolver does not consume graph edges. |
 | `use_multiscale` | X except `False` | `False` | MGN hierarchy is unsupported. |
+
+### 8.4 The Transolver-3 memory ladder (kernel, tiling, amortization)
+
+Three independent knobs, in the order you should reach for them. Only the third
+changes what is computed.
+
+**1. `attention_kernel slice_space` — free, and the prerequisite for the rest.**
+The v1 `naive` order projects every node into head space and then aggregates;
+`slice_space` aggregates into `slice_num` tokens first and projects those. Same
+function, different association order: `Transolver/misc/verify_v3.py` L1 checks
+all three paths (naive / untiled / tiled) agree to fp64 round-off (~5e-16), and
+`misc/verify_against_official.py` checks them against upstream's own code.
+Switching kernels therefore changes memory and speed but not results, so runs
+from before and after the default flip stay comparable. Checkpoints record
+`attention_kernel` in `model_config`, so pre-flip checkpoints keep loading as
+`naive`.
+
+**2. `chunk_size` — the main memory lever, and independent of
+`use_checkpointing`.**
+Tiling cuts each graph into contiguous node tiles. A tiled forward *streams*:
+each tile's `[heads, tile, slice_num]` assignment matrix is dropped as soon as
+it has been folded into the slice aggregates, and rebuilt during backward. That
+takes the N-scaled attention term — the largest tensor in the layer — out of
+retained memory entirely, leaving only the `[N, C]` residual/FFN stream.
+
+This is a property of tiling itself, not of block-level checkpointing. Measured
+on one attention layer (`verify_v3.py` L5, N=60k, C=128, M=128):
+
+| configuration | retained | peak |
+| --- | --- | --- |
+| `naive` | 659 MB | 1619 MB |
+| `slice_space` untiled | 1049 MB | 1570 MB |
+| `slice_space` + `chunk_size 8192` | **64 MB** | **328 MB** |
+
+Two consequences worth planning around:
+
+- **Peak becomes near-independent of `slice_num`**, because `slice_num` only
+  multiplies the term tiling removes. Projected at ex2 scale (200k nodes, batch
+  4/rank, bf16): the `slice_num 256` cell drops from 280 GB untiled to 69 GB
+  tiled, versus 68 GB at `slice_num 128`. Raising `slice_num` stops being a
+  memory decision once tiling is on.
+- **`use_checkpointing` is orthogonal** and usually unnecessary once tiling is
+  on. It removes the remaining `[N, C]` stream at 30–75% wall-clock; reach for
+  it only when tiling alone does not fit.
+
+Untiled, `slice_space` costs more than `naive` (1049 vs 659 MB retained) because
+both passes need the same assignment matrix. `_forward_slice_space` hands pass
+1's copy to pass 2 rather than rebuilding it — free, since the aggregate einsum
+already pins it in the autograd graph. Tiled, the opposite is wanted and each
+tile is discarded; `_accumulate_tokens` returns `None` accordingly.
+
+Reference point for scale: extrapolating the measured ladder to **2.9M points**
+(L=8, C=256, M=128) gives 697 GB untiled → 315 GB tiled → 84 GB tiled +
+`use_checkpointing` → **49 GB** tiled + checkpointing + `mlp_ratio 1` + bf16.
+The last rung is the regime Transolver-3 reports; reaching it needs tiling *and*
+block checkpointing *and* bf16, not tiling alone.
+
+**3. `amortized_training` — the one that changes the objective, and the only
+memory lever that works with `use_checkpointing False`.**
+Each layer's physics tokens are built from a CACHE node stream, and a separate,
+smaller QUERY stream is decoded against them; the loss sees only the query
+nodes. Retained activations go from `O(layers x N x latent_dim)` to
+`O(layers x (cache + query) x latent_dim)`. Because it shrinks `N` itself it
+cuts *every* term, so unlike tiling it does not need recompute to pay off — and
+it is faster, not slower, since there is simply less to compute (same model as
+the table above, `use_checkpointing False` throughout):
+
+| configuration | peak | fwd+bwd |
+| --- | --- | --- |
+| `naive` (v1 baseline) | 4.02 GB | 301 ms |
+| `slice_space` untiled | 4.86 GB | 344 ms |
+| `slice_space` + amortized, cache 8192 / query 2048 | 2.87 GB | 264 ms |
+| `slice_space` + amortized, cache 4096 / query 1024 | 1.47 GB | 161 ms |
+
+A token is a sum over nodes divided by a sum over the same nodes, so the scale
+factor of a uniform subsample cancels and the subsampled token is a *consistent*
+estimator of the whole-mesh token with no rescaling. `verify_v3.py` L4 confirms
+the error falls at the 1/sqrt(k) Monte Carlo rate. Consistent is not exact, so
+this is a **training-only** transform: `_amortized_active()` requires
+`self.training`, and validation, periodic test and inference always run the full
+mesh, keeping reported metrics comparable to a non-amortized run.
+
+Both streams run with autograd. A `no_grad` cache stream would look like an
+obvious optimization and would silently freeze `in_project_fx`, which appears
+nowhere else; `verify_v3.py` L3 asserts every parameter still receives a finite
+gradient.
+
+Rejected combinations (native and suite, codes `TRANS-AMORT-001..004`):
+`attention_kernel naive`; both budgets `0` (pure overhead — it computes the
+ordinary forward with two streams); `time_integration ar_rt` (the rollout feeds
+each step's prediction back as the next full node state); `parallel_mode
+node_shard` (sharding assumes the ranks partition one whole mesh).
+
+### 8.5 Common keys
 
 All common optimizer, noise, EMA, compile, augmentation, DataLoader, and
 rollout-output keys in section 3.4 apply. Transolver uses AdamW and defaults
@@ -944,6 +1077,7 @@ configured path logic; verify before relying on it.
 | --- | --- |
 | `_mgn_dump_helper.py` | R `--dataset`, `--config-json`, `--split-seed`, `--out`; optional `--n-items 5`. |
 | `bench_attention_kernels.py` | R `--dataset`; optional `--latent-dim 128`, `--num-heads 8`, `--slice-num 64`, `--chunk-size 0`, `--use-checkpointing`, `--n` (all nodes if omitted). |
+| `verify_v3.py` | No arguments. Self-contained fp64/CPU check of the Transolver-3 feature set (section 8.4): kernel equivalence, decoupled and amortized identity, gradient coverage, token-estimator convergence rate, and — on CUDA — the peak-memory ladder. Unlike `verify_against_official.py` it needs no upstream clone. |
 | `compare_meshgraphnets_dataset.py` | R `--dataset`, `--meshgraphnets-root`, `--config`; optional `--n-items 5`. |
 | `verify_against_official.py` | R `--t3-root`; optional `--v1-file`. |
 
@@ -1546,6 +1680,24 @@ recommendation warning to errors (3 files). Neither run validates the existence
 of every referenced HDF5/checkpoint, full dataset consistency, checkpoint tensor
 compatibility, CUDA availability, or training completion.
 
+**Re-audit after the Hi-MGN ablation configs landed** (16 new
+`configs/MeshGraphNets/{ex1,ex2}/config_{train,infer}_himgn_{base,p1,p2,p12}.txt`,
+plus `pool_type` / `unpool_type` / `pool_heads` / `voronoi_branches` /
+`pin_memory` added to `MGN_KEYS`):
+
+```text
+non-strict: files=143, clean=137, errors=12, warnings=17
+strict:     files=143, clean=137, errors=12, warnings=17
+```
+
+Two things changed beyond the file count. **Strict and non-strict now agree** —
+the 3 strict-only promotions are gone, because `pin_memory` is registered
+instead of raising `CFG-UNKNOWN-001`; repo-wide there are now **zero unknown
+config keys**. And the remaining 12 errors are unchanged in kind: they are
+`CFG-COMMON-001`/`-002` on the same 6 paper-harness files
+(`benchmarks/{deeponet_fractional2d, elasticity, gino_carcfd}/…`) that carry no
+`model` key. No ablation config contributes an error or a warning.
+
 ## 16. Verification record
 
 The 2026-07-23 re-audit was checked mechanically against the working-tree
@@ -1569,6 +1721,23 @@ source:
 - `configs/Geometry_generation/config_train_v2.txt` (the new Tier-2 file) passes
   a full launcher `--check` with datasets/native/environment probes skipped:
   0 errors, 0 warnings, 7 notices.
+
+**Hi-MGN ablation addendum** (see section 15's re-audit and section 11.1 of
+REPOSITORY_OVERVIEW.md):
+
+- **143** live `config*.txt` files after adding 16 ablation files. Appendix A
+  predates them and has not been re-enumerated.
+- **0** unknown config keys repo-wide: `pin_memory` — previously the only
+  non-harness `CFG-UNKNOWN-001` — is now in `MGN_KEYS` alongside the four new
+  MeshGraphNets keys, so strict and non-strict preflight now produce identical
+  counts (143 files, 137 clean, 12 errors, 17 warnings).
+- All 10 ablation **train** configs pass a full launcher `--check` (0 errors) on
+  an 8-GPU host; on a host with fewer GPUs the high-numbered lanes correctly
+  fail `ENV-CUDA-002`. All 8 **inference** configs pass with
+  `--skip-filesystem-check` (their `modelpath` checkpoints do not exist until
+  training runs — the pre-existing `config_infer_himgn.txt` files behave the
+  same way).
+- MeshGraphNets test suite: 29 passed.
 - New SDFFlow keys traced to their live consumers: `surface_weight` /
   `normal_weight` / `eikonal_weight` / `hybrid_grad_points`
   (`training_profiles/train_vae.py`), `fm_arch` / `fm_heads`

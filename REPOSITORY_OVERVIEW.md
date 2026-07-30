@@ -154,6 +154,8 @@ AI-CAE4ALL/
 │   └── benchmarks/…              # per-paper validation datasets
 │
 ├── output/                       # run artifacts (checkpoints, rollouts, samples)
+├── run_ablation.sh               # launches the Hi-MGN ablation sweep (§11.1)
+├── compare_ablation.py           # reads the sweep's epoch logs into one table
 └── git-*.sh                      # auto push/pull/fresh-start helpers
 ```
 
@@ -467,6 +469,24 @@ substantially extended.
   coarsening (`use_multiscale`) with `bfs` or three `voronoi_*` strategies, a
   down-arm/coarsest/up-arm block layout (`mp_per_level` must equal
   `2*multiscale_levels+1`), and per-worker + on-disk hierarchy caching.
+- **Learned inter-level transfer operators** (`pool_type`, `unpool_type`,
+  `pool_heads`): the restriction was a fixed mean-pool and the prolongation
+  aggregation a fixed sum, while everything around them was learned. Both can
+  now be multi-head attention over the cluster / over each fine node's coarse
+  sources. Zero-initialized score heads make either reduce to the fixed
+  operator *exactly* at step 0, so enabling one starts training from the
+  previous model rather than from a different basin.
+- **Multi-partition coarse representation** (`voronoi_branches`): a level can
+  hold `K` parallel Voronoi partitions of the same node set instead of one,
+  merged by a widened `skip_projs`. The motivation is that a single `k`
+  controls two things at once — how much field information the coarse level
+  retains and how short its graph diameter is — and `K` partitions of `k`
+  clusters improve both together relative to one partition of `K*k`. Only the
+  deepest configured level may branch; branching an earlier level would fork
+  every level beneath it, so it is rejected in the hierarchy builder, the model
+  constructor, and the dataset.
+  See [ATTENTION_TRANSFER_DESIGN.md](MeshGraphNets/ATTENTION_TRANSFER_DESIGN.md)
+  for the design, the measurements behind the defaults, and the as-built notes.
 - **World edges** ([general_modules/world_edges.py](MeshGraphNets/general_modules/world_edges.py)):
   optional non-mesh radius edges from deformed positions (`use_world_edges`,
   backends `scipy_kdtree`/`torch_cluster`), for contact-like interactions.
@@ -481,6 +501,13 @@ substantially extended.
   ([general_modules/removed_feature_guard.py](MeshGraphNets/general_modules/removed_feature_guard.py)):
   hard-rejects VAE/prior keys, so a variational config accidentally routed here
   fails loudly rather than silently ignoring settings.
+- **Concurrent-job safety.** Training writes normalization statistics back into
+  the *source* HDF5 (`write_preprocessing_to_hdf5`). DDP restricts that to rank
+  0, but independent jobs on the same dataset — which the ablation sweep runs
+  eight of at once — had no guard, and HDF5's own file locking does not block a
+  second `'r+'` open here (verified on HDF5 1.14.6). The write is now serialized
+  by an exclusive lock file, the same pattern `multiscale_cache.ensure_cache`
+  already used for the shared hierarchy cache.
 
 ---
 
@@ -583,18 +610,28 @@ softly assigns mesh nodes to a small learned set of "physics slices"
 `O(N²)` node attention into `O(N·slice_num)`.
 
 - **Two numerically-exact attention kernels** sharing one v1-layout state dict:
-  `naive` (project-then-aggregate; default at small/medium meshes) and
-  `slice_space` (aggregate-then-project, chunked; required for tiling/node
-  sharding). Both operate **per graph, segmented by `ptr`**, so nodes never mix
-  across graphs in a batch.
+  `slice_space` (Transolver-3's aggregate-then-project; **the default**, and the
+  only kernel that can tile, shard, or amortize) and `naive` (v1's
+  project-then-aggregate). Both operate **per graph, segmented by `ptr`**, so
+  nodes never mix across graphs in a batch, and they agree to fp64 round-off
+  (`misc/verify_v3.py` L1), so the choice is memory/speed, never results.
 - **Node-shard parallelism** (`parallel_mode node_shard`, alias `model_split`):
   one mesh's nodes are split across ≥2 GPUs and the slice aggregates are
   autograd-aware SUM all-reduced, reproducing single-process results bit-for-bit.
   Requires `attention_kernel slice_space`.
-- **Memory characteristic** (from prior investigation): the naive kernel holds
-  `[H, N, slice_num]` fp32 per layer, so VRAM scales with `B·L·H·N·slice_num` —
-  `slice_num`/`num_layers` (not `latent_dim`) drive memory; deep/wide configs
-  need activation checkpointing.
+- **Memory characteristic**: the dominant term is the `[H, N, slice_num]` fp32
+  slice-weight matrix per layer, so VRAM scales with `B·L·H·N·slice_num` —
+  `slice_num`/`num_layers` (not `latent_dim`) drive memory. `chunk_size` tiles
+  that matrix and **streams** it: each tile is dropped once folded into the
+  aggregates and rebuilt in backward, so the N-scaled attention term leaves
+  retained memory (measured 1049 MB → 64 MB) and peak becomes near-independent
+  of `slice_num`. This needs no block checkpointing — `use_checkpointing` is
+  orthogonal. Measured in `misc/verify_v3.py` L5 and CONFIGURATION_REFERENCE.md 8.4.
+- **Amortized training** (`amortized_training`): builds each layer's physics
+  tokens from a subsampled *cache* node stream and computes the loss on a
+  smaller decoded *query* stream, cutting activations to
+  `O(L·(cache+query)·C)`. Training-only — eval and inference always run the full
+  mesh. See CONFIGURATION_REFERENCE.md 8.4.
 - Uses AdamW; slice-assignment temperature is annealed
   (`temperature_init/min/max`); inference supports `direct` and `decoupled`
   modes.
@@ -662,7 +699,7 @@ example dataset. Approximate inventory:
 
 | Location | Files | Notes |
 | --- | --- | --- |
-| `configs/MeshGraphNets/{ex1,ex2}/` | ~25 | Train/inference for both example datasets |
+| `configs/MeshGraphNets/{ex1,ex2}/` | ~35 | Train/inference for both example datasets, including the Hi-MGN ablation arms (§11.1) |
 | `configs/MeshGraphNets-V/b8_all_warpage_input/` | ~24 | Variational sweeps (displacement-only, `input_var 3`/`output_var 3`) |
 | `configs/Neural_Operator/{ex1,ex2}/` | ~17 | Point-DeepONet/DeepONet/FNO/GINO, incl. smoke configs |
 | `configs/Transolver/{ex1,ex2}/` | ~13 | Includes an `ex2_sweep` |
@@ -677,6 +714,43 @@ results. Note the caveat from the config reference: several benchmark-only keys
 **intent markers, not runnable** — the native validators reject or ignore them,
 so those files capture benchmark *intent* more than a currently-executable
 config.
+
+### 11.1 The Hi-MGN transfer-operator / multi-partition ablation
+
+A controlled four-arm study of the two MeshGraphNets extensions described in
+§6, run on both example datasets. Design and measurements:
+[MeshGraphNets/ATTENTION_TRANSFER_DESIGN.md](MeshGraphNets/ATTENTION_TRANSFER_DESIGN.md).
+
+| Arm | Config stem | Difference from the arm baseline |
+| --- | --- | --- |
+| `orig` | `config_train_himgn` | pre-existing reference (differs from `base`: ex1 `use_world_edges`, ex2 `time_integration`) |
+| `base` | `config_train_himgn_base` | the study baseline — every arm is this file plus one block |
+| `p1` | `config_train_himgn_p1` | `pool_type`/`unpool_type attention`, `pool_heads 4` |
+| `p2` | `config_train_himgn_p2` | `voronoi_branches 1, 4` |
+| `p12` | `config_train_himgn_p12` | both |
+
+Matching `config_infer_himgn_{base,p1,p2,p12}` files exist per arm.
+
+Two properties are load-bearing and worth preserving if this is extended:
+
+- **The arms are generated, not hand-written.**
+  [configs/MeshGraphNets/gen_ablation_arms.py](configs/MeshGraphNets/gen_ablation_arms.py)
+  derives `p1`/`p2`/`p12` and every inference config from each ex's
+  `config_train_himgn_base.txt`, mirrors architecture keys from each train arm
+  into its inference twin, and assigns one GPU per config. Edit a baseline and
+  re-run it; editing an arm directly reintroduces exactly the silent drift the
+  study measures against. (It also owns the GPU map, so `run_ablation.sh` reads
+  the assignment back out of the configs rather than duplicating it.)
+- **`ex1` is AR-OT and `ex2` is AR-RT, forced by the data.** `ex1.h5` has
+  `num_timesteps = 1`, so there is no trajectory to unroll and `ar_rt` is
+  rejected at dataset construction. Arms are comparable *within* an ex only.
+
+`./run_ablation.sh` launches all ten runs at once across eight GPUs (the two
+reference arms share a GPU per dataset), after preflighting every config and
+refusing to start if two lanes claim the same device. `compare_ablation.py
+<ex>` then reads the per-epoch logs into one table. Note its closing caveat:
+the selection metric is a node-averaged MSE, which is not the peak-stress
+question the design document motivates the work with.
 
 ---
 

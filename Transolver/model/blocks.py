@@ -57,10 +57,11 @@ class TransolverBlock(nn.Module):
         return fx
 
     # ------------------------------------------------------------------
-    # decoupled two-stage inference (section 11, Appendix A.4)
+    # decoupled two-stage forward (section 11, Appendix A.4) -- used by
+    # `infer_mode decoupled` and by amortized training (model/amortized.py)
     # ------------------------------------------------------------------
 
-    def compute_tokens(self, fx, ptr, chunk_size: int = 0):
+    def compute_tokens(self, fx, ptr, chunk_size: int = 0, use_checkpointing: bool = False):
         """Stage 1: LayerNorm + per-graph token accumulation only -- no
         attend, no deslice, no FFN. Returns a list of [H, M, D] token tensors,
         one per graph in ptr."""
@@ -69,10 +70,12 @@ class TransolverBlock(nn.Module):
         for i in range(ptr.shape[0] - 1):
             s, e = int(ptr[i].item()), int(ptr[i + 1].item())
             tile_ranges = make_tile_ranges(e - s, chunk_size)
-            tokens_per_graph.append(self.attn.compute_layer_tokens(u[s:e], tile_ranges))
+            tokens_per_graph.append(
+                self.attn.compute_layer_tokens(u[s:e], tile_ranges, use_checkpointing))
         return tokens_per_graph
 
-    def forward_with_tokens(self, fx, ptr, tokens_per_graph, chunk_size: int = 0):
+    def forward_with_tokens(self, fx, ptr, tokens_per_graph, chunk_size: int = 0,
+                            use_checkpointing: bool = False):
         """Stage 2: attend on a precomputed token cache + deslice + residual
         + FFN (+ head if last_layer). fx's graphs must align 1:1 with
         tokens_per_graph (same ptr length), but may hold different node
@@ -82,7 +85,8 @@ class TransolverBlock(nn.Module):
         for i in range(ptr.shape[0] - 1):
             s, e = int(ptr[i].item()), int(ptr[i + 1].item())
             tile_ranges = make_tile_ranges(e - s, chunk_size)
-            attn_out = self.attn.decode_with_tokens(u[s:e], tokens_per_graph[i], tile_ranges)
+            attn_out = self.attn.decode_with_tokens(
+                u[s:e], tokens_per_graph[i], tile_ranges, use_checkpointing)
             outs.append(fx[s:e] + attn_out)
         fx2 = torch.cat(outs, dim=0)
         fx2 = fx2 + self.ffn(self.ln_2(fx2))

@@ -259,8 +259,17 @@ def test_edge_half_constants_match_the_actual_feature_layout():
     )
 
 
-def test_single_step_ar_rt_matches_ar_ot_loss(tmp_path):
-    """A one-step trajectory is AR-OT with extra bookkeeping; losses must agree."""
+def test_single_step_ar_rt_is_ar_ot_rescaled_per_channel(tmp_path):
+    """A one-step rollout is AR-OT's loss rescaled by (delta_std/node_std)^2.
+
+    AR-RT scores the STATE error normalized by the state spread, AR-OT scores
+    the one-step DELTA error normalized by the delta spread. At step 0 the
+    rollout has not drifted, so the two differ by exactly the per-channel ratio
+    of those two scales -- an identity worth pinning, because the previous
+    implementation normalized by delta_std at every step, which made this test
+    pass as exact equality while the loss silently grew with the step index on
+    a real 49-step trajectory (see the ar_rollout module docstring).
+    """
     path = tmp_path / "traj.h5"
     # T=2 -> the full-trajectory rollout is a single step.
     _write_dataset(path, num_timesteps=2)
@@ -290,7 +299,23 @@ def test_single_step_ar_rt_matches_ar_ot_loss(tmp_path):
         predicted, target = model(graph, add_noise=False)
         one_step, _, _ = loss_fn(predicted, target)
 
-    torch.testing.assert_close(rollout, one_step, rtol=1e-5, atol=1e-6)
+        # The exact identity: advanced - gt = delta_std * (pred - target_ot),
+        # so the state-normalized residual is that scaled by 1/state_std.
+        scale = (ctx.delta_std[:OUTPUT_VAR] / ctx.state_std)
+        expected = ((predicted - target) * scale).pow(2).mean(dim=-1).mean()
+
+    torch.testing.assert_close(rollout, expected, rtol=1e-5, atol=1e-7)
+
+    # And the rescale is real, not a no-op: on this fixture the two scales
+    # differ, so an implementation that still divided by delta_std would be
+    # caught here rather than silently agreeing.
+    assert not torch.allclose(scale, torch.ones_like(scale), rtol=1e-3), (
+        "fixture has delta_std == node_std, so this test cannot distinguish "
+        "the two normalizations -- widen the synthetic trajectory"
+    )
+    assert not torch.isclose(rollout, one_step, rtol=1e-3), (
+        "state-space and delta-space losses coincide; the fix is not in effect"
+    )
 
 
 def test_rollout_backpropagates_through_the_whole_unroll(tmp_path):

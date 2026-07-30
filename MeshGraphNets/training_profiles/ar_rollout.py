@@ -19,14 +19,26 @@ Two things differ from the reference, both deliberate:
     which also covers non-kinematic outputs such as stress. AR-RT is
     orthogonal to that choice, so the first-order integrator is kept.
 
-2.  Loss space. Each step's target is the correction back onto the ground
-    truth from wherever the rollout currently is, `s_gt[k+1] - s_pred[k]`,
-    expressed in the same normalized-delta space AR-OT uses. Since
-    `s_pred[k+1] = s_pred[k] + denorm(pred)`, the residual is exactly
-    `(s_pred[k+1] - s_gt[k+1]) / delta_std`, i.e. a per-channel-scaled state
-    loss over the trajectory — the same quantity the reference minimizes, on
-    a scale that keeps AR-OT learning rates transferable and makes a
-    single-step trajectory numerically identical to AR-OT.
+2.  Loss space. The reference computes `MSELoss` on **raw absolute positions**
+    (`node_target = pos_seq[1:]`), so its magnitude is set by the physical
+    position spread and does not depend on trajectory length. This repository
+    cannot use raw units — it predicts four heterogeneous channels
+    (displacement ~1e1, stress ~1e-7 on ex2), and a raw MSE would ignore
+    stress entirely. So the state error is normalized, and the scale is the
+    **state** spread (`node_std`), which is the multi-channel analogue of the
+    reference's implicit position scale.
+
+    It is deliberately *not* the one-step `delta_std`. Dividing an
+    error that accumulates over `k` steps by a one-step spread makes the loss
+    grow linearly with the step index: measured on ex2, `|target|` went from
+    0.34 at step 0 to 27.5 (peak 129) at step 48, an initial MSE of 260
+    against AR-OT's 0.31, and initial gradient norms ~700x AR-OT's — which
+    `clip_grad_norm_(3.0)` then flattened into pure direction. `node_std /
+    delta_std` is 20-31x per channel on ex2, i.e. exactly the trajectory-length
+    factor. That earlier scaling also made a single-step trajectory numerically
+    identical to AR-OT; that property is gone, and it was the reason the bug
+    was invisible at K=1. A single step now equals AR-OT's loss rescaled per
+    channel by `(delta_std / node_std)**2` — see tests/test_ar_rollout.py.
 
 Geometry is rebuilt from the predicted state at every step, exactly as
 inference does: mesh edge features, world (contact) edges, and multiscale
@@ -90,6 +102,10 @@ class RolloutContext:
         self.edge_std = to_tensor(stats['edge_std'])
         self.delta_mean = to_tensor(stats['delta_mean'])
         self.delta_std = to_tensor(stats['delta_std'])
+        # Scale for the rollout loss: the STATE spread over the trajectory, not
+        # the one-step delta spread. See the module docstring -- using
+        # delta_std here makes the loss grow linearly with the step index.
+        self.state_std = to_tensor(stats['node_std'])[:self.output_var]
 
         # A multi-partition level (ATTENTION_TRANSFER_DESIGN.md Part II) stores
         # a LIST of per-branch stat arrays where every other level stores one
@@ -177,8 +193,13 @@ def _refresh_one_partition(graph, key, current_pos, mean, std):
         deformed_half = deformed_edge_attr_torch(coarse_pos, coarse_edge_index)
         if mean is not None:
             deformed_half = (deformed_half - mean) / std
+        # .detach() on the reference half: it is trajectory-invariant, so its
+        # gradient contribution is already zero (the chain terminates at the
+        # dataloader's non-grad tensor). Without the detach every step's `cat`
+        # node stays reachable from the next step's, so a 49-step unroll keeps
+        # 49 of them alive for nothing.
         graph[f'coarse_edge_attr_{key}'] = torch.cat(
-            [deformed_half, previous_attr[:, REFERENCE_SLICE]], dim=1
+            [deformed_half, previous_attr[:, REFERENCE_SLICE].detach()], dim=1
         )
     return coarse_pos
 
@@ -288,18 +309,21 @@ def rollout_loss(model, graph, ctx, loss_fn, training=True):
         else:
             prediction = run_step(state)
 
-        # Target: the correction from where the rollout actually is back onto
-        # the ground truth, in AR-OT's normalized-delta space.
-        target_delta = graph.y_seq[:, step, :] - state[:, :output_var]
-        target = (target_delta - ctx.delta_mean) / ctx.delta_std
+        # Integrate the prediction into the next state, in physical units.
+        advanced = state[:, :output_var] + (prediction * ctx.delta_std + ctx.delta_mean)
 
-        loss, loss_sum, loss_count = loss_fn(prediction, target)
+        # Loss on the STATE, normalized by the state spread -- the reference
+        # compares raw positions; this is that comparison made scale-free
+        # across heterogeneous channels. Normalizing by delta_std instead
+        # would make the loss grow with the step index (module docstring).
+        loss, loss_sum, loss_count = loss_fn(
+            advanced / ctx.state_std, graph.y_seq[:, step, :] / ctx.state_std,
+        )
         total_loss = loss if total_loss is None else total_loss + loss
         total_sum = loss_sum if total_sum is None else total_sum + loss_sum
         total_count += loss_count
 
         if step < steps - 1:
-            advanced = state[:, :output_var] + (prediction * ctx.delta_std + ctx.delta_mean)
             if ctx.input_var > output_var:
                 # Channels the model does not predict are carried unchanged,
                 # matching inference (`current_state[:, :output_dim]` there).

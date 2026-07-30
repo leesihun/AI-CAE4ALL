@@ -9,6 +9,7 @@ launchers are architecture-agnostic.
 import torch
 import torch.nn as nn
 
+from model.amortized import sample_stream_index
 from model.blocks import TransolverBlock
 from model.checkpointing import run_checkpointed
 from model.physics_attention import PhysicsAttentionIrregular
@@ -29,9 +30,19 @@ class Transolver(nn.Module):
         self.temperature_init = float(config.get('temperature_init', 0.5))
         self.temperature_min = float(config.get('temperature_min', 0.1))
         self.temperature_max = float(config.get('temperature_max', 5.0))
-        self.attention_kernel = config.get('attention_kernel', 'naive')
+        # Transolver-3 defaults: the aggregate-then-project kernel, which is
+        # the one that can tile and the one the amortized/decoupled two-stage
+        # paths are built on. `naive` (v1's project-then-aggregate order) stays
+        # selectable and is what checkpoints trained before this default flip
+        # restore, since attention_kernel is recorded in model_config.
+        self.attention_kernel = config.get('attention_kernel', 'slice_space')
         self.chunk_size = int(config.get('chunk_size', 0))
         self.use_checkpointing = bool(config.get('use_checkpointing', False))
+
+        # Amortized training (model/amortized.py). Inactive outside training.
+        self.amortized_training = bool(config.get('amortized_training', False))
+        self.amortized_cache_nodes = int(config.get('amortized_cache_nodes', 0))
+        self.amortized_query_nodes = int(config.get('amortized_query_nodes', 0))
 
         if self.latent_dim % self.num_heads != 0:
             raise ValueError(
@@ -82,6 +93,12 @@ class Transolver(nn.Module):
         print('Transolver model created successfully')
         print(f'  Total parameters: {total_params:,}')
         print(f'  attention_kernel: {self.attention_kernel}, chunk_size: {self.chunk_size}')
+        if self.amortized_training:
+            # Printed at inference too, restored from the checkpoint's model_config
+            # -- it is provenance there, not an active setting, hence the suffix.
+            print(f'  amortized training: cache {self.amortized_cache_nodes or "full"} / '
+                  f'query {self.amortized_query_nodes or "full"} nodes per graph '
+                  f'(training forward only)')
         print(f'  latent_dim: {self.latent_dim}, num_layers: {self.num_layers}, '
               f'num_heads: {self.num_heads}, slice_num: {self.slice_num}')
         print(f'  node_input_size: {self.node_input_size} (+3 for pos_normalized)')
@@ -139,6 +156,23 @@ class Transolver(nn.Module):
             y = y - noise_gamma * noise * ratio
         return x, y
 
+    def _resolve_ptr(self, graph, x):
+        ptr = getattr(graph, 'ptr', None)
+        if ptr is None:
+            ptr = torch.tensor([0, x.shape[0]], device=x.device, dtype=torch.long)
+        return ptr
+
+    def _amortized_active(self) -> bool:
+        """Amortized training only ever alters the TRAINING forward, and only
+        when it actually shrinks a stream. Validation, periodic test and
+        inference all run `model.eval()`, so they take the full-mesh path and
+        the reported metrics stay comparable to a non-amortized run."""
+        return (
+            self.training
+            and self.amortized_training
+            and (self.amortized_cache_nodes > 0 or self.amortized_query_nodes > 0)
+        )
+
     def forward(self, graph, add_noise=None):
         """
         Expects pre-normalized inputs from the dataloader:
@@ -150,9 +184,17 @@ class Transolver(nn.Module):
         Returns:
             predicted normalized delta [sum_N, output_var]
             target normalized delta [sum_N, output_var], or None
+
+        Under amortized training both returns are restricted to the sampled
+        query nodes instead, and stay aligned with each other -- so every
+        caller that treats this as an opaque (prediction, target) pair keeps
+        working unchanged.
         """
         if add_noise is None:
             add_noise = self.training
+
+        if self._amortized_active():
+            return self.forward_amortized(graph, add_noise=add_noise)
 
         x = graph.x
         y = getattr(graph, 'y', None)
@@ -160,9 +202,7 @@ class Transolver(nn.Module):
         if add_noise:
             x, y = self._apply_noise(x, y)
 
-        ptr = getattr(graph, 'ptr', None)
-        if ptr is None:
-            ptr = torch.tensor([0, x.shape[0]], device=x.device, dtype=torch.long)
+        ptr = self._resolve_ptr(graph, x)
 
         inp = torch.cat([graph.pos_normalized, x], dim=-1)
         fx = self.preprocess(inp)
@@ -179,12 +219,59 @@ class Transolver(nn.Module):
 
     def _embed(self, graph):
         x = graph.x
-        ptr = getattr(graph, 'ptr', None)
-        if ptr is None:
-            ptr = torch.tensor([0, x.shape[0]], device=x.device, dtype=torch.long)
-        inp = torch.cat([graph.pos_normalized, x], dim=-1)
-        fx = self.preprocess(inp) + self.placeholder[None, :]
-        return fx, ptr
+        return self._embed_rows(graph.pos_normalized, x, None), self._resolve_ptr(graph, x)
+
+    def _embed_rows(self, pos_normalized, x, index):
+        """Embed one node stream. `index is None` means the whole packed mesh,
+        so the common full-stream case costs no gather."""
+        if index is not None:
+            pos_normalized = pos_normalized[index]
+            x = x[index]
+        inp = torch.cat([pos_normalized, x], dim=-1)
+        return self.preprocess(inp) + self.placeholder[None, :]
+
+    def forward_amortized(self, graph, add_noise=False):
+        """Two-stream training forward: build each layer's physics tokens from
+        a CACHE node stream, decode a (smaller) QUERY node stream against them,
+        and return the prediction/target restricted to the query nodes.
+
+        See model/amortized.py for why a subsampled cache stream still
+        estimates the right tokens and why both streams must carry gradients.
+
+        Layer l+1's tokens depend on layer l's node-space output, so the cache
+        stream is advanced block by block alongside the query stream -- except
+        on the last block, where its output would only feed the head and is
+        never read. Skipping it there saves one full deslice + FFN + head.
+
+        `use_checkpointing` is applied per attention tile here rather than per
+        block: block-level checkpointing exists to bound the residual stream at
+        O(L * N * C), and that is the very cost the node budgets already bound.
+        """
+        x = graph.x
+        y = getattr(graph, 'y', None)
+        if add_noise:
+            x, y = self._apply_noise(x, y)
+
+        ptr = self._resolve_ptr(graph, x)
+        cache_index, cache_ptr = sample_stream_index(ptr, self.amortized_cache_nodes)
+        query_index, query_ptr = sample_stream_index(ptr, self.amortized_query_nodes)
+
+        fx_cache = self._embed_rows(graph.pos_normalized, x, cache_index)
+        fx_query = self._embed_rows(graph.pos_normalized, x, query_index)
+
+        use_ck = self.use_checkpointing and self.training
+        last = len(self.blocks) - 1
+        for i, block in enumerate(self.blocks):
+            tokens = block.compute_tokens(fx_cache, cache_ptr, self.chunk_size, use_ck)
+            fx_query = block.forward_with_tokens(
+                fx_query, query_ptr, tokens, self.chunk_size, use_ck)
+            if i != last:
+                fx_cache = block.forward_with_tokens(
+                    fx_cache, cache_ptr, tokens, self.chunk_size, use_ck)
+
+        if y is not None and query_index is not None:
+            y = y[query_index]
+        return fx_query, y
 
     def forward_decoupled(self, cache_graph, query_graph=None, infer_chunk_size: int = 0):
         """Section 11 / Appendix A.4: two-stage inference. Stage 1 builds a

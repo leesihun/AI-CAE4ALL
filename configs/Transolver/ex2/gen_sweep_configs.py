@@ -54,26 +54,44 @@ server, 8 concurrent, one wave. Cells 1-4 run on server A, cells 5-8 on server B
 Wave duration is set by the single most expensive cell (L10 C512 M128), since
 every cell has its own dedicated GPU pair.
 
-=== MEMORY: WHY use_checkpointing IS True ON EVERY CELL ===
+=== MEMORY: WHY chunk_size CARRIES THIS SWEEP, NOT use_checkpointing ===
 
 ex2 graphs are ~200k nodes (dataset/ex2.h5: nodal_data (8, 50, 199993)), and
 batch_size is PER-RANK under DDP (DistributedSampler, distributed_training.py),
-so each GPU carries 4 x 200k nodes. The naive kernel materializes a
-[heads, N, slice_num] softmax weight tensor per layer, promoted to fp32 by
-_stable() in physics_attention.py:
+so each GPU carries 4 x 200k nodes. The dominant term is Physics-Attention's
+[heads, N, slice_num] softmax weight tensor, promoted to fp32 by _stable() in
+physics_attention.py:
 
     8 heads * 200k nodes * 256 slices * 4 B = 1.64 GB   per graph, per layer
 
-The worst cell here (L10 C256 M256) would hold ~66 GB for those tensors alone
-before counting the pre-softmax logits, which roughly double-to-triple it ->
-130-200 GB against a B300's ~288 GB. That would probably fit, but not with
-enough margin to risk losing the single wave to an OOM, so checkpointing stays
-on. It is also what the current ex2 anchor config already uses, so this keeps
-parity with prior runs rather than introducing a difference.
+A TILED forward streams: each tile's [heads, tile, slice_num] is dropped as soon
+as it has been folded into the slice aggregates and is rebuilt during backward,
+so that term leaves retained memory altogether and only one tile is ever live.
+This is independent of use_checkpointing, which is block-level and stays False
+here. Measured on one attention layer (misc/verify_v3.py L5): retained 1049 MB
+untiled -> 64 MB tiled, peak 80% below the naive kernel with no block
+checkpointing at all. Projected per cell at full ex2 scale, bf16, batch 4:
 
-Note this is a weaker constraint than the earlier full-factorial design faced:
-its L20/C512/M256 corner needed 260-390 GB and checkpointing was strictly
-mandatory. Here it is precautionary.
+    cell                        untiled        tiled 16384
+    1 ANCHOR    L10 C256 M128     171 GB            68 GB
+    3 layers 20 L20 C256 M128     332 GB (OOM)     131 GB
+    7 slice 256 L10 C256 M256     280 GB            69 GB
+
+Note cell 7. Tiling removes precisely the term slice_num multiplies, so peak
+becomes near-independent of slice_num (69 GB at M256 vs 68 GB at M128) -- which
+is what makes the slice_num axis of this star affordable. Untiled, cell 3 does
+not fit a B300's 288 GB at all and cell 7 has no usable margin.
+
+use_checkpointing stays False: tiling alone leaves the worst cell at 131 GB of
+288 GB, and block-level recompute would cost 30-75% wall-clock across a wave
+whose duration is already set by its slowest cell. amortized_training is off for
+the same reason -- it is not needed for memory here, and it is the one knob that
+would change the training objective rather than just its footprint.
+
+All of this is a memory change only. slice_space is Transolver-3's algebraic
+reordering of the same function and tiling is exact, so misc/verify_v3.py L1
+checks naive / untiled / tiled agree to fp64 round-off (~5e-16). Cells generated
+before this switch remain comparable to cells generated after it.
 
 === KNOWN THROUGHPUT CAVEAT (uniform, does not confound) ===
 
@@ -97,7 +115,7 @@ sweep rather than flipping the key.
 
 mlp_ratio 4, num_heads 8, 500 epochs, batch_size 4, lr 1e-4, weight_decay 1e-4,
 dropout 0, std_noise 0.01, augment_geometry True, EMA, grad clip 3.0,
-use_checkpointing True, time_integration ar_ot.
+use_checkpointing False, chunk_size 16384, time_integration ar_ot.
 
 Regularization is deliberately NOT scaled with capacity (project decision): ex2
 has only 40 training trajectories after the 80/10/10 split, so the larger cells
@@ -106,6 +124,7 @@ measures, not noise to regularize away -- summarize_sweep.py reports the
 min-vs-final gap that makes it visible.
 """
 import os
+import re
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -127,7 +146,7 @@ EPOCHS = 500
 BATCH_SIZE = 4        # PER-RANK under DDP
 LEARNING_RATE = 0.0001
 WEIGHT_DECAY = 0.0001
-CHECKPOINTING = "True"
+CHECKPOINTING = "False"
 TIME_INTEGRATION = "ar_ot"
 
 # ---- scheduling ------------------------------------------------------------
@@ -211,8 +230,26 @@ latent_dim                {dim}               # hidden width -- positive int, mu
 num_layers                {layers}                  # Transolver block count -- positive int
 num_heads                 {heads}                   # attention heads -- positive int, must divide latent_dim
 slice_num                 {slices}                  # Physics-Attention learned slice count -- positive int
-attention_kernel          naive               # attention kernel -- {{naive|slice_space}}; chunking and node_shard require slice_space; default naive
-chunk_size                0                   # attention tiling size -- int >= 0, 0 = untiled; positive requires attention_kernel slice_space; default 0
+attention_kernel          slice_space         # attention kernel -- {{naive|slice_space}}; slice_space = Transolver-3 aggregate-then-project, the only kernel that can tile / shard / amortize; naive = v1 order, numerically identical (misc/verify_v3.py L1)
+chunk_size                16384               # attention tiling size in nodes -- int >= 0, 0 = untiled. THIS is the memory lever here: a tiled forward streams, so the [heads, N, slice_num] term leaves retained memory and peak becomes near-independent of slice_num. Independent of use_checkpointing.
+'
+%   Amortized training (Transolver-3 two-stream). Build each layer's physics tokens from a
+%   subsampled CACHE stream, decode only a smaller QUERY stream, and compute the loss there.
+%   Retained activations drop from O(layers x N x latent_dim) to O(layers x (cache + query) x
+%   latent_dim). The tokens are sums over nodes normalized by a sum over the same nodes, so a
+%   uniform subsample estimates them consistently at the 1/sqrt(k) Monte Carlo rate
+%   (misc/verify_v3.py L4) -- consistent, not exact, so it applies to TRAINING ONLY:
+%   validation, periodic test and inference always run the full mesh.
+%
+%   OFF for this sweep, and not needed: tiling alone already fits every cell (worst is
+%   cell 3 at ~131 GB of a B300's 288 GB -- see the MEMORY section in gen_sweep_configs.py).
+%   Amortization is the only knob here that changes the training OBJECTIVE rather than just
+%   its memory footprint, so leaving it off keeps these cells comparable both to each other
+%   and to ex2 runs from before the Transolver-3 switch. Turn it on for a run of its own.
+amortized_training        False               # enable two-stream amortized training -- {{True|False}}; default False
+amortized_cache_nodes     32768               # nodes/graph feeding the token cache -- int >= 0, 0 = full mesh
+amortized_query_nodes     8192                # nodes/graph decoded, and the only ones the loss sees -- int >= 0, 0 = full mesh
+'
 infer_mode                direct              # inference mode -- {{direct|decoupled}}; default direct
 infer_chunk_size          0                   # decoupled-inference chunk size -- int >= 0; default 0
 mlp_ratio                 {mlp}                   # block MLP expansion ratio -- PINNED at the anchor value, not an axis in this sweep
@@ -238,7 +275,7 @@ std_noise          0.01   # lower than ex1 -- input-noise injection for autoregr
 noise_gamma        1      # target-correction multiplier matching injected input noise -- default 1
 augment_geometry   True   # kept ON for ex2 parity across all baselines (isotropy caveat overridden); matches MeshGraphNets ex2
 use_amp            True   # bfloat16 autocast on supported CUDA -- {{True|False}}; native bf16 tensor cores on B300, no Turing MAGMA-fallback penalty
-use_checkpointing  {ckpt}   # precautionary at this star's sizes (worst cell ~130-200 GB without it on 200k-node graphs); also matches the existing ex2 config
+use_checkpointing  {ckpt}  # block-level activation checkpointing -- OFF: chunk_size already streams the attention term, and this would cost 30-75% wall-clock (CONFIGURATION_REFERENCE.md 8.4)
 use_ema            True   # maintain EMA weights (inference prefers EMA when stored) -- {{True|False}}; default False
 ema_decay          0.99   # EMA decay rate -- float in (0,1); default 0.999
 use_compile        False  # torch.compile(dynamic=True) on the model -- {{True|False}}; default False
@@ -268,9 +305,12 @@ def write(path, text):
 
 
 def main():
-    # clear stale configs from any previous (differently sized) design
+    # Clear stale configs from any previous (differently sized) design. Match
+    # only this generator's own numbered outputs -- a bare "config_train*"
+    # prefix also swallows the hand-maintained config_train_transolver.txt
+    # anchor that lives in this directory.
     for fname in os.listdir(HERE):
-        if fname.startswith("config_train") and fname.endswith(".txt"):
+        if re.fullmatch(r"config_train\d+\.txt", fname):
             os.remove(os.path.join(HERE, fname))
 
     cells = assign_schedule(build_cells())
