@@ -33,9 +33,9 @@ Batch_size	4
 grad_accum_steps	1
 LearningR	0.0001
 Latent_dim	128  # MeshGraphNets latent dimension
-num_workers	12  # pin_memory off, so workers are the real limit now
+num_workers	2  # each persistent worker caches the whole train split (~80MB/sample x 40 = 3.2GB); 12 workers held ~38GB/arm
 prefetch_factor	2  # himgn batches are ~550MB (incl. 11.5M unpool edges); 8x4 prefetch would pin ~26GB
-pin_memory	True  # 0.5GB variable-shape batches: pinning serializes in the parent (0.67s/batch vs 0.26s off)
+pin_memory	True  # measured faster than False on this pipeline -- keep on (the 0.67-vs-0.26s figure predates the edge/hierarchy disk cache)
 std_noise	0.01  # INERT under ar_rt: rollout_loss calls the model with add_noise=False
 weight_decay	0.0001  # AdamW decoupled weight decay (decimal form only)
 augment_geometry	True  # kept ON for ex2 parity across all baselines (isotropy caveat overridden)

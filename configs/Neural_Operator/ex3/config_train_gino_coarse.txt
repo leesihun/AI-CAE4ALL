@@ -40,9 +40,12 @@ gino_variant              mesh_state  # GINO variant -- {mesh_state|paper}; pape
 %   un-augmented default radius (0.08) the input-GNO empty-latent-cell fraction
 %   is ~93-94% at 32,32,32. 0.30 (matching ex1's rotation-padded radius, for an
 %   unrelated reason) is the smallest radius in the {0.1,0.15,0.2,0.25,0.3}
-%   sweep that gets under a 25% empty-fraction gate (measured ~21.5% at 0.3);
-%   going tighter (e.g. matching ex2's 0.05 gate) is not reachable without a
-%   near-global kernel that defeats GINO's locality assumption.
+%   sweep that gets under a 25% empty-fraction gate (measured 21.5% here on coarse,
+%   matching orig's independently-measured 21.6% almost exactly --
+%   confirms the underfill is driven by the hollow-shell shape, not by mesh
+%   density: 11.4x more nodes barely moves the empty fraction). Going tighter
+%   (e.g. matching ex2's 0.05 gate) is not reachable without a near-global
+%   kernel that defeats GINO's locality assumption.
 gino_grid_resolution      32, 32, 32  # latent grid size per active axis -- comma list, each entry >= 2; default [32]*operator_dim
 gino_fno_modes            8, 8, 8     # latent FNO Fourier modes per axis -- comma list
 gino_fno_hidden_channels  32          # latent FNO channel width -- positive int; default 64
