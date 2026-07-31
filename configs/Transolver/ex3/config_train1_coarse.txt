@@ -1,6 +1,6 @@
 model          transolver  # backend selector -- {transolver}
 mode           train       # run mode -- {train|inference}
-gpu_ids        0           # CUDA device id(s) -- int or comma list; -1 = CPU (never mixed with CUDA ids)
+gpu_ids        6           # CUDA device id(s) -- int or comma list; -1 = CPU (never mixed with CUDA ids)
 parallel_mode  ddp         # parallelism -- {ddp|node_shard}; node_shard needs >=2 GPUs + attention_kernel slice_space; model_split is an alias for node_shard; default ddp
 '
 %   Datasets and outputs (ex3 NASA-CRM COARSE: 40,000 nodes, 131,066 edges, steady

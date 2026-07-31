@@ -1,6 +1,6 @@
 model          fno  # backend selector -- {point_deeponet|deeponet|fno|gino}
 mode           train           # run mode -- {train|inference}
-gpu_ids        0               # CUDA device id(s) -- int or comma list; -1 = CPU (never mixed with CUDA ids)
+gpu_ids        3               # CUDA device id(s) -- int or comma list; -1 = CPU (never mixed with CUDA ids)
 parallel_mode  ddp             # parallelism -- {ddp|model_split}; model_split is fno/gino only, needs >=2 GPUs + augment_geometry False; default ddp
 '
 %   Datasets and outputs (ex3 NASA-CRM ORIG: 454,404 nodes, 1,527,474 edges, steady

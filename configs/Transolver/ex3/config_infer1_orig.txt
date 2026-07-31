@@ -1,6 +1,6 @@
 model    transolver  # backend selector -- {transolver}
 mode     inference   # run mode -- {train|inference}
-gpu_ids  0           # CUDA device id(s) -- int or comma list; -1 = CPU (never mixed with CUDA ids)
+gpu_ids  6           # CUDA device id(s) -- int or comma list; -1 = CPU (never mixed with CUDA ids)
 '
 %   Datasets and outputs (ex3 NASA-CRM ORIG; stored field = ground truth for
 %   single-step; reuses dataset_dir/infer_dataset like ex2.h5)
