@@ -27,6 +27,10 @@ _VAE_COMPATIBILITY_KEYS = (
 
 _LC_COMPATIBILITY_KEYS = (
     'dataset_dir', 'split_seed', 'vae_modelpath', 'param_dir', 'lc_data_type',
+    # cond_var selects the mesh-HDF5 conditioning rows when lc_data_type hdf5;
+    # changing it changes the conditioner's input width, so a reused LC
+    # checkpoint must have been trained with the same value.
+    'cond_var',
     'lc_filter', 'lc_dropout', 'latent_dim', 'latent_dim_end', 'training_epochs',
     'batch_size', 'learningr',
 )

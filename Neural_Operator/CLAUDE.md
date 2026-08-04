@@ -86,6 +86,14 @@ selects which file to read.
 ## Data Facts
 
 - `nodal_data[0:3]` are reference coordinates, not part of `input_var`.
+- `cond_var` declares trailing **input-only** rows
+  (`nodal_data[3+input_var : 3+input_var+cond_var]`) — known conditions the
+  model reads but never predicts. They occupy `DataSpec.condition_slice`,
+  between `physical_slice` and `positional_slice`, so every core picks them up
+  through `total_node_dim` with no per-model change. Unlike the physical state,
+  they are **not** zeroed for `T==1` and they get real normalization statistics.
+  `DataSpec.condition_dim` defaults to 0, so checkpoints written before the key
+  existed still load.
 - Node type (Part No.) is the *last* row and only exists when the file has
   more than 7 feature rows; `use_node_types True` on a 7-row file is an error.
 - Static (`T==1`) targets are the direct stored field from zero input;

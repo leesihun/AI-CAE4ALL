@@ -24,7 +24,7 @@ SIMULGENVAE_KEYS = frozenset(
         "output_dir", "num_workers", "log_file_dir",
         "pipeline_log_file", "skip_completed_stages",
         # data mapping (SimulGenVAE-specific)
-        "num_var", "field_start_row", "node_start", "node_end", "timesteps_reduced",
+        "num_var", "cond_var", "field_start_row", "node_start", "node_end", "timesteps_reduced",
         "network_size", "load_all", "plot_mode",
         # checkpoints
         "vae_modelpath", "lc_modelpath", "init_vae_modelpath",
@@ -48,7 +48,11 @@ SIMULGENVAE_KEYS = frozenset(
 )
 
 _NETWORK_SIZES = {"small", "large"}
-_LC_DATA_TYPES = {"csv", "image"}
+# 'hdf5' sources the conditioner's inputs from the mesh HDF5's own cond_var
+# rows instead of a separate param_dir file (see SimulGenVAE/general_modules/
+# fom_dataset.py::read_conditions_from_hdf5).
+_LC_DATA_TYPES = {"csv", "image", "hdf5"}
+_LC_MODES = ("train", "train_lc", "reconstruct")
 _LOSS_TYPES = {1, 2, 3, 4}
 
 
@@ -74,9 +78,28 @@ def validate_simulgenvae(ctx: SpecValidationContext) -> None:
         ctx.add("SGV-SIZE-001", Severity.ERROR,
                 "network_size must be 'small' or 'large'.", field_name="network_size")
 
-    if "lc_data_type" in values and str(values["lc_data_type"]).lower() not in _LC_DATA_TYPES:
+    lc_data_type = str(values.get("lc_data_type", "")).lower()
+    if "lc_data_type" in values and lc_data_type not in _LC_DATA_TYPES:
         ctx.add("SGV-LC-001", Severity.ERROR,
-                "lc_data_type must be 'csv' or 'image'.", field_name="lc_data_type")
+                "lc_data_type must be 'csv', 'image' or 'hdf5'.", field_name="lc_data_type")
+
+    # param_dir is required for the file-backed conditioner sources only; the
+    # 'hdf5' source reads the conditions out of dataset_dir instead. It is not
+    # in required_by_mode for that reason, so enforce it here.
+    if ctx.mode in _LC_MODES and lc_data_type in ("csv", "image") and "param_dir" not in values:
+        ctx.add("SGV-LC-002", Severity.ERROR,
+                f"param_dir is required when lc_data_type is '{lc_data_type}'.",
+                field_name="lc_data_type")
+
+    cond_var = integer(values.get("cond_var"))
+    if cond_var is not None and cond_var < 0:
+        ctx.add("SGV-COND-001", Severity.ERROR,
+                "cond_var must be a nonnegative integer.", field_name="cond_var")
+    if lc_data_type == "hdf5" and not cond_var:
+        ctx.add("SGV-COND-002", Severity.ERROR,
+                "lc_data_type 'hdf5' requires cond_var >= 1: it names how many "
+                "conditioning rows follow the field rows in nodal_data.",
+                field_name="cond_var")
 
     if "loss_type" in values and integer(values["loss_type"]) not in _LOSS_TYPES:
         ctx.add("SGV-LOSS-001", Severity.ERROR,
@@ -112,7 +135,7 @@ def build_simulgenvae_spec() -> MethodSpec:
         required_by_mode={
             "train": frozenset({
                 "dataset_dir", "vae_modelpath", "lc_modelpath", "num_filter_enc",
-                "latent_dim", "latent_dim_end", "lc_filter", "lc_data_type", "param_dir",
+                "latent_dim", "latent_dim_end", "lc_filter", "lc_data_type",
                 "vae_training_epochs", "vae_batch_size", "vae_learningr",
                 "lc_training_epochs", "lc_batch_size", "lc_learningr",
             }),
@@ -122,12 +145,12 @@ def build_simulgenvae_spec() -> MethodSpec:
             }),
             "train_lc": frozenset({
                 "dataset_dir", "vae_modelpath", "lc_modelpath", "num_filter_enc",
-                "latent_dim", "latent_dim_end", "lc_filter", "lc_data_type", "param_dir",
+                "latent_dim", "latent_dim_end", "lc_filter", "lc_data_type",
                 "training_epochs", "batch_size", "learningr",
             }),
             "reconstruct": frozenset({
                 "dataset_dir", "vae_modelpath", "lc_modelpath", "num_filter_enc",
-                "latent_dim", "latent_dim_end", "lc_filter", "lc_data_type", "param_dir",
+                "latent_dim", "latent_dim_end", "lc_filter", "lc_data_type",
                 "output_dir",
             }),
         },

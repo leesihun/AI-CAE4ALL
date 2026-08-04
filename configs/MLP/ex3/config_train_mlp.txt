@@ -1,0 +1,49 @@
+%   Routing
+model    mlp     # method selector -- routes to MLP/MLP_main.py
+mode     train   # run mode -- {train|inference}
+gpu_ids  -1      # CPU: 105x6 -> 105x3 tabular regression; a GPU lane would be wasted here
+
+%   Datasets and outputs (paths resolve from the MLP/ repo root)
+%   ex3 scalar-QoI surrogate: 6 global flight/control scalars -> the
+%   surface-area-weighted means of Cp and Cf_xyz. The table is derived from the
+%   same reordered full-resolution cases as the mesh methods by
+%   dataset/build_ex3_mlp_table.py; it is intentionally a scalar benchmark, not
+%   a nodal-field predictor.
+dataset_dir   ../dataset/ex3_mlp_train.h5   # tabular HDF5 with X[105,6] and Y[105,4]
+modelpath     ../output/mlp/ex3/full/mlp.pth   # checkpoint save target
+log_file_dir  ../output/mlp/ex3/full/mlp.log   # log file path
+split_seed    42                            # RNG seed for the deterministic 80/10/10 split
+
+%   Problem shape: N inputs -> M outputs
+input_var   6   # mach, aoa, aileron in/out, elevator, htp (must equal X column count)
+output_var  4   # area-weighted Cp, Cf_x, Cf_y, Cf_z (must equal Y column count)
+
+%   Architecture
+%   Deliberately small: 105 training rows over a 6-D input is a tiny-data
+%   regression, so width is capped and standard scaling is used on both ends
+%   (the four QoIs have different raw scales, so standardize every target).
+hidden_layers         128, 128, 64   # hidden widths -- comma list of positive ints (depth = length)
+activation            gelu           # {relu|gelu|silu|tanh}
+dropout               0.0            # dropout probability -- float in [0, 1)
+norm                  none           # per-layer normalization -- {none|batch|layer}
+input_normalization   standard       # input feature scaling -- {standard|minmax|none}
+output_normalization  standard       # target scaling -- {standard|minmax|none}
+output_activation     none           # final activation -- {none|relu|sigmoid|tanh|softplus}
+
+%   Optimization
+loss             mse     # regression loss -- {mse|mae|huber}
+training_epochs  2000    # epoch count -- positive int; cheap on CPU at this size
+batch_size       16      # DataLoader batch size -- positive int
+learningr        0.001   # AdamW learning rate -- positive float
+weight_decay     0.0001  # AdamW weight decay -- float >= 0
+warmup_epochs    3       # linear LR warmup epochs before cosine decay -- int >= 0
+num_workers      0       # DataLoader worker processes -- int >= 0
+max_grad_norm    3.0     # gradient-clipping max norm -- float
+
+%   Runtime / EMA / evaluation
+use_amp              False  # bfloat16 autocast on CUDA -- {True|False}; CPU run, keep off
+use_ema              True   # maintain EMA weights (inference prefers them) -- {True|False}
+ema_decay            0.999  # EMA decay rate -- float in (0,1)
+use_compile          False  # torch.compile the model -- {True|False}
+val_interval         25     # validation/log cadence in epochs -- positive int
+checkpoint_interval  0      # extra periodic checkpoint cadence in epochs -- 0 disables

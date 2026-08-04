@@ -109,6 +109,70 @@ def compute_world_edges(
     return we, wea.astype(np.float32)
 
 
+def world_edge_index_torch(
+    deformed_pos: torch.Tensor,
+    mesh_edges: torch.Tensor,
+    radius: float,
+    max_num_neighbors: int,
+    batch: Optional[torch.Tensor] = None,
+    ptr: Optional[torch.Tensor] = None,
+    backend: str = 'auto',
+) -> torch.Tensor:
+    """Just the contact *connectivity* for one state — no features, no grad.
+
+    Split out from `compute_world_edges_torch` so an AR-RT rollout can hoist
+    this out of its per-step gradient checkpoint. The search is a discrete
+    function of position under `no_grad`, so recomputing it during backward
+    (which is what happens when it sits inside the checkpointed region)
+    produces the identical index set at full cost.
+
+    `backend` is `'auto'` (prefer torch_cluster on CUDA — the long-standing
+    behavior of this path), `'torch_cluster'`, or `'scipy_kdtree'`. Note that
+    this path does NOT read the `world_edge_backend` config key on its own; the
+    dataloader path does, so the two can disagree. Both backends return the
+    identical edge set (verified on ex2: 1,136 contact edges either way), but
+    not at the same cost — on ex2 (200k nodes, contact radius 0.27x the mean
+    edge length) `radius_graph` took 290 ms against scipy's 248 ms, because it
+    degrades toward O(N^2) at this size: 10k nodes 4.5 ms, 50k 29.6 ms,
+    200k 336 ms.
+
+    Returns [2, E_world] long.
+    """
+    device = deformed_pos.device
+    with torch.no_grad():
+        pos_detached = deformed_pos.detach()
+        mode = str(backend).strip().lower()
+        use_tc = HAS_TORCH_CLUSTER and device.type == 'cuda' and mode in ('auto', 'torch_cluster')
+        if use_tc:
+            candidates = radius_graph(
+                x=pos_detached.float(), r=radius, batch=batch,
+                loop=False, max_num_neighbors=max_num_neighbors,
+            ).long()
+        else:
+            candidates = _radius_graph_kdtree(pos_detached, ptr, radius, device)
+
+        if candidates.shape[1] == 0:
+            return torch.zeros((2, 0), dtype=torch.long, device=device)
+        return _drop_mesh_edges_torch(candidates, mesh_edges, deformed_pos.shape[0])
+
+
+def world_edge_attr_torch(
+    reference_pos: torch.Tensor,
+    deformed_pos: torch.Tensor,
+    world_edge_index: torch.Tensor,
+    edge_mean: Optional[torch.Tensor] = None,
+    edge_std: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    """Differentiable features for an already-known contact edge set."""
+    if world_edge_index.shape[1] == 0:
+        return torch.zeros((0, EDGE_FEATURE_DIM), dtype=deformed_pos.dtype,
+                           device=deformed_pos.device)
+    attr = compute_edge_attr_torch(reference_pos, deformed_pos, world_edge_index)
+    if edge_mean is not None and edge_std is not None:
+        attr = (attr - edge_mean) / edge_std
+    return attr
+
+
 def compute_world_edges_torch(
     reference_pos: torch.Tensor,
     deformed_pos: torch.Tensor,
@@ -119,8 +183,9 @@ def compute_world_edges_torch(
     ptr: Optional[torch.Tensor] = None,
     edge_mean: Optional[torch.Tensor] = None,
     edge_std: Optional[torch.Tensor] = None,
+    backend: str = 'scipy_kdtree',
 ) -> Tuple[torch.Tensor, torch.Tensor]:
-    """Torch/GPU world edges for one AR-RT rollout step.
+    """Torch/GPU world edges for one state: search + features in one call.
 
     Connectivity is a discrete function of position and carries no useful
     gradient, so the radius search runs under `no_grad`; the returned edge
@@ -132,32 +197,12 @@ def compute_world_edges_torch(
 
     Returns (world_edge_index [2, E_world] long, world_edge_attr [E_world, 8]).
     """
-    device = deformed_pos.device
-    empty_ei = torch.zeros((2, 0), dtype=torch.long, device=device)
-    empty_ea = torch.zeros((0, EDGE_FEATURE_DIM), dtype=deformed_pos.dtype, device=device)
-
-    with torch.no_grad():
-        pos_detached = deformed_pos.detach()
-        if HAS_TORCH_CLUSTER and device.type == 'cuda':
-            candidates = radius_graph(
-                x=pos_detached.float(), r=radius, batch=batch,
-                loop=False, max_num_neighbors=max_num_neighbors,
-            ).long()
-        else:
-            candidates = _radius_graph_kdtree(pos_detached, ptr, radius, device)
-
-        if candidates.shape[1] == 0:
-            return empty_ei, empty_ea
-
-        world_edge_index = _drop_mesh_edges_torch(candidates, mesh_edges,
-                                                  deformed_pos.shape[0])
-
-    if world_edge_index.shape[1] == 0:
-        return empty_ei, empty_ea
-
-    attr = compute_edge_attr_torch(reference_pos, deformed_pos, world_edge_index)
-    if edge_mean is not None and edge_std is not None:
-        attr = (attr - edge_mean) / edge_std
+    world_edge_index = world_edge_index_torch(
+        deformed_pos, mesh_edges, radius, max_num_neighbors,
+        batch=batch, ptr=ptr, backend=backend,
+    )
+    attr = world_edge_attr_torch(reference_pos, deformed_pos, world_edge_index,
+                                 edge_mean=edge_mean, edge_std=edge_std)
     return world_edge_index, attr
 
 

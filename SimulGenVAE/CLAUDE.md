@@ -129,10 +129,27 @@ so it folds into the checkpoint `normalization` payload rather than a loose
 convention, `general_modules/fom_dataset.py`, same shape as SDFFlow's
 `sdf_dataset.build_dataset_splits`).
 
-LC conditioning inputs (`read_conditions`) are **not** part of the mesh HDF5 —
-`lc_data_type csv` reads a headerless CSV, `image` reads PNG/JPG under
-`param_dir`; rows/images must be ordered to match the mesh HDF5's **sorted
+LC conditioning inputs come from `read_conditions`, which has three sources:
+
+| `lc_data_type` | Source | `param_dir` |
+| --- | --- | --- |
+| `csv` | headerless CSV `[num_samples, features]` | required |
+| `image` | PNG/JPG under the directory (edge-filtered, /255) | required |
+| `hdf5` | the mesh HDF5's own conditioning rows | **not used** |
+
+For `csv`/`image`, rows/images must be ordered to match the mesh HDF5's **sorted
 integer sample IDs**.
+
+`lc_data_type hdf5` (`read_conditions_from_hdf5`) takes rows
+`[field_start_row + num_var : ... + cond_var]` of `nodal_data` straight out of
+`dataset_dir` — the same input-only conditioning rows the mesh methods consume
+via `cond_var` (see `../dataset/DATASET_FORMAT.md`). It needs `cond_var >= 1`,
+returns `[num_samples, cond_var]` in sorted-sample-ID order, and uses the MLP
+conditioner like `csv` does. Because those rows are per-sample constants
+broadcast to every node, node 0 recovers them exactly; the loader **verifies
+that constancy** and raises if a row varies across nodes, so pointing `cond_var`
+at a genuinely spatial field fails loudly instead of silently training on one
+arbitrary node's value.
 
 ## Hierarchical latent space
 

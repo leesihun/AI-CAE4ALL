@@ -78,4 +78,4 @@ pool_heads	4           # latent_dim 128 / 4 heads = 32 dims per head
 '
 %   Time integration -- AR-RT: unroll all 49 steps, backprop through the whole
 %   trajectory, gradient-checkpoint each step, no injected noise.
-time_integration	ar_rt
+time_integration	ar_ot

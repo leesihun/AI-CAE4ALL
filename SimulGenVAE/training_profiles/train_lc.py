@@ -88,7 +88,7 @@ def lc_worker(config, config_filename='config.txt'):
     hier_norm = fit_minmax(hier)
     main_s = apply_minmax(main, main_norm)
     hier_s = apply_minmax(hier, hier_norm)
-    if str(config.get('lc_data_type', 'csv')).lower() == 'csv':
+    if str(config.get('lc_data_type', 'csv')).lower() in ('csv', 'hdf5'):
         input_norm = fit_minmax(conditions)
         conditions = apply_minmax(conditions, input_norm)
     else:

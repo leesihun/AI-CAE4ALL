@@ -80,7 +80,9 @@ def build_lc(config, input_shape, num_levels, data_shape=None):
     dropout = float(config.get('lc_dropout', 0.3))
     data_type = str(config.get('lc_data_type', 'csv')).lower()
 
-    if data_type == 'csv':
+    # 'hdf5' conditions are a scalar parameter vector like 'csv', just sourced
+    # from the mesh file's conditioning rows -- same MLP conditioner.
+    if data_type in ('csv', 'hdf5'):
         from model.latent_conditioner import LatentConditioner
         return LatentConditioner(lc_filter, latent_main, input_shape,
                                  latent_hier, num_levels, dropout_rate=dropout)

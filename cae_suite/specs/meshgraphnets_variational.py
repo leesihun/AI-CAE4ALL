@@ -11,7 +11,7 @@ VAR_KEYS = frozenset(
     {
         "model", "mode", "gpu_ids", "parallel_mode", "log_file_dir", "modelpath",
         "dataset_dir", "infer_dataset", "eval_dataset", "inference_output_dir",
-        "infer_timesteps", "split_seed", "input_var", "output_var",
+        "infer_timesteps", "split_seed", "input_var", "output_var", "cond_var",
         "feature_loss_weights", "edge_var", "positional_features",
         "message_passing_num", "training_epochs", "batch_size", "learningr",
         "latent_dim", "num_workers", "prefetch_factor", "std_noise", "noise_gamma",

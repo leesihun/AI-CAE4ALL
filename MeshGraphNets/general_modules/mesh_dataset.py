@@ -94,6 +94,14 @@ class MeshGraphDataset(Dataset):
         # Graph and feature parameters
         self.input_dim = config.get('input_var')  # Physical features only (4)
         self.output_dim = config.get('output_var')  # Physical features only (4)
+        # Input-only conditioning rows: nodal_data[3+input_var : 3+input_var+cond_var].
+        # These are read verbatim at every timestep, never predicted, and never
+        # zeroed for static (T=1) data -- they are known boundary/flight
+        # conditions, not unknown state. cond_var 0 (the default) reproduces the
+        # pre-conditioning behavior exactly. See dataset/DATASET_FORMAT.md.
+        self.cond_dim = int(config.get('cond_var', 0) or 0)
+        if self.cond_dim < 0:
+            raise ValueError(f"cond_var must be >= 0; got {self.cond_dim}")
         self.num_pos_features = int(config.get('positional_features', 0))
         configured_edge_dim = int(config.get('edge_var', EDGE_FEATURE_DIM))
         if configured_edge_dim != EDGE_FEATURE_DIM:
@@ -209,6 +217,9 @@ class MeshGraphDataset(Dataset):
 
         print(f"Loading MeshGraphDataset: {h5_file}")
         print(f"  input_dim: {self.input_dim}, output_dim: {self.output_dim}, edge_dim: {self.edge_dim}")
+        if self.cond_dim:
+            print(f"  cond_dim: {self.cond_dim} (input-only conditioning rows "
+                  f"{3 + self.input_dim}:{3 + self.input_dim + self.cond_dim})")
         print(f"  use_node_types: {self.use_node_types}")
         print(f"  use_world_edges: {self.use_world_edges}")
         print(f"  use_multiscale: {self.use_multiscale}" + (f" (levels={self.multiscale_levels})" if self.use_multiscale else ""))
@@ -234,6 +245,14 @@ class MeshGraphDataset(Dataset):
             sample_id = self.sample_ids[0]
             data_shape = f[f'data/{sample_id}/nodal_data'].shape
             self.num_timesteps = data_shape[1]  # Shape: (features, time, nodes)
+
+            required_rows = 3 + max(int(self.input_dim), int(self.output_dim)) + self.cond_dim
+            if data_shape[0] < required_rows:
+                raise ValueError(
+                    f"nodal_data has {data_shape[0]} feature rows but the config needs "
+                    f"{required_rows} (3 coords + max(input_var={self.input_dim}, "
+                    f"output_var={self.output_dim}) + cond_var={self.cond_dim})."
+                )
 
             self.delta_mean = None
             self.delta_std = None
@@ -513,6 +532,7 @@ class MeshGraphDataset(Dataset):
         subset.config = self.config
         subset.input_dim = self.input_dim
         subset.output_dim = self.output_dim
+        subset.cond_dim = self.cond_dim
         subset.num_pos_features = self.num_pos_features
         subset.edge_dim = self.edge_dim
         subset.sample_ids = list(sample_ids)
@@ -576,6 +596,7 @@ class MeshGraphDataset(Dataset):
             self.h5_file, self.sample_ids, self.input_dim, self.output_dim,
             self.num_timesteps, self.num_pos_features,
             use_parallel=self.config.get('use_parallel_stats', True),
+            cond_dim=self.cond_dim,
         )
 
         self.node_mean, self.node_std = finalize_moments(
@@ -594,22 +615,40 @@ class MeshGraphDataset(Dataset):
         self._warn_on_degenerate_stats()
 
     def _warn_on_degenerate_stats(self) -> None:
-        """Print warnings for suspicious normalization statistics."""
+        """Print warnings for suspicious normalization statistics.
+
+        For static (T=1) data the leading `input_dim` node columns are zero by
+        construction (the model predicts the field from a zero state), so their
+        mean/std are trivially 0/1e-8. Excluding them keeps the near-zero
+        variance CRITICAL meaningful for the columns where it signals a real
+        problem — notably the conditioning block, where a constant column means
+        that condition never varies across the split.
+        """
         print('\n  === Normalization Sanity Checks ===')
         warnings = []
-        if np.any(self.node_std > 100):
-            warnings.append(f"  WARNING: Very large node std (> 100): {self.node_std[self.node_std > 100]}")
-        if np.any(self.node_std < 0.01):
-            warnings.append(f"  WARNING: Very small node std (< 0.01): {self.node_std[self.node_std < 0.01]}")
+        if self.num_timesteps == 1 and self.node_std.size > self.input_dim:
+            skip = int(self.input_dim)
+            print(f'  (static T=1: skipping the {skip} zero-by-construction state columns)')
+            node_std = self.node_std[skip:]
+            node_mean = self.node_mean[skip:]
+        elif self.num_timesteps == 1:
+            node_std = np.array([], dtype=self.node_std.dtype)
+            node_mean = node_std
+        else:
+            node_std, node_mean = self.node_std, self.node_mean
+        if np.any(node_std > 100):
+            warnings.append(f"  WARNING: Very large node std (> 100): {node_std[node_std > 100]}")
+        if np.any(node_std < 0.01):
+            warnings.append(f"  WARNING: Very small node std (< 0.01): {node_std[node_std < 0.01]}")
         if np.any(self.delta_std > 100):
             warnings.append(f"  WARNING: Very large delta std (> 100): {self.delta_std[self.delta_std > 100]}")
         if np.any(self.delta_std < 0.01):
             warnings.append(f"  WARNING: Very small delta std (< 0.01): {self.delta_std[self.delta_std < 0.01]}")
-        if np.any(np.abs(self.node_mean) > 10):
-            warnings.append(f"  WARNING: Large node mean (|mean| > 10): {self.node_mean[np.abs(self.node_mean) > 10]}")
+        if np.any(np.abs(node_mean) > 10):
+            warnings.append(f"  WARNING: Large node mean (|mean| > 10): {node_mean[np.abs(node_mean) > 10]}")
         if np.any(np.abs(self.delta_mean) > 10):
             warnings.append(f"  WARNING: Large delta mean (|mean| > 10): {self.delta_mean[np.abs(self.delta_mean) > 10]}")
-        if np.any(self.node_std < 1e-6):
+        if np.any(node_std < 1e-6):
             warnings.append("  CRITICAL: Near-zero node variance - feature is constant!")
         if np.any(self.delta_std < 1e-6):
             warnings.append("  CRITICAL: Near-zero delta variance - targets are constant!")
@@ -972,12 +1011,21 @@ class MeshGraphDataset(Dataset):
         edge_index, x_pos, node_types = self._get_static_sample_data(sample_id, f, dset)
         part_ids = node_types  # same raw IDs, stored separately in graph for visualization
 
+        # Input-only conditioning rows sit immediately after the state block.
+        cond_start = 3 + self.input_dim
+        cond_stop = cond_start + self.cond_dim
+
         # Extract data based on timesteps
         future_states = None  # [N, W, output_var] raw future states (AR-RT only)
+        x_cond = None  # [N, cond_var] known conditions, read from disk in BOTH branches
         if self.num_timesteps == 1:  # Static case
             data_t = dset[:, 0, :].T  # [N, 7]
             pos = data_t[:, :3]  # [N, 3]
             x_phys = np.zeros((data_t.shape[0], self.input_dim), dtype=np.float32)  # [N, input_var] zeros
+            if self.cond_dim:
+                # NOT zeroed: conditions are known inputs, unlike the unknown
+                # state the model has to predict from scratch.
+                x_cond = data_t[:, cond_start:cond_stop].astype(np.float32)
             y_raw = data_t[:, 3:3+self.output_dim]  # [N, output_var]
             target_delta = y_raw.copy()  # Predict final displacement directly
         else:
@@ -989,8 +1037,12 @@ class MeshGraphDataset(Dataset):
             data_t1 = block[:, 1, :].T  # [N, 7]
             pos = data_t[:, :3]  # [N, 3]
             x_phys = data_t[:, 3:3+self.input_dim]  # [N, input_var]
+            if self.cond_dim:
+                x_cond = data_t[:, cond_start:cond_stop].astype(np.float32)
             y_raw = data_t1[:, 3:3+self.output_dim]  # [N, output_var]
-            target_delta = y_raw - x_phys  # [N, output_var]
+            # Slice x_phys to output_var: the two are equal today, but the
+            # explicit slice keeps the delta well-defined if they ever diverge.
+            target_delta = y_raw - x_phys[:, :self.output_dim]  # [N, output_var]
             if self.time_integration == AR_RT:
                 # Ground-truth future states in physical units, [N, W, output_var].
                 # The rollout re-derives each step's target as (state_gt - state_pred),
@@ -1001,10 +1053,19 @@ class MeshGraphDataset(Dataset):
             else:
                 future_states = None
 
+        # Node feature layout: [state | conditions | positional]. Conditions go
+        # directly after the state block so the AR-RT rollout's
+        # `graph.x[:, input_var:]` static-feature split (training_profiles/
+        # ar_rollout.py) picks them up unchanged, and so node_mean/node_std keep
+        # the state head leading.
+        blocks = [x_phys]
+        if x_cond is not None:
+            blocks.append(x_cond)
         if self.num_pos_features > 0:
-            x_raw = np.concatenate([x_phys, x_pos], axis=1)  # [N, input_var + pos_features]
-        else:
-            x_raw = x_phys
+            blocks.append(x_pos)
+        # np.concatenate copies; the single-block path must copy too because the
+        # augmentation below writes into x_raw in place.
+        x_raw = np.concatenate(blocks, axis=1) if len(blocks) > 1 else x_phys.copy()
 
         # Reference positions before augmentation, kept for the coarsening cache.
         ref_pos_raw = pos
@@ -1019,9 +1080,21 @@ class MeshGraphDataset(Dataset):
                 # [N, W, 3] @ [3, 3] — the rollout integrates in this rotated
                 # frame, so its ground-truth targets must live there too.
                 future_states[:, :, :3] = future_states[:, :, :3] @ R.T
-            # Scalar features (stress) and positional features are rotation-invariant, unchanged
+            # Scalar features (stress), conditioning rows and positional features
+            # are rotation-invariant, unchanged. Conditions sit past column
+            # input_var, so the [:, :3] slices above never touch them -- but a
+            # conditioning row that IS a vector component (e.g. a freestream
+            # direction) would need rotating here; keep augment_geometry False
+            # for such datasets.
 
-        displacement = x_raw[:, :3]  # [N, 3] - displacement (zeros for T=1)
+        # Rows 3:6 are the displacement vector by the shared contract; for T=1
+        # they are zeros, so deformed_pos == pos. Guard input_var < 3 so a
+        # narrow state block can never let conditioning columns act as motion.
+        if self.input_dim >= 3:
+            displacement = x_raw[:, :3]  # [N, 3] - displacement (zeros for T=1)
+        else:
+            displacement = np.zeros((x_raw.shape[0], 3), dtype=np.float32)
+            displacement[:, :self.input_dim] = x_raw[:, :self.input_dim]
         deformed_pos = pos + displacement  # [N, 3] - actual mesh position at time t
 
         # Compute 8-D edge features from current and reference geometry.

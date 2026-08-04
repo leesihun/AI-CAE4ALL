@@ -129,7 +129,15 @@ def run_rollout(config, config_filename='config.txt'):
     num_rollout_steps = config.get('infer_timesteps')
     input_dim = config.get('input_var')
     output_dim = config.get('output_var')
+    cond_dim = int(config.get('cond_var', 0) or 0)
     num_pos_features = int(config.get('positional_features', 0))
+    # Static training (T=1) feeds a ZERO state and regresses the field directly;
+    # temporal training feeds state_t and regresses a delta. Inference has to
+    # reproduce whichever contract the checkpoint was fit under -- taking the
+    # ground-truth field as the initial state for a statically-trained model
+    # both leaks the answer and divides by the (degenerate) zero-state std.
+    trained_timesteps = config.get('num_timesteps')
+    static_training = trained_timesteps is not None and int(trained_timesteps) == 1
 
     print("\nLoading initial condition...")
     print(f"  Dataset: {dataset_dir}")
@@ -167,9 +175,38 @@ def run_rollout(config, config_filename='config.txt'):
             )
 
         ref_pos = nodal_data[:3, 0, :].T
-        initial_state = nodal_data[3:3 + input_dim, 0, :].T
+        # Fall back to the inference file's own T when the checkpoint predates
+        # `num_timesteps` in model_config.
+        is_static = static_training if trained_timesteps is not None else (num_timesteps == 1)
 
-        if use_node_types and num_features > 7:
+        if is_static and steps_this_sample != 1:
+            # A statically-trained model is a one-shot regressor: it was only
+            # ever shown a zero state, so feeding its own output back is off
+            # distribution and produces nonsense after step 1.
+            print(
+                f"  INFO: checkpoint was trained on static (T=1) data; "
+                f"clamping {steps_this_sample} requested step(s) to 1."
+            )
+            steps_this_sample = 1
+        if is_static:
+            initial_state = np.zeros((num_nodes, input_dim), dtype=np.float32)
+        else:
+            initial_state = nodal_data[3:3 + input_dim, 0, :].T.astype(np.float32)
+
+        # Input-only conditioning rows: always the real stored values, never
+        # zeroed, never advanced by the rollout.
+        cond_feat = None
+        if cond_dim > 0:
+            cond_start = 3 + input_dim
+            cond_feat = nodal_data[cond_start:cond_start + cond_dim, 0, :].T.astype(np.float32)
+
+        # Node types live in the LAST row, so the guard has to be "is there a row past
+        # the state/conditions block", not the old `num_features > 7` -- that assumed the
+        # 8-row ANSYS builder layout and silently dropped node types for any narrower
+        # dataset (e.g. the 7-row cylinder_flow: 3 coords + 3 state + node type). The
+        # training loader has no such guard, so the mismatch only showed up at inference,
+        # as a node-encoder width error.
+        if use_node_types and num_features > 3 + input_dim + cond_dim:
             part_ids = nodal_data[-1, 0, :].astype(np.int32)
         else:
             part_ids = None
@@ -255,10 +292,14 @@ def run_rollout(config, config_filename='config.txt'):
             for step in range(steps_this_sample):
                 step_start = time.time()
 
+                # Same [state | conditions | positional] layout the dataloader
+                # builds (general_modules/mesh_dataset.py::__getitem__).
+                blocks = [current_state]
+                if cond_feat is not None:
+                    blocks.append(cond_feat)
                 if pos_features is not None:
-                    x_raw = np.concatenate([current_state, pos_features], axis=1)
-                else:
-                    x_raw = current_state
+                    blocks.append(pos_features)
+                x_raw = np.concatenate(blocks, axis=1) if len(blocks) > 1 else current_state
                 x_norm = (x_raw - node_mean) / node_std
 
                 if use_node_types and part_ids is not None and node_type_to_idx is not None:
@@ -269,7 +310,13 @@ def run_rollout(config, config_filename='config.txt'):
                     node_type_onehot[np.arange(num_nodes), node_type_indices] = 1.0
                     x_norm = np.concatenate([x_norm, node_type_onehot], axis=1)
 
-                displacement = current_state[:, :3]
+                # Rows 3:6 are the displacement vector by the shared contract;
+                # zeros for a statically-trained model, so deformed == reference.
+                if input_dim >= 3:
+                    displacement = current_state[:, :3]
+                else:
+                    displacement = np.zeros((num_nodes, 3), dtype=np.float32)
+                    displacement[:, :input_dim] = current_state[:, :input_dim]
                 deformed_pos = ref_pos + displacement
                 edge_attr_raw = compute_edge_attr(ref_pos, deformed_pos, edge_index)
                 edge_attr_norm = (edge_attr_raw - edge_mean) / edge_std

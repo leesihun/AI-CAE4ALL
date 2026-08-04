@@ -199,15 +199,73 @@ def build_dataset_splits(config, split_seed):
     return train_ds, val_ds, test_ds
 
 
+def read_conditions_from_hdf5(config):
+    """Read latent-conditioner inputs from the mesh HDF5's conditioning rows.
+
+    Rows ``[field_start_row + num_var : ... + cond_var]`` of ``nodal_data`` hold
+    input-only conditions (flight/boundary parameters) broadcast to every node
+    -- the same convention the mesh methods consume via ``cond_var``. Because
+    they are per-sample constants, one node is enough to recover them; node 0 at
+    timestep 0 is read and the row is checked for the constancy that convention
+    implies, so pointing ``cond_var`` at a genuinely spatial field fails loudly
+    instead of silently training on one arbitrary node's value.
+
+    Returns ``[num_samples, cond_var]`` float32, ordered by sorted sample ID --
+    the same order ``load_fom_from_hdf5`` stacks samples in.
+    """
+    cond_var = int(config.get('cond_var', 0) or 0)
+    if cond_var < 1:
+        raise ValueError(
+            "lc_data_type 'hdf5' needs cond_var >= 1: it names how many "
+            "conditioning rows follow the field rows in nodal_data.")
+
+    num_var = int(config.get('num_var', 1))
+    field_start = int(config.get('field_start_row', 3))
+    cond_start = field_start + num_var
+    cond_stop = cond_start + cond_var
+
+    rows = []
+    with h5py.File(config['dataset_dir'], 'r') as h5:
+        for sid in _sample_ids(h5):
+            arr = h5[f'data/{sid}/nodal_data']
+            if arr.shape[0] < cond_stop:
+                raise ValueError(
+                    f"Sample {sid}: nodal_data has {arr.shape[0]} feature rows but "
+                    f"conditioning rows {cond_start}:{cond_stop} are required "
+                    f"(field_start_row={field_start} + num_var={num_var} + cond_var={cond_var}).")
+            block = np.asarray(arr[cond_start:cond_stop, 0, :], dtype=np.float32)  # [cond_var, N]
+            spread = np.ptp(block, axis=1)
+            scale = np.maximum(np.abs(block[:, 0]), 1.0)
+            varying = np.nonzero(spread > 1e-4 * scale)[0]
+            if varying.size:
+                raise ValueError(
+                    f"Sample {sid}: conditioning row(s) "
+                    f"{[cond_start + int(i) for i in varying]} vary across nodes "
+                    f"(max spread {float(spread.max()):.3g}). cond_var rows must be "
+                    "per-sample constants broadcast to every node.")
+            rows.append(block[:, 0])
+
+    conditions = np.stack(rows, axis=0).astype(np.float32)  # [num_samples, cond_var]
+    return conditions, int(conditions.shape[1])
+
+
 def read_conditions(config):
-    """Load latent-conditioner inputs from ``param_dir``.
+    """Load latent-conditioner inputs.
 
     ``lc_data_type == 'csv'``  -> a headerless CSV of shape [num_samples, features].
     ``lc_data_type == 'image'``-> images under ``param_dir`` (edge-filtered, /255).
+    ``lc_data_type == 'hdf5'`` -> the ``cond_var`` conditioning rows of the mesh
+    HDF5 named by ``dataset_dir`` (no ``param_dir`` needed) -- see
+    :func:`read_conditions_from_hdf5`.
+
     Returns ``(conditions, input_shape)`` where ``conditions`` is float32
     ``[num_samples, feat]`` and ``input_shape`` is the per-sample feature count.
     """
     data_type = str(config.get('lc_data_type', 'csv')).lower()
+
+    if data_type == 'hdf5':
+        return read_conditions_from_hdf5(config)
+
     param_dir = config['param_dir']
 
     if data_type == 'csv':
@@ -232,4 +290,4 @@ def read_conditions(config):
         flat = imgs.reshape(len(files), -1) / 255.0
         return flat.astype(np.float32), int(flat.shape[1])
 
-    raise ValueError(f"lc_data_type must be 'csv' or 'image'; got {data_type!r}.")
+    raise ValueError(f"lc_data_type must be 'csv', 'image' or 'hdf5'; got {data_type!r}.")

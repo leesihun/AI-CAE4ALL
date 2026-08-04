@@ -55,7 +55,7 @@ from general_modules.edge_features import (
     deformed_edge_attr_torch,
 )
 from general_modules.time_integration import AR_RT, resolve_time_integration
-from general_modules.world_edges import compute_world_edges_torch
+from general_modules.world_edges import world_edge_attr_torch, world_edge_index_torch
 
 
 def ar_rt_enabled(config) -> bool:
@@ -123,6 +123,13 @@ class RolloutContext:
         self.use_world_edges = bool(config.get('use_world_edges', False))
         self.world_edge_radius = stats.get('world_edge_radius', None)
         self.world_max_num_neighbors = int(config.get('world_max_num_neighbors', 64))
+        # The rollout used to hardcode torch_cluster whenever it was importable
+        # on CUDA, silently ignoring this key (which the dataloader path does
+        # honor). On a large mesh with a small contact radius that is the slower
+        # backend -- see world_edge_index_torch.
+        self.world_edge_backend = str(
+            config.get('world_edge_backend', 'scipy_kdtree')
+        ).strip().lower()
 
         self.use_multiscale = bool(config.get('use_multiscale', False))
         self.multiscale_levels = int(config.get('multiscale_levels', 1))
@@ -234,12 +241,44 @@ def _refresh_multiscale(graph, deformed_pos, ctx):
         current_pos = _refresh_one_partition(graph, str(level), current_pos, mean, std)
 
 
-def _apply_state(graph, state, ctx, static_node_features, reference_edge_attr):
+def _world_edge_search(graph, state, ctx):
+    """Contact connectivity for `state` — the part that must NOT be checkpointed.
+
+    The radius search is `no_grad` and returns indices, so re-running it during
+    backward yields the identical set at full cost. On ex2 it is the single
+    most expensive operation in a rollout step (measured: ~200 ms per call at
+    200k nodes), so keeping it outside the checkpoint halves the rollout's
+    dominant cost. Returns None when world edges are off.
+    """
+    if not (ctx.use_world_edges and ctx.world_edge_radius is not None):
+        return None
+    with torch.no_grad():
+        deformed_pos = graph.pos + state[:, :3]
+        return world_edge_index_torch(
+            deformed_pos, graph.edge_index,
+            radius=float(ctx.world_edge_radius),
+            max_num_neighbors=ctx.world_max_num_neighbors,
+            batch=getattr(graph, 'batch', None),
+            ptr=getattr(graph, 'ptr', None),
+            backend=ctx.world_edge_backend,
+        )
+
+
+def _apply_state(graph, state, ctx, static_node_features, reference_edge_attr,
+                 world_edge_index=None):
     """Write the features implied by `state` onto `graph`, on-device.
 
     This is the training-time twin of the per-step feature construction in
     `inference_profiles/rollout.py`; keeping the two in step is what makes
     AR-RT train the model under the conditions it is actually deployed in.
+
+    `world_edge_index` is an optional contact set from `_world_edge_search`,
+    which the rollout computes outside its gradient checkpoint so backward does
+    not redo the search. Omit it and the search happens here instead: the
+    optimization is opt-in, so a caller that does not know about it still gets
+    correct contact edges rather than silently stale ones. Either way only the
+    edge *features* are differentiable in `deformed_pos`, which is what lets a
+    contact that forms mid-rollout influence the loss.
     """
     physical = state[:, :ctx.input_var]
     normalized = (physical - ctx.node_mean) / ctx.node_std
@@ -252,16 +291,13 @@ def _apply_state(graph, state, ctx, static_node_features, reference_edge_attr):
     graph.edge_attr = torch.cat([deformed_half, reference_edge_attr], dim=1)
 
     if ctx.use_world_edges and ctx.world_edge_radius is not None:
-        world_edge_index, world_edge_attr = compute_world_edges_torch(
-            graph.pos, deformed_pos, graph.edge_index,
-            radius=float(ctx.world_edge_radius),
-            max_num_neighbors=ctx.world_max_num_neighbors,
-            batch=getattr(graph, 'batch', None),
-            ptr=getattr(graph, 'ptr', None),
+        if world_edge_index is None:
+            world_edge_index = _world_edge_search(graph, state, ctx)
+        graph.world_edge_index = world_edge_index
+        graph.world_edge_attr = world_edge_attr_torch(
+            graph.pos, deformed_pos, world_edge_index,
             edge_mean=ctx.edge_mean, edge_std=ctx.edge_std,
         )
-        graph.world_edge_index = world_edge_index
-        graph.world_edge_attr = world_edge_attr
 
     if ctx.use_multiscale:
         _refresh_multiscale(graph, deformed_pos, ctx)
@@ -287,6 +323,10 @@ def rollout_loss(model, graph, ctx, loss_fn, training=True):
 
     steps = int(graph.y_seq.shape[1])
     state = graph.state0
+    # Everything past the state block is constant over the unroll: the
+    # input-only conditioning rows (cond_var), the positional features and the
+    # node-type one-hot. The dataloader orders x as [state | cond | pos |
+    # onehot] precisely so this one slice captures all of them.
     static_node_features = graph.x[:, ctx.input_var:]
     reference_edge_attr = graph.edge_attr[:, REFERENCE_SLICE]
     output_var = ctx.output_var
@@ -295,19 +335,25 @@ def rollout_loss(model, graph, ctx, loss_fn, training=True):
     total_sum = None
     total_count = 0
 
-    def run_step(current_state):
-        _apply_state(graph, current_state, ctx, static_node_features, reference_edge_attr)
+    def run_step(current_state, world_ei):
+        _apply_state(graph, current_state, ctx, static_node_features,
+                     reference_edge_attr, world_edge_index=world_ei)
         prediction, _ = model(graph, add_noise=False)
         return prediction
 
     for step in range(steps):
+        # The contact search runs OUTSIDE the checkpoint: it is no_grad and
+        # returns indices, so recomputing it in backward would cost the same
+        # again for an identical result. On ex2 that search dominates the step.
+        world_ei = _world_edge_search(graph, state, ctx)
+
         # Checkpoint while training (as the reference does): only the per-step
         # state tensors stay live, and each step's activations are recomputed
         # during backward.
         if training:
-            prediction = checkpoint(run_step, state, use_reentrant=False)
+            prediction = checkpoint(run_step, state, world_ei, use_reentrant=False)
         else:
-            prediction = run_step(state)
+            prediction = run_step(state, world_ei)
 
         # Integrate the prediction into the next state, in physical units.
         advanced = state[:, :output_var] + (prediction * ctx.delta_std + ctx.delta_mean)

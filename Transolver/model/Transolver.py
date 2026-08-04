@@ -49,11 +49,13 @@ class Transolver(nn.Module):
                 f"latent_dim ({self.latent_dim}) must be divisible by num_heads ({self.num_heads})"
             )
 
+        # graph.x layout: [state | conditions | positional | node-type one-hot]
         input_var = config['input_var']
+        cond_var = int(config.get('cond_var', 0) or 0)
         positional_features = int(config.get('positional_features', 0))
         use_node_types = config.get('use_node_types', False)
         num_node_types = int(config.get('num_node_types', 0)) if use_node_types else 0
-        self.node_input_size = input_var + positional_features + num_node_types
+        self.node_input_size = input_var + cond_var + positional_features + num_node_types
         embed_input_size = self.node_input_size + 3  # + pos_normalized (section 5.4)
 
         self.preprocess = nn.Sequential(

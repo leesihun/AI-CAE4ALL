@@ -19,7 +19,7 @@ COMMON_KEYS = frozenset(
     {
         "model", "mode", "gpu_ids", "parallel_mode", "log_file_dir", "modelpath",
         "dataset_dir", "infer_dataset", "inference_output_dir", "infer_timesteps",
-        "split_seed", "input_var", "output_var", "feature_loss_weights",
+        "split_seed", "input_var", "output_var", "cond_var", "feature_loss_weights",
         "positional_features", "use_node_types", "coordinate_normalization", "operator_dim",
         "dimension_tolerance", "grid_padding", "out_of_bounds_policy", "sdf_source",
         "sdf_sidecar", "global_condition_features", "integration_weight_source",

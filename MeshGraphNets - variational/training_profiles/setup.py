@@ -180,12 +180,17 @@ def build_model_config(config) -> dict:
     return {
         'input_var':         config.get('input_var'),
         'output_var':        config.get('output_var'),
+        'cond_var':          config.get('cond_var', 0),
         'edge_var':          config.get('edge_var'),
         'latent_dim':        config.get('latent_dim'),
         'message_passing_num': config.get('message_passing_num'),
         'use_node_types':    config.get('use_node_types', False),
         'num_node_types':    config.get('num_node_types', 0),
         'positional_features': config.get('positional_features', 0),
+        # Records whether the model was fit on static (T=1, direct-field) or
+        # temporal (T>1, delta) targets, so inference can reproduce the training
+        # input contract instead of guessing from the inference file.
+        'num_timesteps':     config.get('num_timesteps'),
         'use_world_edges':   config.get('use_world_edges', False),
         'use_checkpointing': config.get('use_checkpointing', False),
         'use_multiscale':    config.get('use_multiscale', False),

@@ -214,6 +214,11 @@ def validate_config(config, source='configuration'):
             f"temperature_init <= temperature_max, got min={t_min}, init={t_init}, max={t_max}"
         )
 
+    cond_var = config.get('cond_var')
+    if cond_var is not None and (not isinstance(cond_var, int)
+                                 or isinstance(cond_var, bool) or cond_var < 0):
+        raise ValueError(f"{source}: cond_var must be a non-negative integer, got {cond_var!r}")
+
     output_var = config.get('output_var')
     loss_weights = config.get('feature_loss_weights')
     if output_var is not None and loss_weights is not None:
@@ -244,6 +249,10 @@ def validate_temporal_contract(config):
     Temporal (T > 1) autoregressive datasets require input_var == output_var:
     the delta target is computed as state[t+1, :output_var] - state[t, :input_var],
     which only broadcasts correctly when the widths match (plan section 5.3).
+
+    `cond_var` is deliberately outside this constraint: conditioning rows are
+    input-only and static across the unroll, so they never have to be predicted
+    for the next step to be constructible.
     """
     num_timesteps = config.get('num_timesteps')
     if num_timesteps is not None and num_timesteps > 1:

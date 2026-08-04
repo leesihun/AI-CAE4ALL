@@ -85,6 +85,7 @@ def run_rollout(config, config_filename='config.txt'):
 
     input_var = data_spec.input_var
     output_var = data_spec.output_var
+    cond_var = data_spec.condition_dim
     num_pos_features = data_spec.positional_dim
     use_node_types = data_spec.node_type_dim > 0
 
@@ -148,6 +149,19 @@ def run_rollout(config, config_filename='config.txt'):
         else:
             current_state = nodal_data[3:3 + input_var, 0, :].T.astype(np.float32)
 
+        # Input-only conditioning rows: always the real stored values, never
+        # zeroed (unlike the static state above), never advanced by the rollout.
+        cond_feat = None
+        if cond_var > 0:
+            cond_start = 3 + input_var
+            if num_features < cond_start + cond_var:
+                raise ValueError(
+                    f"Checkpoint expects {cond_var} conditioning row(s) at "
+                    f"{cond_start}:{cond_start + cond_var} but '{dataset_dir}' sample "
+                    f"{sample_id} has only {num_features} feature rows."
+                )
+            cond_feat = nodal_data[cond_start:cond_start + cond_var, 0, :].T.astype(np.float32)
+
         all_states = np.zeros((steps + 1, num_nodes, output_var), dtype=np.float32)
         all_states[0] = current_state[:, :output_var]
 
@@ -156,7 +170,14 @@ def run_rollout(config, config_filename='config.txt'):
         rollout_start = time.time()
         with torch.no_grad():
             for step in range(steps):
-                x_raw = current_state if pos_feat is None else np.concatenate([current_state, pos_feat], axis=1)
+                # Same [state | conditions | positional] layout the dataloader
+                # builds (general_modules/mesh_dataset.py::__getitem__).
+                blocks = [current_state]
+                if cond_feat is not None:
+                    blocks.append(cond_feat)
+                if pos_feat is not None:
+                    blocks.append(pos_feat)
+                x_raw = np.concatenate(blocks, axis=1) if len(blocks) > 1 else current_state
                 x_norm = normalize_node_features(
                     x_raw, node_mean, node_std,
                     node_types=part_ids if use_node_types else None,

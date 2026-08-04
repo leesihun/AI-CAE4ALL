@@ -21,7 +21,7 @@ TRANSOLVER_KEYS = frozenset(
     {
         "model", "mode", "gpu_ids", "parallel_mode", "log_file_dir", "modelpath",
         "dataset_dir", "infer_dataset", "inference_output_dir", "infer_timesteps",
-        "split_seed", "input_var", "output_var", "feature_loss_weights",
+        "split_seed", "input_var", "output_var", "cond_var", "feature_loss_weights",
         "positional_features", "use_node_types", "coordinate_normalization", "latent_dim",
         "num_layers", "num_heads", "slice_num", "attention_kernel", "chunk_size",
         # Amortized (two-stream) training -- CONFIGURATION_REFERENCE.md 9.6.

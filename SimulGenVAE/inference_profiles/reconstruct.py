@@ -14,32 +14,55 @@ import torch
 
 from general_modules.fom_dataset import (
     apply_minmax,
-    build_dataset_splits,
     invert_minmax,
+    load_fom_from_hdf5,
     read_conditions,
 )
 from model.common import add_sn
 from training_profiles.setup import build_lc, build_vae, load_checkpoint, resolve_device
 
 
+def _load_fields_with_checkpoint_normalization(config, field_norm):
+    """Scale held-out fields with the VAE training normalization."""
+    required = {'field_min', 'field_max', 'feature_range'}
+    missing = required.difference(field_norm or {})
+    if missing:
+        raise ValueError(
+            f"VAE checkpoint normalization is missing {sorted(missing)}; "
+            "held-out reconstruction cannot be scaled safely."
+        )
+    raw_ntc, sample_ids = load_fom_from_hdf5(config)       # [N, T, C]
+    scaled_ntc = apply_minmax(raw_ntc, field_norm)
+    data_nct = np.ascontiguousarray(np.transpose(scaled_ntc, (0, 2, 1)))
+    return data_nct, sample_ids
+
+
 def run_reconstruct(config, config_filename='config.txt'):
     device = resolve_device(config)
-    split_seed = int(config.get('split_seed', 42))
 
-    print('\nLoading dataset (ground truth + condition ordering)...')
-    train_dataset, _v, _t = build_dataset_splits(config, split_seed)
-    data_nct = train_dataset.data                     # scaled [N, C, T]
-    field_norm = train_dataset.normalization
-    num_channels, num_time = train_dataset.num_channels, train_dataset.num_time
-    sample_ids = train_dataset.sample_ids
-
-    # Load checkpoints.
+    # The checkpoint must be loaded before the held-out fields: re-fitting
+    # min/max on inference data changes the decoder scale and leaks test stats.
     vae_ckpt = load_checkpoint(config.get('vae_modelpath', './outputs/simulgenvae_vae.pth'), device)
     lc_ckpt = load_checkpoint(config.get('lc_modelpath', './outputs/simulgenvae_lc.pth'), device)
     if vae_ckpt.get('stage') != 'vae':
         raise ValueError("vae_modelpath is not a 'vae' checkpoint.")
     if lc_ckpt.get('stage') != 'lc':
         raise ValueError("lc_modelpath is not an 'lc' checkpoint.")
+
+    print('\nLoading dataset (ground truth + condition ordering)...')
+    field_norm = vae_ckpt.get('normalization')
+    data_nct, sample_ids = _load_fields_with_checkpoint_normalization(config, field_norm)
+    num_channels, num_time = int(data_nct.shape[1]), int(data_nct.shape[2])
+    if int(vae_ckpt.get('num_channels', num_channels)) != num_channels:
+        raise ValueError(
+            f"VAE checkpoint expects {vae_ckpt.get('num_channels')} channels, "
+            f"but inference data provides {num_channels}."
+        )
+    if int(vae_ckpt.get('num_time', num_time)) != num_time:
+        raise ValueError(
+            f"VAE checkpoint expects {vae_ckpt.get('num_time')} timesteps, "
+            f"but inference data provides {num_time}."
+        )
 
     vae, num_filter_enc = build_vae(config, num_channels, num_time, int(config.get('batch_size', 16)))
     vae.apply(add_sn)   # match the spectral-norm parametrization saved by the VAE stage

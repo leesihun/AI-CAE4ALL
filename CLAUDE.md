@@ -183,9 +183,31 @@ mesh HDF5 layout** with no conversion step — `data/{sample_id}/{nodal_data,
 mesh_edge}` where `nodal_data` is `[num_features, num_timesteps, num_nodes]`,
 rows `0:3` are reference coordinates, and `write_preprocessing` may append
 train-derived normalizers. SDFFlow uses a different SDF layout. See
-[dataset/DATASET_FORMAT.md](dataset/DATASET_FORMAT.md) for the full spec and
-[CONFIGURATION_REFERENCE.md](CONFIGURATION_REFERENCE.md) for the exhaustive,
-live-code-backed key catalog and current launcher/native mismatches.
+[dataset/DATASET_FORMAT.md](dataset/DATASET_FORMAT.md) for the full spec.
+
+Row layout past the coordinates is:
+
+```text
+rows [3 : 3+input_var]              state:      input AND output
+rows [3+input_var : ... +cond_var]  conditions: input ONLY  (cond_var, default 0)
+```
+
+**`cond_var`** declares trailing **input-only** rows — known boundary/flight
+conditions the model reads but never predicts. They land in `graph.x` as
+`[state | conditions | positional | node-type one-hot]`, are read from disk even
+in the static (T=1) case where the state block is zeroed, get their own
+normalization statistics, and are carried unchanged through an autoregressive
+rollout. `cond_var 0` reproduces the pre-conditioning behavior exactly.
+`input_var == output_var` is still required for T>1 — that constraint is about
+the AR feedback loop, which conditioning rows sit outside of.
+
+SimulGenVAE reads the same rows as a per-sample parameter vector via
+`lc_data_type hdf5` + `cond_var`. MLP needs nothing: its tabular `X`/`Y`
+contract already separates inputs from outputs.
+
+> Note: `CONFIGURATION_REFERENCE.md` is referenced throughout this file and the
+> per-method docs but **does not exist** in the checkout; treat the specs in
+> `cae_suite/specs/` as the live key catalog.
 
 ## When you change something
 

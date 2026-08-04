@@ -81,4 +81,4 @@ voronoi_branches	1, 4
 '
 %   Time integration -- AR-RT: unroll all 49 steps, backprop through the whole
 %   trajectory, gradient-checkpoint each step, no injected noise.
-time_integration	ar_rt
+time_integration	ar_ot

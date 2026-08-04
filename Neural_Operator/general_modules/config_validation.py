@@ -13,7 +13,7 @@ COMMON_KEYS = {
     "model", "mode", "gpu_ids", "parallel_mode",
     "log_file_dir", "modelpath", "dataset_dir", "infer_dataset",
     "inference_output_dir", "infer_timesteps", "split_seed",
-    "input_var", "output_var", "feature_loss_weights",
+    "input_var", "output_var", "cond_var", "feature_loss_weights",
     "positional_features", "use_node_types",
     "coordinate_normalization", "operator_dim", "dimension_tolerance",
     "grid_padding", "out_of_bounds_policy",
@@ -194,6 +194,10 @@ def validate_common_config(config, source="configuration"):
     if output_var is not None and (not isinstance(output_var, int) or output_var <= 0):
         raise ValueError(f"{source}: output_var must be a positive int, got {output_var!r}.")
 
+    cond_var = config.get("cond_var")
+    if cond_var is not None and (not isinstance(cond_var, int) or cond_var < 0):
+        raise ValueError(f"{source}: cond_var must be a non-negative int, got {cond_var!r}.")
+
     loss_weights = config.get("feature_loss_weights")
     if loss_weights is not None and output_var is not None:
         if not isinstance(loss_weights, list):
@@ -220,7 +224,12 @@ def validate_common_config(config, source="configuration"):
 
 
 def validate_temporal_contract(config):
-    """input_var must equal output_var whenever the dataset has T > 1 (rollout needs it)."""
+    """input_var must equal output_var whenever the dataset has T > 1 (rollout needs it).
+
+    `cond_var` is deliberately not part of this constraint: conditioning rows
+    are input-only and static across the unroll, so they never have to be
+    predicted for the next step to be constructible.
+    """
     num_timesteps = config.get("num_timesteps")
     if num_timesteps is None or num_timesteps <= 1:
         return

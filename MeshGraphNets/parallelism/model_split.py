@@ -549,7 +549,10 @@ class ModelSplitStage(nn.Module):
         if edge_input_size != EDGE_FEATURE_DIM:
             raise ValueError(f"edge_var must be {EDGE_FEATURE_DIM}, got {edge_input_size}")
 
-        node_input_size = int(config['input_var']) + int(config.get('positional_features', 0))
+        # graph.x layout: [state | conditions | positional | node-type one-hot]
+        node_input_size = (int(config['input_var'])
+                           + int(config.get('cond_var', 0) or 0)
+                           + int(config.get('positional_features', 0)))
         if config.get('use_node_types', False) and int(config.get('num_node_types', 0)) > 0:
             node_input_size += int(config['num_node_types'])
 

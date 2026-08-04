@@ -105,6 +105,13 @@ class MeshGraphDataset(Dataset):
         self.config = config
         self.input_dim = config.get('input_var')
         self.output_dim = config.get('output_var')
+        # Input-only conditioning rows: nodal_data[3+input_var : 3+input_var+cond_var].
+        # Read verbatim at every timestep, never predicted, never zeroed for
+        # static (T=1) data -- they are known conditions, not unknown state.
+        # cond_var 0 (the default) reproduces the pre-conditioning behavior.
+        self.cond_dim = int(config.get('cond_var', 0) or 0)
+        if self.cond_dim < 0:
+            raise ValueError(f"cond_var must be >= 0; got {self.cond_dim}")
         self.num_pos_features = int(config.get('positional_features', 0))
         self.use_node_types = config.get('use_node_types', False)
         self.dimension_tolerance = float(config.get('dimension_tolerance', 1e-4))
@@ -137,6 +144,9 @@ class MeshGraphDataset(Dataset):
 
         print(f"Loading MeshGraphDataset: {h5_file}")
         print(f"  input_dim: {self.input_dim}, output_dim: {self.output_dim}")
+        if self.cond_dim:
+            print(f"  cond_dim: {self.cond_dim} (input-only conditioning rows "
+                  f"{3 + self.input_dim}:{3 + self.input_dim + self.cond_dim})")
         print(f"  positional_features: {self.num_pos_features}")
         print(f"  use_node_types: {self.use_node_types}")
 
@@ -152,6 +162,14 @@ class MeshGraphDataset(Dataset):
             nodal_shape = f[f'data/{sample_id}/nodal_data'].shape  # [features, time, nodes]
             self.num_features = nodal_shape[0]
             self.num_timesteps = nodal_shape[1]
+
+        required_rows = 3 + max(int(self.input_dim), int(self.output_dim)) + self.cond_dim
+        if self.num_features < required_rows:
+            raise ValueError(
+                f"nodal_data has {self.num_features} feature rows but the config needs "
+                f"{required_rows} (3 coords + max(input_var={self.input_dim}, "
+                f"output_var={self.output_dim}) + cond_var={self.cond_dim})."
+            )
 
         if self.use_node_types and self.num_features <= 7:
             raise ValueError(
@@ -261,6 +279,7 @@ class MeshGraphDataset(Dataset):
         subset.config = self.config
         subset.input_dim = self.input_dim
         subset.output_dim = self.output_dim
+        subset.cond_dim = self.cond_dim
         subset.num_pos_features = self.num_pos_features
         subset.use_node_types = self.use_node_types
         subset.dimension_tolerance = self.dimension_tolerance
@@ -315,6 +334,7 @@ class MeshGraphDataset(Dataset):
             self.h5_file, self.sample_ids, self.input_dim, self.output_dim,
             self.num_timesteps, self.num_pos_features,
             use_parallel=use_parallel_stats,
+            cond_dim=self.cond_dim,
         )
 
         self.node_mean, self.node_std = finalize_moments(
@@ -459,11 +479,20 @@ class MeshGraphDataset(Dataset):
         edge_index, x_pos, node_types = self._get_static_sample_data(sample_id, f, dset)
         part_ids = node_types
 
+        # Input-only conditioning rows sit immediately after the state block.
+        cond_start = 3 + self.input_dim
+        cond_stop = cond_start + self.cond_dim
+
         future_states = None  # [N, W, output_var] raw future states (AR-RT only)
+        x_cond = None  # [N, cond_var] known conditions, read from disk in BOTH branches
         if self.num_timesteps == 1:
             data_t = dset[:, 0, :].T  # [N, F]
             pos_raw = data_t[:, :3].copy()
             x_phys = np.zeros((data_t.shape[0], self.input_dim), dtype=np.float32)
+            if self.cond_dim:
+                # NOT zeroed: conditions are known inputs, unlike the unknown
+                # state the model has to predict from scratch.
+                x_cond = data_t[:, cond_start:cond_stop].astype(np.float32)
             target_delta = data_t[:, 3:3 + self.output_dim].copy()
         else:
             # One slice covers the whole rollout window; W=1 under AR-OT makes
@@ -474,6 +503,8 @@ class MeshGraphDataset(Dataset):
             data_t1 = block[:, 1, :].T
             pos_raw = data_t[:, :3].copy()
             x_phys = data_t[:, 3:3 + self.input_dim].copy()
+            if self.cond_dim:
+                x_cond = data_t[:, cond_start:cond_stop].astype(np.float32)
             y_raw = data_t1[:, 3:3 + self.output_dim]
             target_delta = y_raw - x_phys[:, :self.output_dim]
             if self.time_integration == AR_RT:
@@ -495,10 +526,16 @@ class MeshGraphDataset(Dataset):
                 # ground-truth targets must live there too.
                 future_states[:, :, :3] = future_states[:, :, :3] @ R.T
 
+        # Node feature layout: [state | conditions | positional]. Conditions go
+        # directly after the state block so DataSpec's physical_slice stays at
+        # the front and the AR-RT rollout's `graph.x[:, input_var:]` static
+        # split picks the conditions up unchanged.
+        blocks = [x_phys]
+        if x_cond is not None:
+            blocks.append(x_cond)
         if self.num_pos_features > 0:
-            x_raw = np.concatenate([x_phys, x_pos], axis=1)
-        else:
-            x_raw = x_phys
+            blocks.append(x_pos)
+        x_raw = np.concatenate(blocks, axis=1) if len(blocks) > 1 else x_phys
 
         if self.node_mean is None or self.node_std is None:
             raise RuntimeError("Dataset preprocessing has not been prepared: node statistics are missing.")

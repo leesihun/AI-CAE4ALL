@@ -181,6 +181,7 @@ def _run_temporal_rollout(model, dataset, device, output_dir, config, modelpath,
     cannot be reused step-to-step)."""
     input_dim = config['input_var']
     output_dim = config['output_var']
+    cond_dim = int(config.get('cond_var', 0) or 0)
     num_pos_features = int(config.get('positional_features', 0))
     use_node_types = config.get('use_node_types', False)
     num_rollout_steps = config.get('infer_timesteps')
@@ -203,6 +204,18 @@ def _run_temporal_rollout(model, dataset, device, output_dir, config, modelpath,
 
             ref_pos = step0[:3, :].T
             current_state = step0[3:3 + input_dim, :].T.astype(np.float32).copy()
+            # Input-only conditioning rows: real stored values, never advanced
+            # by the rollout (they are constants of the scenario).
+            cond_feat = None
+            if cond_dim > 0:
+                cond_start = 3 + input_dim
+                if num_features < cond_start + cond_dim:
+                    raise ValueError(
+                        f"Checkpoint expects {cond_dim} conditioning row(s) at "
+                        f"{cond_start}:{cond_start + cond_dim} but sample {sample_id} "
+                        f"has only {num_features} feature rows."
+                    )
+                cond_feat = step0[cond_start:cond_start + cond_dim, :].T.astype(np.float32)
             part_ids = step0[-1, :].astype(np.int32) if (use_node_types and num_features > 7) else None
 
             edge_index = np.concatenate([mesh_edge, mesh_edge[[1, 0], :]], axis=1)
@@ -216,7 +229,14 @@ def _run_temporal_rollout(model, dataset, device, output_dir, config, modelpath,
 
             start = time.time()
             for step in range(steps):
-                x_raw = np.concatenate([current_state, pos_feat], axis=1) if pos_feat is not None else current_state
+                # Same [state | conditions | positional] layout the dataloader
+                # builds (general_modules/mesh_dataset.py::__getitem__).
+                blocks = [current_state]
+                if cond_feat is not None:
+                    blocks.append(cond_feat)
+                if pos_feat is not None:
+                    blocks.append(pos_feat)
+                x_raw = np.concatenate(blocks, axis=1) if len(blocks) > 1 else current_state
                 x_norm = normalize_node_features(
                     x_raw, dataset.node_mean, dataset.node_std,
                     node_types=part_ids if use_node_types else None,

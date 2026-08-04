@@ -159,11 +159,16 @@ class _SampleContext:
     normalization stats needed to build a normalized step graph.
     """
 
-    def __init__(self, config, checkpoint_norm, ref_pos, edge_index, part_ids, device):
+    def __init__(self, config, checkpoint_norm, ref_pos, edge_index, part_ids, device,
+                 cond_feat=None):
         self.device = device
         self.ref_pos = ref_pos                  # [N, 3]
         self.edge_index = edge_index            # [2, 2M] bidirectional
         self.num_nodes = ref_pos.shape[0]
+        self.input_dim = int(config.get('input_var'))
+        # Input-only conditioning rows [N, cond_var]: known values, static
+        # across every rollout step and z-sample.
+        self.cond_feat = cond_feat
 
         norm = checkpoint_norm
         self.node_mean, self.node_std = norm['node_mean'], norm['node_std']
@@ -248,15 +253,26 @@ class _SampleContext:
     def build_step_graph(self, current_state):
         """Build one normalized PyG graph for the given physical state [N, input_dim]."""
         device = self.device
+        # Same [state | conditions | positional] layout the dataloader builds
+        # (general_modules/mesh_dataset.py::__getitem__).
+        blocks = [current_state]
+        if self.cond_feat is not None:
+            blocks.append(self.cond_feat)
         if self.pos_features is not None:
-            x_raw = np.concatenate([current_state, self.pos_features], axis=1)
-        else:
-            x_raw = current_state
+            blocks.append(self.pos_features)
+        x_raw = np.concatenate(blocks, axis=1) if len(blocks) > 1 else current_state
         x_norm = (x_raw - self.node_mean) / self.node_std
         if self.node_type_onehot is not None:
             x_norm = np.concatenate([x_norm, self.node_type_onehot], axis=1)
 
-        deformed_pos = self.ref_pos + current_state[:, :3]
+        # Rows 3:6 are the displacement vector by the shared contract; zeros for
+        # a statically-trained model, so deformed == reference.
+        if self.input_dim >= 3:
+            displacement = current_state[:, :3]
+        else:
+            displacement = np.zeros((self.num_nodes, 3), dtype=np.float32)
+            displacement[:, :self.input_dim] = current_state[:, :self.input_dim]
+        deformed_pos = self.ref_pos + displacement
         edge_attr = (compute_edge_attr(self.ref_pos, deformed_pos, self.edge_index)
                      - self.edge_mean) / self.edge_std
 
@@ -537,6 +553,9 @@ def run_rollout(config, config_filename='config.txt'):
     num_rollout_steps = config.get('infer_timesteps')
     input_dim = config.get('input_var')
     output_dim = config.get('output_var')
+    cond_dim = int(config.get('cond_var', 0) or 0)
+    trained_timesteps = config.get('num_timesteps')
+    static_training = trained_timesteps is not None and int(trained_timesteps) == 1
 
     # Inline z_disp spread-histogram (generated vs ground-truth eval dataset).
     # Enabled when an `eval_dataset` is given in the config (no GT -> no compare).
@@ -583,12 +602,36 @@ def run_rollout(config, config_filename='config.txt'):
 
         # nodal_data layout: [x, y, z, x_disp, y_disp, z_disp, stress, (part_number)]
         ref_pos = nodal_data[:3, 0, :].T                     # [N, 3]
-        initial_state = nodal_data[3:3 + input_dim, 0, :].T  # [N, input_dim]
+
+        # Static training (T=1) feeds a ZERO state and regresses the field
+        # directly; temporal training feeds state_t and regresses a delta.
+        # Inference must reproduce whichever contract the checkpoint was fit
+        # under -- seeding a statically-trained model with the ground-truth
+        # field both leaks the answer and divides by its degenerate zero-state
+        # std. Fall back to the inference file's own T for older checkpoints.
+        is_static = static_training if trained_timesteps is not None else (num_timesteps == 1)
+        if is_static:
+            initial_state = np.zeros((num_nodes, input_dim), dtype=np.float32)
+            if steps != 1:
+                print(f"  INFO: checkpoint was trained on static (T=1) data; "
+                      f"clamping {steps} requested step(s) to 1.")
+                steps = 1
+        else:
+            initial_state = nodal_data[3:3 + input_dim, 0, :].T.astype(np.float32)  # [N, input_dim]
+
+        # Input-only conditioning rows: always the real stored values, never
+        # zeroed, never advanced by the rollout.
+        cond_feat = None
+        if cond_dim > 0:
+            cond_start = 3 + input_dim
+            cond_feat = nodal_data[cond_start:cond_start + cond_dim, 0, :].T.astype(np.float32)
+
         part_ids = (nodal_data[-1, 0, :].astype(np.int32)
                     if config.get('use_node_types') and num_features > 7 else None)
         edge_index = np.concatenate([mesh_edge, mesh_edge[[1, 0], :]], axis=1)  # [2, 2M]
 
-        ctx = _SampleContext(config, norm, ref_pos, edge_index, part_ids, device)
+        ctx = _SampleContext(config, norm, ref_pos, edge_index, part_ids, device,
+                             cond_feat=cond_feat)
 
         def _run_batch(batch_start, requested_batch_size):
             B = min(requested_batch_size, num_vae_samples - batch_start)

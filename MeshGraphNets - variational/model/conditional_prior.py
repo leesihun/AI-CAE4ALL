@@ -34,7 +34,9 @@ class _ConditionalPriorBase(nn.Module):
             default_num_z = 1
         self.num_z = int(config.get('num_z', default_num_z))
 
+        # graph.x layout: [state | conditions | positional | node-type one-hot]
         base_input_size = int(config.get('input_var'))
+        base_input_size += int(config.get('cond_var', 0) or 0)
         base_input_size += int(config.get('positional_features', 0))
         if config.get('use_node_types', False):
             base_input_size += int(config.get('num_node_types', 0))
@@ -403,6 +405,7 @@ def build_prior_config(config):
     default_num_z = (int(config.get('multiscale_levels', 1)) + 1) if use_multiscale else 1
     return {
         'input_var': config.get('input_var'),
+        'cond_var': config.get('cond_var', 0),
         'edge_var': config.get('edge_var'),
         'latent_dim': config.get('latent_dim'),
         'vae_latent_dim': config.get('vae_latent_dim'),

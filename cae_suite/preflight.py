@@ -251,22 +251,39 @@ def _validate_dataset_against_config(result: PreflightResult, field_name: str) -
     input_var = values.get("input_var")
     output_var = values.get("output_var")
     try:
-        required_features = 3 + max(int(input_var), int(output_var))
+        cond_var = int(values.get("cond_var", 0) or 0)
+    except (TypeError, ValueError):
+        cond_var = 0
+    try:
+        # Row layout: [0:3] coords | state | conditions. The conditioning block
+        # starts after the whole state block, so it adds to the requirement
+        # rather than overlapping it.
+        required_features = 3 + max(int(input_var), int(output_var)) + cond_var
     except (TypeError, ValueError):
         return
     if feature_count < required_features:
+        detail = (f"3 coords + max(input_var={input_var}, output_var={output_var})"
+                  + (f" + cond_var={cond_var}" if cond_var else ""))
         result.report.add(
             "DATASET-FEATURES-001",
             Severity.ERROR,
-            f"Dataset has {feature_count} feature rows but the config needs at least {required_features}.",
+            f"Dataset has {feature_count} feature rows but the config needs at least "
+            f"{required_features} ({detail}).",
             field_name=field_name,
             location=result.parsed.location(field_name),
         )
-    if values.get("use_node_types", False) is True and feature_count <= 7:
+    # The loader reads node types from the LAST row (`nodal_data[-1, 0, :]` in
+    # general_modules/mesh_dataset.py), not from a fixed index 7 -- those coincide only
+    # for the 8-row ANSYS builder layout. What is actually required is one row past the
+    # state+conditions block, so narrower datasets (e.g. the 7-row cylinder_flow: 3 coords
+    # + 3 state + node type) are valid too.
+    if values.get("use_node_types", False) is True and feature_count < required_features + 1:
         result.report.add(
             "DATASET-NODETYPE-001",
             Severity.ERROR,
-            f"use_node_types=True requires a node-type row, but the dataset has only {feature_count} feature rows.",
+            f"use_node_types=True needs a node-type row past the state/conditions block "
+            f"(at least {required_features + 1} rows), but the dataset has "
+            f"{feature_count} feature rows.",
             field_name="use_node_types",
             location=result.parsed.location("use_node_types"),
         )
@@ -274,7 +291,8 @@ def _validate_dataset_against_config(result: PreflightResult, field_name: str) -
         result.report.add(
             "DATASET-TEMPORAL-001",
             Severity.ERROR,
-            f"Temporal data (T={timesteps}) requires input_var == output_var; got {input_var} and {output_var}.",
+            f"Temporal data (T={timesteps}) requires input_var == output_var; got {input_var} and {output_var}."
+            " Use cond_var for channels that are input-only.",
             field_name="input_var",
             location=result.parsed.location("input_var"),
         )

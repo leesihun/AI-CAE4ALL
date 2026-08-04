@@ -161,6 +161,7 @@ def build_model_config(config) -> dict:
         'model': 'transolver',
         'input_var': config.get('input_var'),
         'output_var': config.get('output_var'),
+        'cond_var': config.get('cond_var', 0),
         'positional_features': config.get('positional_features', 0),
         'use_node_types': config.get('use_node_types', False),
         'num_node_types': config.get('num_node_types', 0),

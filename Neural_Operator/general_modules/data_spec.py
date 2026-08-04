@@ -21,16 +21,21 @@ class DataSpec:
     has_sdf: bool
     has_integration_weights: bool
     num_timesteps: int
+    # C: per-node input-only conditioning columns (cond_var). Trailing with a
+    # default so specs built before conditioning existed keep constructing.
+    # Note the FIELD order here is not the COLUMN order in x -- conditions sit
+    # between the physical state and the positional block; see the slices below.
+    condition_dim: int = 0
 
     @property
     def context_dim(self) -> int:
         """Width of x excluding the leading physical-state block."""
-        return self.positional_dim + self.node_type_dim
+        return self.condition_dim + self.positional_dim + self.node_type_dim
 
     @property
     def total_node_dim(self) -> int:
         """Cx: total width of graph.x."""
-        return self.input_var + self.positional_dim + self.node_type_dim
+        return self.input_var + self.condition_dim + self.positional_dim + self.node_type_dim
 
     @property
     def physical_slice(self) -> slice:
@@ -38,15 +43,21 @@ class DataSpec:
         return slice(0, self.input_var)
 
     @property
+    def condition_slice(self) -> slice:
+        """Columns of x holding the input-only per-node conditioning block."""
+        start = self.input_var
+        return slice(start, start + self.condition_dim)
+
+    @property
     def positional_slice(self) -> slice:
         """Columns of x holding numeric positional features (no node type)."""
-        start = self.input_var
+        start = self.input_var + self.condition_dim
         return slice(start, start + self.positional_dim)
 
     @property
     def onehot_slice(self) -> slice:
         """Columns of x holding the node-type one-hot block."""
-        start = self.input_var + self.positional_dim
+        start = self.input_var + self.condition_dim + self.positional_dim
         return slice(start, start + self.node_type_dim)
 
     @property
@@ -58,6 +69,7 @@ class DataSpec:
         return {
             "input_var": self.input_var,
             "output_var": self.output_var,
+            "condition_dim": self.condition_dim,
             "positional_dim": self.positional_dim,
             "node_type_dim": self.node_type_dim,
             "global_condition_dim": self.global_condition_dim,
@@ -73,6 +85,9 @@ class DataSpec:
         return DataSpec(
             input_var=d["input_var"],
             output_var=d["output_var"],
+            # Absent in checkpoints written before cond_var existed; 0 makes
+            # those load with exactly their original channel layout.
+            condition_dim=d.get("condition_dim", 0),
             positional_dim=d["positional_dim"],
             node_type_dim=d["node_type_dim"],
             global_condition_dim=d["global_condition_dim"],
@@ -101,6 +116,7 @@ def build_data_spec_from_dataset(train_dataset, config) -> DataSpec:
     return DataSpec(
         input_var=train_dataset.input_dim,
         output_var=train_dataset.output_dim,
+        condition_dim=getattr(train_dataset, 'cond_dim', 0),
         positional_dim=train_dataset.num_pos_features,
         node_type_dim=node_type_dim,
         global_condition_dim=global_condition_dim,
