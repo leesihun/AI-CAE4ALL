@@ -123,13 +123,14 @@ class RolloutContext:
         self.use_world_edges = bool(config.get('use_world_edges', False))
         self.world_edge_radius = stats.get('world_edge_radius', None)
         self.world_max_num_neighbors = int(config.get('world_max_num_neighbors', 64))
-        # The rollout used to hardcode torch_cluster whenever it was importable
-        # on CUDA, silently ignoring this key (which the dataloader path does
-        # honor). On a large mesh with a small contact radius that is the slower
-        # backend -- see world_edge_index_torch.
-        self.world_edge_backend = str(
-            config.get('world_edge_backend', 'scipy_kdtree')
-        ).strip().lower()
+        # 'auto' preserves this path's long-standing behavior: prefer
+        # torch_cluster whenever it is importable on CUDA. Note it deliberately
+        # does NOT default to the `world_edge_backend` config key, which the
+        # dataloader path uses and defaults to scipy_kdtree -- so the two can
+        # disagree. Both produce the identical edge set; see
+        # world_edge_index_torch for the cost difference and for why that is
+        # worth revisiting.
+        self.world_edge_backend = 'auto'
 
         self.use_multiscale = bool(config.get('use_multiscale', False))
         self.multiscale_levels = int(config.get('multiscale_levels', 1))

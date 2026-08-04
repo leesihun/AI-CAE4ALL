@@ -1,13 +1,13 @@
 model	MeshGraphNets-V  # MeshGraphNets, MeshGraphNets-V, point_deeponet, deeponet, fno, gino, transolver, sdfflow
 mode	train  # Train / Inference
-gpu_ids	0  # 0, 1, 2, 3.....
+gpu_ids	0, 1, 2, 3, 4, 5, 6, 7  # 0, 1, 2, 3.....
 parallel_mode	ddp  # ddp, model_split
 log_file_dir	../../output/meshgraphnets-v/b8_all/train1_z128_h256_pml5_ph256_vml5.log
 modelpath	../output/meshgraphnets-v/b8_all/warpage_train1_z128_h256_pml5_ph256_vml5.pth
 '
 %   Datasets
-dataset_dir	../dataset/b8_main_sec_dataset_traincopy.h5
-infer_dataset	../dataset/b8_main_sec_dataset_infer.h5
+dataset_dir	../dataset/saoi_all.h5
+infer_dataset	../dataset/b8_main.h5
 infer_timesteps	1   # Inference timesteps
 split_seed	42  # Seed for the deterministic 80/10/10 random split
 num_vae_samples	10000   # Number of probabilistic generation
@@ -22,7 +22,7 @@ positional_features	4  # Rotation-invariant node features: [centroid_dist, mean_
 %   Network parameters
 message_passing_num	15  # Only used for non-multiscale modes (vanilla MeshGraphNets only)
 Training_epochs	1000
-Batch_size	8
+Batch_size	16
 LearningR	0.0001
 Latent_dim	256  # Encoder/processor/decoder hidden width
 num_workers	4  # number of workers for dataloader

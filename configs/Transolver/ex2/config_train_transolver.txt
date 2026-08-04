@@ -4,7 +4,8 @@ gpu_ids        0           # CUDA device id(s) -- int or comma list; -1 = CPU (n
 parallel_mode  ddp         # parallelism -- {ddp|node_shard}; node_shard needs >=2 GPUs + attention_kernel slice_space; model_split is an alias for node_shard; default ddp
 '
 %   Datasets and outputs (ex2.h5: 50 samples x 50 timesteps, 3D mesh -> multi-step delta
-%   training, same split/rollout convention as configs/MeshGraphNets/ex2/config_train1.txt)
+%   training, same split/rollout convention as
+%   configs/MeshGraphNets/ex2/config_train_meshgraphnets.txt)
 log_file_dir          ../../output/transolver/ex2/train_transolver.log     # log file path, relative to the backend output dir
 modelpath             ../output/transolver/ex2/transolver.pth              # checkpoint path -- save target in train, load source in inference
 dataset_dir           ../dataset/ex2.h5                                    # training mesh-state HDF5 path

@@ -107,8 +107,9 @@ V-cycle: pool → coarsest blocks → learned unpool → skip-merge → post-blo
 
 ## Configuration
 
-Identical to [HI-MGN](02_HI-MGN.md) except the coarsening keys. Shipped example:
-[`configs/MeshGraphNets/ex2/config_train3.txt`](../../configs/MeshGraphNets/ex2/config_train3.txt).
+Identical to [HI-MGN](02_HI-MGN.md) except the coarsening keys. There is no
+active ex2/ex3 BSMS campaign config; start from the corresponding HI-MGN config
+and change the coarsening keys below when a BSMS experiment is required.
 
 | Key | BSMS-GNN value | Note |
 | --- | --- | --- |

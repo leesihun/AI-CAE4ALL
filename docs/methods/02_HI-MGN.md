@@ -192,8 +192,8 @@ time_integration   ar_ot
 
 Shipped multiscale training configs include
 [`configs/MeshGraphNets/ex1/config_train_himgn.txt`](../../configs/MeshGraphNets/ex1/config_train_himgn.txt)
-and [`configs/MeshGraphNets/ex2/config_train1.txt`](../../configs/MeshGraphNets/ex2/config_train1.txt);
-inference via [`config_infer_himgn.txt`](../../configs/MeshGraphNets/ex1/config_infer_himgn.txt).
+and [`configs/MeshGraphNets/ex2/config_train_himgn.txt`](../../configs/MeshGraphNets/ex2/config_train_himgn.txt),
+with matching `config_infer_himgn.txt` files in each directory.
 
 ---
 

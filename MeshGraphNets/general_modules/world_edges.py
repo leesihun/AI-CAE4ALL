@@ -183,7 +183,7 @@ def compute_world_edges_torch(
     ptr: Optional[torch.Tensor] = None,
     edge_mean: Optional[torch.Tensor] = None,
     edge_std: Optional[torch.Tensor] = None,
-    backend: str = 'scipy_kdtree',
+    backend: str = 'auto',
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """Torch/GPU world edges for one state: search + features in one call.
 
