@@ -14,7 +14,7 @@ modelpath	../output/meshgraphnets/ex2/model_himgn_p12.pth
 %   are written here anyway so the file states what checkpoint it expects.
 %   The hierarchy IS rebuilt per sample at inference exactly as in training,
 %   including the K parallel partitions -- skip_projs is sized for (1 + K)
-%   merge inputs, so a mismatch here does not silently degrade, it fails to
+%   merge inputs, so a mismatch here d oes not silently degrade, it fails to
 %   multiply.
 dataset_dir	../dataset/ex2.h5
 infer_dataset	../dataset/ex2.h5
