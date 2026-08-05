@@ -50,7 +50,7 @@ temperature_max           5.0                 # max slice-assignment temperature
 small_output_init         False               # shrink final head at init -- {True|False}; default true when timesteps unknown/temporal, false for static T=1
 '
 %   Optimization
-training_epochs   500     # epoch count -- matches the epoch budget used by every other ex2 baseline
+training_epochs   100     # epoch count -- matches the epoch budget used by every other ex2 baseline
 batch_size        4       # physical DataLoader batch size, before grad_accum_steps -- positive int
 learningr         0.0001  # AdamW learning rate -- positive float; prefer decimal notation
 weight_decay      0.0001  # AdamW weight decay -- float >= 0; default 0.0001

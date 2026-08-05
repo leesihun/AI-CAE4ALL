@@ -3,23 +3,25 @@
 # (dataset/ex3_train_reordered.h5 / ex3_test_reordered.h5, NASA-CRM-style
 # xyz | Cp,Cf_x,Cf_y,Cf_z | 6 global conditions | normal_xyz,area layout).
 #
-# The default campaign contains twelve directly auditable arms, covering
-# every method repo that has an ex3 config (see configs/ex3/generate_full_configs.py):
+# The default campaign contains eleven directly auditable arms, covering every
+# GPU-backed method repo that has an ex3 config (see
+# configs/ex3/generate_full_configs.py):
 #   - vanilla MeshGraphNets, HI-MGN as-is, and HI-MGN P1/P2/P12 (static AR-OT)
 #   - Point-DeepONet, DeepONet, FNO, and GINO
 #   - Transolver
-#   - MLP (scalar-QoI surrogate, CPU-only -- gpu_ids stays -1, never rewritten)
 #   - SimulGenVAE (VAE -> latent-conditioner pipeline)
 #
+# MLP (scalar-QoI surrogate, tabular not mesh) is intentionally not included --
+# it's a different problem shape from the other ten arms and runs on CPU.
+#
 # Every arm is launched through AI_CAE4ALL_main.py. Canonical configs are never
-# edited: this script writes run-scoped copies with only gpu_ids substituted
-# (MLP is the one exception -- it is CPU-only and is copied unchanged).
+# edited: this script writes run-scoped copies with only gpu_ids substituted.
 # With PARALLEL=1, one worker lane is started per requested GPU and jobs
 # assigned to the same GPU run sequentially.
 #
 # Environment overrides:
 #   PYTHON          root launcher interpreter (default: python)
-#   METHODS         space-separated campaign arms (default: all twelve)
+#   METHODS         space-separated campaign arms (default: all eleven)
 #   GPUS            space-separated CUDA IDs (default: 0 1 2 3 4 5 6 7)
 #   PARALLEL        1 = concurrent GPU lanes; 0 = fully sequential (default: 1)
 #   PREFLIGHT       validate every runtime config before any training (default: 1)
@@ -32,13 +34,13 @@
 #   bash configs/ex3/train_all.sh
 #   CHECK_ONLY=1 bash configs/ex3/train_all.sh
 #   GPUS="0 1 2 3" bash configs/ex3/train_all.sh
-#   METHODS="himgn-as-is himgn-p12 mlp" PARALLEL=0 \
+#   METHODS="himgn-as-is himgn-p12" PARALLEL=0 \
 #       bash configs/ex3/train_all.sh
 
 set -uo pipefail
 
 PYTHON="${PYTHON:-python}"
-METHODS="${METHODS:-meshgraphnets himgn-as-is himgn-p1 himgn-p2 himgn-p12 point_deeponet deeponet fno gino transolver mlp simulgenvae}"
+METHODS="${METHODS:-meshgraphnets himgn-as-is himgn-p1 himgn-p2 himgn-p12 point_deeponet deeponet fno gino transolver simulgenvae}"
 GPUS="${GPUS:-0 1 2 3 4 5 6 7}"
 PARALLEL="${PARALLEL:-1}"
 PREFLIGHT="${PREFLIGHT:-1}"
@@ -67,23 +69,13 @@ config_for() {
         fno)            echo "configs/Neural_Operator/ex3/config_train_fno_full.txt" ;;
         gino)           echo "configs/Neural_Operator/ex3/config_train_gino_full.txt" ;;
         transolver)     echo "configs/Transolver/ex3/config_train_transolver_full.txt" ;;
-        mlp)            echo "configs/MLP/ex3/config_train_mlp.txt" ;;
         simulgenvae)    echo "configs/SimulGenVAE/ex3/config_train.txt" ;;
         *)              return 1 ;;
     esac
 }
 
-# MLP is CPU-only (gpu_ids -1) -- never rewrite it onto a GPU lane.
-is_cpu_only() {
-    [ "$1" = "mlp" ]
-}
-
 runtime_config() {
-    local method=$1 source_cfg=$2 gpu=$3 out_cfg=$4
-    if is_cpu_only "$method"; then
-        cp "$source_cfg" "$out_cfg"
-        return 0
-    fi
+    local source_cfg=$1 gpu=$2 out_cfg=$3
     if ! grep -Eq '^[[:space:]]*gpu_ids[[:space:]]+' "$source_cfg"; then
         echo "ERROR: no gpu_ids entry in $source_cfg" >&2
         return 1
@@ -126,14 +118,10 @@ for index in "${!METHOD_LIST[@]}"; do
         exit 2
     fi
 
-    if is_cpu_only "$method"; then
-        gpu="cpu"
-    else
-        gpu="${GPU_LIST[$((index % ${#GPU_LIST[@]}))]}"
-    fi
+    gpu="${GPU_LIST[$((index % ${#GPU_LIST[@]}))]}"
     rt_cfg="$RUNTIME_CONFIG_ROOT/train_${method}.txt"
     log="$RUN_ROOT/train_${method}.log"
-    runtime_config "$method" "$cfg" "$gpu" "$rt_cfg" || exit 2
+    runtime_config "$cfg" "$gpu" "$rt_cfg" || exit 2
 
     CONFIG_LIST[$index]="$cfg"
     ASSIGNED_GPU[$index]="$gpu"
@@ -147,7 +135,7 @@ echo "ex3 all-in-one training campaign"
 echo "  PYTHON    = $PYTHON"
 echo "  METHODS   = $METHODS"
 echo "  GPUS      = $GPUS"
-echo "  PARALLEL  = $PARALLEL (one sequential lane per GPU; mlp runs CPU-only)"
+echo "  PARALLEL  = $PARALLEL (one sequential lane per GPU)"
 echo "  PREFLIGHT = $PREFLIGHT ($PREFLIGHT_FLAGS)"
 echo "  CHECK_ONLY= $CHECK_ONLY"
 echo "  RUN_ROOT  = $RUN_ROOT"
@@ -198,11 +186,7 @@ run_lane() {
     local lane_rc=0
     local index
     for index in "${!METHOD_LIST[@]}"; do
-        if is_cpu_only "${METHOD_LIST[$index]}"; then
-            if [ "$lane" -ne 0 ]; then
-                continue
-            fi
-        elif [ $((index % ${#GPU_LIST[@]})) -ne "$lane" ]; then
+        if [ $((index % ${#GPU_LIST[@]})) -ne "$lane" ]; then
             continue
         fi
         if train_one "$index"; then

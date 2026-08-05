@@ -23,7 +23,7 @@ positional_features	4  # Rotation-invariant node features: [centroid_dist, mean_
 '
 %   Network parameters
 message_passing_num	15
-Training_epochs	500
+Training_epochs	100
 %   AR-RT keeps all 49 unrolled steps in the autograd graph, which is what
 %   makes this heavy; batch 4 x 200k nodes is affordable on the B300 this runs
 %   on. Kept at 4 to match config_train_himgn.txt exactly.

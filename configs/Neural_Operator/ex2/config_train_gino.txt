@@ -65,7 +65,7 @@ gino_cache_neighbors           True   # reuse the per-sample neighbor edge index
 gino_group_shared_geometry     False  # accepted and shipped but no live code reads it -- {True|False}; keep False
 '
 %   Optimization
-training_epochs   150     # epoch count -- positive int
+training_epochs   100     # epoch count -- positive int
 batch_size        1       # physical DataLoader batch size, before grad_accum_steps -- positive int
 learningr         0.0001  # AdamW learning rate -- positive float; prefer decimal notation
 weight_decay      0.0001  # AdamW weight decay -- float >= 0; default 0.0001

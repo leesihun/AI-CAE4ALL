@@ -2,32 +2,31 @@
 # Head-to-head INFERENCE runner for the static full-resolution ex3 dataset
 # (dataset/ex3_test_reordered.h5, the held-out NASA-CRM-style split).
 #
-# Runs inference/reconstruction for all twelve ex3 arms (see
+# Runs inference/reconstruction for the eleven default ex3 arms (see
 # configs/ex3/train_all.sh for the matching train campaign), each against its
 # own held-out test config. Outputs land in output/<method>/rollout/ex3/full/...
-# (or output/simulgenvae/ex3/full/reconstruct for SimulGenVAE, output/mlp/ex3/full/predictions
-# for MLP). Requires checkpoints already produced by configs/ex3/train_all.sh
-# (or equivalent).
+# (or output/simulgenvae/ex3/full/reconstruct for SimulGenVAE). Requires
+# checkpoints already produced by configs/ex3/train_all.sh (or equivalent).
 #
 # GPUs are assigned round-robin from GPUS, one lane per GPU, same as
-# configs/ex3/train_all.sh. MLP is CPU-only (gpu_ids -1) and is copied
-# unchanged -- it is never rewritten onto a GPU lane.
+# configs/ex3/train_all.sh. MLP (scalar-QoI surrogate, tabular not mesh) is
+# intentionally not included -- different problem shape, runs on CPU.
 #
 # Environment overrides:
 #   PYTHON   = python interpreter (default: python)
-#   METHODS  = space-separated method list (default: all twelve, see config_for())
+#   METHODS  = space-separated method list (default: all eleven, see config_for())
 #   GPUS     = space-separated CUDA IDs (default: 0 1 2 3 4 5 6 7)
 #   PARALLEL = 1 launch all at once then wait (default); 0 run sequentially
 #   LOG_ROOT = directory for transcript logs (default: output/ex3_all/infer_runs)
 #
 # Usage:
 #   bash configs/ex3/infer_all.sh
-#   METHODS="himgn-as-is himgn-p12 mlp" bash configs/ex3/infer_all.sh
+#   METHODS="himgn-as-is himgn-p12" bash configs/ex3/infer_all.sh
 
 set -uo pipefail
 
 PYTHON="${PYTHON:-python}"
-METHODS="${METHODS:-meshgraphnets himgn-as-is himgn-p1 himgn-p2 himgn-p12 point_deeponet deeponet fno gino transolver mlp simulgenvae}"
+METHODS="${METHODS:-meshgraphnets himgn-as-is himgn-p1 himgn-p2 himgn-p12 point_deeponet deeponet fno gino transolver simulgenvae}"
 GPUS="${GPUS:-0 1 2 3 4 5 6 7}"
 PARALLEL="${PARALLEL:-1}"
 
@@ -52,23 +51,13 @@ config_for() {
         fno)            echo "configs/Neural_Operator/ex3/config_infer_fno_full.txt" ;;
         gino)           echo "configs/Neural_Operator/ex3/config_infer_gino_full.txt" ;;
         transolver)     echo "configs/Transolver/ex3/config_infer_transolver_full.txt" ;;
-        mlp)            echo "configs/MLP/ex3/config_infer_mlp.txt" ;;
         simulgenvae)    echo "configs/SimulGenVAE/ex3/config_reconstruct.txt" ;;
         *) echo "" ;;
     esac
 }
 
-# MLP is CPU-only (gpu_ids -1) -- never rewrite it onto a GPU lane.
-is_cpu_only() {
-    [ "$1" = "mlp" ]
-}
-
 runtime_config() {
-    local method=$1 source_cfg=$2 gpu=$3 out_cfg=$4
-    if is_cpu_only "$method"; then
-        cp "$source_cfg" "$out_cfg"
-        return 0
-    fi
+    local source_cfg=$1 gpu=$2 out_cfg=$3
     sed -E "s/^([[:space:]]*gpu_ids[[:space:]]+)[^[:space:]]+/\1${gpu}/" "$source_cfg" > "$out_cfg"
 }
 
@@ -90,13 +79,9 @@ infer_one() {
         echo "[$method] SKIP: config not found ($cfg)" >&2
         return 0
     fi
-    if is_cpu_only "$method"; then
-        gpu="cpu"
-    else
-        gpu="${GPU_LIST[$((index % ${#GPU_LIST[@]}))]}"
-    fi
+    gpu="${GPU_LIST[$((index % ${#GPU_LIST[@]}))]}"
     rt_cfg="$RUNTIME_CONFIG_ROOT/infer_${method}.txt"
-    runtime_config "$method" "$cfg" "$gpu" "$rt_cfg"
+    runtime_config "$cfg" "$gpu" "$rt_cfg"
     log="$LOG_ROOT/infer_${method}.log"
     echo "[$method] INFER START  gpu=$gpu  cfg=$rt_cfg (from $cfg)  -> $log"
     if [ "$PARALLEL" = "1" ]; then
