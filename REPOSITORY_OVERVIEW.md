@@ -150,7 +150,7 @@ AI-CAE4ALL/
 │   ├── ex1.h5, ex2.h5            # canonical mesh datasets (ex1 planar, ex2 true-3D)
 │   ├── deepjeb.h5                # SDFFlow geometry dataset
 │   ├── mlp/make_sample.py        # generator for the MLP tabular X/Y sample
-│   ├── hex_dataset.h5, hex_GT.h5
+│   ├── ex1_infer.h5, ex2_infer.h5, hex_dataset.h5   # held-out inference inputs
 │   └── benchmarks/…              # per-paper validation datasets
 │
 ├── output/                       # run artifacts (checkpoints, rollouts, samples)
@@ -762,7 +762,9 @@ question the design document motivates the work with.
 | `dataset/ex2.h5` | mesh methods | Genuinely **3D** geometry |
 | `dataset/ex2.mscache.*.h5` | MGN | Cached multiscale hierarchy for ex2 |
 | `dataset/deepjeb.h5` | SDFFlow | Geometry-generation shapes + descriptors |
-| `dataset/hex_dataset.h5`, `hex_GT.h5` | mesh methods | Hex-mesh dataset + ground truth |
+| `dataset/ex1_infer.h5` | mesh methods | ex1 single-sample hex-mesh inference input; state rows carry the ground-truth field (was `hex_GT.h5`) |
+| `dataset/ex2_infer.h5` | mesh methods | ex2 held-out inference set: 5 unseen scenes × 50 timesteps; rollout is seeded from t=0 and scored against t=1..49 |
+| `dataset/hex_dataset.h5` | mesh methods | Same mesh with the state rows zeroed — legacy, superseded by `ex1_infer.h5` |
 | `dataset/benchmarks/…` | Neural_Operator benchmarks | Per-paper validation datasets |
 
 Dataset builders live in the method repos (`Geometry_generation/build_dataset.py`

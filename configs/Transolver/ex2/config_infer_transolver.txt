@@ -2,11 +2,12 @@ model    transolver  # backend selector -- {transolver}
 mode     inference   # run mode -- {train|inference}
 gpu_ids  0           # CUDA device id(s) -- int or comma list; -1 = CPU (never mixed with CUDA ids)
 '
-%   Datasets and outputs (ex2.h5 rollout from t=0; stored trajectory = ground truth, same
-%   convention as configs/MeshGraphNets/ex2/config_infer_meshgraphnets.txt)
+%   Datasets and outputs: infer_dataset = ex2_infer.h5, 5 UNSEEN scenes rolled
+%   out from the stored t=0 state only; t=1..49 stay clean ground truth. Same
+%   convention as configs/MeshGraphNets/ex2/config_infer_meshgraphnets.txt.
 log_file_dir          ../../output/transolver/ex2/infer_transolver.log  # log file path, relative to the backend output dir
 modelpath             ../output/transolver/ex2/transolver.pth           # checkpoint path -- save target in train, load source in inference
-infer_dataset         ../dataset/ex2.h5                                 # inference input HDF5 path
+infer_dataset         ../dataset/ex2_infer.h5                           # inference input HDF5 path
 inference_output_dir  ../output/transolver/rollout/ex2/transolver       # rollout output directory
 infer_timesteps       49                                                # autoregressive rollout steps from t=0
 infer_mode            direct                                            # inference mode -- {direct|decoupled}; default direct

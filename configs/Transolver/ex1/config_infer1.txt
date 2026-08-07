@@ -5,7 +5,7 @@ gpu_ids  0           # CUDA device id(s) -- int or comma list; -1 = CPU (never m
 %   Datasets and outputs
 log_file_dir          ../../output/transolver/ex1/infer1.log        # log file path, relative to the backend output dir
 modelpath             ../output/transolver/ex1/transolver1.pth      # checkpoint path -- save target in train, load source in inference
-infer_dataset         ../dataset/hex_dataset.h5                     # inference input HDF5 path
+infer_dataset         ../dataset/ex1_infer.h5                       # inference input HDF5 path -- state rows hold the GT field (zeroed as input at T=1)
 inference_output_dir  ../output/transolver/rollout/ex1/transolver1  # rollout output directory
 infer_timesteps       1                                             # rollout length (int) -- static T=1 inference still needs this unless the direct-static path treats the output as one field
 infer_mode            direct                                        # inference mode -- {direct|decoupled}; default direct

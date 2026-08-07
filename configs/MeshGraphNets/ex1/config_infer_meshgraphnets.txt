@@ -1,11 +1,13 @@
 model	MeshGraphNets  # MeshGraphNets, MeshGraphNets-V, point_deeponet, deeponet, fno, gino, transolver, sdfflow
 mode	inference  # Train / Inference
-gpu_ids	0  # hex-dataset inference for the regular/vanilla (20 MP) baseline
+gpu_ids	0  # ex1_infer hex-mesh inference for the regular/vanilla (20 MP) baseline
 log_file_dir	../../output/meshgraphnets/ex1/infer_vanilla.log
 modelpath	../output/meshgraphnets/ex1/model_vanilla.pth
-%   Datasets (hex mesh; stored state = ground truth for single-step)
-dataset_dir	../dataset/hex_dataset.h5
-infer_dataset	../dataset/hex_dataset.h5
+%   Datasets (hex mesh). dataset_dir = the training set (inert in inference mode);
+%   infer_dataset = ex1_infer.h5, whose stored state rows ARE the ground-truth
+%   field -- the T=1 rollout zeroes them as model input and keeps them for scoring.
+dataset_dir	../dataset/ex1.h5
+infer_dataset	../dataset/ex1_infer.h5
 inference_output_dir	../output/meshgraphnets/rollout/ex1/model_vanilla
 infer_timesteps	1
 %   Common params (architecture overridden by checkpoint model_config at load)

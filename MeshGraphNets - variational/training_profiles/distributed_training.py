@@ -16,10 +16,12 @@ from training_profiles.setup import (
     build_model_and_ema,
     build_optimizer_scheduler,
     cleanup_dataloaders,
+    dump_memory_snapshot,
     init_log_file,
     log_model_summary,
     resolve_prior_type,
     save_checkpoint,
+    start_memory_history,
 )
 from training_profiles.ar_rollout import ar_rt_enabled
 from training_profiles.training_loop import (
@@ -115,7 +117,11 @@ def _train_worker_inner(rank, world_size, config, gpu_ids, config_filename):
         train_dataset.write_preprocessing_to_hdf5(split_seed)
         if config.get('use_node_types', False) and train_dataset.num_node_types is not None:
             print(f"  Node types enabled: {train_dataset.num_node_types} types will be added to input")
-    dist.barrier()
+    # device_ids pins the barrier to this rank's GPU. Without it NCCL guesses,
+    # and every rank guessing device 0 leaves four extra CUDA contexts on GPU 0
+    # (a few hundred MB each) for the rest of the run -- GPU 0 is already the
+    # heaviest rank since it alone runs validation and the periodic test.
+    dist.barrier(device_ids=[gpu_id] if torch.cuda.is_available() else None)
 
     # Create distributed samplers
     if rank == 0:
@@ -231,6 +237,8 @@ def _train_worker_inner(rank, world_size, config, gpu_ids, config_filename):
     if rank == 0:
         log_file = init_log_file(config, config_filename)
 
+    mem_recording = start_memory_history(rank)
+
     # Synchronize all processes before starting training
     dist.barrier(device_ids=[gpu_id])
 
@@ -316,6 +324,12 @@ def _train_worker_inner(rank, world_size, config, gpu_ids, config_filename):
 
         # Per epoch, node-weighted optimization and evaluation losses.
         current_lr = optimizer.param_groups[0]['lr']
+        # Rank 0 only: it is the rank that also runs validation and the periodic
+        # test, so its footprint is the one that OOMs first. A peak that keeps
+        # climbing means reshuffling is still drawing heavier batches; a reserved
+        # far above peak means allocator fragmentation.
+        vram_str = (f" | VRAM peak={train_metrics.get('peak_gb', 0.0):.2f}GB "
+                    f"reserved={train_metrics.get('reserved_gb', 0.0):.2f}GB")
         if rank == 0:
             if use_vae:
                 crps_str = ''
@@ -326,7 +340,7 @@ def _train_worker_inner(rank, world_size, config, gpu_ids, config_filename):
                     f"Epoch {epoch}/{config['training_epochs']} LR: {current_lr:.2e} | "
                     f"Train  recon={train_loss:.2e} mmd={train_metrics.get('mmd_mean', 0.0):.2e} total={train_metrics.get('total_mean', train_loss):.2e} | "
                     f"Valid  recon={valid_loss:.2e} mmd={valid_metrics.get('mmd_mean', 0.0):.2e} total={valid_metrics.get('total_mean', valid_loss):.2e}"
-                    f"{crps_str}"
+                    f"{crps_str}{vram_str}"
                 )
             else:
                 print(
@@ -334,6 +348,7 @@ def _train_worker_inner(rank, world_size, config, gpu_ids, config_filename):
                     f"Train: {train_loss:.2e} "
                     f"Valid: {valid_loss:.2e} "
                     f"LR: {current_lr:.2e}"
+                    f"{vram_str}"
                 )
 
         # Only rank 0 saves checkpoints — only when validation improves or on last epoch.
@@ -364,13 +379,14 @@ def _train_worker_inner(rank, world_size, config, gpu_ids, config_filename):
                         f"Epoch {epoch} LR: {current_lr:.4e} | "
                         f"Train recon={train_loss:.4e} mmd={train_metrics.get('mmd_mean', 0.0):.4e} total={train_metrics.get('total_mean', train_loss):.4e} | "
                         f"Valid recon={valid_loss:.4e} mmd={valid_metrics.get('mmd_mean', 0.0):.4e} total={valid_metrics.get('total_mean', valid_loss):.4e}"
-                        f"{crps_str}\n"
+                        f"{crps_str}{vram_str}\n"
                     )
                 else:
                     f.write(
                         f"Elapsed: {time.time() - start_time:.2f}s "
                         f"Epoch {epoch} Train {train_loss:.4e} "
-                        f"Valid {valid_loss:.4e} LR: {current_lr:.4e}\n"
+                        f"Valid {valid_loss:.4e} LR: {current_lr:.4e}"
+                        f"{vram_str}\n"
                     )
 
         # Periodically test the model on the test set
@@ -383,6 +399,9 @@ def _train_worker_inner(rank, world_size, config, gpu_ids, config_filename):
             if rank == 0:
                 run_periodic_test(eval_model, test_loader, device, config, epoch, train_dataset)
             dist.barrier(device_ids=[gpu_id])
+
+        if rank == 0:
+            dump_memory_snapshot(epoch, mem_recording)
 
     if rank == 0:
         if interrupted:

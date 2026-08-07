@@ -8,10 +8,12 @@ from training_profiles.setup import (
     build_model_and_ema,
     build_optimizer_scheduler,
     cleanup_dataloaders,
+    dump_memory_snapshot,
     init_log_file,
     log_model_summary,
     resolve_prior_type,
     save_checkpoint,
+    start_memory_history,
 )
 from training_profiles.training_loop import (
     evaluate_vae_learned_prior_epoch,
@@ -125,6 +127,7 @@ def single_worker(config, config_filename='config.txt'):
     last_valid_loss = float('inf')
     last_saved_epoch = -1
     val_interval = int(config.get('val_interval', 1))
+    mem_recording = start_memory_history()
 
     try:
         for epoch in range(total_epochs):
@@ -135,6 +138,11 @@ def single_worker(config, config_filename='config.txt'):
             train_loss = train_metrics['mean']
             scheduler.step()
             current_lr = optimizer.param_groups[0]['lr']
+            # A peak that keeps climbing across epochs means reshuffling is still
+            # drawing heavier batches; a reserved far above peak is allocator
+            # fragmentation. Neither is visible from memory_allocated().
+            vram_str = (f" | VRAM peak={train_metrics.get('peak_gb', 0.0):.2f}GB "
+                        f"reserved={train_metrics.get('reserved_gb', 0.0):.2f}GB")
 
             do_val = (epoch % val_interval == 0) or (epoch == total_epochs - 1)
 
@@ -175,12 +183,13 @@ def single_worker(config, config_filename='config.txt'):
                         f"Epoch {epoch}/{total_epochs} LR: {current_lr:.2e} | "
                         f"Train  recon={train_loss:.2e} mmd={train_mmd:.2e} aux={train_aux:.2e} total={train_total:.2e} | "
                         f"Valid  recon={valid_loss:.2e} mmd={valid_mmd:.2e} total={valid_total:.2e}"
-                        f"{crps_str}"
+                        f"{crps_str}{vram_str}"
                     )
                 else:
                     print(
                         f"Epoch {epoch}/{total_epochs} LR: {current_lr:.2e} | "
                         f"Train  recon={train_loss:.2e} mmd={train_mmd:.2e} aux={train_aux:.2e} total={train_total:.2e}"
+                        f"{vram_str}"
                     )
             else:
                 if do_val:
@@ -188,11 +197,13 @@ def single_worker(config, config_filename='config.txt'):
                         f"Epoch {epoch}/{total_epochs} "
                         f"Train: {train_loss:.2e} "
                         f"Valid: {valid_loss:.2e} LR: {current_lr:.2e}"
+                        f"{vram_str}"
                     )
                 else:
                     print(
                         f"Epoch {epoch}/{total_epochs} "
                         f"Train: {train_loss:.2e} LR: {current_lr:.2e}"
+                        f"{vram_str}"
                     )
 
             last_epoch = (epoch == total_epochs - 1)
@@ -231,20 +242,23 @@ def single_worker(config, config_filename='config.txt'):
                             f"Elapsed: {elapsed:.2f}s Epoch {epoch} LR: {current_lr:.4e} | "
                             f"Train recon={train_loss:.4e} mmd={train_metrics.get('mmd_mean',0):.4e} "
                             f"total={train_metrics.get('total_mean',train_loss):.4e} | "
-                            f"{val_str}\n"
+                            f"{val_str}{vram_str}\n"
                         )
                     else:
                         val_str = f"Valid {valid_loss:.4e}" if do_val else "Valid skipped"
                         f.write(
                             f"Elapsed: {elapsed:.2f}s "
                             f"Epoch {epoch} Train {train_loss:.4e} "
-                            f"{val_str} LR: {current_lr:.4e}\n"
+                            f"{val_str} LR: {current_lr:.4e}"
+                            f"{vram_str}\n"
                         )
 
             test_interval = int(config.get('test_interval', 10))
             last_epoch = epoch == total_epochs - 1
             if epoch % test_interval == 0 or last_epoch:
                 run_periodic_test(eval_model, test_loader, device, config, epoch, train_dataset)
+
+            dump_memory_snapshot(epoch, mem_recording)
 
         print(f"\nTraining finished. Last model saved at epoch {last_saved_epoch} with validation loss {last_valid_loss:.2e}")
     except KeyboardInterrupt:

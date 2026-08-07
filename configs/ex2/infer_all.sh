@@ -2,10 +2,14 @@
 # Head-to-head INFERENCE runner for the ex2 dataset (dataset/ex2.h5).
 #
 # Runs inference for all seven baselines IN PARALLEL, each pinned to its own GPU
-# (see gpu_for() below), against ex2.h5 itself: a 49-step autoregressive rollout
-# from t=0, with the stored trajectory serving as ground truth. Outputs land in
+# (see gpu_for() below), against the held-out dataset/ex2_infer.h5: a 49-step
+# autoregressive rollout seeded from t=0 alone, with the stored t=1..49
+# trajectory serving as untouched ground truth. Outputs land in
 # output/<method>/rollout/ex2/... in a directly comparable layout. Requires
 # checkpoints already produced by configs/ex2/train_all.sh (or equivalent).
+#
+# Score the rollouts against ground truth with:
+#   python configs/ex2/score_rollouts.py
 #
 # GPU assignment (fixed, matches configs/ex2/train_all.sh):
 #   0 meshgraphnets   1 meshgraphnets-hi   2 deeponet   3 fno

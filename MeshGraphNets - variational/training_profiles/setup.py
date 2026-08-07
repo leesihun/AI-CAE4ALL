@@ -290,6 +290,48 @@ def cleanup_dataloaders(*loaders) -> None:
     gc.collect()
 
 
+def start_memory_history(rank: int = 0) -> bool:
+    """Opt-in CUDA allocation recording, enabled by env `MGN_MEM_SNAPSHOT=1`.
+
+    When VRAM in nvidia-smi keeps climbing but `memory_allocated` stays flat, the
+    epoch peak/reserved numbers say *that* the pool grew but not *what* grew.
+    This records every allocation with its Python stack, so `dump_memory_snapshot`
+    produces a file that pytorch.org/memory_viz renders as "which call site owns
+    the blocks that are still live". It is the only thing that settles the
+    question without guessing.
+
+    Rank 0 only: it is the rank that also runs validation and the periodic test,
+    and recording on four ranks multiplies the overhead for no extra information.
+    Costs memory proportional to the number of recorded events, so this is
+    deliberately off unless asked for.
+    """
+    if rank != 0 or os.environ.get('MGN_MEM_SNAPSHOT', '') in ('', '0', 'false'):
+        return False
+    if not torch.cuda.is_available():
+        return False
+    torch.cuda.memory._record_memory_history(max_entries=200_000)
+    print("[mem] MGN_MEM_SNAPSHOT=1: recording CUDA allocation history on rank 0.")
+    print(f"[mem] snapshots every {int(os.environ.get('MGN_MEM_SNAPSHOT_EVERY', 10))} "
+          f"epochs -> outputs/mem_snapshot_ep*.pickle (view at pytorch.org/memory_viz)")
+    return True
+
+
+def dump_memory_snapshot(epoch: int, enabled: bool) -> None:
+    """Write the allocation snapshot at the configured epoch cadence."""
+    if not enabled:
+        return
+    every = max(1, int(os.environ.get('MGN_MEM_SNAPSHOT_EVERY', 10)))
+    if epoch % every:
+        return
+    path = os.path.join('outputs', f'mem_snapshot_ep{epoch}.pickle')
+    os.makedirs('outputs', exist_ok=True)
+    try:
+        torch.cuda.memory._dump_snapshot(path)
+        print(f"[mem] snapshot written: {path}")
+    except Exception as exc:
+        print(f"[mem] snapshot failed: {exc}")
+
+
 def init_log_file(config, config_filename: str):
     """Create the epoch log file (with the config embedded) and return its path, or None."""
     log_file_dir = config.get('log_file_dir')

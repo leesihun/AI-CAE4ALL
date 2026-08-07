@@ -17,7 +17,7 @@ modelpath	../output/meshgraphnets/ex2/model_himgn_base.pth
 %   merge inputs, so a mismatch here does not silently degrade, it fails to
 %   multiply.
 dataset_dir	../dataset/ex2.h5
-infer_dataset	../dataset/ex2.h5
+infer_dataset	../dataset/ex2_infer.h5  # held out from training
 inference_output_dir	../output/meshgraphnets/rollout/ex2/model_himgn_base
 infer_timesteps	49  # autoregressive rollout steps from t=0
 %   Common params (architecture overridden by checkpoint model_config at load)

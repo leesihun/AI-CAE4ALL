@@ -277,7 +277,9 @@ Full spec: [dataset/DATASET_FORMAT.md](dataset/DATASET_FORMAT.md).
 | `dataset/ex2.h5` | mesh methods | Genuinely **3D** geometry (~200k nodes/sample) |
 | `dataset/ex*.mscache.*.h5` | MeshGraphNets | Prebuilt multiscale hierarchy caches |
 | `dataset/deepjeb.h5` | SDFFlow | Geometry-generation shapes + 5 descriptors |
-| `dataset/hex_dataset.h5`, `hex_GT.h5` | mesh methods | Hex-mesh dataset + ground truth |
+| `dataset/ex1_infer.h5` | mesh methods | ex1 single-sample hex-mesh inference input; state rows carry the ground-truth field (was `hex_GT.h5`) |
+| `dataset/ex2_infer.h5` | mesh methods | ex2 held-out inference set: 5 unseen scenes × 50 timesteps; rollout is seeded from t=0 and scored against t=1..49 |
+| `dataset/hex_dataset.h5` | mesh methods | Same mesh with the state rows zeroed — legacy, superseded by `ex1_infer.h5` |
 | `dataset/mlp/` | MLP | Tabular `X`/`Y` sample + its generator |
 | `dataset/benchmarks/` | Neural_Operator, Transolver | Five per-paper validation suites |
 

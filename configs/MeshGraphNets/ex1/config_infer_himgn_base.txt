@@ -1,6 +1,6 @@
 model	MeshGraphNets  # MeshGraphNets, MeshGraphNets-V, point_deeponet, deeponet, fno, gino, transolver, sdfflow
 mode	inference  # Train / Inference
-gpu_ids	0  # hex-dataset inference for the Hi-MGN canonical baseline
+gpu_ids	0  # ex1_infer hex-mesh inference for the Hi-MGN canonical baseline
 log_file_dir	../../output/meshgraphnets/ex1/infer_himgn_base.log
 modelpath	../output/meshgraphnets/ex1/model_himgn_base.pth
 %   INFERENCE for ablation arm base (ex1).
@@ -16,8 +16,8 @@ modelpath	../output/meshgraphnets/ex1/model_himgn_base.pth
 %   including the K parallel partitions -- skip_projs is sized for (1 + K)
 %   merge inputs, so a mismatch here does not silently degrade, it fails to
 %   multiply.
-dataset_dir	../dataset/hex_dataset.h5
-infer_dataset	../dataset/hex_dataset.h5
+dataset_dir	../dataset/ex1.h5
+infer_dataset	../dataset/ex1_infer.h5
 inference_output_dir	../output/meshgraphnets/rollout/ex1/model_himgn_base
 infer_timesteps	1
 %   Common params (architecture overridden by checkpoint model_config at load)

@@ -111,15 +111,50 @@ def _crps_from_samples(samples, target):
 
     samples: [S, N, F] prior-sampled predictions. target: [N, F]. Returns [N, F].
     Uses absolute (L1) distance by definition, independent of `recon_loss`.
+
+    Both terms accumulate pair-by-pair into an [N, F] buffer. The vectorized form
+    (`samples.unsqueeze(0) - samples.unsqueeze(1)`) materializes [S, S, N, F] --
+    at S=8 with a 16-graph validation batch of 50k-node meshes that is ~600 MB
+    per intermediate, the largest single allocation anywhere in the run, and it
+    lands on rank 0 only. S(S-1)/2 elementwise kernels cost nothing next to N.
+    Summation order differs from the vectorized form, so values can move by
+    float-rounding epsilon; the estimator is unchanged.
     """
     S = samples.shape[0]
-    accuracy = (samples - target.unsqueeze(0)).abs().mean(dim=0)  # [N, F]
+    accuracy = torch.zeros_like(target)  # [N, F]
+    for i in range(S):
+        accuracy += (samples[i] - target).abs()
+    accuracy /= S
     if S < 2:
         return accuracy
-    # Vectorized pairwise mean abs difference: [S, S, N, F] → sum dims 0,1 → [N, F].
-    # Peak extra memory ≈ S² × N × F floats (e.g. 8²×96k×3 ≈ 74 MB). No loops.
-    spread = (samples.unsqueeze(0) - samples.unsqueeze(1)).abs().sum(dim=[0, 1]) / (2.0 * S * (S - 1))
-    return accuracy - spread
+    # Σ over unordered pairs; the ordered double sum of the formula is exactly
+    # twice this, so 1/(2 S (S-1)) becomes 1/(S (S-1)).
+    spread = torch.zeros_like(accuracy)
+    for i in range(S - 1):
+        for j in range(i + 1, S):
+            spread += (samples[i] - samples[j]).abs()
+    return accuracy - spread / (S * (S - 1))
+
+
+def _mem_gb():
+    """(peak allocated, reserved) in GB — the two numbers that explain an OOM.
+
+    `memory_allocated()` sampled between batches reads near-zero: the optimizer
+    step has already released the graph, so it reports the gap between batches
+    rather than the footprint. The peak is what has to fit; `reserved` is the
+    pool the allocator holds and roughly what nvidia-smi shows. A reserved that
+    sits far above peak means fragmentation; a peak that keeps climbing across
+    epochs means reshuffling is still finding heavier batches.
+    """
+    if not torch.cuda.is_available():
+        return 0.0, 0.0
+    return (torch.cuda.max_memory_allocated() / 1e9,
+            torch.cuda.memory_reserved() / 1e9)
+
+
+def _mem_str():
+    peak, reserved = _mem_gb()
+    return f'{peak:.1f}/{reserved:.1f}GB'
 
 
 def _delta_stats(dataloader, device):
@@ -410,6 +445,11 @@ def train_epoch(model, dataloader, optimizer, device, config, epoch, ema_model=N
     objective_terms = _ObjectiveTerms(config, inner_model, use_amp, amp_dtype, loss_weights)
     rollout_ctx = _build_rollout_context(config, device)
 
+    # Per-epoch peak: without the reset the peak is cumulative since process
+    # start and can never reveal whether THIS epoch needed more than the last.
+    if torch.cuda.is_available():
+        torch.cuda.reset_peak_memory_stats()
+
     optimizer.zero_grad(set_to_none=True)
 
     pbar = tqdm.tqdm(dataloader, total=total_batches)
@@ -461,8 +501,7 @@ def train_epoch(model, dataloader, optimizer, device, config, epoch, ema_model=N
 
         # Update progress bar every 10 batches to reduce memory query overhead
         if batch_idx % 10 == 0:
-            mem_gb = torch.cuda.memory_allocated() / 1e9 if torch.cuda.is_available() else 0
-            postfix = {'rec': f'{loss_val:.2e}', 'mem': f'{mem_gb:.1f}GB'}
+            postfix = {'rec': f'{loss_val:.2e}', 'mem': _mem_str()}
             if use_vae:
                 postfix['mmd'] = f'{float(mmd_loss_val):.2e}'
                 postfix['aux'] = f'{float(aux_loss_val):.2e}'
@@ -476,11 +515,14 @@ def train_epoch(model, dataloader, optimizer, device, config, epoch, ema_model=N
             pbar.set_postfix(postfix)
 
     # Sync GPU accumulators once per epoch (vs once per batch previously).
+    peak_gb, reserved_gb = _mem_gb()
     result = {
         'mean': total_loss_sum / total_loss_count,
         'total_mean': total_opt_loss_gpu.item() / total_loss_count,
         'sum': total_loss_sum,
         'count': total_loss_count,
+        'peak_gb': peak_gb,
+        'reserved_gb': reserved_gb,
     }
     if use_vae and mmd_count > 0:
         result['mmd_mean'] = total_mmd_gpu.item() / mmd_count
@@ -552,9 +594,8 @@ def _evaluate_epoch(model, dataloader, device, config, epoch=0, *,
 
             # Throttle display to every 10 batches — avoids per-batch .item() GPU syncs.
             if batch_idx % 10 == 0:
-                mem_gb = torch.cuda.memory_allocated() / 1e9 if torch.cuda.is_available() else 0
                 postfix = {'rec': f'{batch_loss_sum / max(batch_loss_count, 1):.2e}',
-                           'mem': f'{mem_gb:.1f}GB'}
+                           'mem': _mem_str()}
                 if use_vae:
                     postfix['mmd'] = f'{float(mmd_loss_val):.2e}'
                     postfix['total'] = f'{float(opt_loss):.2e}'
@@ -719,9 +760,8 @@ def evaluate_vae_learned_prior_epoch(model, dataloader, device, config, epoch=0,
                 except Exception:
                     _track_tail = False
 
-            mem_gb = torch.cuda.memory_allocated() / 1e9 if torch.cuda.is_available() else 0
             pbar.set_postfix({'rec': f'{batch_loss_sum / max(batch_loss_count, 1):.2e}',
-                              'mem': f'{mem_gb:.1f}GB'})
+                              'mem': _mem_str()})
 
     result = {
         'mean': total_loss_sum / max(total_loss_count, 1),
@@ -864,8 +904,7 @@ def test_model(model, dataloader, device, config, epoch, dataset=None, output_pr
                 errors = _recon_errors(predicted, target, config.get('recon_loss', 'huber'))
                 loss, batch_loss_sum, batch_loss_count = _loss_from_errors(errors, loss_weights)
 
-            mem_gb = torch.cuda.memory_allocated() / 1e9 if torch.cuda.is_available() else 0
-            pbar.set_postfix({'loss': f'{loss.item():.2e}', 'mem': f'{mem_gb:.1f}GB'})
+            pbar.set_postfix({'loss': f'{loss.item():.2e}', 'mem': _mem_str()})
 
             total_loss_sum += batch_loss_sum
             total_loss_count += batch_loss_count

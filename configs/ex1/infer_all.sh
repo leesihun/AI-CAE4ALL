@@ -2,7 +2,7 @@
 # Head-to-head INFERENCE runner for the ex1 dataset (dataset/ex1.h5).
 #
 # Runs inference for all seven baselines IN PARALLEL, each pinned to its own GPU
-# (see gpu_for() below), against the same held-out hex_dataset.h5 initial condition
+# (see gpu_for() below), against the same held-out ex1_infer.h5 initial condition
 # used by every ex1 baseline, so rollout outputs land in
 # output/<method>/rollout/ex1/... in a directly comparable layout. Requires
 # checkpoints already produced by configs/ex1/train_all.sh (or equivalent).
