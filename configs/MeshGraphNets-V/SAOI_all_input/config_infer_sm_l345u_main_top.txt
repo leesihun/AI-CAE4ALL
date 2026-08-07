@@ -3,8 +3,8 @@
 %   Checkpoint: saoi_top (trained by config_train_top.txt). MAIN and SEC share
 %   the section model; only infer_dataset differs between them.
 %   Every architecture key below MUST match config_train_top.txt or the
-%   checkpoint will not load. Note Latent_dim differs per section:
-%   bot = 256, top = 128 (despite both checkpoint names saying z128_h256).
+%   checkpoint will not load. Latent_dim is 256 for both sections (the z128
+%   in the checkpoint name is vae_latent_dim, not Latent_dim).
 %   5000 prior samples per scene.
 %   NOTE: load_config.py lowercases every single-token string value, so at
 %   runtime this path becomes ../dataset/saoi/test_sm-l345u-main_infer_top.h5.
@@ -35,7 +35,7 @@ positional_features	4  # Rotation-invariant node features: [centroid_dist, mean_
 message_passing_num	15  # Only used for non-multiscale modes (vanilla MeshGraphNets only)
 Batch_size	8
 LearningR	0.0001
-Latent_dim	128  # Encoder/processor/decoder hidden width (top section)
+Latent_dim	256  # Encoder/processor/decoder hidden width
 num_workers	4  # number of workers for dataloader
 std_noise	0.01  # Gaussian physical-input noise (training only)
 

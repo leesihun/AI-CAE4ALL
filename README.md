@@ -275,7 +275,7 @@ Full spec: [dataset/DATASET_FORMAT.md](dataset/DATASET_FORMAT.md).
 | --- | --- | --- |
 | `dataset/ex1.h5` | mesh methods, SimulGenVAE | **Planar** geometry — `operator_dim` resolves to 2 |
 | `dataset/ex2.h5` | mesh methods | Genuinely **3D** geometry (~200k nodes/sample) |
-| `dataset/ex*.mscache.*.h5` | MeshGraphNets | Prebuilt multiscale hierarchy caches |
+| `dataset/ex*.mscache.*.h5` | MeshGraphNets | Transient per-run hierarchy caches — built at startup, deleted at end of training (`hierarchy_cache_keep true` keeps them). Leftovers mean a killed run; the next run prunes them |
 | `dataset/deepjeb.h5` | SDFFlow | Geometry-generation shapes + 5 descriptors |
 | `dataset/ex1_infer.h5` | mesh methods | ex1 single-sample hex-mesh inference input; state rows carry the ground-truth field (was `hex_GT.h5`) |
 | `dataset/ex2_infer.h5` | mesh methods | ex2 held-out inference set: 5 unseen scenes × 50 timesteps; rollout is seeded from t=0 and scored against t=1..49 |

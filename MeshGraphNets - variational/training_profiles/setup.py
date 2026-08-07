@@ -290,6 +290,39 @@ def cleanup_dataloaders(*loaders) -> None:
     gc.collect()
 
 
+def release_hierarchy_cache(config, *datasets, delete: bool = True) -> None:
+    """Close this process's hierarchy-cache readers and delete the cache file.
+
+    The multiscale hierarchy cache is rebuilt at the start of every run (its
+    signature pins the source HDF5's size+mtime, which `write_preprocessing_
+    to_hdf5` changes), so keeping it only leaves one multi-GB file behind per
+    run. `multiscale_cache.release_cache` skips the delete when another job
+    still has the file open; `hierarchy_cache_keep true` disables it entirely.
+
+    Call *after* `cleanup_dataloaders` — worker processes must be gone first,
+    or Windows refuses the delete as in-use. Under DDP every rank calls it with
+    `delete=False` first, then rank 0 deletes past a barrier, so no rank is
+    still holding a handle when the file goes away.
+    """
+    cache_path = None
+    for dataset in datasets:
+        if dataset is None:
+            continue
+        reader = getattr(dataset, '_ms_reader', None)
+        if reader is not None:
+            try:
+                reader.close()
+            except Exception:
+                pass
+            dataset._ms_reader = None
+        cache_path = cache_path or getattr(dataset, '_ms_cache_path', None)
+
+    if cache_path is None or not delete:
+        return
+    from general_modules.multiscale_cache import release_cache
+    release_cache(cache_path, config)
+
+
 def start_memory_history(rank: int = 0) -> bool:
     """Opt-in CUDA allocation recording, enabled by env `MGN_MEM_SNAPSHOT=1`.
 

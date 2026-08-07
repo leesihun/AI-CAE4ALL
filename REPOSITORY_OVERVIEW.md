@@ -760,7 +760,7 @@ question the design document motivates the work with.
 | --- | --- | --- |
 | `dataset/ex1.h5` | mesh methods | **Planar** geometry (z≡0 → operator_dim 2) |
 | `dataset/ex2.h5` | mesh methods | Genuinely **3D** geometry |
-| `dataset/ex2.mscache.*.h5` | MGN | Cached multiscale hierarchy for ex2 |
+| `dataset/ex*.mscache.*.h5` | MGN | Transient per-run hierarchy cache — deleted at end of training; leftovers mean a killed run and are pruned on next start |
 | `dataset/deepjeb.h5` | SDFFlow | Geometry-generation shapes + descriptors |
 | `dataset/ex1_infer.h5` | mesh methods | ex1 single-sample hex-mesh inference input; state rows carry the ground-truth field (was `hex_GT.h5`) |
 | `dataset/ex2_infer.h5` | mesh methods | ex2 held-out inference set: 5 unseen scenes × 50 timesteps; rollout is seeded from t=0 and scored against t=1..49 |

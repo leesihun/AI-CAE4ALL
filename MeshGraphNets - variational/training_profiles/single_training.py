@@ -11,6 +11,7 @@ from training_profiles.setup import (
     dump_memory_snapshot,
     init_log_file,
     log_model_summary,
+    release_hierarchy_cache,
     resolve_prior_type,
     save_checkpoint,
     start_memory_history,
@@ -265,3 +266,4 @@ def single_worker(config, config_filename='config.txt'):
         print(f"\nTraining interrupted by user. Last model saved at epoch {last_saved_epoch} with validation loss {last_valid_loss:.2e}")
 
     cleanup_dataloaders(train_loader, val_loader, test_loader)
+    release_hierarchy_cache(config, train_dataset, val_dataset, test_dataset)

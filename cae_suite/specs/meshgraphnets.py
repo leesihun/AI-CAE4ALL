@@ -67,7 +67,8 @@ MGN_VARIATIONAL_IGNORED_KEYS = frozenset(
         "prior_cov_rank", "vae_batch_size", "vae_batch_size_max",
         "vae_batch_size_min", "vae_batch_vram_fraction", "eval_dataset",
         "hierarchy_cache_dir", "hierarchy_cache_build_workers",
-        "hierarchy_cache_wait_timeout", "static_cache_per_worker",
+        "hierarchy_cache_wait_timeout", "hierarchy_cache_keep",
+        "static_cache_per_worker",
         "make_histogram", "show_histogram", "histogram_bins",
         "histogram_clip_quantile",
     }

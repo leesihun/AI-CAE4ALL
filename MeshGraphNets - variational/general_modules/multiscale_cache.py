@@ -16,6 +16,20 @@ This module precomputes every sample's hierarchy *and* positional features
 and FPS never re-runs. When several independent training jobs start at once, an
 exclusive lock file ensures exactly one builds while the rest wait.
 
+Lifetime
+--------
+The cache lives for one run. ``ensure_cache`` builds it at dataset construction
+and ``release_cache`` deletes it once training is done, because the signature
+below pins the source dataset's size+mtime and training itself rewrites that
+file (``MeshGraphDataset.write_preprocessing_to_hdf5``) — so a kept cache could
+never be reused anyway and would just leave one multi-GB file behind per run.
+Set ``hierarchy_cache_keep true`` to keep it. Runs killed before release leave
+a leftover; the next run's ``_prune_siblings`` collects it.
+
+Unlike the vanilla tree there is no in-process fallback here: this dataset calls
+``get_hierarchy`` directly, so deleting a cache out from under a live job is a
+hard failure, not a slowdown. Hence the in-use guard in ``_try_delete``.
+
 Layout (HDF5)
 -------------
     root.attrs['signature']       json — coarsening + positional config + dataset id
@@ -288,6 +302,92 @@ def _lock_is_stale(lock_path: str) -> bool:
         return True
 
 
+# ---------------------------------------------------------------------------
+# Deletion (in-use aware)
+# ---------------------------------------------------------------------------
+
+def _try_delete(path: str) -> bool:
+    """Delete a cache file unless some process still has it open.
+
+    Windows enforces this for us: ``os.remove`` on an open file raises
+    PermissionError. POSIX happily unlinks it and lets existing readers keep
+    their file descriptors, but a job that has not opened the file *yet* would
+    then hit a hard KeyError in ``_get_ms_reader().get_hierarchy(...)`` — so
+    there we take a non-blocking exclusive ``flock`` first and skip the delete
+    if any reader holds the shared lock (:class:`HierarchyCacheReader`).
+
+    Returns True if the file is gone (including "was already gone").
+    """
+    try:
+        if os.name != 'nt':
+            import fcntl
+            fd = os.open(path, os.O_RDONLY)
+            try:
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except OSError:
+                    return False  # another job is reading it
+            finally:
+                os.close(fd)
+        os.remove(path)
+        return True
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+
+
+def _prune_siblings(keep_path: str, grace_seconds: float = 300.0) -> None:
+    """Remove hierarchy caches for the same dataset left over by crashed runs.
+
+    :func:`release_cache` deletes the cache on a clean exit, so siblings only
+    appear when a run was killed before it got there. Two guards keep this from
+    stealing a cache out from under a concurrent job of a *different* config
+    (the ablation sweep runs eight at once, each with its own digest):
+    ``_try_delete`` skips files that are open, and ``grace_seconds`` skips ones
+    written very recently — a build that has just been renamed into place but
+    whose owner has not opened a reader yet.
+    """
+    import glob
+    directory = os.path.dirname(keep_path) or '.'
+    stem = os.path.basename(keep_path).split('.mscache.')[0]
+    now = time.time()
+    for other in glob.glob(os.path.join(directory, f'{stem}.mscache.*.h5')):
+        if os.path.abspath(other) == os.path.abspath(keep_path):
+            continue
+        try:
+            if (now - os.path.getmtime(other)) < grace_seconds:
+                continue
+        except OSError:
+            continue
+        if _try_delete(other):
+            print(f'[mscache] Pruned leftover cache {os.path.basename(other)}')
+
+
+def release_cache(cache_path: str, config: dict = None) -> None:
+    """Delete this run's hierarchy cache now that training is finished.
+
+    The cache is rebuilt at the start of every run anyway (the source dataset's
+    size/mtime feed the signature, and training writes normalization stats back
+    into it), so keeping it afterwards only accumulates one multi-GB file per
+    run. Set ``hierarchy_cache_keep true`` to keep it instead.
+
+    Must be called *after* the DataLoader workers are shut down and this
+    process's readers are closed, or the delete is refused as in-use.
+    """
+    if not cache_path:
+        return
+    name = os.path.basename(cache_path)
+    if config is not None and bool(config.get('hierarchy_cache_keep', False)):
+        print(f'[mscache] hierarchy_cache_keep=true -> keeping {name}')
+        return
+    if _try_delete(cache_path):
+        print(f'[mscache] Removed hierarchy cache {name}')
+    else:
+        print(f'[mscache] Hierarchy cache {name} is still open by another job '
+              f'-> left in place (a later run will prune it)')
+
+
 def ensure_cache(h5_file: str, sample_ids, config: dict):
     """Return a path to a valid hierarchy cache, building it if needed.
 
@@ -299,6 +399,8 @@ def ensure_cache(h5_file: str, sample_ids, config: dict):
     signature = _signature(h5_file, coarse_params, pos_params)
     sig_json = json.dumps(signature, sort_keys=True)
     cache_path = cache_path_for(h5_file, config, signature)
+
+    _prune_siblings(cache_path)
 
     if _is_valid(cache_path, sig_json, sample_ids):
         print(f'[mscache] Using existing hierarchy cache: {cache_path}')
@@ -361,9 +463,25 @@ class HierarchyCacheReader:
     def __init__(self, cache_path: str):
         self.cache_path = cache_path
         self._h = None
+        self._lock_fd = None
 
     def _handle(self) -> h5py.File:
         if self._h is None:
+            # POSIX only: advertise "in use" so a concurrent job's prune/release
+            # skips this file (see _try_delete). Windows gets this from the open
+            # handle itself. Advisory flock(2) does not collide with the POSIX
+            # record locks HDF5 uses internally.
+            if os.name != 'nt' and self._lock_fd is None:
+                fd = None
+                try:
+                    import fcntl
+                    fd = os.open(self.cache_path, os.O_RDONLY)
+                    fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+                    self._lock_fd = fd
+                except OSError:
+                    if fd is not None:
+                        os.close(fd)
+                    self._lock_fd = None
             self._h = h5py.File(self.cache_path, 'r')
         return self._h
 
@@ -385,3 +503,9 @@ class HierarchyCacheReader:
             except Exception:
                 pass
             self._h = None
+        if self._lock_fd is not None:
+            try:
+                os.close(self._lock_fd)  # releases the shared flock
+            except OSError:
+                pass
+            self._lock_fd = None

@@ -147,6 +147,7 @@ class MeshGraphDataset(Dataset):
         # workers. Keeps the ~15s/sample FPS-Voronoi coarsening off the hot path.
         self._ms_cache_path = None
         self._ms_reader = None
+        self._ms_fallback_warned = False
 
         # Per-level coarsening method. Accepted values per level:
         #   'bfs'              — BFS bi-stride, centroid pool
@@ -301,7 +302,9 @@ class MeshGraphDataset(Dataset):
 
         Falls back to building in-process when the cache is unavailable or does
         not carry this sample (e.g. a split whose ids were not in the set the
-        cache was built for).
+        cache was built for). That fallback is *not* memoized, so it re-runs FPS
+        for every sample of every epoch — warn once per process, because
+        otherwise the only symptom is an unexplained ~1-2 s/sample slowdown.
         """
         reader = self._get_ms_reader()
         if reader is not None:
@@ -310,6 +313,11 @@ class MeshGraphDataset(Dataset):
                     return reader.get_hierarchy(sample_id)
             except (OSError, KeyError):
                 pass  # unreadable cache: fall through and rebuild
+        if not getattr(self, '_ms_fallback_warned', False):
+            self._ms_fallback_warned = True
+            print(f'[mscache] WARNING: hierarchy cache unusable for sample {sample_id} '
+                  f'(path: {getattr(self, "_ms_cache_path", None)}). Rebuilding in-process '
+                  f'every epoch — expect a large slowdown. Was the cache deleted mid-run?')
         return build_multiscale_hierarchy(
             edge_index, num_nodes, ref_pos,
             self.multiscale_levels, self.coarsening_types, self.voronoi_clusters,

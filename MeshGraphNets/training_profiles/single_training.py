@@ -10,6 +10,7 @@ from training_profiles.setup import (
     cleanup_dataloaders,
     init_log_file,
     log_model_summary,
+    release_hierarchy_cache,
     save_checkpoint,
 )
 from training_profiles.training_loop import (
@@ -169,3 +170,4 @@ def single_worker(config, config_filename='config.txt'):
         print("\nTraining interrupted by user. No checkpoint saved.")
 
     cleanup_dataloaders(train_loader, val_loader, test_loader)
+    release_hierarchy_cache(config, train_dataset, val_dataset, test_dataset)

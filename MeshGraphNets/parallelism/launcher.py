@@ -36,6 +36,7 @@ from training_profiles.setup import (
     build_normalization_dict,
     build_optimizer_scheduler,
     cleanup_dataloaders,
+    release_hierarchy_cache,
 )
 
 
@@ -238,6 +239,15 @@ def _split_worker_inner(rank: int, num_stages: int, config: dict, gpu_ids: list,
         print(f"[model_split] training finished. Final model saved at epoch {epoch} with train_loss={train_loss:.2e}")
 
     cleanup_dataloaders(train_loader)
+
+    # Every stage drops its hierarchy-cache handle before rank 0 deletes it.
+    release_hierarchy_cache(config, train_dataset, delete=False)
+    try:
+        dist.barrier(device_ids=[gpu_id] if torch.cuda.is_available() else None)
+    except Exception:
+        return
+    if rank == 0:
+        release_hierarchy_cache(config, train_dataset)
 
 
 def _resolution_counts(probe, L):

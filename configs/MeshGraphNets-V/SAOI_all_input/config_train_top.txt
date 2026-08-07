@@ -35,7 +35,7 @@ message_passing_num	15  # Only used for non-multiscale modes (vanilla MeshGraphN
 Training_epochs	1000
 Batch_size	16  # per-rank; global batch = 16 x 4 GPUs = 64
 LearningR	0.0001
-Latent_dim	128  # Encoder/processor/decoder hidden width
+Latent_dim	256  # Encoder/processor/decoder hidden width
 num_workers	4  # number of workers for dataloader
 std_noise	0.01  # Gaussian physical-input noise (training only)
 augment_geometry	True  # Training-only random Z-rotation + reflection augmentation

@@ -19,6 +19,7 @@ from training_profiles.setup import (
     dump_memory_snapshot,
     init_log_file,
     log_model_summary,
+    release_hierarchy_cache,
     resolve_prior_type,
     save_checkpoint,
     start_memory_history,
@@ -410,6 +411,19 @@ def _train_worker_inner(rank, world_size, config, gpu_ids, config_filename):
             print(f"\nTraining finished. Last model saved at epoch {last_saved_epoch} with validation loss {last_valid_loss:.2e}")
 
     cleanup_dataloaders(train_loader, val_loader, test_loader)
+
+    # Every rank drops its hierarchy-cache handle first; only then may rank 0
+    # delete the file (Windows refuses a delete while any rank holds it open).
+    # Skipped after an interrupt: a rank may already be gone, and collectives on
+    # a half-dead group hang. The next run's _prune_siblings collects the file.
+    release_hierarchy_cache(config, train_dataset, val_dataset, test_dataset, delete=False)
+    if not interrupted:
+        try:
+            dist.barrier(device_ids=[gpu_id])
+        except Exception:
+            return
+        if rank == 0:
+            release_hierarchy_cache(config, train_dataset)
 
 def setup_distributed(rank, world_size, gpu_id, port):
     """Initialize distributed training process group.

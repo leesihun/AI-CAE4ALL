@@ -38,7 +38,8 @@ clustering). The alternative BFS bi-stride coarsener is documented separately in
 - **World edges at coarse levels** (optional, `coarse_world_edges`) so contact
   information also propagates hierarchically.
 - **Shared on-disk hierarchy cache**: the (expensive) coarsening is precomputed once
-  into a `*.mscache.*.h5` file that all workers/jobs stream from.
+  per run into a `*.mscache.*.h5` file that all workers/jobs stream from, then
+  deleted at the end of training (`hierarchy_cache_keep true` to keep it).
 - All of MGN's capabilities (AR-OT/AR-RT, DDP, augmentation, EMA, etc.).
 
 ## Strengths
@@ -174,6 +175,14 @@ apply. The multiscale-specific keys are:
 | `hierarchy_cache_dir` | Directory for the shared `*.mscache.*.h5` hierarchy cache |
 | `hierarchy_cache_build_workers` | Workers for the one-time cache build |
 | `hierarchy_cache_wait_timeout` | Seconds to wait for another job's cache build (default 36000) |
+| `hierarchy_cache_keep` | Keep the cache after training instead of deleting it (default `false`) |
+
+> The cache is **per-run**, not persistent: its signature pins the source HDF5's
+> size+mtime, and training rewrites that file with the train-derived
+> normalization stats — so a kept cache can never be reused anyway and would
+> just leave one multi-GB file per run behind. It is deleted after the
+> DataLoaders shut down, skipped if a concurrent job still holds the file open;
+> a run killed before that leaves a leftover the next run prunes.
 
 > When `use_multiscale True`, **`message_passing_num` is ignored** by the processor
 > — block counts come entirely from `mp_per_level`.

@@ -88,12 +88,18 @@ ref_dx, ref_dy, ref_dz, ref_dist
 | `hierarchy_cache_dir` | data | Optional directory for the shared on-disk hierarchy cache (defaults next to the dataset). |
 | `hierarchy_cache_build_workers` | data | Optional worker count for the one-time cache build. |
 | `hierarchy_cache_wait_timeout` | data | Seconds to wait for another job's cache build before failing. Default `36000`. |
+| `hierarchy_cache_keep` | data | Keep the hierarchy cache after training instead of deleting it. Default `false`. |
 | `static_cache_per_worker` | data | Per-worker LRU cap for positional features (non-multiscale runs only). Default `64`. |
 
 When `use_multiscale True`, `message_passing_num` is not used by the processor;
 the block counts come from `mp_per_level`. Unpooling always uses the learned
-bipartite `UnpoolBlock`. Hierarchies are precomputed once into a shared on-disk
-cache (`*.mscache.*.h5`) that all workers and jobs stream from.
+bipartite `UnpoolBlock`. Hierarchies are precomputed once per run into a shared
+on-disk cache (`*.mscache.*.h5`) that all workers and jobs stream from, and the
+file is deleted once training finishes — its signature pins the source HDF5's
+size+mtime, which training changes when it writes the normalization stats back,
+so it could not be reused by a later run in any case. Set
+`hierarchy_cache_keep true` to keep it. The delete is skipped while another job
+still has the file open; leftovers from a killed run are pruned on next start.
 
 ## World Edge Keys
 

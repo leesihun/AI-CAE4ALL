@@ -221,3 +221,7 @@ Common multiscale errors are usually shape or config mismatches:
   did not run for that graph.
 - A stale `*.mscache.*.h5` after config changes rebuilds automatically (the
   signature hash changes); delete the `.lock` file if a previous build crashed.
+- The cache is built at dataset construction and deleted at the end of training,
+  so `*.mscache.*.h5` files should not accumulate. Leftovers mean runs that were
+  killed before cleanup — the next run prunes them (files another job still has
+  open are skipped). Set `hierarchy_cache_keep true` to keep the cache instead.
