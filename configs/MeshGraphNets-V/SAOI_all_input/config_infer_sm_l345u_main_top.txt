@@ -3,8 +3,7 @@
 %   Checkpoint: saoi_top (trained by config_train_top.txt). MAIN and SEC share
 %   the section model; only infer_dataset differs between them.
 %   Every architecture key below MUST match config_train_top.txt or the
-%   checkpoint will not load. Latent_dim is 256 for both sections (the z128
-%   in the checkpoint name is vae_latent_dim, not Latent_dim).
+%   checkpoint will not load. Latent_dim is 256 for both sections.
 %   5000 prior samples per scene.
 %   NOTE: load_config.py lowercases every single-token string value, so at
 %   runtime this path becomes ../dataset/saoi/test_sm-l345u-main_infer_top.h5.
@@ -15,7 +14,7 @@ model	MeshGraphNets-V  # MeshGraphNets, MeshGraphNets-V, point_deeponet, deepone
 mode	inference  # Train / Inference
 gpu_ids	5  # one GPU per job; the six SAOI infer configs use 0-5 so they can run concurrently
 log_file_dir	../../output/meshgraphnets-v/saoi_all/infer_sm_l345u_main_top.log
-modelpath	../output/meshgraphnets-v/saoi_all/saoi_top_z128_h256_pml5_ph256_vml5.pth
+modelpath	../output/meshgraphnets-v/saoi_all/saoi_top.pth
 inference_output_dir	../output/meshgraphnets-v/saoi_all/infer_sm_l345u_main_top
 
 %   Datasets
