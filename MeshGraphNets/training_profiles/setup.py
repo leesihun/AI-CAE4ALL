@@ -182,6 +182,7 @@ def build_model_config(config) -> dict:
         'pool_type':         config.get('pool_type', 'mean'),
         'pool_heads':        config.get('pool_heads', 4),
         'unpool_type':       config.get('unpool_type', 'sum'),
+        'learned_interpolation': config.get('learned_interpolation', True),
     }
 
 

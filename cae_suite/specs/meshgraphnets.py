@@ -34,6 +34,10 @@ MGN_KEYS = frozenset(
         "pipeline_microbatches",
         # Learned inter-level transfer operators (ATTENTION_TRANSFER_DESIGN.md Part I).
         "pool_type", "pool_heads", "unpool_type",
+        # Prolongation operator: True (default) = learned bipartite UnpoolBlock,
+        # False = broadcast the coarse state over each cluster. Successor to the
+        # legacy `bipartite_unpool` key (documented but never implemented here).
+        "learned_interpolation",
         # Multi-partition coarsening (ATTENTION_TRANSFER_DESIGN.md Part II).
         "voronoi_branches",
         # Time integration (CONFIGURATION_REFERENCE.md section 3.5): ar_ot or ar_rt.
@@ -129,6 +133,27 @@ def validate_meshgraphnets(ctx: SpecValidationContext) -> None:
                     Severity.ERROR,
                     f"mp_per_level must contain {expected} entries for multiscale_levels={levels}; found {length}.",
                     field_name="mp_per_level",
+                )
+        if values.get("learned_interpolation", True) is False:
+            if str(values.get("unpool_type", "sum")).strip().lower() == "attention":
+                ctx.add(
+                    "MGN-UNPOOL-001",
+                    Severity.ERROR,
+                    "unpool_type 'attention' requires learned_interpolation True; the "
+                    "attention score head lives inside UnpoolBlock, which the broadcast "
+                    "path does not build.",
+                    field_name="unpool_type",
+                    hint="Set unpool_type sum, or learned_interpolation True.",
+                )
+            if str(values.get("parallel_mode", "ddp")).strip().lower() == "model_split":
+                ctx.add(
+                    "MGN-UNPOOL-002",
+                    Severity.ERROR,
+                    "learned_interpolation False is not supported by parallel_mode "
+                    "model_split, whose separate V-cycle always builds the learned "
+                    "UnpoolBlock and would ignore the setting.",
+                    field_name="parallel_mode",
+                    hint="Use parallel_mode ddp.",
                 )
         if levels is not None and clusters is not None and len(as_list(clusters)) not in {1, levels}:
             ctx.add(

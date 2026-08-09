@@ -167,6 +167,26 @@ class EncoderProcessorDecoder(nn.Module):
         if self.unpool_type == 'attention':
             print("  Unpool: attention")
 
+        # Prolongation operator (coarse -> fine). True (default) is the learned
+        # bipartite UnpoolBlock; False broadcasts each coarse node's state to
+        # every fine member of its cluster (`h_coarse[ftc]`) -- the fixed
+        # operator the removed `bipartite_unpool` key used to select, renamed.
+        # Note the two differ in SUPPORT as well as weighting: the learned
+        # operator reads a fine node's own cluster plus every coarse neighbour
+        # of that cluster (over `up_ei`), broadcast reads the cluster alone.
+        # `skip_projs` still merges the result with the skip state either way,
+        # so the coarse->fine path is never fully unlearned and the two arms
+        # stay comparable.
+        self.learned_interpolation = bool(config.get('learned_interpolation', True))
+        if not self.learned_interpolation:
+            if self.unpool_type == 'attention':
+                raise ValueError(
+                    "unpool_type 'attention' requires learned_interpolation True: "
+                    "the attention score head lives inside UnpoolBlock, which the "
+                    "broadcast path does not build."
+                )
+            print("  Unpool: broadcast (learned_interpolation False)")
+
         # Multi-partition coarsening (ATTENTION_TRANSFER_DESIGN.md Part II):
         # per-level branch count. Default 1 everywhere reproduces today's
         # single-partition V-cycle exactly -- skip_projs below only widens
@@ -257,12 +277,16 @@ class EncoderProcessorDecoder(nn.Module):
             ])
 
         # Learned bipartite unpool (coarse -> fine message passing) per level.
-        from model.blocks import UnpoolBlock
-        self.unpool_blocks = nn.ModuleList([
-            UnpoolBlock(self.latent_dim, build_mlp,
-                       use_attention=(self.unpool_type == 'attention'))
-            for _ in range(L)
-        ])
+        # Not constructed at all under broadcast: DDP runs with
+        # find_unused_parameters=False, so a module that is built but never
+        # called aborts the first backward rather than merely wasting memory.
+        if self.learned_interpolation:
+            from model.blocks import UnpoolBlock
+            self.unpool_blocks = nn.ModuleList([
+                UnpoolBlock(self.latent_dim, build_mlp,
+                           use_attention=(self.unpool_type == 'attention'))
+                for _ in range(L)
+            ])
 
         coarsest_count = mp_per_level[L]
         self.coarsest_blocks = nn.ModuleList([
@@ -441,6 +465,11 @@ class EncoderProcessorDecoder(nn.Module):
         bipartite edge MLP runs on ~(1 + coarse degree) * N_fine unpool edges,
         otherwise one of the largest saved-activation buffers in the V-cycle.
         """
+        if not self.learned_interpolation:
+            # Broadcast: each fine node takes its own cluster's coarse state.
+            # `ftc` is already batch-offset by MultiscaleData.__inc__, so this
+            # gather is correct at batch_size > 1 with no extra work.
+            return self.skip_projs[i](torch.cat([skip_x, coarse_x[ld['ftc']]], dim=-1))
         src, dst = ld['up_ei']
         rel_pos = ld['fine_pos'][dst] - ld['coarse_centroid'][src]
         h_up = self.unpool_blocks[i](
@@ -465,6 +494,9 @@ class EncoderProcessorDecoder(nn.Module):
         """
         h_ups = []
         for b_ld, coarse_x in zip(ld['branches'], branch_xs):
+            if not self.learned_interpolation:
+                h_ups.append(coarse_x[b_ld['ftc']])
+                continue
             src, dst = b_ld['up_ei']
             rel_pos = ld['fine_pos'][dst] - b_ld['coarse_centroid'][src]
             h_up = self.unpool_blocks[i](

@@ -470,6 +470,19 @@ class _StageInner(nn.Module):
         skip_proj_dict: Dict[str, nn.Module] = {}
         unpool_dict: Dict[str, nn.Module] = {}
 
+        # This split forward is its own implementation of the V-cycle and does
+        # not read the transfer-operator keys -- it always builds the learned
+        # UnpoolBlock. Accepting learned_interpolation False here would train a
+        # model that silently ignores the setting, so refuse instead. Same
+        # reasoning as the voronoi_branches guard (ATTENTION_TRANSFER_DESIGN.md
+        # "As-built (Part II)").
+        if not bool(config.get('learned_interpolation', True)):
+            raise ValueError(
+                "learned_interpolation False is not supported by "
+                "parallel_mode model_split: this path always builds the learned "
+                "UnpoolBlock and would ignore the setting. Use parallel_mode ddp."
+            )
+
         use_coarse_we = bool(config.get('coarse_world_edges', False)) and use_world_edges
 
         for op in ops_sequence:

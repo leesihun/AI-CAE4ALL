@@ -171,6 +171,7 @@ apply. The multiscale-specific keys are:
 | `mp_per_level` | **`2L+1`** ints: descending arm, coarsest, ascending arm (overrides `message_passing_num`) |
 | `coarsening_type` | `voronoi_seedmean` (canonical), `voronoi_centroid`, `voronoi_inherit`, `bfs`, or a per-level comma list |
 | `voronoi_clusters` | Target coarse node count per Voronoi level (scalar or comma list) |
+| `learned_interpolation` | Prolongation operator: `True` (default) = learned bipartite `UnpoolBlock`; `False` = broadcast each coarse state over its cluster. Successor to the legacy `bipartite_unpool` key. Incompatible with `unpool_type attention` and `parallel_mode model_split` (both raise) |
 | `coarse_world_edges` | Lift world edges to all coarse levels (needs `use_world_edges` + `use_multiscale`) |
 | `hierarchy_cache_dir` | Directory for the shared `*.mscache.*.h5` hierarchy cache |
 | `hierarchy_cache_build_workers` | Workers for the one-time cache build |
