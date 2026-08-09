@@ -1,0 +1,30 @@
+model	SimulGenVAE  # stage 1 only: hierarchical VAE
+mode	train_vae  # standalone VAE training (unprefixed stage knobs)
+gpu_ids	0
+parallel_mode	single
+'
+%   dataset/benchmarks/elasticity/elasticity_train.h5 -- 972 nodes, T=1, IDENTICAL for
+%   every one of the 1000 samples (unlike ex4 cylinder_flow/deforming_plate, whose
+%   per-trajectory mesh violates SimulGenVAE's fixed-N/fixed-T requirement). Never
+%   tested against SimulGenVAE before this config.
+dataset_dir	../dataset/benchmarks/elasticity/elasticity_train.h5
+split_seed	42
+num_var	1
+field_start_row	3
+'
+latent_dim	8
+latent_dim_end	32
+num_filter_enc	1024 512 256 128
+network_size	small
+loss_type	1
+alpha	1000000
+init_beta_divisor	4
+'
+training_epochs	20
+batch_size	16
+learningr	0.001
+weight_decay	0.0
+warmup_epochs	5
+vae_modelpath	../output/simulgenvae/ex6/simulgenvae_vae.pth
+output_dir	../output/simulgenvae/ex6
+log_file_dir	../output/simulgenvae/ex6/vae.log

@@ -726,6 +726,19 @@ function connectedNodeValue(nodeId, targetPort, keys, suffixes = []) {
   }) || "";
 }
 
+/** inference/cae_infer classifies checkpoints into 5 families covering 8
+ * model IDs (point_deeponet/deeponet/fno/gino -> neural_operator,
+ * meshgraphnets(-v), transolver, sdfflow -> geometry). mlp and simulgenvae
+ * checkpoints raise a real "Could not classify checkpoint" error there — the
+ * repository-wide output/<model>/... path convention lets the Deploy
+ * workspace warn about that before submitting a job that is certain to fail. */
+function unsupportedDeployFamily(path) {
+  const segments = String(path || "").toLowerCase().split(/[\\/]+/);
+  if (segments.includes("mlp")) return "mlp";
+  if (segments.includes("simulgenvae")) return "simulgenvae";
+  return null;
+}
+
 export async function renderDeployWorkspace(container, nodeId = null) {
   const [deploy, checkpoints, datasets] = await Promise.all([
     apiRequest("/api/deploy"),
@@ -758,6 +771,7 @@ export async function renderDeployWorkspace(container, nodeId = null) {
   <div class="live-toolbar"><span><strong>Portable CPU inference</strong><small>Runs inference/run_inference.py and auto-detects the checkpoint family.</small></span></div>
   <div class="config-card">
     <label class="config-help">Checkpoint${connectedCheckpoint ? " · graph-connected" : ""}</label><select class="config-control" id="deployCheckpoint"><option value="">Select a real checkpoint…</option>${checkpointOptions.map(item => `<option value="${escapeHtml(item.path)}"${item.path === selectedCheckpoint ? " selected" : ""}>${escapeHtml(item.path)}</option>`).join("")}</select>
+    <div id="deployCheckpointWarning"></div>
     <label class="config-help">Input HDF5 (not used by SDFFlow)</label><select class="config-control" id="deployInput"><option value="">No input / SDFFlow</option>${hdf5.map(item => `<option value="${escapeHtml(item.path)}"${item.path === selectedInput ? " selected" : ""}>${escapeHtml(item.path)}</option>`).join("")}</select>
     <label class="config-help">Output folder (written under frontend/runtime/inference)</label><input class="config-control" id="deployOutput" value="${escapeHtml(node?.config.output_name || "studio-inference")}">
     <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:7px">
@@ -784,15 +798,26 @@ export async function renderDeployWorkspace(container, nodeId = null) {
     snapshot();
     assignManualConfig(node, next);
   };
+  const renderCheckpointWarning = () => {
+    const family = unsupportedDeployFamily($("#deployCheckpoint").value);
+    $("#deployCheckpointWarning").innerHTML = family
+      ? `<p class="config-help" style="color:var(--red,#b3261e)">This looks like a ${escapeHtml(family)} checkpoint. The portable bundle only classifies the ${deploy.families.length} families above (point_deeponet/deeponet/fno/gino, transolver, meshgraphnets(-v), sdfflow) — running it here will fail with "Could not classify checkpoint". ${family === "mlp" ? "Use the model's own inference/evaluation blocks instead." : "Use the SimulGen-VAE reconstruct mode instead."}</p>`
+      : "";
+  };
+  renderCheckpointWarning();
   ["deployCheckpoint", "deployInput", "deployOutput", "deployTimesteps", "deploySamples", "deployOdeSteps", "deployConditions"]
     .forEach(id => $("#" + id).addEventListener("change", persistDeploy));
+  $("#deployCheckpoint").addEventListener("change", renderCheckpointWarning);
   $("#runPortableInference").addEventListener("click", async () => {
     const checkpoint = $("#deployCheckpoint").value;
     if (!checkpoint) {
       toast("Select a real checkpoint first.", "error");
       return;
     }
-    if (!window.confirm("Run the portable CPU inference bundle with the selected repository files?")) return;
+    const unsupportedFamily = unsupportedDeployFamily(checkpoint);
+    if (unsupportedFamily) {
+      if (!window.confirm(`This checkpoint looks like ${unsupportedFamily}, which the portable bundle cannot classify and will reject. Run it anyway to see the real error?`)) return;
+    } else if (!window.confirm("Run the portable CPU inference bundle with the selected repository files?")) return;
     persistDeploy();
     try {
       const job = await apiRequest("/api/inference/run", {

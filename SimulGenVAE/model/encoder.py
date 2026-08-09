@@ -32,16 +32,16 @@ class ConvBlock(nn.Module):
         if small:
             self._seq = nn.Sequential(
                 nn.Conv1d(in_channel, out_channel, kernel_size=1, padding=0),
-                nn.GroupNorm(min(8, max(1, out_channel//4)), out_channel),
+                nn.GroupNorm(group_norm_groups(out_channel), out_channel),
                 nn.GELU(),
             )
         else:
             self._seq = nn.Sequential(
                 nn.Conv1d(in_channel, out_channel, kernel_size=1, padding=0),
-                nn.GroupNorm(min(8, max(1, out_channel//4)), out_channel),
+                nn.GroupNorm(group_norm_groups(out_channel), out_channel),
                 nn.GELU(),
                 nn.Conv1d(out_channel, out_channel, kernel_size=3, padding=1),
-                nn.GroupNorm(min(8, max(1, out_channel//4)), out_channel),
+                nn.GroupNorm(group_norm_groups(out_channel), out_channel),
                 nn.GELU(),
             )
     

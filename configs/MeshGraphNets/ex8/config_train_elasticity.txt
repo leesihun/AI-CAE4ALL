@@ -1,0 +1,51 @@
+model	MeshGraphNets
+mode	train
+gpu_ids	0
+parallel_mode	ddp
+log_file_dir	../../output/meshgraphnets/ex6/train_elasticity.log
+modelpath	../output/meshgraphnets/ex6/model_elasticity.pth
+%   dataset/benchmarks/elasticity/elasticity_{train,test}.h5 (Geo-FNO Random_UnitCell,
+%   972-node point cloud, k=6 KNN mesh_edge, static T=1). Never had an MGN config before
+%   this one -- the paper benchmarks only ever targeted Transolver/Neural_Operator.
+dataset_dir	../dataset/benchmarks/elasticity/elasticity_train.h5
+infer_dataset	../dataset/benchmarks/elasticity/elasticity_test.h5
+infer_timesteps	1
+split_seed	42
+input_var	1
+output_var	1
+feature_loss_weights	1.0
+edge_var	8
+positional_features	0
+'
+message_passing_num	10
+Training_epochs	20
+Batch_size	4
+LearningR	0.0001
+Latent_dim	64
+num_workers	2
+prefetch_factor	2
+pin_memory	True
+std_noise	0.0
+weight_decay	0.0001
+augment_geometry	False
+grad_accum_steps	1
+'
+use_checkpointing	False
+'
+use_amp	True
+use_ema	True
+ema_decay	0.99
+test_interval	10
+val_interval	5
+'
+use_node_types	False
+'
+use_world_edges	False
+'
+test_batch_idx	0, 1, 2
+plot_feature_idx	-1
+'
+use_multiscale	False
+'
+time_integration	ar_ot
+cond_var	0

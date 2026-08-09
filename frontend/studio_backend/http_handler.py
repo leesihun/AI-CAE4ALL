@@ -29,6 +29,7 @@ from studio_backend.llm_configure import configure_via_llm, public_settings, sav
 from studio_backend.native_jobs import (
     UPLOAD_SUFFIXES,
     create_exe_build_job,
+    create_geometry_smoke_fixture,
     create_inference_job,
     create_simulgen_smoke_fixture,
 )
@@ -283,6 +284,8 @@ class StudioRequestHandler(SimpleHTTPRequestHandler):
                 self.send_json(export_artifact(payload), HTTPStatus.CREATED)
             elif parsed.path == "/api/simulgen/smoke-fixture":
                 self.send_json(create_simulgen_smoke_fixture(), HTTPStatus.CREATED)
+            elif parsed.path == "/api/geometry/smoke-fixture":
+                self.send_json(create_geometry_smoke_fixture(), HTTPStatus.CREATED)
             elif parsed.path.startswith("/api/jobs/") and parsed.path.endswith("/cancel"):
                 job_id = parsed.path.split("/")[-2]
                 self.send_json(STATE.cancel_job(job_id))

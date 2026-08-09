@@ -116,6 +116,44 @@ def create_simulgen_smoke_fixture() -> dict[str, Any]:
     }
 
 
+_CUBE_FACES = [
+    # (normal, (v0, v1, v2, v3)) — each quad face split into two triangles.
+    ((-1, 0, 0), ((0, 0, 0), (0, 1, 0), (0, 1, 1), (0, 0, 1))),
+    ((1, 0, 0), ((1, 0, 0), (1, 0, 1), (1, 1, 1), (1, 1, 0))),
+    ((0, -1, 0), ((0, 0, 0), (0, 0, 1), (1, 0, 1), (1, 0, 0))),
+    ((0, 1, 0), ((0, 1, 0), (1, 1, 0), (1, 1, 1), (0, 1, 1))),
+    ((0, 0, -1), ((0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0))),
+    ((0, 0, 1), ((0, 0, 1), (0, 1, 1), (1, 1, 1), (1, 0, 1))),
+]
+
+
+def create_geometry_smoke_fixture() -> dict[str, Any]:
+    """Write a tiny deterministic unit-cube STL so the Geometry -> HDF5 block
+    is runnable on a fresh checkout with no external CAD dataset staged.
+    geometry_ingest's ``input_geometry`` is always a directory of mesh files
+    (see dataset/geometry_ingest/main.py), so the fixture must be one too."""
+    root = RUNTIME_ROOT / "geometry-smoke" / "sample_cad"
+    root.mkdir(parents=True, exist_ok=True)
+    path = root / "sample_cube.stl"
+    if not path.exists():
+        lines = ["solid studio_smoke_cube"]
+        for normal, (v0, v1, v2, v3) in _CUBE_FACES:
+            for a, b, c in ((v0, v1, v2), (v0, v2, v3)):
+                lines.append(f"  facet normal {normal[0]} {normal[1]} {normal[2]}")
+                lines.append("    outer loop")
+                for vertex in (a, b, c):
+                    lines.append(f"      vertex {vertex[0]} {vertex[1]} {vertex[2]}")
+                lines.append("    endloop")
+                lines.append("  endfacet")
+        lines.append("endsolid studio_smoke_cube")
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return {
+        "path": relative(root),
+        "scientific_use": False,
+        "note": "Deterministic unit-cube STL for exercising the real Geometry -> HDF5 path; not real engineering geometry.",
+    }
+
+
 def create_inference_job(payload: dict[str, Any]) -> dict[str, Any]:
     checkpoint = safe_repo_path(
         str(payload.get("checkpoint", "")),

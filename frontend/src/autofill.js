@@ -21,6 +21,19 @@ export function toGeometryPath(value) {
   return `../../${normalized.replace(/^\.\//, "")}`;
 }
 
+/** Inverse of toGeometryPath: geometry_ingest's own output_dataset default is
+ * stored method-relative (relative to dataset/geometry_ingest/, two levels
+ * below the suite root). Other blocks (Export, Evaluate, HDF5 viewers) all
+ * resolve paths suite-root-relative, so propagating that raw value verbatim
+ * escapes the allowed repository roots. */
+export function fromGeometryPath(value) {
+  const normalized = text(value).replaceAll("\\", "/");
+  if (!normalized || /^[A-Za-z]:\//.test(normalized)) return normalized;
+  if (normalized.startsWith("../../")) return normalized.slice("../../".length);
+  if (normalized.startsWith("../")) return `dataset/${normalized.slice("../".length)}`;
+  return normalized;
+}
+
 function configPath(node, keys) {
   for (const key of keys) {
     const value = text(node?.config?.[key]);
@@ -91,7 +104,7 @@ function commaNames(node, key) {
 function datasetPath(node) {
   if (!node) return "";
   if (node.type === "source.hdf5") return configPath(node, ["path"]);
-  if (node.type === "prep.geometry") return configPath(node, ["output_dataset"]);
+  if (node.type === "prep.geometry") return fromGeometryPath(configPath(node, ["output_dataset"]));
   return configPath(node, ["dataset_path", "truth_path", "path"]);
 }
 
@@ -120,7 +133,7 @@ function checkpointPaths(node) {
 function outputArtifactPath(node) {
   if (!node) return "";
   if (node.type === "source.hdf5" || node.type === "source.cad" || node.type === "source.checkpoint") return configPath(node, ["path"]);
-  if (node.type === "prep.geometry") return configPath(node, ["output_dataset"]);
+  if (node.type === "prep.geometry") return fromGeometryPath(configPath(node, ["output_dataset"]));
   return configPath(node, [
     "report_path", "metrics_csv", "prediction_path", "output_path", "output_csv",
     "candidate_csv", "csv_path", "source_path", "path"

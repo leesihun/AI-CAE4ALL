@@ -3,7 +3,7 @@ import { state } from "./state.js";
 import { BLOCK_SPECS, MODEL_CATALOG, TYPE_META } from "./constants.js";
 import { apiRequest, requireRuntime } from "./api.js";
 import { normalizeConfigValues, rawConfig } from "./config.js";
-import { applyGraphAutofill, toGeometryPath } from "./autofill.js";
+import { applyGraphAutofill, toGeometryPath, toMethodPath } from "./autofill.js";
 
 export function typeColor(type) {
   return (TYPE_META[type] || TYPE_META.artifact).color;
@@ -112,10 +112,33 @@ export function executableSteps(targetId = null) {
         : modelId === "sdfflow"
           ? "reconstruct"
           : "inference";
+    // The run.inference/run.cad_generator node's own graph-linked fields
+    // (dataset_path, checkpoint_path, ...) are what the Inspector shows and
+    // what the user edits, but the upstream model node's OWN persisted
+    // config (still whatever mode it was last trained/edited in) is what
+    // actually gets serialized below. Without this merge, infer_dataset and
+    // friends are silently absent unless the model node happens to already
+    // be sitting in inference mode with those keys manually set.
+    const overrides = { mode };
+    const catalogKeys = MODEL_CATALOG[modelId].keys;
+    if (catalogKeys.includes("infer_dataset") && node.config.dataset_path) {
+      overrides.infer_dataset = toMethodPath(node.config.dataset_path);
+    }
+    if (catalogKeys.includes("modelpath") && node.config.checkpoint_path) {
+      // toMethodPath is a no-op on paths already relative to the owning
+      // method repo (e.g. a checkpoint fed back from the same model node
+      // that just trained it) and only adds the "../" prefix when the value
+      // came from a source.checkpoint block's suite-relative browse/upload
+      // path, so it is safe to apply unconditionally here.
+      overrides.modelpath = toMethodPath(node.config.checkpoint_path);
+    }
+    ["vae_modelpath", "lc_modelpath", "fm_modelpath"].forEach(key => {
+      if (catalogKeys.includes(key) && node.config[key]) overrides[key] = toMethodPath(node.config[key]);
+    });
     steps.push({
       label: `${BLOCK_SPECS[upstream.type].label} · ${mode}`,
       nodeId: node.id,
-      config: configTextForNode(upstream, { mode })
+      config: configTextForNode(upstream, overrides)
     });
   });
   return steps;

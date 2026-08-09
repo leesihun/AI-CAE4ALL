@@ -4,7 +4,7 @@ import { BLOCK_SPECS, MODEL_CATALOG, TYPE_META, INPUT_SOURCE_META } from "./cons
 import { apiRequest, requireRuntime } from "./api.js";
 import { previewGraphic, nodeVisualLabel } from "./graphics.js";
 import { typeColor } from "./validate.js";
-import { duplicateNode, deleteSelected, nodeEvidenceLabel } from "./graph.js";
+import { duplicateNode, deleteSelected, nodeEvidenceLabel, render } from "./graph.js";
 import { openConfig } from "./config.js";
 import { openArtifact } from "./viewer.js";
 import { runGraph } from "./run.js";
@@ -109,6 +109,8 @@ export function inputSourcePanel(node) {
       <button class="button primary" id="uploadInputSource">Upload local file…</button>
     </div>
     <input id="inputSourceFile" type="file" accept="${escapeHtml(meta.accept)}" hidden>
+    ${node.type === "source.cad" ? `<button class="button" id="createGeometrySample" style="width:100%;margin-top:7px">Create sample geometry</button>
+    <p class="input-source-help">No CAD file handy? Generates a tiny real unit-cube STL under frontend/runtime so the Geometry → HDF5 block is runnable end to end with no external dataset.</p>` : ""}
     <p class="input-source-help">The selected path is stored on this source block and follows its links into model preflight and execution.</p>
   </section>`;
 }
@@ -141,7 +143,7 @@ export async function openInputPicker(nodeId) {
         snapshot();
         node.config[meta.key] = button.dataset.useInput;
         $("#studioOverlay").classList.remove("open");
-        renderInspector();
+        render();
         toast(`${meta.label} selected: ${button.dataset.useInput}`);
       }));
     };
@@ -170,10 +172,31 @@ export async function uploadInputFile(nodeId, file) {
     if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
     snapshot();
     node.config[meta.key] = result.path;
-    renderInspector();
+    render();
     toast(`Uploaded and selected ${file.name} (${formatBytes(result.size)}).`);
   } catch (error) {
     toast(`Upload failed: ${error.message}`, "error");
+    button.disabled = false;
+    button.textContent = original;
+  }
+}
+
+export async function createGeometrySample(nodeId) {
+  const node = state.nodes.find(item => item.id === nodeId);
+  const meta = node && INPUT_SOURCE_META[node.type];
+  if (!node || !meta || !requireRuntime()) return;
+  const button = $("#createGeometrySample");
+  const original = button.textContent;
+  button.disabled = true;
+  button.textContent = "Creating sample geometry…";
+  try {
+    const fixture = await apiRequest("/api/geometry/smoke-fixture", { method: "POST", body: {} });
+    snapshot();
+    node.config[meta.key] = fixture.path;
+    render();
+    toast(`Created a real sample CAD file: ${fixture.path}`);
+  } catch (error) {
+    toast(`Could not create sample geometry: ${error.message}`, "error");
     button.disabled = false;
     button.textContent = original;
   }
@@ -292,6 +315,7 @@ export function renderInspector() {
   $("#openFullConfig")?.addEventListener("click", () => openConfig(node.id));
   $("#browseInputSource")?.addEventListener("click", () => openInputPicker(node.id));
   $("#uploadInputSource")?.addEventListener("click", () => $("#inputSourceFile").click());
+  $("#createGeometrySample")?.addEventListener("click", () => createGeometrySample(node.id));
   $("#inputSourceFile")?.addEventListener("change", event => {
     const file = event.target.files?.[0];
     if (file) uploadInputFile(node.id, file);

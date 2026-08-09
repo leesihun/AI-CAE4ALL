@@ -190,7 +190,7 @@ export const BLOCK_SPECS = {
     label: "CAD", category: "Sources", icon: "cad", accent: "#4c7f71", visual: "geometry", maturity: "native",
     description: "Select STEP, IGES, STL, PLY, or OBJ geometry and inspect every body.",
     inputs: [], outputs: [{ id: "geometry", type: "geometry", label: "geometry" }],
-    defaults: { path: "dataset/cad/bracket.step", units: "mm" }, sampleLabel: "12 CAD bodies"
+    defaults: { path: "", units: "mm" }, sampleLabel: "CAD / mesh geometry"
   },
   "source.hdf5": {
     label: "HDF5 Dataset", category: "Sources", icon: "data", accent: "#3c7193", visual: "dataset", maturity: "native",
@@ -209,7 +209,7 @@ export const BLOCK_SPECS = {
     label: "Saved ML Model", category: "Sources", icon: "model", accent: "#795991", visual: "checkpoint", maturity: "native",
     description: "Load a .pth checkpoint or compatible multi-stage model bundle with lineage.",
     inputs: [], outputs: [{ id: "model", type: "checkpoint", label: "saved model" }],
-    defaults: { path: "output/model.pth", version: "best", compatibility: "auto-detect" }, sampleLabel: "Select checkpoint", workspace: "deploy"
+    defaults: { path: "", version: "best", compatibility: "auto-detect" }, sampleLabel: "Select checkpoint", workspace: "deploy"
   },
   "prep.geometry": {
     label: "Geometry → HDF5 Dataset", category: "Preparation", icon: "prepare", accent: "#29745f", visual: "dataset", maturity: "native",
@@ -339,7 +339,7 @@ export const TEMPLATES = {
   geometry: {
     name: "Geometry to HDF5 inspection",
     nodes: [
-      ["cad", "source.cad", 35, 125, { path: "dataset/benchmarks/gino_carcfd/source/extracted/processed-car-pressure-data/data", units: "dataset native" }],
+      ["cad", "source.cad", 35, 125, { path: "", units: "dataset native" }],
       ["ingest", "prep.geometry", 365, 125, { mode: "inspect", reader: "trimesh", mesh_type: "surface", emit: "graph, pointcloud", num_points: "4096", limit: "3" }],
       ["export", "output.export", 710, 125, { path: "frontend/runtime/geometry-ingest" }]
     ],

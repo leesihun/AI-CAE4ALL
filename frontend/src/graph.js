@@ -2,7 +2,7 @@ import { $, $$, escapeHtml, toast } from "./dom.js";
 import { state, snapshot, nodePortRows, nodeHeight } from "./state.js";
 import {
   ICONS, BLOCK_SPECS, MODEL_CATALOG, TYPE_META, TEMPLATES,
-  NODE_WIDTH, PORT_START_Y, PORT_GAP
+  NODE_WIDTH, PORT_START_Y, PORT_GAP, INPUT_SOURCE_META
 } from "./constants.js";
 import { previewGraphic, nodeVisualLabel, parametersTableGraphic } from "./graphics.js";
 import { typeColor, compatible, validateGraph } from "./validate.js";
@@ -96,6 +96,7 @@ export function addBlock(type, position) {
   });
   state.selectedNode = id;
   state.selectedEdge = null;
+  setPanelVisibility("inspector", true);
   render();
   toast(`${spec.label} added. Click either socket first, then choose a highlighted compatible socket.`);
 }
@@ -113,6 +114,7 @@ export function duplicateNode(id) {
   state.nodes.push(copy);
   state.selectedNode = copy.id;
   state.selectedEdge = null;
+  setPanelVisibility("inspector", true);
   render();
 }
 
@@ -307,7 +309,10 @@ export function nodeEvidenceLabel(node, spec) {
   if (node.type === "deploy.api") return compactPath(config.checkpoint_path) || "Select checkpoint";
   if (node.type.startsWith("run.")) return "No run yet";
   const path = compactPath(config.path || config.output_dataset);
-  return path ? `path · ${path}` : spec.sampleLabel;
+  if (path) return `path · ${path}`;
+  const sourceMeta = INPUT_SOURCE_META[node.type];
+  if (sourceMeta) return `No ${sourceMeta.label.toLowerCase()} selected`;
+  return spec.sampleLabel;
 }
 
 export function renderNodes() {

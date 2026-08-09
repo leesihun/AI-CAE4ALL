@@ -45,7 +45,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 
 .topbar {
   position: relative;
-  z-index: 30;
+  z-index: 90;
   display: grid;
   grid-template-columns: 255px minmax(640px, 1fr) auto;
   align-items: center;
@@ -270,11 +270,15 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
   height: 48px;
   padding: 0 12px 0 14px;
   border-bottom: 1px solid var(--line);
   background: rgba(251,250,246,.97);
+  overflow-x: auto;
+  overflow-y: hidden;
 }
+.canvas-actions { flex: none; }
 .pipeline-heading { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .pipeline-heading input { width: 270px; padding: 3px 5px; border: 1px solid transparent; border-radius: 5px; color: var(--ink); background: transparent; font-size: 11px; font-weight: 820; }
 .pipeline-heading input:hover, .pipeline-heading input:focus { border-color: var(--line); background: #fff; }
@@ -832,6 +836,13 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   box-shadow: 0 22px 60px rgb(9 24 19 / .34);
 }
 .runtime-drawer.open { display: grid; }
+/* The drawer intentionally sits above modals (z-index 110 vs 80) so a
+   running job stays visible while browsing other UI, but its fixed
+   bottom-right position can then physically cover a modal's own footer
+   buttons (Save to block, Explain config, ...) with no way to reach them
+   short of first dismissing the drawer. Keep it visible but click-through
+   whenever a modal is open; closing the modal restores full interaction. */
+.overlay.open ~ .runtime-drawer { pointer-events: none; }
 .runtime-drawer.minimized { height: auto; }
 .runtime-drawer.minimized .runtime-log,
 .runtime-drawer.minimized .runtime-actions { display: none; }
