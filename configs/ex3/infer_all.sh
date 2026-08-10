@@ -2,22 +2,28 @@
 # Head-to-head INFERENCE runner for the static full-resolution ex3 dataset
 # (dataset/ex3_test_reordered.h5, the held-out NASA-CRM-style split).
 #
-# Runs inference/reconstruction for the eleven default ex3 arms (see
-# configs/ex3/train_all.sh for the matching train campaign), each against its
-# own held-out test config. Outputs land in output/<method>/rollout/ex3/full/...
-# (or output/simulgenvae/ex3/full/reconstruct for SimulGenVAE). Requires
-# checkpoints already produced by configs/ex3/train_all.sh (or equivalent).
+# Runs inference/reconstruction for the same eleven ex3 arms as
+# configs/ex3/train_all.sh (must match exactly, so every checkpoint that gets
+# trained also gets scored), ALL AT ONCE. Outputs land in
+# output/<method>/rollout/ex3/full/... (or output/simulgenvae/ex3/full/reconstruct
+# for SimulGenVAE). Requires checkpoints already produced by
+# configs/ex3/train_all.sh (or equivalent).
 #
-# GPUs are assigned round-robin from GPUS, one lane per GPU, same as
-# configs/ex3/train_all.sh. MLP (scalar-QoI surrogate, tabular not mesh) is
+# GPU assignment mirrors configs/ex3/train_all.sh: Point-DeepONet, DeepONet,
+# and FNO are the low-VRAM arms and are packed onto GPUs from LIGHT_GPUS
+# independently of the "heavy" arms, so no GPU hosts more than one heavy
+# process by default. MLP (scalar-QoI surrogate, tabular not mesh) is
 # intentionally not included -- different problem shape, runs on CPU.
 #
 # Environment overrides:
-#   PYTHON   = python interpreter (default: python)
-#   METHODS  = space-separated method list (default: all eleven, see config_for())
-#   GPUS     = space-separated CUDA IDs (default: 0 1 2 3 4 5 6 7)
-#   PARALLEL = 1 launch all at once then wait (default); 0 run sequentially
-#   LOG_ROOT = directory for transcript logs (default: output/ex3_all/infer_runs)
+#   PYTHON        = python interpreter (default: python)
+#   METHODS       = space-separated method list (default: all eleven, see config_for())
+#   GPUS          = space-separated CUDA IDs for heavy arms (default: 0 1 2 3 4 5 6 7)
+#   LIGHT_METHODS = space-separated method keys treated as low-VRAM
+#                   (default: point_deeponet deeponet fno)
+#   LIGHT_GPUS    = space-separated CUDA IDs for light arms (default: same as GPUS)
+#   PARALLEL      = 1 launch all at once then wait (default); 0 run sequentially
+#   LOG_ROOT      = directory for transcript logs (default: output/ex3_all/infer_runs)
 #
 # Usage:
 #   bash configs/ex3/infer_all.sh
@@ -28,6 +34,8 @@ set -uo pipefail
 PYTHON="${PYTHON:-python}"
 METHODS="${METHODS:-meshgraphnets himgn-as-is himgn-p1 himgn-p2 himgn-p12 point_deeponet deeponet fno gino transolver simulgenvae}"
 GPUS="${GPUS:-0 1 2 3 4 5 6 7}"
+LIGHT_METHODS="${LIGHT_METHODS:-point_deeponet deeponet fno}"
+LIGHT_GPUS="${LIGHT_GPUS:-$GPUS}"
 PARALLEL="${PARALLEL:-1}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -56,20 +64,52 @@ config_for() {
     esac
 }
 
+is_light() {
+    local method=$1 m
+    for m in $LIGHT_METHODS; do
+        [ "$m" = "$method" ] && return 0
+    done
+    return 1
+}
+
 runtime_config() {
     local source_cfg=$1 gpu=$2 out_cfg=$3
     sed -E "s/^([[:space:]]*gpu_ids[[:space:]]+)[^[:space:]]+/\1${gpu}/" "$source_cfg" > "$out_cfg"
 }
 
 read -r -a GPU_LIST <<< "$GPUS"
+read -r -a LIGHT_GPU_LIST <<< "$LIGHT_GPUS"
 if [ "${#GPU_LIST[@]}" -eq 0 ]; then
     echo "ERROR: GPUS is empty" >&2
     exit 2
 fi
+if [ "${#LIGHT_GPU_LIST[@]}" -eq 0 ]; then
+    echo "ERROR: LIGHT_GPUS is empty" >&2
+    exit 2
+fi
+
+read -r -a METHOD_LIST <<< "$METHODS"
+declare -a ASSIGNED_GPU WEIGHT_LIST
+heavy_idx=0
+light_idx=0
+for index in "${!METHOD_LIST[@]}"; do
+    method="${METHOD_LIST[$index]}"
+    if is_light "$method"; then
+        WEIGHT_LIST[$index]="light"
+        ASSIGNED_GPU[$index]="${LIGHT_GPU_LIST[$((light_idx % ${#LIGHT_GPU_LIST[@]}))]}"
+        light_idx=$((light_idx + 1))
+    else
+        WEIGHT_LIST[$index]="heavy"
+        ASSIGNED_GPU[$index]="${GPU_LIST[$((heavy_idx % ${#GPU_LIST[@]}))]}"
+        heavy_idx=$((heavy_idx + 1))
+    fi
+done
 
 infer_one() {
-    local method=$1 index=$2
-    local cfg gpu rt_cfg log
+    local index=$1
+    local method="${METHOD_LIST[$index]}"
+    local gpu="${ASSIGNED_GPU[$index]}"
+    local cfg rt_cfg log
     cfg="$(config_for "$method")"
     if [ -z "$cfg" ]; then
         echo "[$method] SKIP: unknown method" >&2
@@ -79,7 +119,6 @@ infer_one() {
         echo "[$method] SKIP: config not found ($cfg)" >&2
         return 0
     fi
-    gpu="${GPU_LIST[$((index % ${#GPU_LIST[@]}))]}"
     rt_cfg="$RUNTIME_CONFIG_ROOT/infer_${method}.txt"
     runtime_config "$cfg" "$gpu" "$rt_cfg"
     log="$LOG_ROOT/infer_${method}.log"
@@ -93,37 +132,34 @@ infer_one() {
 
 started=$(date +%s)
 echo "ex3 infer-all"
-echo "  PYTHON   = $PYTHON"
-echo "  METHODS  = $METHODS"
-echo "  GPUS     = $GPUS"
-echo "  PARALLEL = $PARALLEL"
-echo "  LOG_ROOT = $LOG_ROOT"
-echo "  RUN_ID   = $RUN_ID"
-
-read -r -a METHOD_LIST <<< "$METHODS"
+echo "  PYTHON       = $PYTHON"
+echo "  METHODS      = $METHODS"
+echo "  GPUS         = $GPUS"
+echo "  LIGHT_METHODS= $LIGHT_METHODS"
+echo "  LIGHT_GPUS   = $LIGHT_GPUS"
+echo "  PARALLEL     = $PARALLEL"
+echo "  LOG_ROOT     = $LOG_ROOT"
+echo "  RUN_ID       = $RUN_ID"
 
 rc=0
 if [ "$PARALLEL" = "1" ]; then
     pids=()
-    names=()
     for index in "${!METHOD_LIST[@]}"; do
-        m="${METHOD_LIST[$index]}"
-        infer_one "$m" "$index" &
+        infer_one "$index" &
         pids+=("$!")
-        names+=("$m")
-        echo "  launched $m (pid $!)"
+        echo "  launched ${METHOD_LIST[$index]} (pid $!, gpu ${ASSIGNED_GPU[$index]}, ${WEIGHT_LIST[$index]})"
     done
-    for k in "${!pids[@]}"; do
-        if ! wait "${pids[$k]}"; then
-            echo "[${names[$k]}] INFER FAILED -- see $LOG_ROOT/infer_${names[$k]}.log" >&2
+    for index in "${!pids[@]}"; do
+        if ! wait "${pids[$index]}"; then
+            echo "[${METHOD_LIST[$index]}] INFER FAILED -- see $LOG_ROOT/infer_${METHOD_LIST[$index]}.log" >&2
             rc=1
         else
-            echo "[${names[$k]}] INFER DONE"
+            echo "[${METHOD_LIST[$index]}] INFER DONE"
         fi
     done
 else
     for index in "${!METHOD_LIST[@]}"; do
-        infer_one "${METHOD_LIST[$index]}" "$index" || rc=1
+        infer_one "$index" || rc=1
     done
 fi
 
