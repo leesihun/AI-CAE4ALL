@@ -9,11 +9,13 @@ modelpath	../output/meshgraphnets/ex2/model_himgn_p1.pth
 %   GENERATED from config_train_himgn_base.txt -- edit that file and re-run the
 %   generator rather than editing this one, so the arms cannot drift apart.
 %   This file is the baseline verbatim plus the single feature block near the
-%   bottom (marked "ARM DIFFERENCE"). Read the baseline for why the shared
-%   settings are what they are, including which time_integration this ex uses.
+%   bottom (marked "ARM DIFFERENCE"), EXCEPT time_integration: this arm runs
+%   AR-OT (teacher-forced) instead of the base's AR-RT -- see the note near
+%   time_integration below. Read the baseline for why the other shared
+%   settings are what they are.
 %   See MeshGraphNets/ATTENTION_TRANSFER_DESIGN.md.
 dataset_dir	../dataset/ex2.h5
-infer_dataset	../dataset/ex2.h5
+infer_dataset	../dataset/ex2_infer.h5  # held out from training
 infer_timesteps	49  # 50 stored timesteps -> 49 autoregressive rollout steps
 split_seed	42
 %   Common params
@@ -26,22 +28,19 @@ positional_features	4  # Rotation-invariant node features: [centroid_dist, mean_
 %   Network parameters
 message_passing_num	15
 Training_epochs	100
-%   AR-RT keeps all 49 unrolled steps in the autograd graph, which is what
-%   makes this heavy; batch 4 x 200k nodes is affordable on the B300 this runs
-%   on. Kept at 4 to match config_train_himgn.txt exactly.
-Batch_size	4
+Batch_size	4  # Kept at 4 to match config_train_himgn.txt exactly.
 grad_accum_steps	1
 LearningR	0.0001
 Latent_dim	128  # MeshGraphNets latent dimension
 num_workers	2  # each persistent worker caches the whole train split (~80MB/sample x 40 = 3.2GB); 12 workers held ~38GB/arm
 prefetch_factor	2  # himgn batches are ~550MB (incl. 11.5M unpool edges); 8x4 prefetch would pin ~26GB
 pin_memory	True  # measured faster than False on this pipeline -- keep on (the 0.67-vs-0.26s figure predates the edge/hierarchy disk cache)
-std_noise	0.01  # INERT under ar_rt: rollout_loss calls the model with add_noise=False
+std_noise	0.01  # input-noise injection for autoregressive stability (multi-step)
 weight_decay	0.0001  # AdamW decoupled weight decay (decimal form only)
 augment_geometry	True  # kept ON for ex2 parity across all baselines (isotropy caveat overridden)
 '
 %   Memory Optimization
-use_checkpointing	True  # AR-RT additionally gradient-checkpoints every unrolled step
+use_checkpointing	True
 '
 %   Performance Optimization
 use_amp	True  # Mixed precision training with bfloat16
@@ -57,7 +56,7 @@ use_node_types	True  # Add one-hot encoded node types to node features
 use_world_edges	True   # fine-level contact edges, rebuilt from the predicted state each rollout step
 '
 %   Test set control
-test_batch_idx	0, 10, 20, 30, 40, 100, 200, 500, 1000
+test_batch_idx	0, 10, 20, 30, 40
 plot_feature_idx	-1  # Feature index to visualize in plots (-1 = last feature, i.e., stress)
 '
 %   Multi-Scale / Hierarchical Parameters -- ON (Hi-MGN backbone)
@@ -65,7 +64,7 @@ use_multiscale	True
 coarsening_type	voronoi_seedmean
 voronoi_clusters	5000, 100
 multiscale_levels	2
-mp_per_level	2, 3, 5, 3, 2
+mp_per_level	4, 6, 8, 6, 4
 '
 %   ==== ARM DIFFERENCE: Part I -- learned inter-level transfer operators ====
 %   Both reduce EXACTLY to the baseline's fixed mean-pool / sum-unpool at
@@ -76,6 +75,6 @@ pool_type	attention   # mean (baseline) | attention
 unpool_type	attention   # sum (baseline) | attention
 pool_heads	4           # latent_dim 128 / 4 heads = 32 dims per head
 '
-%   Time integration -- AR-RT: unroll all 49 steps, backprop through the whole
-%   trajectory, gradient-checkpoint each step, no injected noise.
+%   Time integration -- reverted to AR-OT (teacher-forced), unlike
+%   config_train_himgn_base.txt which trains this arm's baseline under AR-RT.
 time_integration	ar_ot

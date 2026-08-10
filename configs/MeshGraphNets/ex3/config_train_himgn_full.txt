@@ -41,9 +41,9 @@ test_batch_idx        0, 1, 2, 3, 4, 5, 6, 7, 8, 9
 plot_feature_idx      -1
 use_multiscale        True
 coarsening_type       voronoi_seedmean
-voronoi_clusters      50000, 1000
+voronoi_clusters      5000, 100
 multiscale_levels     2
-mp_per_level          2, 3, 5, 3, 2
+mp_per_level          4, 6, 8, 6, 4
 time_integration      ar_ot
 inference_output_dir  ../output/meshgraphnets/rollout/ex3/full/himgn
 cond_var              10

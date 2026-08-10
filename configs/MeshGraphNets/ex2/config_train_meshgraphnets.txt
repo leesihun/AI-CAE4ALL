@@ -7,7 +7,7 @@ modelpath	../output/meshgraphnets/ex2/model_vanilla.pth
 %   Datasets (ex2.h5: 50 samples x 50 timesteps, 3D mesh -> multi-step delta training;
 %   flat/non-hierarchical baseline -- HI-MGN uses config_train_himgn.txt instead)
 dataset_dir	../dataset/ex2.h5
-infer_dataset	../dataset/ex2.h5
+infer_dataset	../dataset/ex2_infer.h5  # held out from training
 infer_timesteps	49  # 50 stored timesteps -> 49 autoregressive rollout steps
 split_seed	42
 %   Common params
@@ -48,7 +48,7 @@ use_node_types	True  # Add one-hot encoded node types to node features
 use_world_edges	True
 '
 %   Test set control
-test_batch_idx	0, 10, 20, 30, 40, 100, 200, 500, 1000
+test_batch_idx	0, 10, 20, 30, 40
 plot_feature_idx	-1  # Feature index to visualize in plots (-1 = last feature, i.e., stress)
 '
 %   Multi-Scale / Hierarchical Parameters -- OFF for the regular/vanilla baseline

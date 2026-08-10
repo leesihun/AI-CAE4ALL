@@ -8,8 +8,8 @@ model                     transolver
 mode                      train
 gpu_ids                   0
 parallel_mode             ddp
-log_file_dir              ../../output/transolver/ex4/train_plate_smoke.log
-modelpath                 ../output/transolver/ex4/plate_smoke.pth
+log_file_dir              ../../output/transolver/ex5/train_plate_smoke.log
+modelpath                 ../output/transolver/ex5/plate_smoke.pth
 dataset_dir               ../dataset/ex5_deforming_plate_smoke.h5
 infer_dataset              ../dataset/ex5_deforming_plate_smoke.h5
 infer_timesteps           20

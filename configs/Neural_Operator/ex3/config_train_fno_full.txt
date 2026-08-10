@@ -29,13 +29,13 @@ global_condition_features  none
 integration_weight_source  none
 fno_grid_resolution        32, 32, 32
 fno_modes                  8, 8, 8
-fno_hidden_channels        32
+fno_hidden_channels        48
 fno_layers                 4
 fno_use_channel_mlp        True
 fno_norm                   none
 training_epochs            2000
 batch_size                 1
-learningr                  0.0001
+learningr                  0.0005
 weight_decay               0.0001
 warmup_epochs              3
 num_workers                2
@@ -46,7 +46,7 @@ std_noise                  0.01
 noise_gamma                1
 augment_geometry           False
 use_amp                    True
-use_checkpointing          False
+use_checkpointing          True
 use_ema                    True
 ema_decay                  0.99
 use_compile                False

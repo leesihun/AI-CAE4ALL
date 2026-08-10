@@ -4,9 +4,15 @@
 # The default campaign contains eleven directly auditable arms:
 #   - vanilla MeshGraphNets (AR-OT)
 #   - HI-MGN as-is (AR-OT)
-#   - HI-MGN base (AR-RT)
-#   - HI-MGN P1, P2, and P12 (AR-OT)
+#   - HI-MGN base (AR-RT) -- the ancestor the P1/P2/P12 arms are generated from
+#   - HI-MGN P1, P2, and P12 (AR-OT; transfer-operator / multi-partition study,
+#     see MeshGraphNets/ATTENTION_TRANSFER_DESIGN.md)
 #   - Point-DeepONet, DeepONet, FNO, GINO, and Transolver (AR-OT)
+#
+# NOT included: SimulGenVAE and MLP have no ex2 config directory (ex2 is a
+# transient point-cloud/graph dataset, not the fixed-mesh dense-FOM or tabular
+# shape those two methods need). The config_train_abl_*.txt coarsening-ablation
+# study lives under configs/MeshGraphNets/ex1/ only -- not applicable here.
 #
 # Every arm is launched through AI_CAE4ALL_main.py. Canonical configs are never
 # edited: this script writes run-scoped copies with only gpu_ids substituted.
@@ -29,13 +35,13 @@
 #   bash configs/ex2/train_all.sh
 #   CHECK_ONLY=1 bash configs/ex2/train_all.sh
 #   GPUS="0 1 2 3" bash configs/ex2/train_all.sh
-#   METHODS="meshgraphnets himgn-as-is himgn-ar-rt" PARALLEL=0 \
+#   METHODS="meshgraphnets himgn-as-is himgn-base" PARALLEL=0 \
 #       bash configs/ex2/train_all.sh
 
 set -uo pipefail
 
 PYTHON="${PYTHON:-python}"
-METHODS="${METHODS:-meshgraphnets himgn-as-is himgn-ar-rt himgn-p1 himgn-p2 himgn-p12 point_deeponet deeponet fno gino transolver}"
+METHODS="${METHODS:-meshgraphnets himgn-as-is himgn-base himgn-p1 himgn-p2 himgn-p12 point_deeponet deeponet fno gino transolver}"
 GPUS="${GPUS:-0 1 2 3 4 5 6 7}"
 PARALLEL="${PARALLEL:-1}"
 PREFLIGHT="${PREFLIGHT:-1}"
@@ -56,7 +62,7 @@ config_for() {
     case "$1" in
         meshgraphnets)                 echo "configs/MeshGraphNets/ex2/config_train_meshgraphnets.txt" ;;
         himgn-as-is|meshgraphnets-hi)  echo "configs/MeshGraphNets/ex2/config_train_himgn.txt" ;;
-        himgn-ar-rt)                   echo "configs/MeshGraphNets/ex2/config_train_himgn_base.txt" ;;
+        himgn-base|himgn-ar-rt)        echo "configs/MeshGraphNets/ex2/config_train_himgn_base.txt" ;;
         himgn-p1)                      echo "configs/MeshGraphNets/ex2/config_train_himgn_p1.txt" ;;
         himgn-p2)                      echo "configs/MeshGraphNets/ex2/config_train_himgn_p2.txt" ;;
         himgn-p12)                     echo "configs/MeshGraphNets/ex2/config_train_himgn_p12.txt" ;;

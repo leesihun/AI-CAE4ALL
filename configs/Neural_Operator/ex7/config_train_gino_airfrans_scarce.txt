@@ -5,11 +5,11 @@ model                          gino
 mode                           train
 gpu_ids                        0
 parallel_mode                  ddp
-log_file_dir                   ../../output/neural_operator/ex5/gino_airfrans_scarce.log
-modelpath                      ../output/neural_operator/ex5/gino_airfrans_scarce.pth
+log_file_dir                   ../../output/neural_operator/ex7/gino_airfrans_scarce.log
+modelpath                      ../output/neural_operator/ex7/gino_airfrans_scarce.pth
 dataset_dir                    ../dataset/ex7_airfrans_scarce_train.h5
 infer_dataset                  ../dataset/ex7_airfrans_scarce_train.h5
-inference_output_dir           ../output/neural_operator/rollout/ex5/gino_airfrans_scarce
+inference_output_dir           ../output/neural_operator/rollout/ex7/gino_airfrans_scarce
 infer_timesteps                1
 split_seed                     42
 input_var                      4
@@ -27,8 +27,8 @@ sdf_sidecar                    none
 global_condition_features      none
 integration_weight_source      none
 gino_variant                   mesh_state
-gino_grid_resolution            16, 16, 16
-gino_fno_modes                 6, 6, 6
+gino_grid_resolution            16, 16
+gino_fno_modes                 6, 6
 gino_fno_hidden_channels       24
 gino_fno_layers                3
 gino_kernel_hidden              24

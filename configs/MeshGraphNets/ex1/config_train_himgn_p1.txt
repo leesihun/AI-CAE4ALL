@@ -13,7 +13,7 @@ modelpath	../output/meshgraphnets/ex1/model_himgn_p1.pth
 %   settings are what they are, including which time_integration this ex uses.
 %   See MeshGraphNets/ATTENTION_TRANSFER_DESIGN.md.
 dataset_dir	../dataset/ex1.h5
-infer_dataset	../dataset/hex_dataset.h5
+infer_dataset	../dataset/ex1_infer.h5
 infer_timesteps	1
 split_seed	42
 %   Common params

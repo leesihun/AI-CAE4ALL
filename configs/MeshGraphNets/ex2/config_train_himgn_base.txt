@@ -11,7 +11,7 @@ modelpath	../output/meshgraphnets/ex2/model_himgn_base.pth
 %   feature block each, so every arm shares this exact configuration.
 %   See MeshGraphNets/ATTENTION_TRANSFER_DESIGN.md.
 dataset_dir	../dataset/ex2.h5
-infer_dataset	../dataset/ex2.h5
+infer_dataset	../dataset/ex2_infer.h5  # held out from training
 infer_timesteps	49  # 50 stored timesteps -> 49 autoregressive rollout steps
 split_seed	42
 %   Common params
@@ -55,7 +55,7 @@ use_node_types	True  # Add one-hot encoded node types to node features
 use_world_edges	True   # fine-level contact edges, rebuilt from the predicted state each rollout step
 '
 %   Test set control
-test_batch_idx	0, 10, 20, 30, 40, 100, 200, 500, 1000
+test_batch_idx	0, 1, 2, 3, 4  # ar_rt: 1 window/sample -> the 5-sample test split only has indices 0-4
 plot_feature_idx	-1  # Feature index to visualize in plots (-1 = last feature, i.e., stress)
 '
 %   Multi-Scale / Hierarchical Parameters -- ON (Hi-MGN backbone)
@@ -63,7 +63,7 @@ use_multiscale	True
 coarsening_type	voronoi_seedmean
 voronoi_clusters	5000, 100
 multiscale_levels	2
-mp_per_level	2, 3, 5, 3, 2
+mp_per_level	4, 6, 8, 6, 4
 '
 %   Time integration -- AR-RT: unroll all 49 steps, backprop through the whole
 %   trajectory, gradient-checkpoint each step, no injected noise.

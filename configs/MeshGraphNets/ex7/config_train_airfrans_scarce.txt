@@ -2,8 +2,8 @@ model	MeshGraphNets
 mode	train
 gpu_ids	0
 parallel_mode	ddp
-log_file_dir	../../output/meshgraphnets/ex5/train_airfrans_scarce.log
-modelpath	../output/meshgraphnets/ex5/model_airfrans_scarce.pth
+log_file_dir	../../output/meshgraphnets/ex7/train_airfrans_scarce.log
+modelpath	../output/meshgraphnets/ex7/model_airfrans_scarce.pth
 %   ex7_airfrans_scarce_train.h5: 200 static RANS airfoils, full resolution
 %   (~155-200k nodes each). rows 3:7 state (u_x,u_y,p,nu_t), rows 7:12
 %   conditions (u_inf_x,u_inf_y,sdf,n_x,n_y) -> cond_var 5, row 12 node_type

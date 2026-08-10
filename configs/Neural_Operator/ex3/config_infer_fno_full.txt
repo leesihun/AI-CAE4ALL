@@ -26,7 +26,7 @@ global_condition_features  none
 integration_weight_source  none
 fno_grid_resolution        32, 32, 32
 fno_modes                  8, 8, 8
-fno_hidden_channels        32
+fno_hidden_channels        48
 fno_layers                 4
 fno_use_channel_mlp        True
 fno_norm                   none
@@ -42,7 +42,7 @@ std_noise                  0.0
 noise_gamma                1
 augment_geometry           False
 use_amp                    True
-use_checkpointing          False
+use_checkpointing          True
 use_ema                    True
 ema_decay                  0.99
 use_compile                False

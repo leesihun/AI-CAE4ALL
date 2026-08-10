@@ -2,8 +2,8 @@ model	MeshGraphNets
 mode	train
 gpu_ids	0
 parallel_mode	ddp
-log_file_dir	../../output/meshgraphnets/ex4/train_flag_smoke.log
-modelpath	../output/meshgraphnets/ex4/model_flag_smoke.pth
+log_file_dir	../../output/meshgraphnets/ex6/train_flag_smoke.log
+modelpath	../output/meshgraphnets/ex6/model_flag_smoke.pth
 %   ex6_flag_simple_smoke.h5: DeepMind flag_simple, 20 trajectories, 67 steps
 %   (stride-6 subsample of the raw 401-step trajectory). Cloth pinned to a pole
 %   in the wind, self-contact -> use_world_edges. UNLIKE cylinder_flow/

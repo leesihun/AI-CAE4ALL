@@ -13,7 +13,7 @@ log_file_dir	../../output/meshgraphnets/ex1/abl_base_rep2_train.log
 modelpath	../output/meshgraphnets/ex1/abl_base_rep2.pth
 %   Datasets
 dataset_dir	../dataset/ex1.h5
-infer_dataset	../dataset/hex_dataset.h5
+infer_dataset	../dataset/ex1_infer.h5
 infer_timesteps	1
 %   Common params
 input_var	4  # number of input variables: x_disp, y_disp, z_disp, stress (excluding node types)

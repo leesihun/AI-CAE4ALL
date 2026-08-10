@@ -9,8 +9,8 @@ modelpath              ../output/transolver/ex3/full/transolver.pth
 infer_dataset          ../dataset/ex3_test_reordered.h5
 inference_output_dir   ../output/transolver/rollout/ex3/full/transolver
 infer_timesteps        1
-infer_mode             direct
-infer_chunk_size       0
+infer_mode             decoupled
+infer_chunk_size       65536
 input_var              4
 output_var             4
 positional_features    4
@@ -25,9 +25,9 @@ parallel_mode          ddp
 attention_kernel       slice_space
 chunk_size             8192
 amortized_training     False
-amortized_cache_nodes  16384
-amortized_query_nodes  4096
+amortized_cache_nodes  100000
+amortized_query_nodes  50000
 small_output_init      False
-use_checkpointing      False
+use_checkpointing      True
 write_preprocessing    False
 use_multiscale         False

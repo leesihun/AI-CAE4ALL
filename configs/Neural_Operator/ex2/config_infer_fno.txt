@@ -32,7 +32,7 @@ integration_weight_source  none  # quadrature-weight source -- accepted but iner
 %   Network parameters
 fno_grid_resolution  32, 32, 32  # regular grid size per active axis -- comma list, each entry >= 2; default [32]*operator_dim
 fno_modes            8, 8, 8     # retained Fourier modes per axis -- comma list; validated against fno_grid_resolution
-fno_hidden_channels  32          # spectral channel width -- positive int; default 64
+fno_hidden_channels  48          # spectral channel width -- positive int; default 64
 fno_layers           4           # spectral block count -- int >= 1; default 4
 fno_use_channel_mlp  True        # add a channel MLP in each spectral block -- {True|False}; default True
 fno_norm             none        # block normalization -- {none} (only accepted value in this baseline)
@@ -52,7 +52,7 @@ std_noise          0.0    # Gaussian std of training input noise -- float >= 0; 
 noise_gamma        1      # target-correction multiplier matching injected input noise -- default 1
 augment_geometry   False  # train-only z-rotation / x-y reflection augmentation -- {True|False}; must be False for model_split; default False
 use_amp            True   # bfloat16 autocast on supported CUDA -- {True|False}; default True
-use_checkpointing  False  # activation checkpointing to cut memory -- {True|False}; default False
+use_checkpointing  True   # activation checkpointing to cut memory -- {True|False}; default False
 use_ema            True   # maintain EMA weights (inference prefers EMA when stored) -- {True|False}; default False
 ema_decay          0.99   # EMA decay rate -- float in (0,1); default 0.999
 use_compile        False  # torch.compile(dynamic=True) on the model -- {True|False}; default False

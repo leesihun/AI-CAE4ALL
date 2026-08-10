@@ -52,7 +52,7 @@ std_noise          0.0    # Gaussian std of training input noise -- float >= 0; 
 noise_gamma        1      # target-correction multiplier matching injected input noise -- default 1
 augment_geometry   False  # train-only z-rotation / x-y reflection augmentation -- {True|False}; must be False for model_split; default False
 use_amp            True   # bfloat16 autocast on supported CUDA -- {True|False}; default True
-use_checkpointing  False  # activation checkpointing to cut memory -- {True|False}; default False
+use_checkpointing  True   # activation checkpointing to cut memory -- {True|False}; default False
 use_ema            True   # maintain EMA weights (inference prefers EMA when stored) -- {True|False}; default False
 ema_decay          0.99   # EMA decay rate -- float in (0,1); default 0.999
 use_compile        False  # torch.compile(dynamic=True) on the model -- {True|False}; default False

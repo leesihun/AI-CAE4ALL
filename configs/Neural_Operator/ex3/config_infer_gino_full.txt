@@ -27,15 +27,15 @@ integration_weight_source      none
 gino_variant                   mesh_state
 gino_grid_resolution           32, 32, 32
 gino_fno_modes                 8, 8, 8
-gino_fno_hidden_channels       32
+gino_fno_hidden_channels       48
 gino_fno_layers                4
-gino_kernel_hidden             64
+gino_kernel_hidden             48
 gino_in_radius                 0.30
 gino_out_radius                0.30
 gino_max_empty_input_fraction  0.25
 gino_query_chunk_size          50000
 gino_use_torch_cluster         True
-gino_max_num_neighbors         8192
+gino_max_num_neighbors         0
 gino_cache_neighbors           True
 gino_group_shared_geometry     False
 training_epochs                1

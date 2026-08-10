@@ -7,7 +7,7 @@ parallel_mode  ddp             # parallelism -- {ddp|model_split}; model_split i
 log_file_dir          ../../output/neural_operator/ex2/point_deeponet.log   # log file path, relative to the backend output dir
 modelpath             ../output/neural_operator/ex2/point_deeponet.pth      # checkpoint path -- save target in train, load source in inference
 dataset_dir           ../dataset/ex2.h5                                     # training mesh-state HDF5 path
-infer_dataset         ../dataset/ex2.h5                                     # inference input HDF5 path
+infer_dataset         ../dataset/ex2_infer.h5                               # inference input HDF5 path
 inference_output_dir  ../output/neural_operator/rollout/ex2/point_deeponet  # rollout output directory
 infer_timesteps       49                                                    # rollout length (int) -- required for static T=1; omit only when a temporal input has >1 timestep
 split_seed            42                                                    # RNG seed for the deterministic 80/10/10 train/val/test split; default 42
@@ -31,7 +31,7 @@ global_condition_features  none  # global scalar conditions -- must be 'none'; d
 integration_weight_source  none  # quadrature-weight source -- accepted but inert; no weighted-kernel integration exists; keep none
 '
 point_variant              mesh_state  # Point-DeepONet variant -- {mesh_state|paper}; paper needs unsupported SDF/conditions/tanh; default mesh_state
-point_sensor_count         5000        # random branch sensor points per sample -- int >= 0, 0 = use all points; default 5000
+point_sensor_count         10000       # random branch sensor points per sample -- int >= 0, 0 = use all points; default 5000
 point_sampling             random      # sensor sampling -- {random} (only accepted value)
 point_resample_each_epoch  True        # resample sensors every epoch -- {True|False}; default True
 point_hidden_channels      128         # branch/trunk hidden width -- positive int; default 128
@@ -49,7 +49,7 @@ point_output_activation    identity    # output activation -- {identity|tanh}; p
 %   Optimization
 training_epochs   100     # epoch count -- positive int
 batch_size        4       # physical DataLoader batch size, before grad_accum_steps -- positive int
-learningr         0.0001  # AdamW learning rate -- positive float; prefer decimal notation
+learningr         0.0005  # AdamW learning rate -- positive float; prefer decimal notation
 weight_decay      0.0001  # AdamW weight decay -- float >= 0; default 0.0001
 warmup_epochs     3       # linear LR warmup epochs before the cosine schedule -- int >= 0; default 3
 num_workers       2       # DataLoader worker processes -- int >= 0

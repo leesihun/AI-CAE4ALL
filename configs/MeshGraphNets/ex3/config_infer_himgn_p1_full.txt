@@ -36,9 +36,9 @@ test_batch_idx        0
 plot_feature_idx      -1
 use_multiscale        True
 coarsening_type       voronoi_seedmean
-voronoi_clusters      50000, 1000
+voronoi_clusters      5000, 100
 multiscale_levels     2
-mp_per_level          2, 3, 5, 3, 2
+mp_per_level          4, 6, 8, 6, 4
 pool_type             attention
 unpool_type           attention
 pool_heads            4

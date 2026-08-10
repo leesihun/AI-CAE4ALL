@@ -14,10 +14,18 @@ and [`../../../MeshGraphNets/COARSENING_ABLATION_DESIGN.md`](../../../MeshGraphN
 
 ## The five axes
 
-Baseline is `config_train1.txt` exactly as shipped: `voronoi_clusters 5000, 100`,
-`multiscale_levels 2`, `mp_per_level 4, 6, 8, 6, 4`, `coarsening_type
-voronoi_seedmean`, learned prolongation, `std_noise 0.1`, 2000 epochs,
-`Batch_size 1`. Nothing else is touched by any arm.
+Baseline is `config_train1.txt` as it stood when the 22 arms were generated:
+`voronoi_clusters 5000, 100`, `multiscale_levels 2`, `mp_per_level 4, 6, 8, 6, 4`,
+`coarsening_type voronoi_seedmean`, learned prolongation, `std_noise 0.1`, 2000
+epochs, `Batch_size 1`. Nothing else is touched by any arm.
+
+**Note:** `config_train1.txt` was later changed to `std_noise 0.01` to match the
+rest of the ex1 suite. The generated `config_{train,infer}_abl_*.txt` files were
+deliberately *not* regenerated, so this ablation study stays frozen at
+`std_noise 0.1` as its own internal baseline — the two files have intentionally
+diverged. Re-run `ablation.py gen` only if you want the study to pick up 0.01
+(and re-read the "Known limitations" note below, which was written about the
+0.1 value).
 
 | axis | arms |
 | --- | --- |
@@ -133,9 +141,11 @@ placeholder. `ablation.py all` also exists but includes `gen`; prefer
 
 ## Scoring
 
-Every arm is scored on **`dataset/ex1_infer.h5`**. `config_train1.txt` ships
-`infer_dataset hex_dataset.h5`, whose state rows are all zero and therefore
-cannot serve as ground truth; the generated infer configs repoint it.
+Every arm is scored on **`dataset/ex1_infer.h5`**. `config_train1.txt` and the
+generated `config_train_abl_*.txt` arms used to ship `infer_dataset
+hex_dataset.h5` (whose state rows are all zero and cannot serve as ground
+truth) — inert in `mode train` but misleading, so all ex1 train configs now
+point `infer_dataset` at `ex1_infer.h5` directly, same as the infer configs.
 
 **R² is the mean of per-channel `1 − SS_res/SS_tot`** on the denormalized
 field, computed by `ablation.py`. Two deliberate choices:

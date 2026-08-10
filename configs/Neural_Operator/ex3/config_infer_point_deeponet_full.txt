@@ -25,7 +25,7 @@ sdf_sidecar                none
 global_condition_features  none
 integration_weight_source  none
 point_variant              mesh_state
-point_sensor_count         5000
+point_sensor_count         10000
 point_sampling             random
 point_resample_each_epoch  True
 point_hidden_channels      128

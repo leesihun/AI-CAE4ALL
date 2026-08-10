@@ -7,7 +7,7 @@ modelpath	../output/meshgraphnets/ex2/model_himgn.pth
 %   Datasets (ex2.h5: 50 samples x 50 timesteps, 3D mesh -> multi-step delta training;
 %   hierarchical Hi-MGN baseline -- flat/vanilla uses config_train_meshgraphnets.txt instead)
 dataset_dir	../dataset/ex2.h5
-infer_dataset	../dataset/ex2.h5
+infer_dataset	../dataset/ex2_infer.h5  # held out from training
 infer_timesteps	49  # 50 stored timesteps -> 49 autoregressive rollout steps
 split_seed	42
 %   Common params
@@ -48,7 +48,7 @@ use_node_types	True  # Add one-hot encoded node types to node features
 use_world_edges	True
 '
 %   Test set control
-test_batch_idx	0, 10, 20, 30, 40, 100, 200, 500, 1000
+test_batch_idx	0, 10, 20, 30, 40
 plot_feature_idx	-1  # Feature index to visualize in plots (-1 = last feature, i.e., stress)
 '
 %   Multi-Scale / Hierarchical Parameters -- ON (Hi-MGN backbone)
@@ -56,7 +56,7 @@ use_multiscale	True
 coarsening_type	voronoi_seedmean
 voronoi_clusters	5000, 100
 multiscale_levels	2
-mp_per_level	2, 3, 5, 3, 2
+mp_per_level	4, 6, 8, 6, 4
 '
 %   Time integration (CONFIGURATION_REFERENCE.md section 3.5)
 time_integration	ar_ot  # ar_ot = one-step/teacher-forced (default); ar_rt = full-trajectory autoregressive rollout training

@@ -7,7 +7,7 @@ modelpath	../output/meshgraphnets/ex1/model_himgn.pth
 %   Datasets (same split as configs/MeshGraphNets/ex1/config_train_meshgraphnets.txt; this is the
 %   hierarchical Hi-MGN baseline -- flat/vanilla uses config_train_meshgraphnets.txt instead)
 dataset_dir	../dataset/ex1.h5
-infer_dataset	../dataset/hex_dataset.h5
+infer_dataset	../dataset/ex1_infer.h5
 infer_timesteps	1
 split_seed	42
 %   Common params

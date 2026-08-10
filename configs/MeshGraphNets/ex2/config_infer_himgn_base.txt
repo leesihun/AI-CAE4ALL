@@ -1,6 +1,6 @@
 model	MeshGraphNets
 mode	inference  # Train / Inference
-gpu_ids	0  # ex2 inference for the Hi-MGN canonical baseline
+gpu_ids	0  # ex2 inference for ablation arm base
 log_file_dir	../../output/meshgraphnets/ex2/infer_himgn_base.log
 modelpath	../output/meshgraphnets/ex2/model_himgn_base.pth
 %   INFERENCE for ablation arm base (ex2).
@@ -64,4 +64,4 @@ use_multiscale	True  # mirrored from config_train_himgn_base.txt
 coarsening_type	voronoi_seedmean  # mirrored from config_train_himgn_base.txt
 voronoi_clusters	5000, 100  # mirrored from config_train_himgn_base.txt
 multiscale_levels	2  # mirrored from config_train_himgn_base.txt
-mp_per_level	2, 3, 5, 3, 2  # mirrored from config_train_himgn_base.txt
+mp_per_level	4, 6, 8, 6, 4  # mirrored from config_train_himgn_base.txt

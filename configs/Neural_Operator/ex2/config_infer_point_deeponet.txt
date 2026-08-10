@@ -30,7 +30,7 @@ global_condition_features  none  # global scalar conditions -- must be 'none'; d
 integration_weight_source  none  # quadrature-weight source -- accepted but inert; no weighted-kernel integration exists; keep none
 '
 point_variant              mesh_state  # Point-DeepONet variant -- {mesh_state|paper}; paper needs unsupported SDF/conditions/tanh; default mesh_state
-point_sensor_count         5000        # random branch sensor points per sample -- int >= 0, 0 = use all points; default 5000
+point_sensor_count         10000       # random branch sensor points per sample -- int >= 0, 0 = use all points; default 5000
 point_sampling             random      # sensor sampling -- {random} (only accepted value)
 point_resample_each_epoch  True        # resample sensors every epoch -- {True|False}; default True
 point_hidden_channels      128         # branch/trunk hidden width -- positive int; default 128
