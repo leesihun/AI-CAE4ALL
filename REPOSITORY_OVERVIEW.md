@@ -339,7 +339,7 @@ unchanged to the native process.
 | Rule | Behavior |
 | --- | --- |
 | Keys | Lowercased. `Training_epochs` == `training_epochs`. |
-| String values | Also lowercased (matters for case-sensitive Linux paths). |
+| String values | Also lowercased — **except path-valued keys**, which keep the case you wrote (`dataset_dir`, `infer_dataset`, `modelpath`, the `*_modelpath` variants, `input_mesh`, `sdf_sidecar`, `param_dir`, and the output/log dirs). The exempt set is `cae_suite/config_parser.py::PATH_KEYS`, mirrored per repo in each `load_config.py`. |
 | Comments | A line starting with `%` is ignored; text after `#` is stripped; blank lines ignored. |
 | Separator | First whitespace splits key from value (tabs or spaces). |
 | Lists | Commas **or** multiple space-separated tokens → a list (`gpu_ids 0,1`). |

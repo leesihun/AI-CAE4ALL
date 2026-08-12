@@ -10,6 +10,35 @@ from .diagnostics import DiagnosticReport, Severity, SourceLocation
 
 _KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
+# Keys whose value is a filesystem path. The native parsers lowercase every
+# string value, which silently rewrites `dataset/NASA_CRM.h5` into a path that
+# only resolves on a case-insensitive filesystem; these keys are exempt in the
+# native parsers and must be exempt here too or the mirror would disagree.
+# Union over every method spec — this parser runs before `model` routing.
+PATH_KEYS = frozenset({
+    "dataset_dir",
+    "infer_dataset",
+    "modelpath",
+    "inference_output_dir",
+    "hierarchy_cache_dir",
+    "sdf_sidecar",
+    "log_dir",
+    "log_file_dir",
+    "vae_log_file_dir",
+    "fm_log_file_dir",
+    "lc_log_file_dir",
+    "pipeline_log_file",
+    "output_dir",
+    "param_dir",
+    "init_vae_modelpath",
+    "vae_modelpath",
+    "fm_modelpath",
+    "lc_modelpath",
+    "input_mesh",
+    "input_geometry",
+    "output_dataset",
+})
+
 
 @dataclass(frozen=True)
 class ConfigEntry:
@@ -34,16 +63,23 @@ class ParsedConfig:
         return self.locations.get(key.lower())
 
 
-def parse_value(value_str: str) -> Any:
-    """Mirror the current native config parser conversion behavior."""
+def parse_value(value_str: str, preserve_case: bool = False) -> Any:
+    """Mirror the current native config parser conversion behavior.
+
+    ``preserve_case`` (set for `PATH_KEYS`) skips only the string-lowercasing;
+    the bool/int/float/list typing is deliberately identical either way.
+    """
     value_str = value_str.strip()
+
+    def _text(part: str) -> str:
+        return part if preserve_case else part.lower()
 
     if "," in value_str:
         parts = [part.strip() for part in value_str.split(",")]
         try:
             return [int(part) if "." not in part else float(part) for part in parts]
         except ValueError:
-            return [part.lower() for part in parts]
+            return [_text(part) for part in parts]
 
     if " " in value_str:
         parts = value_str.split()
@@ -51,7 +87,7 @@ def parse_value(value_str: str) -> Any:
             try:
                 return [int(part) if "." not in part else float(part) for part in parts]
             except ValueError:
-                return [part.lower() for part in parts]
+                return [_text(part) for part in parts]
 
     if value_str.lower() in ("true", "false"):
         return value_str.lower() == "true"
@@ -61,7 +97,7 @@ def parse_value(value_str: str) -> Any:
             return float(value_str)
         return int(value_str)
     except ValueError:
-        return value_str.lower()
+        return _text(value_str)
 
 
 def parse_config(path: str | Path) -> ParsedConfig:
@@ -154,7 +190,7 @@ def parse_config(path: str | Path) -> ParsedConfig:
         key = raw_key.lower()
         if key == "reserved":
             continue
-        value = parse_value(raw_value)
+        value = parse_value(raw_value, preserve_case=key in PATH_KEYS)
         entry = ConfigEntry(
             key=key,
             raw_key=raw_key,

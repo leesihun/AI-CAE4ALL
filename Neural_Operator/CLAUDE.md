@@ -118,6 +118,11 @@ selects which file to read.
   numeric use site converts explicitly (`float(config.get('weight_decay',
   1e-4))`). This is inherited from MeshGraphNets' parser and is intentional
   — do not "fix" it without updating every call site and its test.
+- Path-valued keys (`dataset_dir`, `infer_dataset`, `modelpath`,
+  `inference_output_dir`, `sdf_sidecar`, `log_dir`, `log_file_dir` —
+  `general_modules/load_config.py::PATH_KEYS`) keep the case written in the
+  config; every other string value is still lowercased. Mirrored in
+  `cae_suite/config_parser.py::PATH_KEYS`; a new path key must be added to both.
 - Unknown or legacy (removed-feature) config keys raise immediately in
   `general_modules/config_validation.py`, before any HDF5 file is opened.
 

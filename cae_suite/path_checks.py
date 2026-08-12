@@ -12,11 +12,34 @@ from .specs import MethodSpec, PathKind
 _PATH_SENTINELS = {"", "none", "null", "false"}
 
 
-def resolve_native_path(value: str, repository_root: Path) -> Path:
+def _absolute_native_path(value: str, repository_root: Path) -> Path:
+    """Absolutize a native path value, keeping the case the config spelled.
+
+    ``normpath`` collapses the ``../`` segments every native config uses, but
+    lexically — unlike ``resolve()`` it never rewrites a component to its
+    on-disk case, which is exactly what `_case_mismatch` needs to compare.
+    """
     path = Path(value).expanduser()
     if not path.is_absolute():
         path = repository_root / path
-    return path.resolve(strict=False)
+    return Path(os.path.normpath(path))
+
+
+def resolve_native_path(value: str, repository_root: Path) -> Path:
+    return _absolute_native_path(value, repository_root).resolve(strict=False)
+
+
+def _case_mismatch(literal: Path, resolved: Path) -> bool:
+    """True when the config spells an existing path with the wrong case.
+
+    ``Path.resolve()`` reports a file's real on-disk name on Windows, so a
+    literal that differs from it *only* by case names a file the local
+    case-insensitive filesystem happily opens but Linux would not find.
+    Anything still differing by more than case (a traversed symlink) is not a
+    case problem and is ignored.
+    """
+    literal_str, resolved_str = str(literal), str(resolved)
+    return literal_str != resolved_str and literal_str.lower() == resolved_str.lower()
 
 
 def _nearest_existing(path: Path) -> Path | None:
@@ -53,18 +76,18 @@ def validate_paths(
         path = resolve_native_path(value, repository_root)
         resolved[rule.field] = path
 
-        raw_value = parsed.raw_values.get(rule.field, value)
-        raw_path = resolve_native_path(raw_value, repository_root)
-        if raw_path.exists() and not path.exists() and raw_path != path:
+        literal = _absolute_native_path(value, repository_root)
+        if path.exists() and _case_mismatch(literal, path):
             report.add(
                 "PATH-CASE-001",
-                Severity.ERROR,
-                f"The original path exists, but the lowercased path seen by the native parser does not: {path}",
+                Severity.WARNING,
+                f"Path case does not match the filesystem: config says {literal}, on disk it is {path}",
                 field_name=rule.field,
                 location=parsed.location(rule.field),
-                hint="Use a case-insensitive location or update the native parser to preserve path case.",
+                hint="This resolves here only because the local filesystem is case-insensitive; "
+                "it would fail on Linux. Correct the spelling in the config.",
+                promote_in_strict=True,
             )
-            continue
 
         if rule.kind in {PathKind.INPUT_FILE, PathKind.INPUT_DIR}:
             expected = "file" if rule.kind is PathKind.INPUT_FILE else "directory"

@@ -25,7 +25,10 @@ python SDFFlow_main.py --config ../configs/Geometry_generation/config_sample.txt
 ```
 
 The config parser accepts flat `key value` text, lowercases keys and string
-values, and treats `%` lines as comments. Relative native paths resolve from
+values, and treats `%` lines as comments. Path-valued keys (`dataset_dir`,
+`output_dir`, `input_mesh`, `*_modelpath`, the log dirs — see
+`general_modules/load_config.py::PATH_KEYS`) are exempt from the value
+lowercasing and keep the case you wrote. Relative native paths resolve from
 the `Geometry_generation` repository even when the suite launcher is used.
 
 Valid modes are `train`, `train_vae`, `train_fm`, `sample`, `reconstruct`, and

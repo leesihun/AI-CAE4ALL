@@ -513,8 +513,12 @@ python AI_CAE4ALL_main.py --config configs/geometry_ingest/config_ingest_surface
 All backends read the same flat `key value` text. Keys and string values are
 lowercased; `%` starts a comment (**on its own line**); commas or multiple
 tokens make a list (`gpu_ids 0,1`); `true`/`false` are booleans. Duplicate keys
-are an error. Two quirks worth knowing:
+are an error. Three quirks worth knowing:
 
+- **Path-valued keys keep their case.** `dataset_dir`, `infer_dataset`,
+  `modelpath` and friends are exempt from the lowercasing, so
+  `dataset_dir ../dataset/NASA_CRM.h5` stays exactly that and works on Linux.
+  Every other string value is still lowercased.
 - A **single value parses to a bare scalar, not a one-element list**
   (`test_batch_idx 0` → `0`).
 - **Prefer decimal notation** (`0.0001`, not `1e-4`): a token with no `.` fails

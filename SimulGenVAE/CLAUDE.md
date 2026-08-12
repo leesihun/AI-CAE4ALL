@@ -61,7 +61,10 @@ tests/
 
 Same flat `key value` format as every other method (`#` inline comment, `%`/`'`
 line comments, comma/space → list, `true`/`false` → bool). **Values are
-lowercased** by the shared parser, so relative paths must be lowercase.
+lowercased** by the shared parser, **except path-valued keys** (`dataset_dir`,
+`param_dir`, `output_dir`, `*_modelpath`, the log dirs — see
+`general_modules/load_config.py::PATH_KEYS`), which keep the case you wrote, so
+mixed-case paths are fine.
 
 Per-stage training knobs are carried with `vae_`/`lc_` prefixes in the combined
 `train` mode and stripped to the unprefixed names each worker reads

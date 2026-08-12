@@ -172,6 +172,15 @@ every native call site:
 - **`int` vs `str` for numerics is significant**: `100` → `int`, but `1e-4` has
   no `.` so it fails `int()`/`float()` fast-paths and stays a **string** — every
   numeric consumer converts explicitly (`float(config.get(...))`).
+- **Path-valued keys are exempt from the value lowercasing** and keep the case
+  written in the config; every other string value is still lowercased. The set
+  lives in `cae_suite/config_parser.py::PATH_KEYS` and is mirrored per repo as
+  `PATH_KEYS` in each native `general_modules/load_config.py` — **adding a new
+  path key means editing both**, or the launcher's mirror and the native parser
+  will disagree about what the model actually opens. `MLP/` and
+  `dataset/geometry_ingest/` store raw value strings and need no exemption.
+  Preflight's `PATH-CASE-001` (warning) now flags a config whose path case
+  differs from the on-disk name — it resolves on Windows but not on Linux.
 - `true`/`false` → `bool`; `%` starts a comment; a UTF-8 **BOM is a hard error**
   (native parsers misread the first key); duplicate keys are an error (native
   would silently take the last).

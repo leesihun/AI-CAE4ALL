@@ -1,5 +1,23 @@
 #!/usr/bin/env python3
 
+# Values for these keys are filesystem paths and keep their original case;
+# every other string value is still lowercased (see parse_value). Mirrored in
+# cae_suite/config_parser.py::PATH_KEYS -- keep the two in sync. The vae_/lc_
+# log prefixes are stripped by train_pipeline.build_stage_config *after*
+# parsing, so both the prefixed and bare spellings are listed.
+PATH_KEYS = frozenset({
+    'dataset_dir',
+    'param_dir',
+    'output_dir',
+    'init_vae_modelpath',
+    'vae_modelpath',
+    'lc_modelpath',
+    'log_file_dir',
+    'vae_log_file_dir',
+    'lc_log_file_dir',
+    'pipeline_log_file',
+})
+
 
 def load_config(config_path):
     """Load configuration from a key/value text file (MeshGraphNets convention)."""
@@ -34,16 +52,23 @@ def load_config(config_path):
                 if key == 'reserved':
                     continue
 
-                config[key] = parse_value(value)
+                config[key] = parse_value(value, preserve_case=key in PATH_KEYS)
 
     print(f"Configuration loaded with {len(config)} parameters")
 
     return config
 
 
-def parse_value(value_str):
-    """Parse string value to appropriate type"""
+def parse_value(value_str, preserve_case=False):
+    """Parse string value to appropriate type
+
+    preserve_case (set for PATH_KEYS) skips only the string-lowercasing; the
+    bool/int/float/list typing is identical either way.
+    """
     value_str = value_str.strip()
+
+    def _text(part):
+        return part if preserve_case else part.lower()
 
     # Handle comma-separated values (e.g., gpu_ids, cond_values)
     if ',' in value_str:
@@ -51,7 +76,7 @@ def parse_value(value_str):
         try:
             return [int(part) if '.' not in part else float(part) for part in parts]
         except ValueError:
-            return [part.lower() for part in parts]
+            return [_text(part) for part in parts]
 
     # Handle arrays (space-separated values)
     if ' ' in value_str:
@@ -60,7 +85,7 @@ def parse_value(value_str):
             try:
                 return [int(part) if '.' not in part else float(part) for part in parts]
             except ValueError:
-                return [part.lower() for part in parts]
+                return [_text(part) for part in parts]
 
     # Handle boolean values
     if value_str.lower() in ['true', 'false']:
@@ -73,4 +98,4 @@ def parse_value(value_str):
         else:
             return int(value_str)
     except ValueError:
-        return value_str.lower()
+        return _text(value_str)
