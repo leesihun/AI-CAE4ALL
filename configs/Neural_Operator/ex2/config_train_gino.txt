@@ -47,17 +47,21 @@ gino_fno_modes            8, 8, 8     # latent FNO Fourier modes per axis -- com
 gino_fno_hidden_channels  48          # latent FNO channel width -- positive int; default 64
 gino_fno_layers           4           # latent FNO block count -- int >= 1; default 4
 gino_kernel_hidden        48          # GNO kernel MLP width -- positive int; default 64
-%   Measured on real ex2.h5 (misc/inspect_adapter_coverage.py-style sweep):
-%   despite augment_geometry False, the geometry still doesn't fill the
-%   [0,1]^3 grid box uniformly, so the un-augmented default radius (0.08)
-%   left an 18.4% empty-latent-cell fraction at 32,32,32. 0.20 clears the
-%   gino_max_empty_input_fraction=0.05 gate at the current gino_grid_resolution
-%   (20,20,20) too (max 4.58% at 32,32,32; coarsening to 20,20,20 needs no
-%   radius change -- see gino_grid_resolution comment above for the edge-count
-%   memory tradeoff this was coarsened for).
+%   Measured on real ex2.h5 (misc/inspect_adapter_coverage.py, 40/40 train
+%   samples): the un-augmented default radius (0.08) left an 18.4%
+%   empty-latent-cell fraction at 32,32,32; 0.20 clears that down to 4.58%
+%   -- but that 4.58% figure (like the superseded 0.05 gate below) was
+%   measured under augment_geometry False. This config actually trains with
+%   augment_geometry True (see below), which rotates every sample; the
+%   rotation-safe grid box keeps output queries fully reachable (0.0% empty
+%   measured), but per-sample INPUT occupancy still depends on orientation
+%   because the geometry isn't azimuthally symmetric. Re-measured with
+%   augment_geometry True across all 40 train samples: input-GNO empty
+%   fraction min=0.081 median=0.099 max=0.130 -- i.e. the old 0.05 gate
+%   failed on every sample, not just an unlucky rotation draw.
 gino_in_radius                 0.20   # mesh->grid neighbor radius, pos_normalized units -- positive float; default 0.08
 gino_out_radius                0.20   # grid->query neighbor radius, pos_normalized units -- positive float; too small vs cell diagonal warns; default 0.08
-gino_max_empty_input_fraction  0.05   # max fraction of latent grid points with no input neighbor -- float in [0,1]; default 0.01
+gino_max_empty_input_fraction  0.20   # max fraction of latent grid points with no input neighbor -- float in [0,1]; default 0.01; measured max 0.130 under augment_geometry True (see comment above), headroom to ~1.5x
 gino_query_chunk_size          50000  # neighbor-search per-query chunk (bounds torch_cluster's query_chunk*cap prealloc) AND kernel/query chunking -- int >= 0, 0 = unchunked (distinct from infer_query_chunk_size)
 gino_use_torch_cluster         True   # neighbor backend -- {True|False}; True runs the radius search on-GPU (torch_cluster), else CPU SciPy KDTree; default False
 gino_max_num_neighbors         0      # initial torch_cluster per-query neighbor cap -- int >= 0, 0 = auto (2048 seed); auto-grows until no query saturates it, so it never truncates

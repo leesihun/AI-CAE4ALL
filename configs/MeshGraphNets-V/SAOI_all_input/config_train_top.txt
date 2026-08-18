@@ -5,7 +5,10 @@
 %   its own checkpoint, log and multiscale cache — nothing is shared.
 %   The DDP rendezvous port is picked free per process (MeshGraphNets_main.py),
 %   so both jobs can start at the same time without colliding.
-%   Architecture is the b8_all winner cell: z128_h256_pml5_ph256_vml5.
+%   Derived from the b8_all winner cell (z128_h256_pml5_ph256_vml5) but scaled
+%   DOWN for SAOI's larger meshes: Latent_dim 128 (not 256), voronoi 1000/100
+%   (not 2000/500), mp_per_level 4,6,8,6,4 (not 4,8,12,8,4). The infer configs
+%   mirror these values; the checkpoint's model_config is authoritative either way.
 %   ============================================================
 model	MeshGraphNets-V  # MeshGraphNets, MeshGraphNets-V, point_deeponet, deeponet, fno, gino, transolver, sdfflow
 mode	train  # Train / Inference
@@ -33,7 +36,7 @@ positional_features	4  # Rotation-invariant node features: [centroid_dist, mean_
 %   Network parameters
 message_passing_num	15  # Only used for non-multiscale modes (vanilla MeshGraphNets only)
 Training_epochs	1000
-Batch_size	2  # per-rank; global batch = 16 x 4 GPUs = 64
+Batch_size	2  # per-rank; global batch = 2 x 4 GPUs = 8
 LearningR	0.0001
 Latent_dim	128  # Encoder/processor/decoder hidden width
 num_workers	4  # number of workers for dataloader
@@ -65,6 +68,13 @@ coarsening_type	voronoi_seedmean  # Use Voronoi_seedmean only for production, le
 voronoi_clusters	1000, 100  # Cluster count per multiscale level (Voronoi coarsening)
 multiscale_levels	2  # Number of coarsening levels
 mp_per_level	4, 6, 8, 6, 4  # Message-passing blocks per level: down arm, coarsest, up arm (2*levels+1 values)
+%   Coarsening-invariance: FPS is seeded per sample id, so training would
+%   otherwise see ONE fixed Voronoi partition for every epoch while inference
+%   builds a fresh one it has never seen. K variants are built once at cache
+%   construction (NOT per epoch) and rotated across epochs; validation stays
+%   pinned to variant 0 so its loss stays comparable. Costs K x cache build
+%   time and K x cache disk. 1 = previous behavior, bit-for-bit.
+hierarchy_variants	4  # Independently-seeded coarsening partitions cached per sample
 
 %   VAE (MMD-InfoVAE)
 use_vae	True  # Enable posterior encoder + stochastic latent path (variational losses)

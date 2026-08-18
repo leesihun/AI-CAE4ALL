@@ -58,7 +58,7 @@ import numpy as np
 
 from general_modules.multiscale_helpers import build_multiscale_hierarchy
 
-FORMAT_VERSION = 1
+FORMAT_VERSION = 2
 
 # Lock files older than this (seconds) are treated as stale (builder crashed).
 _STALE_LOCK_SECONDS = 6 * 3600
@@ -90,10 +90,18 @@ def _coarse_params(config: dict) -> dict:
     if len(clusters) == 1 and levels > 1:
         clusters = clusters * levels
 
+    # Number of independently-seeded hierarchy variants stored per sample. >1
+    # lets training rotate partitions across epochs so the model learns
+    # coarsening-invariance instead of overfitting one FPS draw (inference builds
+    # a partition the cache has never seen). Part of the signature: changing it
+    # must invalidate the cache, or a run would silently reuse a 1-variant file.
+    variants = max(1, int(config.get('hierarchy_variants', 1)))
+
     return {
         'levels': levels,
         'types': types,
         'clusters': clusters,
+        'variants': variants,
     }
 
 
@@ -135,11 +143,29 @@ def cache_path_for(h5_file: str, config: dict, signature: dict) -> str:
 # HDF5 read/write of a single hierarchy entry
 # ---------------------------------------------------------------------------
 
-def _write_entry(root: h5py.Group, sid: int, hierarchy, x_pos) -> None:
-    g = root.create_group(str(sid))
+def variant_seed(sid: int, variant: int) -> int:
+    """Deterministic FPS seed for one (sample, variant) pair.
+
+    Variant 0 keeps the historical ``sid``-only seed, so a 1-variant cache is
+    bit-identical to what pre-variant runs built.
+    """
+    if int(variant) == 0:
+        return int(sid) & 0x7FFFFFFF
+    return (int(sid) * 1000003 + int(variant) * 9176249) & 0x7FFFFFFF
+
+
+def _write_entry(root: h5py.Group, sid: int, hierarchy, x_pos, variant: int = 0) -> None:
+    """Write one hierarchy. Variant 0 sits at the sample group (unchanged layout);
+    variants >0 go in ``v{k}`` subgroups. ``x_pos`` depends only on the fine mesh,
+    so it is stored once, on variant 0."""
+    sample_g = root.require_group(str(sid))
+    if int(variant) == 0:
+        g = sample_g
+        if x_pos is not None:
+            g.create_dataset('x_pos', data=np.asarray(x_pos, dtype=np.float32))
+    else:
+        g = sample_g.create_group(f'v{int(variant)}')
     g.attrs['num_levels'] = len(hierarchy)
-    if x_pos is not None:
-        g.create_dataset('x_pos', data=np.asarray(x_pos, dtype=np.float32))
     for l, entry in enumerate(hierarchy):
         g.create_dataset(f'L{l}_ftc', data=np.asarray(entry['ftc']))
         g.create_dataset(f'L{l}_c_ei', data=np.asarray(entry['c_ei'], dtype=np.int64))
@@ -187,14 +213,20 @@ def _init_worker(h5_file: str, coarse_params: dict, pos_params: dict) -> None:
     _WORKER['pp'] = pos_params
 
 
-def _build_one(sid: int):
-    """Build one sample's hierarchy (+ positional features). Runs in a pool worker."""
+def _build_one(task):
+    """Build one (sample, variant) hierarchy. Runs in a pool worker.
+
+    ``task`` is ``(sample_id, variant)``. Positional features depend only on the
+    fine mesh, so they are computed once, on variant 0.
+    """
+    sid, variant = (task if isinstance(task, (tuple, list)) else (task, 0))
+    sid, variant = int(sid), int(variant)
     f = _WORKER['h5']
     cp = _WORKER['cp']
     pp = _WORKER['pp']
 
     # Deterministic FPS seed -> reproducible cache, identical across jobs/workers.
-    np.random.seed(int(sid) & 0x7FFFFFFF)
+    np.random.seed(variant_seed(sid, variant))
 
     mesh_edge = f[f'data/{sid}/mesh_edge'][:]
     edge_index = np.concatenate([mesh_edge, mesh_edge[[1, 0], :]], axis=1)
@@ -208,11 +240,11 @@ def _build_one(sid: int):
     )
 
     x_pos = None
-    if pp['num'] > 0:
+    if pp['num'] > 0 and variant == 0:
         from general_modules.positional_features import compute_positional_features
         x_pos = compute_positional_features(ref_pos, edge_index, pp['num'])
 
-    return int(sid), hierarchy, x_pos
+    return sid, variant, hierarchy, x_pos
 
 
 def _resolve_build_workers(config: dict, n_samples: int) -> int:
@@ -226,12 +258,16 @@ def build_cache(h5_file, sample_ids, signature, cache_path,
                 coarse_params, pos_params, config) -> None:
     """Build the full cache to a temp file, then atomically rename into place."""
     sample_ids = [int(s) for s in sample_ids]
-    n = len(sample_ids)
+    variants = max(1, int(coarse_params.get('variants', 1)))
+    # One task per (sample, variant). Variant 0 first for every sample so a
+    # partially-built cache is still usable at variant 0 if a run is killed.
+    tasks = [(sid, v) for v in range(variants) for sid in sample_ids]
+    n = len(tasks)
     num_workers = _resolve_build_workers(config, n)
     tmp_path = f'{cache_path}.tmp.{os.getpid()}'
 
-    print(f'[mscache] Building hierarchy cache for {n} samples '
-          f'({num_workers} workers) -> {cache_path}')
+    print(f'[mscache] Building hierarchy cache for {len(sample_ids)} samples '
+          f'x {variants} variant(s) = {n} entries ({num_workers} workers) -> {cache_path}')
     t0 = time.time()
 
     try:
@@ -248,18 +284,31 @@ def build_cache(h5_file, sample_ids, signature, cache_path,
                     print(f'[mscache]   {k}/{n}  ({el:.0f}s elapsed, ~{eta:.0f}s left)')
 
             if num_workers <= 1:
+                # Serial build runs _init_worker in THIS process, so its
+                # read-only handle on the source HDF5 must be closed again --
+                # otherwise write_preprocessing_to_hdf5's later r+ open fails
+                # with "file is already open for read-only". The pool path is
+                # unaffected (handles live in child processes).
                 _init_worker(h5_file, coarse_params, pos_params)
-                for k, sid in enumerate(sample_ids, 1):
-                    _, hier, xp = _build_one(sid)
-                    _write_entry(out, sid, hier, xp)
-                    _progress(k)
+                try:
+                    for k, task in enumerate(tasks, 1):
+                        sid, var, hier, xp = _build_one(task)
+                        _write_entry(out, sid, hier, xp, variant=var)
+                        _progress(k)
+                finally:
+                    handle = _WORKER.pop('h5', None)
+                    if handle is not None:
+                        try:
+                            handle.close()
+                        except Exception:
+                            pass
             else:
                 ctx = mp.get_context('spawn')
                 with ctx.Pool(num_workers, initializer=_init_worker,
                               initargs=(h5_file, coarse_params, pos_params)) as pool:
-                    for k, (sid, hier, xp) in enumerate(
-                            pool.imap_unordered(_build_one, sample_ids, chunksize=2), 1):
-                        _write_entry(out, sid, hier, xp)
+                    for k, (sid, var, hier, xp) in enumerate(
+                            pool.imap_unordered(_build_one, tasks, chunksize=2), 1):
+                        _write_entry(out, sid, hier, xp, variant=var)
                         _progress(k)
         os.replace(tmp_path, cache_path)
     except BaseException:
@@ -488,8 +537,20 @@ class HierarchyCacheReader:
     def has(self, sid: int) -> bool:
         return str(int(sid)) in self._handle()
 
-    def get_hierarchy(self, sid: int):
-        hierarchy, _ = _read_entry(self._handle()[str(int(sid))])
+    def num_variants(self, sid: int) -> int:
+        """How many independently-seeded hierarchies this sample has (>=1)."""
+        g = self._handle()[str(int(sid))]
+        return 1 + sum(1 for k in g.keys() if k.startswith('v') and k[1:].isdigit())
+
+    def get_hierarchy(self, sid: int, variant: int = 0):
+        """Read one hierarchy. Falls back to variant 0 when the requested
+        variant is absent, so a cache built with fewer variants than the config
+        now asks for degrades to the old single-partition behavior instead of
+        raising mid-epoch."""
+        g = self._handle()[str(int(sid))]
+        if int(variant) > 0:
+            g = g.get(f'v{int(variant)}', g)
+        hierarchy, _ = _read_entry(g)
         return hierarchy
 
     def get_pos(self, sid: int):

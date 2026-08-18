@@ -25,6 +25,11 @@ VAR_KEYS = frozenset(
         "coarse_world_edges", "use_parallel_stats", "static_cache_per_worker",
         "hierarchy_cache_dir", "hierarchy_cache_build_workers",
         "hierarchy_cache_wait_timeout", "hierarchy_cache_keep",
+        # Coarsening-partition variance control: hierarchy_variants caches K
+        # independently-seeded partitions per sample so training can rotate them
+        # per epoch; hierarchy_seed pins the (otherwise unseeded) FPS draw at
+        # inference so a rollout is reproducible.
+        "hierarchy_variants", "hierarchy_seed",
         "test_batch_idx", "plot_feature_idx",
         "use_multiscale", "coarsening_type", "voronoi_clusters", "multiscale_levels",
         "mp_per_level", "pipeline_microbatches", "make_histogram", "show_histogram",

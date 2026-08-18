@@ -2,8 +2,10 @@
 %   SAOI warpage inference — S26FE SEC board, TOP section
 %   Checkpoint: saoi_top (trained by config_train_top.txt). MAIN and SEC share
 %   the section model; only infer_dataset differs between them.
-%   Every architecture key below MUST match config_train_top.txt or the
-%   checkpoint will not load. Latent_dim is 256 for both sections.
+%   Architecture keys below mirror config_train_top.txt. rollout.py overrides
+%   every one of them from checkpoint['model_config'] at load time, so the
+%   checkpoint always wins -- they are kept in sync so this file documents
+%   what actually runs rather than contradicting it.
 %   5000 prior samples per scene.
 %   NOTE: load_config.py lowercases every single-token string value, so at
 %   runtime this path becomes ../dataset/saoi/test_s26fe-sec_infer_top.h5.
@@ -32,11 +34,11 @@ positional_features	4  # Rotation-invariant node features: [centroid_dist, mean_
 
 %   Network parameters - MUST match config_train_top.txt
 message_passing_num	15  # Only used for non-multiscale modes (vanilla MeshGraphNets only)
-Batch_size	8
+Batch_size	2  # per-rank training batch; unused in inference (vae_batch_size governs)
 LearningR	0.0001
-Latent_dim	256  # Encoder/processor/decoder hidden width
+Latent_dim	128  # Encoder/processor/decoder hidden width
 num_workers	4  # number of workers for dataloader
-std_noise	0.01  # Gaussian physical-input noise (training only)
+std_noise	0.0  # Gaussian physical-input noise (training only)
 
 %   Memory / performance
 use_checkpointing	False  #faster; set True if OOM
@@ -57,9 +59,16 @@ plot_feature_idx	-1  # Feature index to visualize in plots (-1 = last feature, i
 %   Multiscale - MUST match training
 use_multiscale	True  # Enable HI-MGN architecture
 coarsening_type	voronoi_seedmean  # Use Voronoi_seedmean only for production, legacy codeset for comparison
-voronoi_clusters	2000, 500  # Cluster count per multiscale level (Voronoi coarsening)
+voronoi_clusters	1000, 100  # Cluster count per multiscale level (Voronoi coarsening)
 multiscale_levels	2  # Number of coarsening levels
-mp_per_level	4, 8, 12, 8, 4  # Message-passing blocks per level: down arm, coarsest, up arm (2*levels+1 values)
+mp_per_level	4, 6, 8, 6, 4  # Message-passing blocks per level: down arm, coarsest, up arm (2*levels+1 values)
+%   FPS seeds its first point from the unseeded global RNG, so an unpinned
+%   rollout builds a different Voronoi partition every run (~50% of node
+%   pairs regrouped) -- one the trained model never saw. A LIST builds one
+%   hierarchy per seed and rotates them across z-sample batches, so a bad
+%   partition can no longer poison all num_vae_samples of a scene at once.
+%   Each output records its hierarchy_seed in /metadata for attribution.
+hierarchy_seed	0, 1, 2, 3  # Coarsening partitions to build and rotate across z-sample batches
 
 %   VAE (MMD-InfoVAE) - MUST match training
 use_vae	True  # Enable posterior encoder + stochastic latent path (variational losses)

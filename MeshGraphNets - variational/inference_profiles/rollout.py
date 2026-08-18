@@ -238,10 +238,53 @@ class _SampleContext:
             if len(voronoi_clusters) == 1 and multiscale_levels > 1:
                 voronoi_clusters = voronoi_clusters * multiscale_levels
 
-            self.hierarchy = build_multiscale_hierarchy(
-                edge_index, self.num_nodes, ref_pos,
-                multiscale_levels, coarsening_types, voronoi_clusters,
-            )
+            # FPS picks its first seed with an unseeded np.random.randint
+            # (model/coarsening.py::_fps_euclidean), so an unpinned rollout
+            # builds a DIFFERENT partition on every run -- measured ~50% of node
+            # pairs regrouped between two builds of the same mesh. Training, by
+            # contrast, seeds per sample id (multiscale_cache.py::variant_seed),
+            # so it always saw one fixed partition.
+            #
+            # `hierarchy_seed` pins the draw. Give it a LIST and the rollout
+            # builds one hierarchy per seed and rotates them across z-sample
+            # batches: the partition stops being a per-scene lottery whose bad
+            # outcome poisons all num_vae_samples at once, and becomes a nuisance
+            # variable the sample set marginalises over. Each trajectory records
+            # the seed it used, so an outlier can be traced back to a partition.
+            raw_seed = config.get('hierarchy_seed')
+            if raw_seed is None:
+                self.hierarchy_seeds = [None]
+            elif isinstance(raw_seed, (list, tuple)):
+                self.hierarchy_seeds = [int(s) for s in raw_seed]
+            else:
+                self.hierarchy_seeds = [int(raw_seed)]
+
+            self.hierarchies = []
+            for hseed in self.hierarchy_seeds:
+                rng_state = np.random.get_state() if hseed is not None else None
+                if hseed is not None:
+                    np.random.seed(int(hseed) & 0x7FFFFFFF)
+                try:
+                    self.hierarchies.append(build_multiscale_hierarchy(
+                        edge_index, self.num_nodes, ref_pos,
+                        multiscale_levels, coarsening_types, voronoi_clusters,
+                    ))
+                finally:
+                    if rng_state is not None:
+                        np.random.set_state(rng_state)
+
+            if self.hierarchy_seeds == [None]:
+                print("  Coarsening hierarchy: UNPINNED -- this rollout is not "
+                      "reproducible. Set `hierarchy_seed` (a list rotates "
+                      "partitions across z-sample batches).")
+            else:
+                print(f"  Coarsening hierarchy: {len(self.hierarchies)} partition(s), "
+                      f"seeds={self.hierarchy_seeds}"
+                      + (" (rotated across z-sample batches)"
+                         if len(self.hierarchies) > 1 else " (fixed)"))
+
+            self.hierarchy = self.hierarchies[0]
+            self.active_hierarchy_idx = 0
             current_n = self.num_nodes
             for level, entry in enumerate(self.hierarchy):
                 method = coarsening_types[level] if level < len(coarsening_types) else 'bfs'
@@ -249,6 +292,17 @@ class _SampleContext:
                 print(f"  Coarsening level {level} ({method}): {current_n} → {n_c} nodes "
                       f"({n_c / current_n * 100:.1f}%)")
                 current_n = n_c
+
+    def use_hierarchy(self, batch_index):
+        """Select which cached partition the next batch of graphs is built on."""
+        if not getattr(self, 'hierarchies', None):
+            return
+        self.active_hierarchy_idx = int(batch_index) % len(self.hierarchies)
+        self.hierarchy = self.hierarchies[self.active_hierarchy_idx]
+
+    def active_hierarchy_seed(self):
+        seeds = getattr(self, 'hierarchy_seeds', [None])
+        return seeds[getattr(self, 'active_hierarchy_idx', 0) % len(seeds)]
 
     def build_step_graph(self, current_state):
         """Build one normalized PyG graph for the given physical state [N, input_dim]."""
@@ -315,7 +369,7 @@ class _SampleContext:
 
 def _save_rollout_h5(output_path, sample_id, all_states, ctx, part_ids, output_dim,
                      num_steps, model_path, config_filename, rollout_time_s,
-                     vae_sample_idx=None):
+                     vae_sample_idx=None, hierarchy_seed=None, hierarchy_idx=None):
     """Write one trajectory to HDF5 following DATASET_FORMAT.md.
 
     all_states: [num_steps + 1, N, output_dim] predicted physical states.
@@ -356,6 +410,12 @@ def _save_rollout_h5(output_path, sample_id, all_states, ctx, part_ids, output_d
         meta_grp.attrs['total_rollout_time_s'] = rollout_time_s
         if vae_sample_idx is not None:
             meta_grp.attrs['vae_sample_idx'] = vae_sample_idx
+        # Which coarsening partition produced this trajectory. Lets an outlier be
+        # attributed to a partition rather than to the latent draw.
+        if hierarchy_idx is not None:
+            meta_grp.attrs['hierarchy_idx'] = int(hierarchy_idx)
+        meta_grp.attrs['hierarchy_seed'] = (
+            -1 if hierarchy_seed is None else int(hierarchy_seed))
 
         _all_feature_names = [
             b'x_coord', b'y_coord', b'z_coord',
@@ -633,7 +693,13 @@ def run_rollout(config, config_filename='config.txt'):
         ctx = _SampleContext(config, norm, ref_pos, edge_index, part_ids, device,
                              cond_feat=cond_feat)
 
+        batch_index = {'n': 0}
+
         def _run_batch(batch_start, requested_batch_size):
+            # Rotate the coarsening partition per batch so a single unlucky
+            # partition cannot poison every z-sample of this scene at once.
+            ctx.use_hierarchy(batch_index['n'])
+            batch_index['n'] += 1
             B = min(requested_batch_size, num_vae_samples - batch_start)
             states = [initial_state.copy() for _ in range(B)]
             all_states = np.zeros((B, steps + 1, num_nodes, output_dim), dtype=np.float32)
@@ -691,6 +757,8 @@ def run_rollout(config, config_filename='config.txt'):
                     output_path, sample_id, all_states[b], ctx, part_ids, output_dim,
                     steps, model_path, config_filename, rollout_time,
                     vae_sample_idx=vae_idx if use_vae else None,
+                    hierarchy_seed=ctx.active_hierarchy_seed(),
+                    hierarchy_idx=getattr(ctx, 'active_hierarchy_idx', 0),
                 )
                 if b == B - 1 or B <= 4:
                     size_mb = os.path.getsize(output_path) / (1024 * 1024)

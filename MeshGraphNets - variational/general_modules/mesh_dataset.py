@@ -84,6 +84,13 @@ class MeshGraphDataset(Dataset):
         # On-disk hierarchy/positional cache (built once, streamed by all workers).
         self._ms_cache_path = None
         self._ms_reader = None
+        # Number of independently-seeded coarsening partitions cached per sample.
+        # >1 makes training draw a different partition per epoch so the model
+        # learns coarsening-invariance; inference builds a partition neither the
+        # cache nor training has ever seen, and a model fit to exactly one FPS
+        # draw has no reason to be robust to it. Validation stays pinned to
+        # variant 0 so epoch-to-epoch val numbers remain comparable.
+        self.hierarchy_variants = max(1, int(config.get('hierarchy_variants', 1)))
 
         # Per-level coarsening method.
         from model.coarsening import ACCEPTED_COARSEN_METHODS
@@ -419,6 +426,7 @@ class MeshGraphDataset(Dataset):
         # process-local and opened lazily per worker.
         subset._ms_cache_path = self._ms_cache_path
         subset._ms_reader = None
+        subset.hierarchy_variants = self.hierarchy_variants
         subset._h5_handle = None
         subset.is_training = is_training
         subset.augment_geometry = self.config.get('augment_geometry', False) and is_training
@@ -535,8 +543,12 @@ class MeshGraphDataset(Dataset):
                 level_ref_pos = first_pos_data.T     # [N, 3]
 
                 # Hierarchies come from the shared on-disk cache, built for all
-                # sample_ids at dataset construction time.
-                hierarchy = self._get_ms_reader().get_hierarchy(sid)
+                # sample_ids at dataset construction time. Coarse-edge stats are
+                # always taken from variant 0: they must not depend on which
+                # partition a given epoch happens to draw, and the variants are
+                # statistically interchangeable (same cluster-count and
+                # cluster-size distribution, only a different assignment).
+                hierarchy = self._get_ms_reader().get_hierarchy(sid, 0)
                 actual_levels = len(hierarchy)
 
                 # Collect coarse edge stats per level — 10 timesteps is sufficient
@@ -657,6 +669,19 @@ class MeshGraphDataset(Dataset):
         if not hasattr(self, '_h5_handle') or self._h5_handle is None:
             self._h5_handle = h5py.File(self.h5_file, 'r', swmr=True)
         return self._h5_handle
+
+    def _pick_hierarchy_variant(self) -> int:
+        """Which cached coarsening partition to use for this item.
+
+        Training rotates uniformly over the cached variants; validation/test pin
+        variant 0 so their loss stays comparable across epochs. Drawn from the
+        torch RNG because DataLoader seeds that per worker *and* per epoch —
+        numpy's global RNG is not reseeded in workers, so every worker would
+        walk the same sequence.
+        """
+        if self.hierarchy_variants <= 1 or not getattr(self, 'is_training', False):
+            return 0
+        return int(torch.randint(self.hierarchy_variants, (1,)).item())
 
     def _get_ms_reader(self):
         """Lazily open the per-process on-disk hierarchy cache reader (or None)."""
@@ -959,7 +984,8 @@ class MeshGraphDataset(Dataset):
         # Attach per-level coarsening data (only when use_multiscale=True).
         # Hierarchies always come from the shared on-disk cache.
         if self.use_multiscale:
-            hierarchy = self._get_ms_reader().get_hierarchy(sample_id)
+            hierarchy = self._get_ms_reader().get_hierarchy(
+                sample_id, self._pick_hierarchy_variant())
 
             world_ei_for_coarse = (
                 graph_data.world_edge_index.numpy()
