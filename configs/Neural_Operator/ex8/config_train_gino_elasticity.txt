@@ -4,8 +4,8 @@ gpu_ids	0
 parallel_mode	ddp
 log_file_dir	../output/benchmarks/elasticity/gino/train.log
 modelpath	../output/benchmarks/elasticity/gino/model.pth
-dataset_dir	../dataset/benchmarks/elasticity/elasticity_train.h5
-infer_dataset	../dataset/benchmarks/elasticity/elasticity_test.h5
+dataset_dir	../dataset/ex8.h5
+infer_dataset	../dataset/ex8_infer.h5
 inference_output_dir	../output/benchmarks/elasticity/gino/inference
 infer_timesteps	1
 split_seed	42

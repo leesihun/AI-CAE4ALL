@@ -2,13 +2,15 @@ model	MeshGraphNets
 mode	train
 gpu_ids	0
 parallel_mode	ddp
-log_file_dir	../../output/meshgraphnets/ex6/train_elasticity.log
-modelpath	../output/meshgraphnets/ex6/model_elasticity.pth
-%   dataset/benchmarks/elasticity/elasticity_{train,test}.h5 (Geo-FNO Random_UnitCell,
-%   972-node point cloud, k=6 KNN mesh_edge, static T=1). Never had an MGN config before
-%   this one -- the paper benchmarks only ever targeted Transolver/Neural_Operator.
-dataset_dir	../dataset/benchmarks/elasticity/elasticity_train.h5
-infer_dataset	../dataset/benchmarks/elasticity/elasticity_test.h5
+log_file_dir	../../output/meshgraphnets/ex8/train_elasticity.log
+modelpath	../output/meshgraphnets/ex8/model_elasticity.pth
+%   dataset/ex8.h5, ex8_infer.h5 (Geo-FNO Random_UnitCell, 972-node point cloud,
+%   k=6 KNN mesh_edge, static T=1, canonical ntrain=1000/ntest=200 split --
+%   NOT extrapolation, this is a paper-replication benchmark, see
+%   dataset/build_geo_fno_elasticity.py). Never had an MGN config before this
+%   one -- the paper benchmarks only ever targeted Transolver/Neural_Operator.
+dataset_dir	../dataset/ex8.h5
+infer_dataset	../dataset/ex8_infer.h5
 infer_timesteps	1
 split_seed	42
 input_var	1

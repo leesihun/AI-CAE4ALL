@@ -6,8 +6,8 @@ parallel_mode	ddp
 %   Plasticity: 987 cases, 20 states, 3131 nodes; one-step delta training
 log_file_dir	../../output/benchmarks/plasticity/transolver/train.log
 modelpath	../output/benchmarks/plasticity/transolver/model.pth
-dataset_dir	../dataset/benchmarks/plasticity/plasticity.h5
-infer_dataset	../dataset/benchmarks/plasticity/plasticity_seed42_test.h5
+dataset_dir	../dataset/ex9.h5
+infer_dataset	../dataset/ex9_infer.h5
 inference_output_dir	../output/benchmarks/plasticity/transolver/inference
 infer_timesteps	19
 split_seed	42

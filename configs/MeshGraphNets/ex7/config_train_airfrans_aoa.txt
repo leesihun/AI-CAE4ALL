@@ -1,0 +1,61 @@
+model	MeshGraphNets
+mode	train
+gpu_ids	0
+parallel_mode	ddp
+log_file_dir	../../output/meshgraphnets/ex7/train_airfrans_aoa.log
+modelpath	../output/meshgraphnets/ex7/model_airfrans_aoa.pth
+%   ex7_airfrans_aoa_{train,test}.h5: AirfRANS's published angle-of-attack
+%   EXTRAPOLATION split (804 train / 196 test), not just a held-out sample of
+%   the same distribution -- test AoAs fall outside the train AoA range. This
+%   is the actual reason AirfRANS was picked (see dataset/PUBLIC_DATASETS.md).
+%   The previous config here (scarce_train, 200 samples) set infer_dataset ==
+%   dataset_dir -- training and "inference" evaluated on the identical 200
+%   samples, i.e. no real generalization test at all. ex7_airfrans_reynolds_*
+%   (Reynolds-number extrapolation) and ex7_airfrans_{scarce_train,full_test}
+%   (plain interpolation, data-scarce regime) are also built and sitting in
+%   dataset/ if a different axis or the interpolation regime is wanted.
+%   rows 3:7 state (u_x,u_y,p,nu_t), rows 7:12 conditions (u_inf_x,u_inf_y,sdf,
+%   n_x,n_y) -> cond_var 5, row 12 node_type (0 volume, 1 airfoil surface).
+%   T=1 static regression.
+dataset_dir	../dataset/ex7_airfrans_aoa_train.h5
+infer_dataset	../dataset/ex7_airfrans_aoa_test.h5
+infer_timesteps	1
+split_seed	42
+input_var	4
+output_var	4
+feature_loss_weights	1.0, 1.0, 1.0, 1.0
+edge_var	8
+positional_features	4
+'
+message_passing_num	10
+Training_epochs	20
+Batch_size	1
+LearningR	0.0001
+Latent_dim	64
+num_workers	2
+prefetch_factor	2
+pin_memory	True
+std_noise	0.01
+weight_decay	0.0001
+augment_geometry	False
+grad_accum_steps	1
+'
+use_checkpointing	True
+'
+use_amp	True
+use_ema	True
+ema_decay	0.99
+test_interval	10
+val_interval	5
+'
+use_node_types	True
+'
+use_world_edges	False
+'
+test_batch_idx	0, 1, 2
+plot_feature_idx	-1
+'
+use_multiscale	False
+'
+time_integration	ar_ot
+cond_var	5

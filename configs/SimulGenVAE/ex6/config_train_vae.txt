@@ -1,0 +1,32 @@
+model	SimulGenVAE  # stage 1 only: hierarchical VAE
+mode	train_vae  # standalone VAE training (unprefixed stage knobs)
+gpu_ids	0
+parallel_mode	single
+'
+%   dataset/ex6.h5 -- DeepMind flag_simple, 1579 nodes, T=401, IDENTICAL for
+%   every one of the 100 samples (unlike ex4 cylinder_flow/ex5 deforming_plate,
+%   whose per-trajectory mesh violates SimulGenVAE's fixed-N/fixed-T
+%   requirement). num_var 3 = disp_x/disp_y/disp_z (rows 3:6); row 6
+%   (node_type) is outside num_var so this VAE stage never reads it, same as
+%   the ex8/ex9 benchmarks below.
+dataset_dir	../dataset/ex6.h5
+split_seed	42
+num_var	3
+field_start_row	3
+'
+latent_dim	8
+latent_dim_end	32
+num_filter_enc	1024 512 256 128
+network_size	small
+loss_type	1
+alpha	1000000
+init_beta_divisor	4
+'
+training_epochs	20
+batch_size	16
+learningr	0.001
+weight_decay	0.0
+warmup_epochs	5
+vae_modelpath	../output/simulgenvae/ex6/simulgenvae_vae.pth
+output_dir	../output/simulgenvae/ex6
+log_file_dir	../output/simulgenvae/ex6/vae.log

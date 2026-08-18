@@ -3,11 +3,11 @@ mode	train_vae  # standalone VAE training (unprefixed stage knobs)
 gpu_ids	0
 parallel_mode	single
 '
-%   dataset/benchmarks/plasticity/plasticity.h5 -- 3131-node structured grid, T=20,
-%   IDENTICAL node/timestep count for every one of the 900 samples (unlike ex4
-%   cylinder_flow/deforming_plate/flag_simple's per-trajectory or single-shared-but-
-%   still-verified-elsewhere mesh). Never tested against SimulGenVAE before this config.
-dataset_dir	../dataset/benchmarks/plasticity/plasticity.h5
+%   dataset/ex9.h5 -- 3131-node structured grid, T=20, IDENTICAL node/timestep
+%   count for every one of the 900 samples (unlike ex4 cylinder_flow/
+%   deforming_plate/flag_simple's per-trajectory or single-shared-but-still-
+%   verified-elsewhere mesh).
+dataset_dir	../dataset/ex9.h5
 split_seed	42
 num_var	4
 field_start_row	3
@@ -25,6 +25,6 @@ batch_size	16
 learningr	0.001
 weight_decay	0.0
 warmup_epochs	5
-vae_modelpath	../output/simulgenvae/ex7/simulgenvae_vae.pth
-output_dir	../output/simulgenvae/ex7
-log_file_dir	../output/simulgenvae/ex7/vae.log
+vae_modelpath	../output/simulgenvae/ex9/simulgenvae_vae.pth
+output_dir	../output/simulgenvae/ex9
+log_file_dir	../output/simulgenvae/ex9/vae.log

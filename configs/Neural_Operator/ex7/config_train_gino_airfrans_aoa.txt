@@ -1,23 +1,27 @@
-% ex4_cylinder_flow_smoke.h5 on Neural_Operator/gino -- reads the same MGN HDF5
-% with no conversion step. use_node_types must stay False: 7-row file, node
-% types on cylinder_flow only work under MeshGraphNets (see
-% dataset/PUBLIC_DATASETS.md).
+% ex7_airfrans_aoa_{train,test}.h5 on Neural_Operator/gino -- AirfRANS's
+% published angle-of-attack EXTRAPOLATION split (804 train / 196 test), not a
+% held-out sample of the same distribution. The previous config here
+% (scarce_train) set infer_dataset == dataset_dir -- no real generalization
+% test at all. ex7_airfrans_reynolds_* and ex7_airfrans_{scarce_train,
+% full_test} are also built (see dataset/PUBLIC_DATASETS.md) if a different
+% axis or the interpolation regime is wanted. cond_var 5 is supported by all
+% four Neural_Operator aliases per DATASET_FORMAT.md.
 model                          gino
 mode                           train
 gpu_ids                        0
 parallel_mode                  ddp
-log_file_dir                   ../../output/neural_operator/ex4/gino_cylinder_smoke.log
-modelpath                      ../output/neural_operator/ex4/gino_cylinder_smoke.pth
-dataset_dir                    ../dataset/ex4_cylinder_flow_smoke.h5
-infer_dataset                  ../dataset/ex4_cylinder_flow_smoke.h5
-inference_output_dir           ../output/neural_operator/rollout/ex4/gino_cylinder_smoke
-infer_timesteps                20
+log_file_dir                   ../../output/neural_operator/ex7/gino_airfrans_aoa.log
+modelpath                      ../output/neural_operator/ex7/gino_airfrans_aoa.pth
+dataset_dir                    ../dataset/ex7_airfrans_aoa_train.h5
+infer_dataset                  ../dataset/ex7_airfrans_aoa_test.h5
+inference_output_dir           ../output/neural_operator/rollout/ex7/gino_airfrans_aoa
+infer_timesteps                1
 split_seed                     42
-input_var                      3
-output_var                     3
-feature_loss_weights           1.0, 1.0, 1.0
+input_var                      4
+output_var                     4
+feature_loss_weights           1.0, 1.0, 1.0, 1.0
 positional_features            4
-use_node_types                 False
+use_node_types                 True
 coordinate_normalization       centered_isotropic
 operator_dim                   auto
 dimension_tolerance            0.0001
@@ -42,7 +46,7 @@ gino_max_num_neighbors           2048
 gino_cache_neighbors             True
 gino_group_shared_geometry       False
 training_epochs                20
-batch_size                     2
+batch_size                     1
 learningr                      0.0001
 weight_decay                   0.0001
 warmup_epochs                  3
@@ -54,7 +58,7 @@ std_noise                      0.01
 noise_gamma                    1
 augment_geometry                False
 use_amp                        True
-use_checkpointing              False
+use_checkpointing              True
 use_ema                        True
 ema_decay                      0.99
 use_compile                    False
@@ -72,4 +76,4 @@ write_preprocessing              False
 use_world_edges                  False
 use_multiscale                   False
 time_integration                 ar_ot
-cond_var                        0
+cond_var                        5

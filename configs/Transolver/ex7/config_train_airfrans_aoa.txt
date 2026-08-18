@@ -1,0 +1,64 @@
+% ex7_airfrans_aoa_{train,test}.h5 on Transolver -- AirfRANS's published
+% angle-of-attack EXTRAPOLATION split (804 train / 196 test), not a held-out
+% sample of the same distribution. The previous config here (scarce_train)
+% set infer_dataset == dataset_dir -- no real generalization test at all.
+% ex7_airfrans_reynolds_* and ex7_airfrans_{scarce_train,full_test} are also
+% built (see dataset/PUBLIC_DATASETS.md) if a different axis or the
+% interpolation regime is wanted. cond_var 5 picked up as rows 7:12.
+model                     transolver
+mode                      train
+gpu_ids                   0
+parallel_mode             ddp
+log_file_dir              ../../output/transolver/ex7/train_airfrans_aoa.log
+modelpath                 ../output/transolver/ex7/airfrans_aoa.pth
+dataset_dir               ../dataset/ex7_airfrans_aoa_train.h5
+infer_dataset              ../dataset/ex7_airfrans_aoa_test.h5
+infer_timesteps           1
+split_seed                42
+input_var                 4
+output_var                4
+positional_features       4
+use_node_types            True
+feature_loss_weights      1.0, 1.0, 1.0, 1.0
+coordinate_normalization  centered_isotropic
+latent_dim                128
+num_layers                4
+num_heads                 8
+slice_num                 64
+attention_kernel          slice_space
+chunk_size                4096
+amortized_training        False
+amortized_cache_nodes     16384
+amortized_query_nodes     4096
+infer_mode                direct
+infer_chunk_size          0
+mlp_ratio                 4
+dropout                   0.0
+temperature_init          0.5
+temperature_min           0.1
+temperature_max           5.0
+small_output_init         False
+training_epochs           20
+batch_size                1
+learningr                 0.0001
+weight_decay               0.0001
+warmup_epochs              3
+num_workers                2
+prefetch_factor           2
+grad_accum_steps          1
+max_grad_norm             3.0
+std_noise                 0.01
+noise_gamma                1
+augment_geometry           False
+use_amp                    True
+use_checkpointing          True
+use_ema                    True
+ema_decay                  0.99
+use_compile                False
+val_interval                5
+test_interval               10
+use_world_edges              False
+use_multiscale              False
+write_preprocessing          False
+time_integration              ar_ot
+cond_var                      5
