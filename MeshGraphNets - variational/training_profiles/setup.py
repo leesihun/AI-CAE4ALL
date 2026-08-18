@@ -198,6 +198,11 @@ def build_model_config(config) -> dict:
         'mp_per_level':      config.get('mp_per_level', None),
         'coarsening_type':   config.get('coarsening_type', 'bfs'),
         'voronoi_clusters':  config.get('voronoi_clusters', None),
+        # Provenance, not architecture: records how many coarsening partitions
+        # this checkpoint was trained to be invariant to. 1 = fit to a single
+        # fixed partition, so its inference output is sensitive to whichever
+        # partition the rollout happens to build.
+        'hierarchy_variants': config.get('hierarchy_variants', 1),
         'use_vae':           config.get('use_vae', False),
         'vae_latent_dim':    config.get('vae_latent_dim', 32),
         'vae_mp_layers':     config.get('vae_mp_layers', 5),
