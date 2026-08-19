@@ -9,7 +9,13 @@ parallel_mode	single
 %   verified-elsewhere mesh).
 dataset_dir	../dataset/ex9.h5
 split_seed	42
-num_var	4
+%   num_var 2 = ux,uy (rows 3:5). Was 4, which pulled in rows 5:7 (uz, which is
+%   identically zero, and die_profile, the static driving input parameter) --
+%   half the autoencoded "field" carried no per-sample field signal at all.
+%   SimulGenVAE has no cond_var mechanism, so those rows are simply excluded
+%   here rather than re-tagged as conditions (see configs/*/ex9/ for the mesh
+%   methods' cond_var 2 treatment of the same two rows).
+num_var	2
 field_start_row	3
 '
 latent_dim	8

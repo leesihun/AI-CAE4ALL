@@ -12,10 +12,23 @@ inference_output_dir	../output/benchmarks/plasticity/fno/inference
 infer_timesteps	19
 split_seed	42
 '
-%   State: ux, uy, uz=0, static die profile; physical score uses displacement only
-input_var	4
-output_var	4
-feature_loss_weights	1.0, 1.0, 1.0, 1.0
+%   Row layout: [x,y,z | ux,uy | uz,die_profile]. input_var 2 = ux,uy -- the ONLY
+%   two channels that carry signal. cond_var 2 = the trailing input-only rows:
+%     uz          identically zero everywhere (plasticity is 2D; the builder
+%                 stores a 3rd displacement row to fit the 3-component convention)
+%     die_profile the benchmark's DRIVING INPUT PARAMETER (Geo-FNO's `input`
+%                 array), constant over time -- an input to condition on, never
+%                 something to predict.
+%   Before 2026-08-19 both of these were inside input_var/output_var=4, so the
+%   model was asked to predict two targets whose per-step delta is exactly 0 and
+%   feature_loss_weights spent HALF the loss budget on them (this is what the
+%   'CRITICAL: Near-zero delta variance - targets are constant!' warning in the
+%   training logs was reporting). cond_var is exactly the mechanism for this --
+%   see CLAUDE.md's cond_var description.
+input_var	2
+output_var	2
+cond_var	2
+feature_loss_weights	1.0, 1.0
 positional_features	4
 use_node_types	False
 coordinate_normalization	centered_isotropic
@@ -40,9 +53,13 @@ fno_use_channel_mlp	True
 fno_norm	none
 '
 %   Optimization
+%   batch_size/learningr matched to Geo-FNO's own plasticity_3d.py exactly
+%   (ntrain=900/ntest=80, batch_size=20, learning_rate=0.001, modes=12,
+%   epochs=501 -- all already matched here except batch/lr, which previously
+%   were 4 and 0.0001).
 training_epochs	500
-batch_size	4
-learningr	0.0001
+batch_size	20
+learningr	0.001
 weight_decay	0.0001
 warmup_epochs	3
 num_workers	2

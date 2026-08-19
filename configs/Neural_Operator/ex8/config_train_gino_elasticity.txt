@@ -38,7 +38,7 @@ gino_group_shared_geometry	False
 training_epochs	500
 batch_size	4
 learningr	0.001
-weight_decay	0.00001
+weight_decay	0.0001
 warmup_epochs	3
 num_workers	0
 prefetch_factor	2

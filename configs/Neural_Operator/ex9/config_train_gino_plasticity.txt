@@ -12,10 +12,23 @@ inference_output_dir	../output/benchmarks/plasticity/gino/inference
 infer_timesteps	19
 split_seed	42
 '
-%   State: ux, uy, uz=0, static die profile; physical score uses displacement only
-input_var	4
-output_var	4
-feature_loss_weights	1.0, 1.0, 1.0, 1.0
+%   Row layout: [x,y,z | ux,uy | uz,die_profile]. input_var 2 = ux,uy -- the ONLY
+%   two channels that carry signal. cond_var 2 = the trailing input-only rows:
+%     uz          identically zero everywhere (plasticity is 2D; the builder
+%                 stores a 3rd displacement row to fit the 3-component convention)
+%     die_profile the benchmark's DRIVING INPUT PARAMETER (Geo-FNO's `input`
+%                 array), constant over time -- an input to condition on, never
+%                 something to predict.
+%   Before 2026-08-19 both of these were inside input_var/output_var=4, so the
+%   model was asked to predict two targets whose per-step delta is exactly 0 and
+%   feature_loss_weights spent HALF the loss budget on them (this is what the
+%   'CRITICAL: Near-zero delta variance - targets are constant!' warning in the
+%   training logs was reporting). cond_var is exactly the mechanism for this --
+%   see CLAUDE.md's cond_var description.
+input_var	2
+output_var	2
+cond_var	2
+feature_loss_weights	1.0, 1.0
 positional_features	4
 use_node_types	False
 coordinate_normalization	centered_isotropic
@@ -45,9 +58,14 @@ gino_use_torch_cluster	False
 gino_group_shared_geometry	False
 '
 %   Optimization
+%   learningr matched to Geo-FNO's own plasticity_3d.py (learning_rate=0.001,
+%   was 0.0001). batch_size kept at 1, NOT raised to the paper's 20: GINO has
+%   no plasticity baseline of its own to match, and its radius-graph/kernel
+%   ops are more memory-hungry per sample than FNO's grid convolutions --
+%   raising batch here risks OOM without empirical headroom to justify it.
 training_epochs	500
 batch_size	1
-learningr	0.0001
+learningr	0.001
 weight_decay	0.0001
 warmup_epochs	3
 num_workers	2

@@ -43,7 +43,7 @@ gino_use_torch_cluster          True
 gino_max_num_neighbors           2048
 gino_cache_neighbors             True
 gino_group_shared_geometry       False
-training_epochs                20
+training_epochs                500
 batch_size                     2
 learningr                      0.0001
 weight_decay                   0.0001

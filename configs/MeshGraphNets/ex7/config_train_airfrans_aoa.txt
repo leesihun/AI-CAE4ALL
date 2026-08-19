@@ -4,21 +4,21 @@ gpu_ids	0
 parallel_mode	ddp
 log_file_dir	../../output/meshgraphnets/ex7/train_airfrans_aoa.log
 modelpath	../output/meshgraphnets/ex7/model_airfrans_aoa.pth
-%   ex7_airfrans_aoa_{train,test}.h5: AirfRANS's published angle-of-attack
-%   EXTRAPOLATION split (804 train / 196 test), not just a held-out sample of
-%   the same distribution -- test AoAs fall outside the train AoA range. This
-%   is the actual reason AirfRANS was picked (see dataset/PUBLIC_DATASETS.md).
-%   The previous config here (scarce_train, 200 samples) set infer_dataset ==
-%   dataset_dir -- training and "inference" evaluated on the identical 200
-%   samples, i.e. no real generalization test at all. ex7_airfrans_reynolds_*
-%   (Reynolds-number extrapolation) and ex7_airfrans_{scarce_train,full_test}
-%   (plain interpolation, data-scarce regime) are also built and sitting in
-%   dataset/ if a different axis or the interpolation regime is wanted.
+inference_output_dir	../output/meshgraphnets/rollout/ex7/model_airfrans_aoa
+%   ex7.h5/ex7_infer.h5: AirfRANS's published angle-of-attack EXTRAPOLATION
+%   split (804 train / 196 test), not just a held-out sample of the same
+%   distribution -- test AoAs fall outside the train AoA range. This is the
+%   actual reason AirfRANS was picked (see dataset/PUBLIC_DATASETS.md).
+%   ex7.h5+ex7_infer.h5 together ARE the full 1000-sample AirfRANS set
+%   (verified: their sample-ID union equals the union of every other split
+%   the builder can produce) -- the scarce/full/reynolds partitions of that
+%   same 1000 samples were consolidated away (2026-08-19) since they carried
+%   no unique data, only a different train/test grouping.
 %   rows 3:7 state (u_x,u_y,p,nu_t), rows 7:12 conditions (u_inf_x,u_inf_y,sdf,
 %   n_x,n_y) -> cond_var 5, row 12 node_type (0 volume, 1 airfoil surface).
 %   T=1 static regression.
-dataset_dir	../dataset/ex7_airfrans_aoa_train.h5
-infer_dataset	../dataset/ex7_airfrans_aoa_test.h5
+dataset_dir	../dataset/ex7.h5
+infer_dataset	../dataset/ex7_infer.h5
 infer_timesteps	1
 split_seed	42
 input_var	4
@@ -26,12 +26,21 @@ output_var	4
 feature_loss_weights	1.0, 1.0, 1.0, 1.0
 edge_var	8
 positional_features	4
+%   Architecture uses MeshGraphNets' own general default (15 MP steps,
+%   latent 128 -- Pfaff et al. ICLR'21), since AirfRANS itself never
+%   benchmarked MeshGraphNets (its own baselines are GraphSAGE/PointNet/
+%   GUNet/MLP). Training_epochs 398 matches the AirfRANS paper's own
+%   published protocol instead (thuml/Transolver's
+%   Airfoil-Design-AirfRANS/params.yaml: nb_epochs=398, shared across every
+%   baseline architecture there, not just Transolver) -- this is the one ex7
+%   arm with a directly confirmed epoch count, unlike ex4-ex6's scaled
+%   estimate above.
 '
-message_passing_num	10
-Training_epochs	20
+message_passing_num	15
+Training_epochs	398
 Batch_size	1
 LearningR	0.0001
-Latent_dim	64
+Latent_dim	128
 num_workers	2
 prefetch_factor	2
 pin_memory	True

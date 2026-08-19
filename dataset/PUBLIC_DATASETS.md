@@ -179,16 +179,22 @@ hdf5` is not implemented in this runtime, each task is written as its **own file
 `dataset_dir` at the train task and `infer_dataset` at the test task rather than relying on the
 seeded 80/10/10 split.
 
-**2026-08-18: `ex7`'s configs now point at `aoa_train`/`aoa_test`** (804/196 samples,
-angle-of-attack extrapolation), not `scarce_train`. The `reynolds_*` and `aoa_*` splits were built
-back on 2026-08-09 but never actually wired into a config -- the committed `ex7` configs set
-`dataset_dir` and `infer_dataset` to the **identical** `scarce_train.h5` file, so "inference"
-evaluated on the same 200 samples the model trained on, no real generalization test at all. Fixed
-by switching to the AoA extrapolation split (arbitrary pick between AoA/Reynolds, both are
-equally valid published axes -- AoA has more samples). `scarce_train.h5`, `full_test.h5`, and
-`reynolds_{train,test}.h5` are still built and sitting in `dataset/` (~10 GB combined) if a
-different axis or the plain interpolation/data-scarce regime is wanted for a second `ex7` config
--- nothing currently references them.
+**2026-08-18: `ex7`'s configs switched to the AoA extrapolation split** (804/196 samples), fixing
+a self-reference bug where `dataset_dir`/`infer_dataset` both pointed at the identical
+`scarce_train.h5`, so "inference" evaluated on the same 200 samples the model trained on -- no
+real generalization test at all.
+
+**2026-08-19: consolidated to a single `ex7.h5`/`ex7_infer.h5` pair.** Checked whether the
+`scarce_train`/`full_test`/`reynolds_{train,test}`/`aoa_{train,test}` splits were independent or
+overlapping data by comparing sample IDs across all six built files: they are **six different
+train/test partitions of the exact same 1000 unique AirfRANS samples** -- the aoa-split union
+alone already equals the union of all six files, zero unique samples anywhere else. So nothing was
+lost by keeping only one: `ex7_airfrans_aoa_train.h5` -> `ex7.h5`, `ex7_airfrans_aoa_test.h5` ->
+`ex7_infer.h5` (rename, not rebuild), and the other four files (~7.7 GB, confirmed fully
+redundant) were deleted. `ex7` now matches every other `exN` slot's plain two-file convention.
+If a different extrapolation axis (Reynolds) or the plain interpolation/data-scarce regime is
+wanted later, rebuild it with `build_public_airfrans.py --task reynolds_train` etc. --the
+`--task` names still work, they just don't get kept as permanent files by default anymore.
 
 The `smoke` tier (not rebuilt in the 2026-08-09 recovery) decimates to 16k nodes by random
 subsampling but **always keeps every airfoil-surface node**, since those carry the geometry the
@@ -211,9 +217,37 @@ filenames agree:
 | `ex4` | `cylinder_flow` | `dataset/ex4.h5`, `dataset/ex4_infer.h5` |
 | `ex5` | `deforming_plate` | `dataset/ex5.h5`, `dataset/ex5_infer.h5` |
 | `ex6` | `flag_simple` | `dataset/ex6.h5`, `dataset/ex6_infer.h5` |
-| `ex7` | AirfRANS | `dataset/ex7_airfrans_{full_test,scarce_train,reynolds_train,reynolds_test,aoa_train,aoa_test}.h5` |
+| `ex7` | AirfRANS | `dataset/ex7.h5` (804 train), `dataset/ex7_infer.h5` (196 test, AoA extrapolation) |
 | `ex8` | Geo-FNO elasticity | `dataset/ex8.h5` (1000 train), `dataset/ex8_infer.h5` (200 test) -- rebuilt 2026-08-19 via `dataset/build_geo_fno_elasticity.py`, canonical ntrain/ntest split (not extrapolation, see the script's docstring) |
-| `ex9` | Geo-FNO plasticity | `dataset/ex9.h5` (900 train), `dataset/ex9_infer.h5` (87 test) -- rebuilt 2026-08-19 via `dataset/build_geo_fno_plasticity.py`, plain held-out split (not extrapolation) |
+| `ex9` | Geo-FNO plasticity | `dataset/ex9.h5` (900 train), `dataset/ex9_infer.h5` (87 test) -- rebuilt 2026-08-19 via `dataset/build_geo_fno_plasticity.py`, plain held-out split (not extrapolation). **Read the channel-semantics note below before writing an `ex9` config.** |
+
+### `ex9` channel semantics -- `cond_var 2`, not `input_var 4` (corrected 2026-08-19)
+
+`ex9.h5`'s 7 rows are `[x, y, z | ux, uy | uz, die_profile]`. Only **two** of those carry a
+predictable signal:
+
+| row | content | verified property |
+| --- | --- | --- |
+| 3, 4 | `ux`, `uy` | real 2D displacement, varies over time -- the actual target |
+| 5 | `uz` | **identically zero everywhere** (plasticity is 2D; the builder emits a third displacement row only to fit the 3-component convention) |
+| 6 | `die_profile` | the benchmark's **driving input parameter** (Geo-FNO's `input` array), constant over the trajectory |
+
+Every `ex9` config shipped before 2026-08-19 used `input_var 4` / `output_var 4` / `cond_var 0`,
+i.e. it asked the model to *predict* `uz` and `die_profile`. Both have a per-step delta of exactly
+zero, so with `feature_loss_weights 1.0, 1.0, 1.0, 1.0` **half the loss budget was being spent on
+targets that are trivially zero** -- and predicting the die profile is meaningless anyway, since it
+is the input the benchmark conditions on. This is precisely what the
+`CRITICAL: Near-zero delta variance - targets are constant!` line in the training logs was
+reporting; it was a real defect, not cosmetic noise.
+
+The correct form (now used by all seven mesh-method `ex9` configs) is
+`input_var 2`, `output_var 2`, `cond_var 2`, `feature_loss_weights 1.0, 1.0`. `cond_var` consumes
+the **trailing** rows, which is exactly where `uz`/`die_profile` sit, so the layout works without
+touching the data. Confirmed at runtime: the loader now reports
+`cond_dim: 2 (input-only conditioning rows 5:7)` and non-degenerate delta stats
+(`std: [0.132, 0.085]` instead of two `1e-8` floors), and the constant-target CRITICAL is gone.
+`configs/SimulGenVAE/ex9` uses `num_var 2` for the same reason (SimulGenVAE has no `cond_var`
+mechanism, so those rows are excluded rather than re-tagged).
 
 | Directory | Contents |
 | --- | --- |
@@ -283,11 +317,12 @@ printed then stopped:
 | Transolver, `ex9` (plasticity) | ✅ real per-step loss |
 | SimulGenVAE, `ex8` (elasticity) | ✅ Epoch 0 Recon: 4.77e-01, KL: 2.09e+01 |
 
-**Operational note, not a bug:** the "CRITICAL: Near-zero node/delta variance" warnings these
-runs print for `ex9` (and similar for `ex8`) are expected -- plasticity's `uz`/`dz` channel is
-deliberately zero (2D data stored in a 3-channel convention, documented in
-`build_geo_fno_plasticity.py`'s own docstring), and Transolver's own message points at
-`IMPLEMENTATION_PLAN.md` section 5.2 for the same accepted tradeoff on `ex1.h5`. Also: killing a
+**Correction (2026-08-19):** the "CRITICAL: Near-zero **delta** variance" warning in those `ex9`
+runs was originally written off here as expected/cosmetic. That was wrong -- it was reporting a
+real config defect (two of four predicted channels were constant), now fixed; see the `ex9`
+channel-semantics section above. The remaining "Near-zero **node** variance" warning *is*
+genuinely cosmetic: it refers to constant *input* features (`z_coord`, and `uz` in its new
+conditioning role), which are read but never scored. Also: killing a
 launched training run via a plain process-stop does **not** clean up its DataLoader worker
 subprocesses on Windows (`num_workers`>0 spawns via `multiprocessing.spawn`, orphaned on a hard
 kill) -- verify with `Get-CimInstance Win32_Process -Filter "Name='python.exe'"` and kill the

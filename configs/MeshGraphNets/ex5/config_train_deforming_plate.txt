@@ -4,6 +4,7 @@ gpu_ids	0
 parallel_mode	ddp
 log_file_dir	../../output/meshgraphnets/ex5/train_deforming_plate.log
 modelpath	../output/meshgraphnets/ex5/model_deforming_plate.pth
+inference_output_dir	../output/meshgraphnets/rollout/ex5/model_deforming_plate
 %   ex5.h5: DeepMind deforming_plate, 100 trajectories, full 400-step rollout.
 %   Rigid actuator pressed into a hyperelastic plate -- the only ex4-ex6
 %   dataset with contact, so use_world_edges is exercised here. ex5_infer.h5
@@ -19,12 +20,20 @@ output_var	4
 feature_loss_weights	1.0, 1.0, 1.0, 1.0
 edge_var	8
 positional_features	4
+%   Architecture matched to Pfaff et al. ICLR'21: 15 MP steps, latent 128,
+%   batch 2, LR 1e-4 (see ex4's config for the scheduler caveat).
+%   Training_epochs 630 extends the paper's confirmed cylinder_flow 10M-step
+%   budget to this dataset's own size (80 train traj x 399 transitions /
+%   batch 2 = 15,960 steps/epoch; 10,000,000 / 15,960 ~= 630) -- the paper
+%   does not publish a separate step count for deforming_plate, so this
+%   assumes the same order-of-magnitude budget as its own confirmed number,
+%   not a second independently-cited figure.
 '
-message_passing_num	10
-Training_epochs	20
+message_passing_num	15
+Training_epochs	630
 Batch_size	2
 LearningR	0.0001
-Latent_dim	64
+Latent_dim	128
 num_workers	2
 prefetch_factor	2
 pin_memory	True

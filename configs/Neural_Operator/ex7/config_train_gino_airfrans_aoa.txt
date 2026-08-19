@@ -1,19 +1,18 @@
-% ex7_airfrans_aoa_{train,test}.h5 on Neural_Operator/gino -- AirfRANS's
-% published angle-of-attack EXTRAPOLATION split (804 train / 196 test), not a
-% held-out sample of the same distribution. The previous config here
-% (scarce_train) set infer_dataset == dataset_dir -- no real generalization
-% test at all. ex7_airfrans_reynolds_* and ex7_airfrans_{scarce_train,
-% full_test} are also built (see dataset/PUBLIC_DATASETS.md) if a different
-% axis or the interpolation regime is wanted. cond_var 5 is supported by all
-% four Neural_Operator aliases per DATASET_FORMAT.md.
+% ex7.h5/ex7_infer.h5 on Neural_Operator/gino -- AirfRANS's published
+% angle-of-attack EXTRAPOLATION split (804 train / 196 test), not a held-out
+% sample of the same distribution. ex7.h5+ex7_infer.h5 together ARE the full
+% 1000-sample AirfRANS set; the scarce/full/reynolds partitions of that same
+% pool were consolidated away (2026-08-19), see dataset/PUBLIC_DATASETS.md.
+% cond_var 5 is supported by all four Neural_Operator aliases per
+% DATASET_FORMAT.md.
 model                          gino
 mode                           train
 gpu_ids                        0
 parallel_mode                  ddp
 log_file_dir                   ../../output/neural_operator/ex7/gino_airfrans_aoa.log
 modelpath                      ../output/neural_operator/ex7/gino_airfrans_aoa.pth
-dataset_dir                    ../dataset/ex7_airfrans_aoa_train.h5
-infer_dataset                  ../dataset/ex7_airfrans_aoa_test.h5
+dataset_dir                    ../dataset/ex7.h5
+infer_dataset                  ../dataset/ex7_infer.h5
 inference_output_dir           ../output/neural_operator/rollout/ex7/gino_airfrans_aoa
 infer_timesteps                1
 split_seed                     42
@@ -45,7 +44,7 @@ gino_use_torch_cluster          True
 gino_max_num_neighbors           2048
 gino_cache_neighbors             True
 gino_group_shared_geometry       False
-training_epochs                20
+training_epochs                398
 batch_size                     1
 learningr                      0.0001
 weight_decay                   0.0001

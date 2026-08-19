@@ -4,6 +4,7 @@ gpu_ids	0
 parallel_mode	ddp
 log_file_dir	../../output/meshgraphnets/ex8/train_elasticity.log
 modelpath	../output/meshgraphnets/ex8/model_elasticity.pth
+inference_output_dir	../output/meshgraphnets/rollout/ex8/model_elasticity
 %   dataset/ex8.h5, ex8_infer.h5 (Geo-FNO Random_UnitCell, 972-node point cloud,
 %   k=6 KNN mesh_edge, static T=1, canonical ntrain=1000/ntest=200 split --
 %   NOT extrapolation, this is a paper-replication benchmark, see
@@ -18,12 +19,19 @@ output_var	1
 feature_loss_weights	1.0
 edge_var	8
 positional_features	0
+%   Architecture uses MeshGraphNets' own general default (15 MP steps,
+%   latent 128 -- Pfaff et al. ICLR'21), since elasticity was never
+%   benchmarked with MeshGraphNets in any paper (Geo-FNO/Transolver only).
+%   Training_epochs 500 matches this dataset's own established convention
+%   from its real published baselines (Geo-FNO elas_geofno.py: epochs=501;
+%   Transolver_Elas.sh implies the same via this repo's Transolver/FNO ex8
+%   configs) rather than a MeshGraphNets-specific number, since none exists.
 '
-message_passing_num	10
-Training_epochs	20
+message_passing_num	15
+Training_epochs	500
 Batch_size	4
 LearningR	0.0001
-Latent_dim	64
+Latent_dim	128
 num_workers	2
 prefetch_factor	2
 pin_memory	True

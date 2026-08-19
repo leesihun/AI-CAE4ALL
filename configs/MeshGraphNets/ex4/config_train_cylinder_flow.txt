@@ -4,6 +4,7 @@ gpu_ids	0
 parallel_mode	ddp
 log_file_dir	../../output/meshgraphnets/ex4/train_cylinder_flow.log
 modelpath	../output/meshgraphnets/ex4/model_cylinder_flow.pth
+inference_output_dir	../output/meshgraphnets/rollout/ex4/model_cylinder_flow
 %   ex4.h5: DeepMind cylinder_flow, 100 trajectories, full 600-step rollout,
 %   per-trajectory mesh. ex4_infer.h5 holds out the 20 trajectories with the
 %   highest inflow speed (the randomized per-trajectory BC) as a genuine
@@ -20,12 +21,22 @@ output_var	3
 feature_loss_weights	1.0, 1.0, 1.0
 edge_var	8
 positional_features	4
+%   Architecture + budget matched to Pfaff et al. ICLR'21 (arXiv:2010.03409):
+%   15 message-passing steps, latent 128, batch 2, LR 1e-4 (paper decays to
+%   1e-6 over 5M steps; this codebase's scheduler is LinearLR warmup ->
+%   CosineAnnealingWarmRestarts instead, a code-level difference, not a
+%   config one). Training_epochs 420 targets the paper's confirmed 10M-step
+%   budget for cylinder_flow scaled to THIS file's 80 train trajectories
+%   (80 traj x 599 transitions / batch 2 = 23,960 steps/epoch;
+%   10,000,000 / 23,960 ~= 420 epochs) -- the paper trains on 1000
+%   trajectories, we intentionally use 100 (see dataset/PUBLIC_DATASETS.md),
+%   so steps/epoch differs and epoch count is scaled to compensate.
 '
-message_passing_num	10
-Training_epochs	20
+message_passing_num	15
+Training_epochs	420
 Batch_size	2
 LearningR	0.0001
-Latent_dim	64
+Latent_dim	128
 num_workers	2
 prefetch_factor	2
 pin_memory	True

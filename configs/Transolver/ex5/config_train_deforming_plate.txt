@@ -12,6 +12,7 @@ gpu_ids                   0
 parallel_mode             ddp
 log_file_dir              ../../output/transolver/ex5/train_deforming_plate.log
 modelpath                 ../output/transolver/ex5/deforming_plate.pth
+inference_output_dir      ../output/transolver/rollout/ex5/deforming_plate
 dataset_dir               ../dataset/ex5.h5
 infer_dataset              ../dataset/ex5_infer.h5
 infer_timesteps           399
@@ -39,7 +40,7 @@ temperature_init          0.5
 temperature_min           0.1
 temperature_max           5.0
 small_output_init         False
-training_epochs           20
+training_epochs           500
 batch_size                2
 learningr                 0.0001
 weight_decay              0.0001
