@@ -259,7 +259,7 @@ def single_worker(config, config_filename='config.txt'):
             if epoch % test_interval == 0 or last_epoch:
                 run_periodic_test(eval_model, test_loader, device, config, epoch, train_dataset)
 
-            dump_memory_snapshot(epoch, mem_recording)
+            dump_memory_snapshot(epoch, mem_recording, config)
 
         print(f"\nTraining finished. Last model saved at epoch {last_saved_epoch} with validation loss {last_valid_loss:.2e}")
     except KeyboardInterrupt:

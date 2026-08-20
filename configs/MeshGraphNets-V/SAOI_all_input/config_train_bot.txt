@@ -40,12 +40,12 @@ Batch_size	2  # per-rank; global batch = 2 x 4 GPUs = 8
 LearningR	0.0001
 Latent_dim	128  # Encoder/processor/decoder hidden width
 num_workers	4  # number of workers for dataloader
-std_noise	0.0  # Gaussian physical-input noise (training only)
+std_noise	0.1  # Gaussian physical-input noise (training only)
 augment_geometry	True  # Training-only random Z-rotation + reflection augmentation
 grad_accum_steps	1  # Gradient accumulation steps
 
 %   Memory / performance
-use_checkpointing	False  #faster; set True if OOM
+use_checkpointing	True  #faster; set True if OOM
 use_amp	True  # Mixed precision training with bfloat16
 use_ema	True  # EMA shadow model for validation/inference
 ema_decay	0.99  # EMA decay factor

@@ -1,3 +1,4 @@
+import os
 import contextlib
 import time
 
@@ -923,7 +924,11 @@ def test_model(model, dataloader, device, config, epoch, dataset=None, output_pr
                 else:
                     filename = f'batch{batch_idx}'
 
-                output_path = f'outputs/{output_prefix}/{gpu_ids}/{str(epoch)}/{filename}.h5'
+                # config['log_dir'] is set by init_log_file() from log_file_dir --
+                # the same directory the log and checkpoint already live in.
+                viz_base = config.get('log_dir', 'outputs')
+                output_path = os.path.join(viz_base, output_prefix, gpu_ids,
+                                           str(epoch), f'{filename}.h5')
 
                 # Convert to numpy
                 predicted_np = predicted.float().cpu().numpy() if hasattr(predicted, 'cpu') else predicted

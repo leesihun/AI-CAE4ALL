@@ -402,7 +402,7 @@ def _train_worker_inner(rank, world_size, config, gpu_ids, config_filename):
             dist.barrier(device_ids=[gpu_id])
 
         if rank == 0:
-            dump_memory_snapshot(epoch, mem_recording)
+            dump_memory_snapshot(epoch, mem_recording, config)
 
     if rank == 0:
         if interrupted:

@@ -9,6 +9,7 @@ PATH_KEYS = frozenset({
     'modelpath',
     'inference_output_dir',
     'hierarchy_cache_dir',
+    'log_dir',
     'log_file_dir',
 })
 

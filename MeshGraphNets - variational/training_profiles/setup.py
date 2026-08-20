@@ -328,6 +328,11 @@ def release_hierarchy_cache(config, *datasets, delete: bool = True) -> None:
     release_cache(cache_path, config)
 
 
+def _artifact_dir(config) -> str:
+    """Where a run's files belong: the log's directory, else the legacy 'outputs'."""
+    return (config or {}).get('log_dir', 'outputs')
+
+
 def start_memory_history(rank: int = 0) -> bool:
     """Opt-in CUDA allocation recording, enabled by env `MGN_MEM_SNAPSHOT=1`.
 
@@ -350,19 +355,20 @@ def start_memory_history(rank: int = 0) -> bool:
     torch.cuda.memory._record_memory_history(max_entries=200_000)
     print("[mem] MGN_MEM_SNAPSHOT=1: recording CUDA allocation history on rank 0.")
     print(f"[mem] snapshots every {int(os.environ.get('MGN_MEM_SNAPSHOT_EVERY', 10))} "
-          f"epochs -> outputs/mem_snapshot_ep*.pickle (view at pytorch.org/memory_viz)")
+          f"epochs -> <log_dir>/mem_snapshot_ep*.pickle (view at pytorch.org/memory_viz)")
     return True
 
 
-def dump_memory_snapshot(epoch: int, enabled: bool) -> None:
+def dump_memory_snapshot(epoch: int, enabled: bool, config=None) -> None:
     """Write the allocation snapshot at the configured epoch cadence."""
     if not enabled:
         return
     every = max(1, int(os.environ.get('MGN_MEM_SNAPSHOT_EVERY', 10)))
     if epoch % every:
         return
-    path = os.path.join('outputs', f'mem_snapshot_ep{epoch}.pickle')
-    os.makedirs('outputs', exist_ok=True)
+    out_dir = _artifact_dir(config)
+    path = os.path.join(out_dir, f'mem_snapshot_ep{epoch}.pickle')
+    os.makedirs(out_dir, exist_ok=True)
     try:
         torch.cuda.memory._dump_snapshot(path)
         print(f"[mem] snapshot written: {path}")
@@ -371,18 +377,32 @@ def dump_memory_snapshot(epoch: int, enabled: bool) -> None:
 
 
 def init_log_file(config, config_filename: str):
-    """Create the epoch log file (with the config embedded) and return its path, or None."""
+    """Create the epoch log file (with the config embedded) and return its path, or None.
+
+    Also records `config['log_dir']` -- the directory the log lives in, which is
+    where `modelpath` normally points too. The periodic train/test visualization
+    dumps and the memory snapshots are written there instead of a bare
+    cwd-relative 'outputs/', so every artifact of a run lands together.
+
+    normpath collapses the leading 'outputs/' against the '../..' that configs
+    use to escape it; without that, makedirs materializes a stray empty
+    'outputs/' in the repo on the way to the real destination.
+    """
     log_file_dir = config.get('log_file_dir')
     if not log_file_dir:
         return None
 
-    log_file = 'outputs/' + log_file_dir
+    log_file = os.path.normpath('outputs/' + log_file_dir)
+    config['log_dir'] = os.path.dirname(log_file)
     os.makedirs(os.path.dirname(log_file), exist_ok=True)
 
-    with open(log_file, 'w') as f:
+    # Explicit utf-8 both ways: load_config() already reads the config as utf-8,
+    # and a config carrying non-ASCII comments would otherwise raise
+    # UnicodeDecodeError here on a non-utf-8 default locale (e.g. Windows cp949).
+    with open(log_file, 'w', encoding='utf-8') as f:
         f.write("Training epoch log file\n")
         f.write(f"Time: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
         f.write(f"Log file absolute path: {os.path.abspath(log_file)}\n")
-        with open(config_filename, 'r') as fc:
+        with open(config_filename, 'r', encoding='utf-8') as fc:
             f.write(fc.read())
     return log_file
