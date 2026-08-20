@@ -29,7 +29,7 @@
 #   CHECK_ONLY      prepare + validate the campaign without training (default: 0)
 #   LOG_ROOT        campaign root (default: output/benchmarks_all/train_runs)
 #   RUN_ID          run directory name (default: timestamp + PID)
-#   STALL_TIMEOUT_MIN       no log growth for this long -> kill the job (default: 30)
+#   STALL_TIMEOUT_MIN       no log growth for this long -> kill the job (default: 60)
 #   VRAM_TARGET_UTIL_PERCENT admit a new job onto a GPU only while its current
 #                           usage is below this % of total VRAM (default: 50)
 #   MAX_CONCURRENCY_PER_GPU hard concurrency cap per GPU (default: 3)
@@ -43,7 +43,7 @@
 #   CHECK_ONLY=1 bash configs/benchmarks_all/train_all.sh
 #   GPUS="0 1" bash configs/benchmarks_all/train_all.sh
 #   LABELS="meshgraphnets_ex8 transolver_ex8" bash configs/benchmarks_all/train_all.sh
-#   STALL_TIMEOUT_MIN=45 MAX_CONCURRENCY_PER_GPU=2 bash configs/benchmarks_all/train_all.sh
+#   STALL_TIMEOUT_MIN=90 MAX_CONCURRENCY_PER_GPU=2 bash configs/benchmarks_all/train_all.sh
 
 set -uo pipefail
 

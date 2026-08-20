@@ -34,7 +34,7 @@ PREFLIGHT_FLAGS, CHECK_ONLY, LOG_ROOT, RUN_ID); each also has an equivalent
 --flag that takes precedence. New knobs (env var + --flag), defaults tuned
 for a multi-hour campaign:
 
-    STALL_TIMEOUT_MIN       (default 30)   no log growth for this long -> kill
+    STALL_TIMEOUT_MIN       (default 60)   no log growth for this long -> kill
     VRAM_TARGET_UTIL_PERCENT (default 50)  admit a new job onto a GPU only
                                             while its current usage is below
                                             this % of total VRAM (a % target
@@ -100,7 +100,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     p.add_argument("--check-only", default=_env("CHECK_ONLY", "0"))
     p.add_argument("--log-root", default=os.environ.get("LOG_ROOT"))
     p.add_argument("--run-id", default=_env("RUN_ID", f"{time.strftime('%Y%m%d_%H%M%S')}_{os.getpid()}"))
-    p.add_argument("--stall-timeout-min", type=float, default=float(_env("STALL_TIMEOUT_MIN", "30")))
+    p.add_argument("--stall-timeout-min", type=float, default=float(_env("STALL_TIMEOUT_MIN", "60")))
     p.add_argument("--vram-target-util-percent", type=float, default=float(_env("VRAM_TARGET_UTIL_PERCENT", "50")))
     p.add_argument("--max-concurrency-per-gpu", type=int, default=int(_env("MAX_CONCURRENCY_PER_GPU", "3")))
     p.add_argument("--admit-warmup-sec", type=float, default=float(_env("ADMIT_WARMUP_SEC", "90")))
