@@ -40,7 +40,7 @@ Batch_size	2  # per-rank; global batch = 2 x 4 GPUs = 8
 LearningR	0.0001
 Latent_dim	128  # Encoder/processor/decoder hidden width
 num_workers	4  # number of workers for dataloader
-std_noise	0.1  # Gaussian physical-input noise (training only)
+std_noise	0.0  # Gaussian physical-input noise (training only)
 augment_geometry	True  # Training-only random Z-rotation + reflection augmentation
 grad_accum_steps	1  # Gradient accumulation steps
 
@@ -81,8 +81,8 @@ use_vae	True  # Enable posterior encoder + stochastic latent path (variational l
 vae_latent_dim	128  # Posterior/global latent width (must match checkpoint)
 vae_mp_layers	5  # Posterior graph-encoder message-passing depth
 recon_loss	mse  # huber or mse reconstruction objective
-alpha_recon	1000  # Reconstruction-loss multiplier
-lambda_mmd	0.2  # Aggregate-posterior MMD loss multiplier
+alpha_recon	10  # Reconstruction-loss multiplier
+lambda_mmd	1  # Aggregate-posterior MMD loss multiplier
 mmd_bandwidth	median  # MMD bandwidth mode (fixed or median)
 vae_graph_aware	True  # Include graph/input context when encoding the posterior
 beta_aux	1.0  # Auxiliary latent-statistics prediction loss weight
