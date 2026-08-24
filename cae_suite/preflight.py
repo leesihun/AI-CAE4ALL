@@ -13,6 +13,15 @@ from .registry import MethodRegistry, ResolvedMethod
 from .settings import LocalSettings
 from .specs import SpecValidationContext
 
+# Every probe below spawns a fresh interpreter in the method venv that imports
+# torch (and for the checkpoint probe, torch.load). On a machine already running
+# training jobs that start-up alone can take far longer than the original 30s,
+# and a probe timeout is reported as a hard ENV-PYTHON-002 error that rejects an
+# otherwise valid config. Concurrent Studio runs made that a routine false
+# negative, so the budget is generous while still bounded.
+PROBE_TIMEOUT_SECONDS = 180
+
+
 
 @dataclass(frozen=True)
 class PreflightOptions:
@@ -136,7 +145,7 @@ def _probe_environment(
             cwd=repository_root,
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=PROBE_TIMEOUT_SECONDS,
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
@@ -202,7 +211,7 @@ def _probe_dataset(
             cwd=result.resolved.repository_root,
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=PROBE_TIMEOUT_SECONDS,
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
@@ -340,7 +349,7 @@ def _probe_native(result: PreflightResult, suite_root: Path) -> None:
             cwd=result.resolved.repository_root,
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=PROBE_TIMEOUT_SECONDS,
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
@@ -394,7 +403,7 @@ def _probe_checkpoints(result: PreflightResult, suite_root: Path) -> None:
                 cwd=result.resolved.repository_root,
                 capture_output=True,
                 text=True,
-                timeout=60,
+                timeout=PROBE_TIMEOUT_SECONDS,
                 check=False,
             )
         except (OSError, subprocess.TimeoutExpired) as exc:

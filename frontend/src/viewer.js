@@ -675,7 +675,7 @@ export async function renderRealArtifactSample(sampleIndex, feature = null, time
   showViewerMessage(`Reading actual sample ${selected.id}…`);
   try {
     const sample = await apiRequest(
-      `/api/preview/sample?path=${encodeURIComponent(artifact.path)}&sample=${encodeURIComponent(selected.id)}&feature=${requestedFeature}&timestep=${timestep}`
+      `/api/preview/sample?path=${encodeURIComponent(artifact.path)}&sample=${encodeURIComponent(selected.id)}&feature=${requestedFeature}&timestep=${timestep}${artifact.truth_path ? `&truth=${encodeURIComponent(artifact.truth_path)}` : ""}`
     );
     state.realArtifact.currentSample = sample;
     // A new sample chooses its own orientation; reloading a feature or
@@ -706,6 +706,12 @@ export async function renderRealArtifactSample(sampleIndex, feature = null, time
     <section class="info-block"><div class="section-title">Provenance</div><p>source=${escapeHtml(sample.path)}<br>sample=${escapeHtml(sample.sample)}<br>reader=${escapeHtml(sample.source_kind)}<br>nodes=${sample.returned_points.toLocaleString()} / ${sample.total_points.toLocaleString()}${sample.metadata?.node_reduction ? ` (${escapeHtml(sample.metadata.node_reduction)})` : ""}${topology}</p></section>`;
     $("#loadRealField")?.addEventListener("click", () =>
       renderRealArtifactSample(sampleIndex, Number($("#realFeature").value), Number($("#realTimestep").value))
+    );
+    // Picking a channel is a request to see it. Requiring a separate Load click
+    // afterwards is a step with no decision in it, and silently leaves the view
+    // showing the previous channel while the dropdown claims otherwise.
+    $("#realFeature")?.addEventListener("change", () =>
+      renderRealArtifactSample(sampleIndex, Number($("#realFeature").value), Number($("#realTimestep").value || sample.timestep))
     );
     $$("[data-load-feature]").forEach(button =>
       button.addEventListener("click", () =>
@@ -765,6 +771,13 @@ function configuredPreviewPath(node, spec) {
   if (spec.isModel) {
     return normalizeConfiguredPath(node.config.dataset_dir || node.config.infer_dataset);
   }
+  // A finished run records exactly where its predictions went. Two reasons this
+  // value is returned raw: it is a directory of per-sample result files rather
+  // than a single file, so it must skip the extension test below, and it is
+  // already suite-relative -- normalizeConfiguredPath exists to strip a method
+  // repo's "../" prefixes and would slice "MeshGraphNets/outputs/rollout" down
+  // to "outputs/rollout" at the first known root, which resolves to nothing.
+  if (node.config.results_path) return String(node.config.results_path).trim();
   const candidate = normalizeConfiguredPath(
     node.config.path
     || node.config.infer_dataset
@@ -785,9 +798,22 @@ function catalogKind(node, spec) {
   return "";
 }
 
-async function loadPreviewCatalog(path, limit = null) {
+/**
+ * The dataset an Inference block predicted from, if the graph knows it.
+ *
+ * A rollout result contains only the prediction; naming its source dataset is
+ * what lets the viewer show truth and error too. It is optional everywhere --
+ * without it the prediction still renders on its own.
+ */
+function truthForNode(node) {
+  if (!node || node.type !== "run.inference") return "";
+  return String(node.config?.dataset_path || "").trim();
+}
+
+async function loadPreviewCatalog(path, limit = null, truth = "") {
   const limitQuery = limit == null ? "" : `&limit=${encodeURIComponent(limit)}`;
-  const catalog = await apiRequest(`/api/preview/samples?path=${encodeURIComponent(path)}${limitQuery}`);
+  const truthQuery = truth ? `&truth=${encodeURIComponent(truth)}` : "";
+  const catalog = await apiRequest(`/api/preview/samples?path=${encodeURIComponent(path)}${limitQuery}${truthQuery}`);
   if (!catalog.samples?.length) throw new Error(`${path} contains no visualizable samples.`);
   return catalog;
 }
@@ -796,10 +822,21 @@ async function resolvePreview(node, spec) {
   const configured = configuredPreviewPath(node, spec);
   if (configured) {
     try {
-      return await loadPreviewCatalog(configured);
+      return await loadPreviewCatalog(configured, null, truthForNode(node));
     } catch (error) {
       if (node.type === "source.cad" || node.type === "source.hdf5") throw error;
     }
+  }
+
+  if (node.type === "run.inference") {
+    // Only ever show THIS block's own results. Falling back to the newest run in
+    // the repository looked helpful and was actively misleading: the viewer
+    // would render some other model's predictions under this block's name, with
+    // nothing on screen saying they were unrelated.
+    if (node.config.results_path) {
+      throw new Error(`The recorded results for this block (${node.config.results_path}) could not be read — they may have been moved or deleted. Run the block again to regenerate them.`);
+    }
+    throw new Error("No results yet. Run this Inference block to predict with the connected dataset and checkpoint; its results then open here.");
   }
 
   const kind = catalogKind(node, spec);

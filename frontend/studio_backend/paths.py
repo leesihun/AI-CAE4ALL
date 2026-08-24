@@ -75,14 +75,33 @@ def file_record(path: Path, kind: str) -> dict[str, Any]:
     }
 
 
-def walk_files(roots: tuple[Path, ...], suffixes: set[str], kind: str) -> dict[str, Any]:
+def walk_files(
+    roots: tuple[Path, ...],
+    suffixes: set[str],
+    kind: str,
+    exclude: tuple[Path, ...] = (),
+) -> dict[str, Any]:
+    """Catalog matching files under `roots`, newest first, capped at FILE_LIMIT.
+
+    The cap is applied *after* ranking by mtime, never during the walk. Cutting
+    the walk short instead meant the first directory os.walk happened to reach
+    won `FILE_LIMIT` outright: `frontend/runtime/configs/` accumulates one .txt
+    per config save and per preflight (2 000+ of them in a working session), so
+    every artifact picker in the GUI ended up showing nothing but the Studio's
+    own scratch configs -- no dataset, no CSV, no report from `output/` could
+    ever appear, however recent.
+    """
     records: list[dict[str, Any]] = []
     visited = 0
+    excluded = {path.resolve() for path in exclude}
     for root in roots:
         if not root.exists():
             continue
         for directory, dirs, files in os.walk(root):
             dirs[:] = [name for name in dirs if name not in SKIP_DIRS]
+            if excluded and Path(directory).resolve() in excluded:
+                dirs[:] = []
+                continue
             for name in files:
                 visited += 1
                 path = Path(directory) / name
@@ -92,8 +111,30 @@ def walk_files(roots: tuple[Path, ...], suffixes: set[str], kind: str) -> dict[s
                     records.append(file_record(path, kind))
                 except OSError:
                     continue
-                if len(records) >= FILE_LIMIT:
-                    records.sort(key=lambda item: item["modified"], reverse=True)
-                    return {"items": records, "truncated": True, "visited": visited}
     records.sort(key=lambda item: item["modified"], reverse=True)
-    return {"items": records, "truncated": False, "visited": visited}
+    truncated = len(records) > FILE_LIMIT
+    return {"items": records[:FILE_LIMIT], "truncated": truncated, "visited": visited}
+
+
+def result_roots() -> tuple[Path, ...]:
+    """Every directory a run may legitimately have written results into.
+
+    Analysis endpoints used to allow only `dataset/`, `output/`, `outputs/` and
+    the runtime dir. Native inference writes to `<MethodRepo>/outputs/...`, which
+    is under none of them, so evaluating a real inference run failed with "Path
+    is outside the allowed AI-CAE4ALL roots" no matter what the user selected.
+
+    Kept as an explicit allowlist of data locations rather than opening the whole
+    suite root: these endpoints read arbitrary caller-supplied paths, and there
+    is no reason for them to reach source code or configs.
+    """
+    roots = [
+        SUITE_ROOT / "dataset",
+        SUITE_ROOT / "output",
+        SUITE_ROOT / "outputs",
+        RUNTIME_ROOT,
+    ]
+    for item in SUITE_ROOT.iterdir():
+        if item.is_dir() and item.name not in SKIP_DIRS:
+            roots.extend([item / "outputs", item / "output"])
+    return tuple(root for root in roots if root.is_dir())

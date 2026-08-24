@@ -77,6 +77,14 @@ async function assertViewportPainted(page, message) {
 (async () => {
   const browser = await chromium.launch({ channel: "chrome", headless: true });
   const page = await browser.newPage({ viewport: { width: 1600, height: 960 } });
+  // The studio shows a one-time orientation card to first-run users, and every
+  // smoke run starts from a clean browser profile -- so without this it would
+  // meet that modal on every launch. Seed the "already welcomed" flag instead of
+  // clicking the card away, so the runs exercise the studio a returning user sees.
+  await page.addInitScript(() => {
+    try { localStorage.setItem("ai-cae4all.studio.welcomed.v1", "1"); } catch { /* storage blocked */ }
+  });
+
   const browserErrors = [];
   page.on("pageerror", error => browserErrors.push(`pageerror: ${error.message}`));
   page.on("console", message => {

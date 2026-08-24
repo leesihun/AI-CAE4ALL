@@ -32,7 +32,10 @@ export async function refreshNavCounts(prefetched = null) {
     const active = jobs.items.filter(job => ["queued", "running"].includes(job.status)).length;
     const navCount = $(".nav-count");
     if (navCount) {
-      navCount.textContent = String(jobs.items.length);
+      // A badge reads as "needs attention", so it counts queued/running jobs only and
+      // disappears at zero; the all-time total stays available in the tooltip.
+      navCount.textContent = String(active);
+      navCount.style.display = active ? "" : "none";
       navCount.title = active ? `${active} active · ${jobs.items.length} total` : `${jobs.items.length} total runs`;
     }
     return jobs;
@@ -57,6 +60,9 @@ export async function connectRuntime(onConnected) {
       const local = MODEL_CATALOG[model.model];
       if (!local) return;
       local.keys = model.known_keys;
+      // The live MethodSpec is authoritative for which fields the launcher will
+      // actually reject a run for; the constants.js map is only an offline fallback.
+      local.required = model.required;
       local.modes = model.modes;
       local.dataset = model.dataset_kind || local.dataset;
       local.backend = model;
@@ -68,10 +74,12 @@ export async function connectRuntime(onConnected) {
     $(".coverage-pill").textContent = `${state.api.models.length} live routes · ${state.api.models.reduce((sum, model) => sum + model.modes.length, 0)} route modes`;
     refreshNavCounts(jobs);
     onConnected?.();
-    const activeJob = jobs.items.find(job => ["queued", "running"].includes(job.status));
-    if (activeJob) {
+    // Rejoin every job still in flight, not just the first — several pipelines
+    // can be running when the page is (re)opened.
+    const activeJobs = jobs.items.filter(job => ["queued", "running"].includes(job.status));
+    if (activeJobs.length) {
       const { beginCommandJob } = await import("./run.js");
-      beginCommandJob(activeJob);
+      activeJobs.forEach((job, index) => beginCommandJob(job, { focus: index === activeJobs.length - 1 }));
     }
     return true;
   } catch (error) {
@@ -82,4 +90,50 @@ export async function connectRuntime(onConnected) {
     $("#savedState").textContent = "Runtime offline · use START_STUDIO.bat";
     return false;
   }
+}
+
+/**
+ * What a saved .pth records about itself, fetched once per path.
+ *
+ * An Inference block used to be dead unless the model block that trained the
+ * checkpoint was also on the canvas -- the graph carried the file but nothing
+ * knew which method to launch or what architecture the weights expect. The
+ * checkpoint knows both, and every native inference path already overlays its
+ * `model_config` over the config file, so reading it here reproduces exactly
+ * what the run would have used.
+ *
+ * Returns null (never throws) when the runtime is offline or the file cannot be
+ * read; callers treat that as "not resolved yet", not as an error.
+ */
+export function checkpointMetadata(path) {
+  const key = String(path || "").trim();
+  if (!key) return null;
+  // Deliberately NOT async: an async function hands back a *new* promise on
+  // every call, so a caller that subscribes to the result once per autofill
+  // pass ends up with an unbounded fan-out of callbacks -- which re-enter
+  // autofill, subscribe again, and take the renderer down with them. Returning
+  // the one shared in-flight promise (or the settled record) keeps it linear.
+  if (state.checkpointMeta.has(key)) return state.checkpointMeta.get(key);
+  if (!state.api.connected) return null;
+  const pending = apiRequest(`/api/checkpoint?path=${encodeURIComponent(key)}`, { allowError: true })
+    .then(payload => {
+      const record = payload?.ok
+        ? payload
+        : { ok: false, error: payload?.error || `HTTP ${payload?.httpStatus || "error"}`, path: key };
+      state.checkpointMeta.set(key, record);
+      return record;
+    })
+    .catch(error => {
+      const record = { ok: false, error: error.message, path: key };
+      state.checkpointMeta.set(key, record);
+      return record;
+    });
+  state.checkpointMeta.set(key, pending);
+  return pending;
+}
+
+/** The resolved record for `path`, or null while it is still in flight. */
+export function checkpointMetaNow(path) {
+  const cached = state.checkpointMeta.get(String(path || "").trim());
+  return cached && !(cached instanceof Promise) ? cached : null;
 }

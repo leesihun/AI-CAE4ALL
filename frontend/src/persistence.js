@@ -1,4 +1,4 @@
-import { BLOCK_SPECS } from "./constants.js";
+import { BLOCK_SPECS, FIT_MIN_ZOOM, MAX_ZOOM } from "./constants.js";
 import { state, registerMutationHook } from "./state.js";
 import { applyGraphAutofill } from "./autofill.js";
 
@@ -28,7 +28,7 @@ export function pipelineDocument() {
     view: {
       x: finite(state.view.x, 22),
       y: finite(state.view.y, 34),
-      scale: Math.min(1.6, Math.max(.45, finite(state.view.scale, .9)))
+      scale: Math.min(MAX_ZOOM, Math.max(FIT_MIN_ZOOM, finite(state.view.scale, .9)))
     },
     nodes: state.nodes.map(node => ({
       id: node.id,
@@ -147,7 +147,7 @@ export function applyPipelineDocument(payload) {
   state.view = {
     x: finite(payload.view?.x, 22),
     y: finite(payload.view?.y, 34),
-    scale: Math.min(1.6, Math.max(.45, finite(payload.view?.scale, .9)))
+    scale: Math.min(MAX_ZOOM, Math.max(FIT_MIN_ZOOM, finite(payload.view?.scale, .9)))
   };
   applyGraphAutofill();
   const nameInput = document.getElementById("pipelineName");

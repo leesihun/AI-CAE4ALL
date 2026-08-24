@@ -1,5 +1,38 @@
+import { MESH_PREVIEW, FIELD_PREVIEW } from "./previewdata.js";
+
 function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]));
+}
+
+// The Studio's field ramp, shared with the artifact viewer.
+const FIELD_STOPS = ["#2759a7", "#32b5c3", "#d9e56c", "#f09b38", "#c23d3e"];
+
+function fieldRampStops(id) {
+  return `<linearGradient id="${id}" x1="0" y1="1" x2="0" y2="0">${
+    FIELD_STOPS.map((color, index) =>
+      `<stop offset="${(index / (FIELD_STOPS.length - 1)).toFixed(2)}" stop-color="${color}"/>`).join("")
+  }</linearGradient>`;
+}
+
+/**
+ * A loss curve shaped like a real one — fast early drop into a noisy plateau, with
+ * validation sitting slightly above training — rather than the two smooth straight
+ * lines the old preview drew. Deterministic, so previews never flicker on re-render.
+ */
+function lossCurve(count, amplitude, floor, decay, phase) {
+  return Array.from({ length: count }, (unused, index) => {
+    const t = index / (count - 1);
+    const envelope = Math.exp(-decay * t);
+    return floor + amplitude * envelope * (1 + 0.09 * Math.sin(index * 1.9 + phase) * envelope);
+  });
+}
+
+function polyline(values, x0, y0, plotWidth, plotHeight, maximum) {
+  return values.map((value, index) => {
+    const x = x0 + (index / (values.length - 1)) * plotWidth;
+    const y = y0 + plotHeight - (value / maximum) * plotHeight;
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(" ");
 }
 
 /**
@@ -41,11 +74,20 @@ export function previewGraphic(kind, seed = 0, large = false) {
   const height = large ? 410 : 80;
   const offset = Number(seed) % 5;
   if (kind === "field") {
-    return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Field prediction preview">
-      <defs><linearGradient id="field-${seed}" x1="0" x2="1"><stop stop-color="#2759a7"/><stop offset=".34" stop-color="#32b5c3"/><stop offset=".62" stop-color="#d9e56c"/><stop offset=".84" stop-color="#f09b38"/><stop offset="1" stop-color="#c23d3e"/></linearGradient></defs>
-      <rect width="${width}" height="${height}" fill="${large ? "transparent" : "#22332e"}"/>
-      <path d="${large ? "M110 248 225 105 507 144 570 222 447 247 405 326 187 318Z M207 218 265 165 328 186 281 240Z" : "M24 55 64 19 171 27 199 48 153 54 137 73 53 71Z M62 50 82 34 110 39 94 55Z"}" fill="url(#field-${seed})" stroke="rgba(255,255,255,.7)" stroke-width="${large ? 2 : .8}" fill-rule="evenodd"/>
-      <g opacity=".4" stroke="#fff" stroke-width="${large ? 1.2 : .45}">${large ? '<path d="M110 248 225 105 281 240 187 318M225 105l103 81 179-42M328 186l77 140M281 240l166 7M187 318l218 8M507 144l-60 103 123-25"/>' : '<path d="M24 55 64 19 94 55 53 71M64 19l46 20 61-12M110 39l27 34M94 55l59-1M53 71l84 2M171 27l-18 27 46-6"/>'}</g>
+    // A real ex9 plasticity field rasterised through the Studio ramp, plus the
+    // colour bar that makes it readable as a contour plot instead of decoration.
+    const bar = large ? 16 : 7;
+    const inset = large ? 26 : 7;
+    const plotWidth = width - inset * 2 - bar - (large ? 46 : 12);
+    return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Predicted field preview from ex9 plasticity">
+      <defs>${fieldRampStops(`fieldbar-${seed}`)}</defs>
+      <rect width="${width}" height="${height}" fill="${large ? "#101d19" : "#16241f"}"/>
+      <image href="${large ? FIELD_PREVIEW.large : FIELD_PREVIEW.small}" x="${inset}" y="${inset}"
+             width="${plotWidth}" height="${height - inset * 2}" preserveAspectRatio="xMidYMid meet"/>
+      <rect x="${width - inset - bar}" y="${inset}" width="${bar}" height="${height - inset * 2}"
+            rx="${large ? 4 : 2}" fill="url(#fieldbar-${seed})" stroke="rgba(255,255,255,.35)" stroke-width="${large ? 1.2 : .5}"/>
+      ${large ? `<text x="${width - inset - bar - 8}" y="${inset + 10}" fill="rgba(255,255,255,.82)" font-size="13" text-anchor="end">${FIELD_PREVIEW.max}</text>
+        <text x="${width - inset - bar - 8}" y="${height - inset - 2}" fill="rgba(255,255,255,.82)" font-size="13" text-anchor="end">${FIELD_PREVIEW.min}</text>` : ""}
     </svg>`;
   }
   if (kind === "latent") {
@@ -67,13 +109,108 @@ export function previewGraphic(kind, seed = 0, large = false) {
     </svg>`;
   }
   if (kind === "training") {
-    const points = large ? "46,335 110,290 172,255 238,226 301,192 365,168 428,147 492,119 555,103 632,82" : "10,68 31,58 52,50 74,44 96,35 118,30 141,24 165,20 188,15 213,11";
-    const points2 = large ? "46,360 110,320 172,285 238,260 301,229 365,207 428,183 492,166 555,141 632,126" : "10,73 31,64 52,57 74,51 96,45 118,39 141,34 165,30 188,25 213,21";
-    return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Training metrics preview">
-      <rect width="${width}" height="${height}" fill="${large ? "transparent" : "#f1f4ef"}"/>
-      <g stroke="#dbe0da" stroke-width="1">${[1,2,3,4].map(i => `<path d="M0 ${i*height/5}H${width}"/>`).join("")}</g>
-      <polyline points="${points}" fill="none" stroke="#19715e" stroke-width="${large ? 5 : 2}" stroke-linecap="round" stroke-linejoin="round"/>
-      <polyline points="${points2}" fill="none" stroke="#b97838" stroke-width="${large ? 4 : 1.6}" stroke-linecap="round" stroke-linejoin="round"/>
+    // The old preview drew two straight lines rising to the right, which is the
+    // wrong shape for a loss and read as a generic "chart" sticker. This is a real
+    // decay-into-plateau with validation above training, on proper axes.
+    const padLeft = large ? 54 : 20;
+    const padBottom = large ? 40 : 14;
+    const padTop = large ? 22 : 7;
+    const padRight = large ? 22 : 8;
+    const plotWidth = width - padLeft - padRight;
+    const plotHeight = height - padTop - padBottom;
+    const count = large ? 46 : 26;
+    const train = lossCurve(count, 1, 0.075, 3.4, 0);
+    const valid = lossCurve(count, 1.06, 0.135, 3.0, 1.7);
+    const maximum = Math.max(...train, ...valid) * 1.08;
+    return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Training and validation loss preview">
+      <rect width="${width}" height="${height}" fill="${large ? "#fbfcfa" : "#f4f6f2"}"/>
+      <g stroke="#dfe4dd" stroke-width="${large ? 1.2 : .7}">
+        ${[0, 1, 2, 3].map(i => {
+          const y = padTop + (i / 3) * plotHeight;
+          return `<path d="M${padLeft} ${y.toFixed(1)}H${width - padRight}"/>`;
+        }).join("")}
+      </g>
+      <path d="M${padLeft} ${padTop}V${padTop + plotHeight}H${width - padRight}" fill="none" stroke="#b6bfb8" stroke-width="${large ? 1.6 : .9}"/>
+      <polyline points="${polyline(valid, padLeft, padTop, plotWidth, plotHeight, maximum)}" fill="none"
+                stroke="#b97838" stroke-width="${large ? 3.4 : 1.5}" stroke-linecap="round" stroke-linejoin="round"/>
+      <polyline points="${polyline(train, padLeft, padTop, plotWidth, plotHeight, maximum)}" fill="none"
+                stroke="#19715e" stroke-width="${large ? 4 : 1.8}" stroke-linecap="round" stroke-linejoin="round"/>
+      ${large ? `<text x="${padLeft - 10}" y="${padTop + 6}" fill="#6c7872" font-size="13" text-anchor="end">loss</text>
+        <text x="${padLeft}" y="${height - 12}" fill="#6c7872" font-size="13">epoch</text>
+        <g font-size="13"><rect x="${width - 190}" y="${padTop + 4}" width="16" height="4" rx="2" fill="#19715e"/>
+        <text x="${width - 168}" y="${padTop + 11}" fill="#4c5a54">train</text>
+        <rect x="${width - 116}" y="${padTop + 4}" width="16" height="4" rx="2" fill="#b97838"/>
+        <text x="${width - 94}" y="${padTop + 11}" fill="#4c5a54">validation</text></g>` : ""}
+    </svg>`;
+  }
+  if (kind === "parity") {
+    // Predicted vs. ground truth around y=x — what an evaluation block actually
+    // produces. It previously borrowed the training-loss curve, which is a
+    // different quantity entirely.
+    const pad = large ? 34 : 9;
+    const box = Math.min(width, height) - pad * 2;
+    const x0 = (width - box) / 2;
+    const y0 = (height - box) / 2;
+    const dots = Array.from({ length: large ? 90 : 34 }, (unused, i) => {
+      const t = (i + 0.5) / (large ? 90 : 34);
+      const spread = 0.045 * Math.sin(i * 2.7) + 0.028 * Math.cos(i * 1.3);
+      const px = t;
+      const py = Math.min(0.99, Math.max(0.01, t + spread));
+      return `<circle cx="${(x0 + px * box).toFixed(1)}" cy="${(y0 + (1 - py) * box).toFixed(1)}" r="${large ? 4 : 1.6}" fill="#3f6f91" opacity=".72"/>`;
+    }).join("");
+    return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Predicted versus ground-truth parity preview">
+      <rect width="${width}" height="${height}" fill="${large ? "#fbfcfa" : "#f4f6f2"}"/>
+      <rect x="${x0}" y="${y0}" width="${box}" height="${box}" fill="none" stroke="#d5dcd6" stroke-width="${large ? 1.4 : .8}"/>
+      <path d="M${x0} ${y0 + box}L${x0 + box} ${y0}" stroke="#9aa8a1" stroke-width="${large ? 2 : 1}" stroke-dasharray="${large ? "7 5" : "3 2"}"/>
+      ${dots}
+      ${large ? `<text x="${x0}" y="${y0 + box + 24}" fill="#6c7872" font-size="13">ground truth</text>
+        <text x="${x0 - 8}" y="${y0 + 4}" fill="#6c7872" font-size="13" text-anchor="end">predicted</text>` : ""}
+    </svg>`;
+  }
+  if (kind === "ranking") {
+    // Model comparison is a ranking, not a time series.
+    const rows = large ? 5 : 4;
+    const pad = large ? 30 : 8;
+    const rowH = (height - pad * 2) / rows;
+    const labelW = large ? 96 : 30;
+    const maxW = width - pad * 2 - labelW;
+    const values = [1, 0.78, 0.61, 0.44, 0.29];
+    return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Model ranking preview">
+      <rect width="${width}" height="${height}" fill="${large ? "#fbfcfa" : "#f4f6f2"}"/>
+      ${Array.from({ length: rows }, (unused, i) => {
+        const y = pad + i * rowH + rowH * 0.18;
+        const h = rowH * 0.62;
+        return `<rect x="${pad + labelW}" y="${y.toFixed(1)}" width="${(maxW * values[i]).toFixed(1)}" height="${h.toFixed(1)}"
+                  rx="${large ? 4 : 2}" fill="${i === 0 ? "#19715e" : "#7ba394"}" opacity="${i === 0 ? 1 : 0.55 + (rows - i) * 0.08}"/>
+                <rect x="${pad + labelW - (large ? 74 : 24)}" y="${(y + h * 0.28).toFixed(1)}" width="${large ? 62 : 20}" height="${large ? 6 : 3}"
+                  rx="3" fill="#c3ccc6"/>`;
+      }).join("")}
+    </svg>`;
+  }
+  if (kind === "pareto") {
+    // Objective space with a highlighted non-dominated front.
+    const pad = large ? 34 : 9;
+    const w = width - pad * 2;
+    const h = height - pad * 2;
+    const frontCount = large ? 7 : 5;
+    const front = Array.from({ length: frontCount }, (unused, i) => {
+      const t = i / (frontCount - 1);
+      return [pad + t * w, pad + h - (1 - Math.pow(t, 1.7)) * h * 0.92];
+    });
+    const cloud = Array.from({ length: large ? 44 : 20 }, (unused, i) => {
+      const t = ((i * 37) % 100) / 100;
+      const lift = ((i * 61) % 100) / 100;
+      const x = pad + t * w;
+      const y = pad + h - (1 - Math.pow(t, 1.7)) * h * 0.92 + lift * h * 0.42;
+      return `<circle cx="${x.toFixed(1)}" cy="${Math.min(y, pad + h).toFixed(1)}" r="${large ? 4 : 1.7}" fill="#9aa8a1" opacity=".6"/>`;
+    }).join("");
+    return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Pareto front preview">
+      <rect width="${width}" height="${height}" fill="${large ? "#fbfcfa" : "#f4f6f2"}"/>
+      <path d="M${pad} ${pad}V${pad + h}H${pad + w}" fill="none" stroke="#c3ccc6" stroke-width="${large ? 1.6 : .9}"/>
+      ${cloud}
+      <polyline points="${front.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(" ")}" fill="none"
+                stroke="#b76b2a" stroke-width="${large ? 3 : 1.4}" stroke-dasharray="${large ? "8 5" : "3 2"}"/>
+      ${front.map(([x, y]) => `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${large ? 6 : 2.6}" fill="#b76b2a" stroke="#fff" stroke-width="${large ? 2 : .8}"/>`).join("")}
     </svg>`;
   }
   if (kind === "parameters") {
@@ -86,24 +223,41 @@ export function previewGraphic(kind, seed = 0, large = false) {
     </svg>`;
   }
   if (kind === "checkpoint") {
-    return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Saved model preview">
-      <rect width="${width}" height="${height}" fill="${large ? "transparent" : "#efebf2"}"/>
-      ${[0,1,2,3,4,5].map(i => {
-        const x = large ? 86+i*86 : 28+i*31;
-        const h = large ? 110+(i%3)*35 : 26+(i%3)*9;
-        return `<rect x="${x}" y="${height/2-h/2}" width="${large ? 45 : 15}" height="${h}" rx="${large ? 7 : 2}" fill="${i%2 ? "#8d70a2" : "#6f5290"}" opacity="${.65+i*.05}"/>`;
-      }).join("")}
+    // Reads as "a trained network on disk". The old version was six bars of
+    // arbitrary height, which said nothing about what a .pth actually holds.
+    const layers = [4, 6, 6, 3];
+    const gap = large ? 150 : 48;
+    const x0 = large ? 130 : 42;
+    const r = large ? 11 : 3.6;
+    const nodes = layers.map((n, li) => Array.from({ length: n }, (unused, ni) => ({
+      x: x0 + li * gap,
+      y: height / 2 + (ni - (n - 1) / 2) * (large ? 62 : 17)
+    })));
+    const links = nodes.slice(0, -1).flatMap((layer, li) =>
+      layer.flatMap(a => nodes[li + 1].map(bNode =>
+        `<path d="M${a.x} ${a.y}L${bNode.x} ${bNode.y}"/>`))).join("");
+    return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Saved model checkpoint preview">
+      <rect width="${width}" height="${height}" fill="${large ? "#f4f1f7" : "#efebf2"}"/>
+      <g stroke="#b4a0c6" stroke-width="${large ? .9 : .35}" opacity=".75" fill="none">${links}</g>
+      ${nodes.flat().map(node => `<circle cx="${node.x}" cy="${node.y}" r="${r}" fill="#7a5c96" stroke="#fff" stroke-width="${large ? 2.4 : .8}"/>`).join("")}
     </svg>`;
   }
   if (kind === "candidates") {
-    return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="CAD candidate gallery preview">
-      <rect width="${width}" height="${height}" fill="${large ? "transparent" : "#eef1e8"}"/>
-      ${[0,1,2].map(i => {
-        const x = large ? 70+i*205 : 18+i*68;
-        const y = large ? 95+(i%2)*25 : 16+(i%2)*4;
-        const size = large ? 130 : 42;
-        return `<path d="M${x+size*.18} ${y+size*.1} ${x+size*.76} ${y} ${x+size} ${y+size*.55} ${x+size*.69} ${y+size} ${x+size*.13} ${y+size*.81} ${x} ${y+size*.36}Z" fill="${["#88a640","#a7b84d","#6f9238"][i]}" stroke="rgba(255,255,255,.75)" stroke-width="${large ? 4 : 1.2}"/>`;
-      }).join("")}
+    // Three *distinct* load-bearing brackets with mounting holes — a generated
+    // design family. The old version drew the same irregular blob three times.
+    const scale = large ? 1 : 0.322;
+    const step = large ? 205 : 68;
+    const x0 = large ? 68 : 17;
+    const yBase = large ? 96 : 17;
+    const webs = ["M0 0h118v34H74l-8 96H0Z", "M0 0h118v40H62l14 90H0Z", "M0 0h108v30H70l4 100H0Z"];
+    return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Generated CAD candidate family preview">
+      <rect width="${width}" height="${height}" fill="${large ? "#f2f5ec" : "#eef1e8"}"/>
+      ${[0, 1, 2].map(i => `<g transform="translate(${x0 + i * step} ${yBase}) scale(${scale})">
+        <path d="${webs[i]}" fill="${["#88a640", "#a7b84d", "#6f9238"][i]}" stroke="rgba(255,255,255,.8)"
+              stroke-width="${large ? 4 : 9}" stroke-linejoin="round"/>
+        <circle cx="26" cy="17" r="9" fill="${large ? "#f2f5ec" : "#eef1e8"}"/>
+        <circle cx="26" cy="${100 + i * 6}" r="9" fill="${large ? "#f2f5ec" : "#eef1e8"}"/>
+      </g>`).join("")}
     </svg>`;
   }
   if (kind === "export") {
@@ -113,11 +267,14 @@ export function previewGraphic(kind, seed = 0, large = false) {
       ${[0,1,2,3].map(i => `<path d="M${large ? 225 : 72} ${large ? 122+i*48 : 23+i*12}H${large ? 455 : 148}" stroke="#74827c" stroke-width="${large ? 5 : 1.7}" stroke-linecap="round"/>`).join("")}
     </svg>`;
   }
-  return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Geometry sample preview">
-    <defs><linearGradient id="mesh-${seed}" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#7db3b4"/><stop offset="1" stop-color="#315e6d"/></linearGradient></defs>
-    <rect width="${width}" height="${height}" fill="${large ? "transparent" : "#e8ede7"}"/>
-    <path d="${large ? "M98 292 275 112 249 352M171 64l80 179 112-185M251 243l115 61 165 29M363 58l7 176 211-105M390 158l141 175M290 139l-41 213M171 64l192-6" : "M28 62 91 26 84 75M58 17l26 39 37-38M84 56l40 5 62 7M121 18l2 40 70-22M128 39l58 29M95 34 84 75M58 17l63 1"}" fill="none" stroke="url(#mesh-${seed})" stroke-width="${large ? 8 : 2.8}" stroke-linecap="round" stroke-linejoin="round"/>
-    ${[0,1,2,3,4,5].map(i => `<circle cx="${large ? 115+i*82 : 31+i*31}" cy="${large ? 250-((i+offset)%3)*58 : 58-((i+offset)%3)*14}" r="${large ? 8 : 2.5}" fill="#e2efe9" stroke="#44766a" stroke-width="${large ? 3 : 1}"/>`).join("")}
+  // Default: the real ex9 mesh. The previous version drew seven random strokes and
+  // six floating dots, which looked like scribble rather than a discretised body.
+  const mesh = large ? MESH_PREVIEW.large : MESH_PREVIEW.small;
+  return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Mesh sample preview from ex9 plasticity">
+    <rect width="${width}" height="${height}" fill="${large ? "#f4f7f4" : "#eef2ee"}"/>
+    <path d="${mesh.outline}" fill="#dcebe4" stroke="none"/>
+    <path d="${mesh.d}" fill="none" stroke="#6d9d92" stroke-width="${large ? .9 : .5}" opacity=".9"/>
+    <path d="${mesh.outline}" fill="none" stroke="#2f5f54" stroke-width="${large ? 3 : 1.3}" stroke-linejoin="round"/>
   </svg>`;
 }
 
@@ -126,7 +283,10 @@ export function nodeVisualLabel(spec) {
   if (spec.visual === "field") return "click field samples";
   if (spec.visual === "candidates") return "click candidate gallery";
   if (spec.visual === "training") return "training + validation";
-  if (spec.visual === "dataset") return "samples + geometry + fields";
+  if (spec.visual === "parity") return "predicted vs ground truth";
+  if (spec.visual === "ranking") return "ranked model metrics";
+  if (spec.visual === "pareto") return "objective space + Pareto front";
+  if (spec.visual === "dataset") return "mesh samples + fields";
   if (spec.visual === "checkpoint") return "saved model + .pth";
   return spec.sampleLabel;
 }

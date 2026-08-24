@@ -21,6 +21,14 @@ const metric = (key, label, values) => ({
 (async () => {
   const browser = await chromium.launch({ channel: "chrome", headless: true });
   const page = await browser.newPage({ viewport: { width: 1600, height: 960 } });
+  // The studio shows a one-time orientation card to first-run users, and every
+  // smoke run starts from a clean browser profile -- so without this it would
+  // meet that modal on every launch. Seed the "already welcomed" flag instead of
+  // clicking the card away, so the runs exercise the studio a returning user sees.
+  await page.addInitScript(() => {
+    try { localStorage.setItem("ai-cae4all.studio.welcomed.v1", "1"); } catch { /* storage blocked */ }
+  });
+
   const errors = [];
   page.on("pageerror", error => errors.push(`pageerror: ${error.message}`));
   page.on("console", message => {
@@ -86,9 +94,14 @@ const metric = (key, label, values) => ({
     await page.goto(studioUrl);
     await page.waitForFunction(() => document.querySelector(".route-health")?.textContent.includes("routes live"));
     assert(await page.locator('[data-node-id="train_metrics"]').count() === 1, "Default template is missing Train Metrics");
-    const edge = await page.evaluate(() => window.__AI_CAE_FRONTEND__.state.edges.find(
-      item => item.fromNode === "simulgen" && item.fromPort === "metrics" && item.toNode === "train_metrics"
-    ));
+    // Match the trainer by role, not by node id: the default template is HI-MGN
+    // (node id "trainer") rather than the SimulGen one this used to hard-code.
+    const edge = await page.evaluate(() => {
+      const app = window.__AI_CAE_FRONTEND__;
+      return app.state.edges.find(item =>
+        item.fromPort === "metrics" && item.toNode === "train_metrics"
+        && app.BLOCK_SPECS[app.state.nodes.find(node => node.id === item.fromNode)?.type || ""]?.isModel);
+    });
     assert(Boolean(edge), "Model training metrics are not connected to the Train Metrics block");
 
     await page.locator('[data-node-id="train_metrics"] .node-preview').click();

@@ -7,6 +7,7 @@ avoid maintaining duplicate dataset/model/optimizer/checkpoint logic.
 
 import os
 import time
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -55,6 +56,43 @@ def build_dataset_splits(config, split_seed: int):
 # Model
 # ---------------------------------------------------------------------------
 
+def load_init_weights(model, ema_model, config, device):
+    """Warm-start `model` from an existing checkpoint named by `init_modelpath`.
+
+    Training always started from scratch, which makes the standard recipe for
+    rollout training impossible to express: pretrain one-step (AR-OT, cheap and
+    stable), then fine-tune the same weights on the full rollout (AR-RT, ~2x the
+    cost per epoch but optimizing the metric that is actually reported). Without
+    a warm start, AR-RT has to relearn one-step dynamics from noise inside the
+    expensive objective.
+
+    Mirrors SDFFlow's `init_vae_modelpath`. Deliberately strict: a checkpoint
+    whose architecture does not match raises instead of quietly leaving randomly
+    initialized weights in place, which would look like a bad training run.
+    """
+    init_path = str(config.get('init_modelpath', '') or '').strip()
+    if not init_path:
+        return
+    path = Path(init_path)
+    if not path.is_absolute():
+        path = (Path.cwd() / path).resolve()
+    if not path.is_file():
+        raise FileNotFoundError(f"init_modelpath does not exist: {path}")
+    checkpoint = torch.load(path, map_location=device, weights_only=False)
+    state = checkpoint.get('model_state_dict', checkpoint) if isinstance(checkpoint, dict) else checkpoint
+    target = model.module if hasattr(model, 'module') else model
+    target.load_state_dict(state)
+    source_epoch = checkpoint.get('epoch') if isinstance(checkpoint, dict) else None
+    print(f"Warm start: loaded weights from {path}"
+          + (f" (epoch {source_epoch})" if source_epoch is not None else ""))
+    # Seeding EMA from the same weights rather than the fresh random ones stops
+    # the first validations of a fine-tune from scoring a half-random average.
+    if ema_model is not None:
+        ema_target = ema_model.module if hasattr(ema_model, 'module') else ema_model
+        ema_target.load_state_dict(state)
+        print("Warm start: EMA shadow seeded from the same weights")
+
+
 def build_model_and_ema(config, device):
     """
     Instantiate MeshGraphNets, wrap with EMA if configured, and optionally
@@ -66,6 +104,9 @@ def build_model_and_ema(config, device):
     ema_model = build_ema_model(model, config)
     if ema_model is not None:
         ema_model = ema_model.to(device)
+
+    # Before torch.compile so the loaded weights are what gets compiled.
+    load_init_weights(model, ema_model, config, device)
 
     if config.get('use_compile', False):
         model = torch.compile(model, dynamic=True)

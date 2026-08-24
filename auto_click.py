@@ -16,11 +16,11 @@ import pyautogui
 
 
 # Change these three settings before running the script.
-TARGET_TIME = "2026-08-10 00:31:00"  # Local time: YYYY-MM-DD HH:MM:SS
+TARGET_TIME = "2026-08-23 02:01:00"  # Local time: YYYY-MM-DD HH:MM:SS
 # TARGET_TIME = "2026-08-09 22:06:00"  # Local time: YYYY-MM-DD HH:MM:SS
 CLICK_POINTS = [
-    (1152, 734),   # First button: (x, y)
-    (1542, 734),  # Second button: (x, y)
+    (1869, 728),   # First button: (x, y)
+    # (1542, 734),  # Second button: (x, y)
 ]
 DELAY_BETWEEN_CLICKS = 0.5  # Seconds
 

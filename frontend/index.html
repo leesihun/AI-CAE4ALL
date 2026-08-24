@@ -33,10 +33,10 @@
       </nav>
 
       <div class="top-actions">
-        <span class="route-health"><i></i> Connecting runtime…</span>
-        <button class="button dark" id="buildExe">Deploy</button>
-        <button class="button dark" id="validateTop">Validate</button>
-        <button class="button acid" id="runTop"><span class="play">▶</span> Run pipeline</button>
+        <span class="route-health" title="Live connection to the AI-CAE4ALL launcher"><i></i> Connecting runtime…</span>
+        <button class="button square ghost" id="shortcutsTop" aria-label="Keyboard shortcuts" title="Keyboard shortcuts (?)">?</button>
+        <button class="button dark" id="validateTop" title="Check the pipeline without running it (V)">Validate</button>
+        <button class="button acid" id="runTop" title="Run the pipeline (Ctrl + Enter)"><span class="play">▶</span> Run pipeline</button>
       </div>
     </header>
 
@@ -47,7 +47,7 @@
             <strong>Block library</strong>
             <small>Drag a module onto the canvas</small>
           </span>
-          <button class="panel-toggle" id="hideLibrary" aria-label="Hide block library">‹</button>
+          <button class="panel-toggle" id="hideLibrary" aria-label="Hide block library" title="Hide the block library">‹</button>
         </div>
         <label class="search">
           <span aria-hidden="true">⌕</span>
@@ -67,23 +67,19 @@
             </span>
           </div>
           <div class="canvas-actions">
-            <button class="button small panel-reopen" id="showLibrary">Library</button>
+            <button class="button small panel-reopen" id="showLibrary" title="Show the block library">Library</button>
             <select id="templateSelect" aria-label="Pipeline template">
+              <!-- The rest are generated from TEMPLATES at startup so adding a
+                   pipeline cannot leave the picker out of date. -->
               <option value="saved" hidden>Restored workspace</option>
-              <option value="simulgen">SimulGen-VAE reconstruction</option>
-              <option value="geometry">Geometry ingest</option>
-              <option value="physics">Train + predict</option>
-              <option value="parametric">Parametric estimator</option>
-              <option value="generative">Generative optimization</option>
-              <option value="blank">Blank pipeline</option>
             </select>
-            <button class="button small" id="savePipeline">Save</button>
-            <button class="button small" id="exportPipeline">Export</button>
-            <button class="button small" id="importPipeline">Import</button>
+            <button class="button small" id="savePipeline" title="Save this pipeline in the browser (Ctrl + S)">Save</button>
+            <button class="button small" id="exportPipeline" title="Download this pipeline as a .json file">Export</button>
+            <button class="button small" id="importPipeline" title="Load a pipeline from a .json file">Import</button>
             <input id="pipelineFile" type="file" accept=".json,application/json" hidden>
-            <button class="button small" id="arrangeGraph">Auto layout</button>
-            <button class="button square" id="undoGraph" aria-label="Undo">↶</button>
-            <button class="button small panel-reopen" id="showInspector">Inspector</button>
+            <button class="button small" id="arrangeGraph" title="Tidy the blocks into readable columns (L)">Auto layout</button>
+            <button class="button square" id="undoGraph" aria-label="Undo" title="Undo the last graph change (Ctrl + Z)">↶</button>
+            <button class="button small panel-reopen" id="showInspector" title="Show settings for the selected block">Inspector</button>
           </div>
         </header>
 
@@ -102,7 +98,7 @@
           <div class="run-banner" id="runBanner" role="status" aria-live="polite">
             <span class="spinner"></span>
             <span><strong id="runTitle">Pipeline validation</strong><small id="runDetail">Checking typed graph…</small></span>
-            <button class="button small" id="stopRun">Stop</button>
+            <button class="button small" id="stopRun" title="Stop the running pipeline">Stop</button>
           </div>
 
           <div class="canvas-help">
@@ -110,10 +106,10 @@
             <span>Click or drag sockets to connect</span><i></i><kbd>Del</kbd><span>remove</span>
           </div>
           <div class="zoom">
-            <button id="zoomOut" aria-label="Zoom out">−</button>
-            <button id="fitGraph" aria-label="Fit graph">⌗</button>
+            <button id="zoomOut" aria-label="Zoom out" title="Zoom out (−)">−</button>
+            <button id="fitGraph" aria-label="Fit graph" title="Fit the whole pipeline in view (F)">⌗</button>
             <span id="zoomLevel">90%</span>
-            <button id="zoomIn" aria-label="Zoom in">+</button>
+            <button id="zoomIn" aria-label="Zoom in" title="Zoom in (+)">+</button>
           </div>
         </div>
       </section>
@@ -124,7 +120,7 @@
             <strong>Inspector</strong>
             <small id="inspectorHint">Select a block</small>
           </span>
-          <button class="panel-toggle" id="hideInspector" aria-label="Hide inspector">›</button>
+          <button class="panel-toggle" id="hideInspector" aria-label="Hide inspector" title="Hide the inspector">›</button>
         </div>
         <div class="inspector-content" id="inspectorContent"></div>
       </aside>
@@ -144,11 +140,11 @@
         <div class="modal-actions">
           <select id="configMode" aria-label="Model mode"></select>
           <select id="configPreset" aria-label="Configuration preset"></select>
-          <button class="button small" id="applyPreset">Apply preset</button>
+          <button class="button small" id="applyPreset" title="Overwrite the fields this preset owns, then show a diff">Apply preset</button>
           <input id="configFile" type="file" accept=".txt,text/plain" hidden>
-          <button class="button small" id="loadTxt">Load .txt</button>
-          <button class="button small" id="exportTxt">Export .txt</button>
-          <button class="button square" data-close="configOverlay" aria-label="Close configuration">×</button>
+          <button class="button small" id="loadTxt" title="Replace these values from a flat config .txt file">Load .txt</button>
+          <button class="button small" id="exportTxt" title="Download these values as a launcher-ready .txt config">Export .txt</button>
+          <button class="button square" data-close="configOverlay" aria-label="Close configuration" title="Close (Esc)">×</button>
         </div>
       </header>
 
@@ -182,8 +178,8 @@
           </header>
           <textarea id="configRaw" aria-label="Raw flat configuration" spellcheck="false"></textarea>
           <div class="raw-actions">
-            <button class="button primary" id="parseRaw">Parse &amp; apply</button>
-            <button class="button" id="regenerateRaw">Regenerate text</button>
+            <button class="button primary" id="parseRaw" title="Read the text on the left back into the form fields">Parse &amp; apply</button>
+            <button class="button" id="regenerateRaw" title="Rewrite the text from the current form values">Regenerate text</button>
           </div>
           <div class="diagnostics" id="configDiagnostics"></div>
         </aside>
@@ -192,10 +188,10 @@
       <footer class="modal-foot">
         <span>Form and .txt stay synchronized · preset changes show a diff · preflight remains authoritative.</span>
         <span>
-          <button class="button" id="llmConfigure">Configure via LLM</button>
-          <button class="button" id="explainConfig">Explain config</button>
-          <button class="button" id="preflightConfig">Run preflight</button>
-          <button class="button primary" id="saveConfig">Save to block</button>
+          <button class="button" id="llmConfigure" title="Ask the local LLM helper to fill this configuration">Configure via LLM</button>
+          <button class="button" id="explainConfig" title="Show which keys are configured, defaulted, inactive, or owned by a checkpoint">Explain config</button>
+          <button class="button" id="preflightConfig" title="Run the real launcher validation against these values">Run preflight</button>
+          <button class="button primary" id="saveConfig" title="Write these values back onto the selected block">Save to block</button>
         </span>
       </footer>
     </section>
@@ -214,7 +210,7 @@
         <div class="modal-actions">
           <span class="coverage-pill">11 routes · 28 route modes · 10 trainable models</span>
           <button class="button small" id="studioPipeline">Open block library</button>
-          <button class="button square" data-close="studioOverlay" aria-label="Close workspace">×</button>
+          <button class="button square" data-close="studioOverlay" aria-label="Close workspace" title="Close (Esc)">×</button>
         </div>
       </header>
       <div class="studio-body">
@@ -235,10 +231,10 @@
           </span>
         </div>
         <div class="modal-actions">
-          <button class="button small primary" id="artifactAddDataset">+ Add dataset</button>
-          <button class="button small" id="artifactCompare">Compare</button>
-          <button class="button small" id="artifactDownload" disabled>Download sample</button>
-          <button class="button square" data-close="artifactOverlay" aria-label="Close samples">×</button>
+          <button class="button small primary" id="artifactAddDataset" title="Open another artifact or upload a local file">+ Add dataset</button>
+          <button class="button small" id="artifactCompare" title="Compare this sample against another">Compare</button>
+          <button class="button small" id="artifactDownload" title="Download the selected sample as a file" disabled>Download sample</button>
+          <button class="button square" data-close="artifactOverlay" aria-label="Close samples" title="Close (Esc)">×</button>
         </div>
       </header>
       <div class="artifact-body">
@@ -254,13 +250,13 @@
               <button data-view-mode="field" disabled>Field</button>
             </span>
             <div class="viewer-camera-tools">
-              <button id="viewerReset" aria-label="Reset sample camera" disabled>Reset view</button>
+              <button id="viewerReset" aria-label="Reset sample camera" title="Recentre the camera on the sample" disabled>Reset view</button>
               <span class="viewer-mode-meta" id="viewerModeMeta">No sample selected</span>
             </div>
           </div>
           <div class="viewer-visual" id="viewerVisual" tabindex="0" aria-label="Interactive sample viewport"></div>
           <div class="viewer-gesture-hint">Left-drag rotate · Right-drag pan · Wheel zoom · Double-click reset</div>
-          <div class="viewer-timeline"><button id="viewerPlay" aria-label="Play timestep animation" disabled>▶</button><span>t = 0 / 0</span><input type="range" min="0" max="0" value="0" disabled></div>
+          <div class="viewer-timeline"><button id="viewerPlay" aria-label="Play timestep animation" title="Play through the timesteps" disabled>▶</button><span>t = 0 / 0</span><input type="range" min="0" max="0" value="0" disabled></div>
         </section>
         <aside class="sample-info" id="sampleInfo"></aside>
       </div>
@@ -283,6 +279,57 @@
     </section>
   </div>
 
+  <div class="overlay" id="welcomeOverlay" role="dialog" aria-modal="true" aria-labelledby="welcomeTitle">
+    <section class="welcome-shell">
+      <header>
+        <span class="modal-icon" aria-hidden="true">▶</span>
+        <span>
+          <h2 id="welcomeTitle">Welcome to AI-CAE4All Studio</h2>
+          <p>Three things worth knowing before you build your first pipeline.</p>
+        </span>
+      </header>
+      <ol class="welcome-steps">
+        <li>
+          <strong>Build left to right on the canvas</strong>
+          <span>Drag a block out of the library on the left, then drag between the coloured sockets to connect them. Data flows from a source, through a model, into an evaluation or export block.</span>
+        </li>
+        <li>
+          <strong>Click a block to configure it</strong>
+          <span>The inspector on the right holds the common settings. <em>Open full configuration</em> shows every key the real launcher accepts, with the flat <code>.txt</code> config kept in sync beside it.</span>
+        </li>
+        <li>
+          <strong>Validate before you run</strong>
+          <span><em>Validate</em> runs the same preflight the command line does and reports every problem at once. <em>Run pipeline</em> then launches the native process, and its live output appears in the runtime panel.</span>
+        </li>
+      </ol>
+      <footer>
+        <span>Press <kbd>?</kbd> at any time for the keyboard shortcuts.</span>
+        <span>
+          <button class="button" id="welcomeTour">Show shortcuts</button>
+          <button class="button primary" id="welcomeDismiss">Start building</button>
+        </span>
+      </footer>
+    </section>
+  </div>
+
+  <div class="overlay" id="shortcutsOverlay" role="dialog" aria-modal="true" aria-labelledby="shortcutsTitle">
+    <section class="shortcuts-shell">
+      <header class="modal-head">
+        <div class="modal-heading">
+          <span class="modal-icon" aria-hidden="true">⌘</span>
+          <span>
+            <h2 id="shortcutsTitle">Keyboard shortcuts</h2>
+            <p>Canvas shortcuts are ignored while you are typing in a field.</p>
+          </span>
+        </div>
+        <div class="modal-actions">
+          <button class="button square" data-close="shortcutsOverlay" aria-label="Close keyboard shortcuts" title="Close (Esc)">×</button>
+        </div>
+      </header>
+      <div class="shortcuts-body" id="shortcutsBody"></div>
+    </section>
+  </div>
+
   <div class="toast-stack" id="toastStack" aria-live="polite"></div>
 
   <aside class="runtime-drawer" id="runtimeDrawer" aria-label="Live AI-CAE4ALL job" aria-live="polite">
@@ -293,17 +340,19 @@
         <small id="runtimeJobMeta">Actual launcher output appears here.</small>
       </span>
       <span class="runtime-head-actions">
-        <button class="button small" id="runtimeExperiments">All jobs</button>
-        <button class="button square" id="runtimeMinimize" aria-label="Minimize runtime log" aria-expanded="true">—</button>
-        <button class="button square" id="runtimeDismiss" aria-label="Dismiss this job notification">×</button>
+        <!-- Concurrent pipelines are allowed; this counts the ones the drawer is not showing. -->
+        <span id="runtimeOtherJobs" class="runtime-other-jobs" style="display:none"></span>
+        <button class="button small" id="runtimeExperiments" title="Open the Runs workspace to see every job">All jobs</button>
+        <button class="button square" id="runtimeMinimize" aria-label="Minimize runtime log" aria-expanded="true" title="Minimize runtime log">—</button>
+        <button class="button square" id="runtimeDismiss" aria-label="Dismiss this job notification" title="Dismiss this finished job">×</button>
       </span>
     </header>
     <pre class="runtime-log" id="runtimeLog">Connect with START_STUDIO.bat to enable the real AI-CAE4ALL runtime.</pre>
     <footer class="runtime-actions">
       <span id="runtimeStep">Idle</span>
       <span>
-        <button class="button small" id="runtimeCopyLog">Copy log</button>
-        <button class="button small danger" id="runtimeCancel" disabled>Stop process</button>
+        <button class="button small" id="runtimeCopyLog" title="Copy the full launcher log to the clipboard">Copy log</button>
+        <button class="button small danger" id="runtimeCancel" disabled title="Terminate the native launcher process">Stop process</button>
       </span>
     </footer>
   </aside>

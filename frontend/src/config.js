@@ -21,6 +21,13 @@ function retainExplicitConfig(node) {
 export function requiredFor(modelId, mode) {
   const canonicalModel = String(modelId || "").toLowerCase();
   const canonicalMode = String(mode || "").toLowerCase();
+  // Prefer the live spec (fetched in connectRuntime): the hardcoded map drifts, and
+  // over-claiming is worse than under-claiming — it demanded param_dir for every
+  // SimulGen mode even though the spec only needs it for lc_data_type csv/image,
+  // pushing users away from the hdf5/cond_var conditioner path. Conditional rules
+  // stay with the authoritative preflight rather than being mirrored here.
+  const liveRequired = MODEL_CATALOG[canonicalModel]?.required?.[canonicalMode];
+  if (liveRequired) return new Set(liveRequired);
   const modelRequired = REQUIRED[canonicalModel]?.[canonicalMode];
   if (modelRequired) return new Set(modelRequired);
   return new Set(canonicalMode === "inference"
@@ -28,7 +35,13 @@ export function requiredFor(modelId, mode) {
     : keys(`model mode gpu_ids dataset_dir modelpath input_var output_var training_epochs batch_size learningr`));
 }
 
-export function keyDisposition(modelId, key) {
+export function keyDisposition(modelId, key, config = null) {
+  // The multiscale trainer prints "[message_passing_num is IGNORED when
+  // use_multiscale=True]" and then obeys mp_per_level instead, but the sheet
+  // showed the key as a live, "set" value -- so anyone tuning HI-MGN would
+  // reasonably turn that number and see nothing change. Both shipped HI-MGN
+  // paths leave message_passing_num in the config, which makes it worse.
+  if (key === "message_passing_num" && config && isTruthyConfigValue(config.use_multiscale)) return "inactive";
   if (modelId === "transolver" && TRANSOLVER_REJECTED.has(key)) return "removed";
   if (["point_deeponet", "deeponet", "fno", "gino"].includes(modelId)) {
     if (OPERATOR_REMOVED.has(key)) return "removed";
@@ -39,8 +52,50 @@ export function keyDisposition(modelId, key) {
   return "active";
 }
 
-export function sectionFor(modelId, key, required) {
-  if (keyDisposition(modelId, key) !== "active") return "Inactive / rejected";
+function isTruthyConfigValue(value) {
+  return ["true", "1", "yes"].includes(String(value ?? "").trim().toLowerCase());
+}
+
+/**
+ * Warn about keys a *switch you just flipped* made mandatory.
+ *
+ * `requiredFor` deliberately mirrors only the spec's per-mode required set and
+ * leaves conditional rules to the authoritative preflight -- a good call, since
+ * mirroring the full rule set here would drift. The cost showed up in practice:
+ * turning on use_multiscale makes voronoi_clusters and mp_per_level mandatory
+ * (MGN-MULTI-REQ), yet nothing in the sheet said so, and the shipped HI-MGN
+ * preset shipped without them, so the first sign of trouble was four errors
+ * from a preflight six seconds later -- or a failed run.
+ *
+ * This stays a hint, not a badge: preflight remains the authority, and the text
+ * names the rule so it is obvious where the requirement comes from.
+ */
+function conditionallyMissing(modelId, config) {
+  const notes = [];
+  const isMesh = modelId === "meshgraphnets" || modelId === "meshgraphnets-v";
+  if (isMesh && isTruthyConfigValue(config.use_multiscale)) {
+    const needed = ["coarsening_type", "multiscale_levels", "voronoi_clusters", "mp_per_level"]
+      .filter(key => String(config[key] ?? "").trim() === "");
+    if (needed.length) {
+      notes.push({
+        type: "warn",
+        text: `use_multiscale is True, so MGN-MULTI-REQ also requires: ${needed.join(", ")}`
+      });
+    }
+    const levels = Number(config.multiscale_levels);
+    const entries = String(config.mp_per_level ?? "").split(",").map(item => item.trim()).filter(Boolean);
+    if (Number.isFinite(levels) && levels > 0 && entries.length && entries.length !== 2 * levels + 1) {
+      notes.push({
+        type: "warn",
+        text: `mp_per_level needs ${2 * levels + 1} entries for multiscale_levels ${levels}; it has ${entries.length}.`
+      });
+    }
+  }
+  return notes;
+}
+
+export function sectionFor(modelId, key, required, config = null) {
+  if (keyDisposition(modelId, key, config) !== "active") return "Inactive / rejected";
   if (required.has(key)) return "Required";
   if (/dataset|modelpath|output_dir|log_file|pipeline_log|param_dir|input_mesh|sidecar|split_seed/.test(key)) return "Data & output";
   if (/^(point_|pointnet_|deeponet_|fno_|gino_|encoder_|decoder_|fm_arch|fm_blocks|fm_hidden|fm_cond_hidden|latent_|latent_dim|message_passing|slice_num|num_layers|num_heads|attention_kernel|mlp_ratio|coarsening|multiscale|mp_per_level|positional|fourier|operator_dim|global_condition|num_filter|lc_filter|network_size)/.test(key)) return "Architecture";
@@ -55,9 +110,14 @@ export function choicesFor(modelId, key) {
   if (key === "mode") return MODEL_CATALOG[modelId].modes;
   if (BOOLEAN_KEYS.has(key) || /^use_/.test(key)) return ["False", "True"];
   if (key === "parallel_mode") {
-    if (modelId === "simulgenvae") return ["single", "ddp", "fsdp"];
+    // Mirrors each spec's own validator exactly: sdfflow/simulgenvae take
+    // single|ddp|fsdp ("single" being the right pick on a one-GPU box);
+    // Transolver takes ddp|node_shard (TRANS-PARALLEL-001 rejects model_split);
+    // model_split is fno/gino-only among the operators (NOVAR-PARALLEL-002),
+    // so deeponet/point_deeponet are ddp-only; the mesh methods take ddp|model_split.
+    if (["simulgenvae", "sdfflow"].includes(modelId)) return ["single", "ddp", "fsdp"];
     if (modelId === "transolver") return ["ddp", "node_shard"];
-    if (["fno", "gino"].includes(modelId)) return ["ddp", "model_split"];
+    if (["fno", "gino", "meshgraphnets", "meshgraphnets-v"].includes(modelId)) return ["ddp", "model_split"];
     return ["ddp"];
   }
   return CHOICES[key] || null;
@@ -83,10 +143,34 @@ export function normalizeConfigValues(values = {}) {
   return normalized;
 }
 
+// The flat format has no representation for an empty value: "key" with nothing
+// after it fails the native parser as CFG-SYNTAX-001, which then masks the
+// actionable CFG-REQ-001 for that same key. Omitting it reports "required" instead.
+const hasValue = value => String(value ?? "").trim() !== "";
+
+/**
+ * Keys the Studio writes onto a block for its own bookkeeping.
+ *
+ * They are not config: `run.js` stamps the last run's results onto the block so
+ * the canvas can show the evidence, and `rawConfig` then emitted them as
+ * "unknown keys" into the flat .txt handed to the launcher -- which answered
+ * with CFG-UNKNOWN-001 for each, and would reject the config outright under
+ * --strict. Every config the Studio exported after a successful run carried
+ * them. Genuinely unknown keys (a user's typo) must still be emitted, so this
+ * is a fixed list rather than a catch-all filter.
+ */
+const STUDIO_ONLY_KEYS = new Set([
+  "results_path", "results_samples", "report_path", "evaluated_samples",
+  "export_path", "job_id", "model_id", "dataset_path", "checkpoint_path",
+  "parameters_path", "prediction_path", "truth_path", "compatibility", "binding"
+]);
+
 export function rawConfig(values, catalog) {
   const normalized = normalizeConfigValues(values);
-  const ordered = catalog.filter(key => Object.hasOwn(normalized, key));
-  const unknown = Object.keys(normalized).filter(key => !catalog.includes(key)).sort();
+  const ordered = catalog.filter(key => Object.hasOwn(normalized, key) && hasValue(normalized[key]));
+  const unknown = Object.keys(normalized)
+    .filter(key => !catalog.includes(key) && hasValue(normalized[key]) && !STUDIO_ONLY_KEYS.has(key))
+    .sort();
   return [...ordered, ...unknown].map(key => `${key.padEnd(29, " ")}${normalized[key]}`).join("\n");
 }
 
@@ -160,17 +244,22 @@ export function renderConfig() {
   const showInactive = $("#showInactive").checked;
   const groups = Object.fromEntries(CONFIG_SECTIONS.map(section => [section, []]));
   model.keys.forEach(key => {
-    const disposition = keyDisposition(spec.modelId, key);
+    const disposition = keyDisposition(spec.modelId, key, node.config);
     if (!showInactive && disposition !== "active") return;
     if (changedOnly && !Object.hasOwn(node.config, key)) return;
     if (search && !key.toLowerCase().includes(search)) return;
-    groups[sectionFor(spec.modelId, key, required)].push(key);
+    groups[sectionFor(spec.modelId, key, required, node.config)].push(key);
   });
-  Object.keys(node.config).filter(key => !model.keys.includes(key)).forEach(key => {
-    if (!showInactive) return;
-    if (search && !key.toLowerCase().includes(search)) return;
-    groups["Inactive / rejected"].push(key);
-  });
+  // Studio bookkeeping keys are excluded here too: they are not config the user
+  // typed, they are never sent to the launcher, and listing them as "rejected"
+  // invites someone to go hunting for a problem that does not exist.
+  Object.keys(node.config)
+    .filter(key => !model.keys.includes(key) && !STUDIO_ONLY_KEYS.has(key))
+    .forEach(key => {
+      if (!showInactive) return;
+      if (search && !key.toLowerCase().includes(search)) return;
+      groups["Inactive / rejected"].push(key);
+    });
   if (!groups[state.configSection]?.length && search) state.configSection = CONFIG_SECTIONS.find(section => groups[section].length) || "Required";
 
   $("#configSectionList").innerHTML = CONFIG_SECTIONS.map(section => `<button class="config-section-button${state.configSection === section ? " active" : ""}" data-config-section="${section}"><span>${section}</span><small>${groups[section].length}</small></button>`).join("");
@@ -179,16 +268,25 @@ export function renderConfig() {
     renderConfig();
   }));
 
-  const visible = groups[state.configSection];
-  $("#configSectionTitle").textContent = state.configSection;
-  $("#configSectionMeta").textContent = `${visible.length} visible keys · ${mode} mode`;
+  // A search spans every section. Filtering the search *within* the selected
+  // section meant a key you had just typed the exact name of stayed invisible
+  // whenever it lived elsewhere and the current section happened to hold some
+  // other match: searching "modelpath" from "Data & output" showed
+  // init_modelpath and hid `modelpath` itself, which sits in "Required".
+  const visible = search
+    ? CONFIG_SECTIONS.flatMap(section => groups[section])
+    : groups[state.configSection];
+  $("#configSectionTitle").textContent = search ? `Search: ${search}` : state.configSection;
+  $("#configSectionMeta").textContent = search
+    ? `${visible.length} matching keys across all sections · ${mode} mode`
+    : `${visible.length} visible keys · ${mode} mode`;
   const automaticCount = autoFillCount(node);
   $("#configBadges").innerHTML = `<span class="badge">${model.keys.length} accepted</span><span class="badge warn">${required.size} required</span>${automaticCount ? `<span class="badge auto">${automaticCount} graph-filled</span>` : ""}`;
   $("#schemaNote").innerHTML = `<strong>${model.keys.length} live keys</strong><br>All MethodSpec keys are present. Closed choices use dropdowns; paths, widths, lists, and open family values remain manual.<br><br>${spec.modelId === "simulgenvae" ? "The live SimulGen route has separate VAE, LC, combined, and reconstruction requirements." : "Shared-family inactive and rejected keys remain visible for diagnostic honesty."}`;
 
   $("#configFields").innerHTML = visible.length ? visible.map(key => {
     const accepted = model.keys.includes(key);
-    const disposition = accepted ? keyDisposition(spec.modelId, key) : "unknown";
+    const disposition = accepted ? keyDisposition(spec.modelId, key, node.config) : "unknown";
     const set = Object.hasOwn(node.config, key);
     const requiredKey = required.has(key);
     const rejectedByPreflight = state.configRejectedNode === node.id && state.configRejectedField === key;
@@ -200,9 +298,18 @@ export function renderConfig() {
     const control = choices
       ? `<select class="config-control full-config-control" data-key="${key}"${disabled ? " disabled" : ""}><option value="">— not set —</option>${choices.map(choice => `<option value="${escapeHtml(choice)}"${String(value).toLowerCase() === String(choice).toLowerCase() ? " selected" : ""}>${escapeHtml(choice)}</option>`).join("")}</select>`
       : `<input class="config-control full-config-control" data-key="${key}" value="${escapeHtml(value)}" placeholder="manual value"${disabled ? " disabled" : ""}>`;
+    // Why a key is dead outranks what the key means: the generic help for
+    // message_passing_num reads as though the value still does something, which
+    // is the whole reason nobody noticed the trainer ignores it under multiscale.
+    const dispositionHelp = key === "message_passing_num" && disposition === "inactive"
+      ? "Ignored while use_multiscale is True — the trainer prints this and uses mp_per_level for depth instead. Set use_multiscale False for this value to take effect."
+      : disposition === "unknown" ? "This key is not accepted by the selected model. Clear its value to remove it before running preflight again."
+      : disposition === "removed" ? "Known by a shared diagnostic schema, but rejected for this selected model."
+      : disposition === "inactive" ? "Accepted by the shared family schema but configures a different variant."
+      : "";
     const help = automatic
       ? `Auto-filled from ${automatic.sourceLabel}: ${automatic.reason}. Edit it to keep a manual override, or clear it to follow the graph again.`
-      : HELP[key] || (disposition === "unknown" ? "This key is not accepted by the selected model. Clear its value to remove it before running preflight again." : disposition === "removed" ? "Known by a shared diagnostic schema, but rejected for this selected model." : disposition === "inactive" ? "Accepted by the shared family schema but configures a different variant." : "Manual input is retained because the live spec does not publish a closed value set for this field.");
+      : dispositionHelp || HELP[key] || "Manual input is retained because the live spec does not publish a closed value set for this field.";
     return `<article class="config-card ${disposition}${automatic ? " graph-autofilled" : ""}${rejectedByPreflight ? " preflight-rejected" : ""}"><header class="config-card-head"><span class="config-key">${key}</span><span class="config-card-states">${automatic ? `<span class="config-status autofill">auto · ${escapeHtml(automatic.sourceLabel)}</span>` : ""}<span class="config-status ${status}">${status}</span></span></header>${control}<p class="config-help">${escapeHtml(help)}</p></article>`;
   }).join("") : `<div class="inspect-empty" style="height:auto;grid-column:1/-1"><p>No keys match this filter.</p></div>`;
 
@@ -223,10 +330,16 @@ export function renderConfig() {
 
   $("#configRaw").value = rawConfig(node.config, model.keys);
   const missing = [...required].filter(key => !Object.hasOwn(node.config, key) || node.config[key] === "");
-  const unknown = Object.keys(node.config).filter(key => !model.keys.includes(key));
+  // Same exclusion as rawConfig: the Studio's own bookkeeping keys are never
+  // emitted, so warning that they "will fail preflight" was false -- and the
+  // authoritative preflight beside it disagreed, reporting 0 errors.
+  const unknown = Object.keys(node.config)
+    .filter(key => !model.keys.includes(key) && !STUDIO_ONLY_KEYS.has(key));
+  const conditional = conditionallyMissing(spec.modelId, node.config);
   const diagnostics = [
     { type: "", text: `${model.keys.length} accepted keys loaded; ${Object.keys(node.config).length} currently set.` },
     ...(missing.length ? [{ type: "warn", text: `Missing required for ${mode}: ${missing.join(", ")}` }] : [{ type: "", text: `All required ${mode} keys currently have values.` }]),
+    ...conditional,
     ...(unknown.length ? [{ type: "warn", text: `Unknown keys will fail preflight: ${unknown.join(", ")}` }] : []),
     ...state.configMessages
   ];
@@ -274,8 +387,20 @@ export async function applyPreset() {
     chunk_size: "1024", infer_chunk_size: "1024", train_query_chunk_size: "1024", infer_query_chunk_size: "1024"
   };
   if (preset === "mgn_flat") values = { use_multiscale: "False", coarsening_type: "none" };
-  if (preset === "mgn_hi") values = { use_multiscale: "True", coarsening_type: "voronoi", multiscale_levels: "3" };
-  if (preset === "mgn_bsms") values = { use_multiscale: "True", coarsening_type: "bfs", multiscale_levels: "3" };
+  // MGN-MULTI-REQ makes voronoi_clusters and mp_per_level mandatory the moment
+  // use_multiscale is True -- for bfs as well -- and mp_per_level must hold
+  // 2*levels+1 entries. Emitting only the three switches left every multiscale
+  // preset four errors deep in preflight, with the two missing keys carrying no
+  // "required" badge anywhere in the sheet to hint at it. These mirror the
+  // checked-in configs/MeshGraphNets/ex9 pair, which are known to run.
+  if (preset === "mgn_hi") values = {
+    use_multiscale: "True", coarsening_type: "voronoi_seedmean", multiscale_levels: "2",
+    voronoi_clusters: "500, 100", mp_per_level: "4, 6, 8, 6, 4"
+  };
+  if (preset === "mgn_bsms") values = {
+    use_multiscale: "True", coarsening_type: "bfs", multiscale_levels: "2",
+    voronoi_clusters: "500, 100", mp_per_level: "4, 6, 8, 6, 4"
+  };
   if (preset === "sdfflow_vae") values = { mode: "train_vae" };
   if (preset === "sdfflow_fm") values = { mode: "train_fm" };
   if (preset === "simulgen_vae") values = { mode: "train_vae", training_epochs: model.defaults.vae_training_epochs, batch_size: model.defaults.vae_batch_size, learningr: model.defaults.vae_learningr };

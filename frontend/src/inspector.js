@@ -1,9 +1,9 @@
-import { $, $$, escapeHtml, toast, formatBytes } from "./dom.js";
+import { $, $$, escapeHtml, toast, formatBytes, on } from "./dom.js";
 import { state, snapshot } from "./state.js";
 import { BLOCK_SPECS, MODEL_CATALOG, TYPE_META, INPUT_SOURCE_META } from "./constants.js";
 import { apiRequest, requireRuntime } from "./api.js";
 import { previewGraphic, nodeVisualLabel } from "./graphics.js";
-import { typeColor } from "./validate.js";
+import { typeColor, STANDALONE_INFERENCE_MODEL_IDS } from "./validate.js";
 import { duplicateNode, deleteSelected, nodeEvidenceLabel, render } from "./graph.js";
 import { openConfig } from "./config.js";
 import { openArtifact } from "./viewer.js";
@@ -148,7 +148,7 @@ export async function openInputPicker(nodeId) {
       }));
     };
     renderFiles("");
-    $("#inputPickerSearch").addEventListener("input", event => renderFiles(event.target.value));
+    on("#inputPickerSearch", "input", event => renderFiles(event.target.value));
   } catch (error) {
     liveError(container, error);
   }
@@ -202,6 +202,11 @@ export async function createGeometrySample(nodeId) {
   }
 }
 
+/** Keys a run writes back onto a block: evidence, never user input. */
+const RUN_EVIDENCE_KEYS = new Set([
+  "results_path", "results_samples", "report_path", "export_path", "evaluated_samples", "job_id"
+]);
+
 export function renderInspector() {
   applyGraphAutofill();
   const node = state.nodes.find(item => item.id === state.selectedNode);
@@ -224,7 +229,7 @@ export function renderInspector() {
       <div class="port-row"><i style="--port:${typeColor(input?.type || "artifact")}"></i><span>← ${escapeHtml(input?.label || edge.toPort)}</span><small>${escapeHtml(input?.type || "unknown")}</small></div>
     </div></section>
     <section class="inspect-section"><button class="button danger" id="deleteConnection" style="width:100%">Delete connection</button><p class="input-source-help">You can also press Delete or Backspace while the connection is selected.</p></section>`;
-    $("#deleteConnection").addEventListener("click", deleteSelected);
+    on("#deleteConnection", "click", deleteSelected);
     return;
   }
   if (!node) {
@@ -245,7 +250,11 @@ export function renderInspector() {
         emit: ["graph", "pointcloud", "graph, pointcloud"],
         resample_method: ["fps", "random"]
       }
-    : {};
+    : node.type === "run.inference"
+      // Only the families whose checkpoints record enough to rebuild the model
+      // without their training config; the rest still need their model block.
+      ? { model_id: ["", ...STANDALONE_INFERENCE_MODEL_IDS] }
+      : {};
   const ports = [
     ...spec.inputs.map(port => ({ ...port, direction: "in" })),
     ...spec.outputs.map(port => ({ ...port, direction: "out" }))
@@ -266,6 +275,13 @@ export function renderInspector() {
         }
         if (inspectorChoices[key]) {
           return `<div class="form-row"><label>${escapeHtml(key.replaceAll("_", " "))}</label><select class="field inspector-config" data-key="${key}">${inspectorChoices[key].map(choice => `<option value="${escapeHtml(choice)}"${String(value) === choice ? " selected" : ""}>${escapeHtml(choice)}</option>`).join("")}</select></div>`;
+        }
+        if (RUN_EVIDENCE_KEYS.has(key)) {
+          // What a run produced, not something to configure. Rendering it as a
+          // text input invited edits that change the label without changing
+          // anything real -- typing over "results samples" would relabel the
+          // canvas while the results on disk stayed exactly as they were.
+          return `<div class="form-row run-evidence"><label>${escapeHtml(key.replaceAll("_", " "))}<small class="inline-auto">from the last run</small></label><output class="field readonly" title="${escapeHtml(value)}">${escapeHtml(value) || "—"}</output></div>`;
         }
         const automatic = autoFillMeta(node, key);
         return `<div class="form-row${automatic ? " graph-autofilled" : ""}"><label>${escapeHtml(key.replaceAll("_", " "))}${automatic ? `<small class="inline-auto">auto · ${escapeHtml(automatic.sourceLabel)}</small>` : ""}</label><input class="field inspector-config" data-key="${key}" value="${escapeHtml(value)}"></div>`;
@@ -289,7 +305,7 @@ export function renderInspector() {
     toast(`Updated ${control.dataset.key}.`);
   }));
   $("#openParameterSpreadsheet")?.addEventListener("click", () => openArtifact(node.id));
-  $("#inspectorRun").addEventListener("click", () => {
+  on("#inspectorRun", "click", () => {
     if (spec.workspace) openStudio(spec.workspace, node.id);
     else if (node.type === "evaluate.predictions") openStudio("evaluation");
     else if (node.type === "evaluate.compare") openStudio("comparison");
@@ -307,11 +323,11 @@ export function renderInspector() {
       : spec.workspace
         ? openStudio(spec.workspace, node.id)
       : openArtifact(node.id);
-  $("#inspectorSamples").addEventListener("click", openPrimaryDetails);
+  on("#inspectorSamples", "click", openPrimaryDetails);
   $("#artifactStrip")?.addEventListener("click", openPrimaryDetails);
   $("#artifactMini")?.addEventListener("click", openPrimaryDetails);
-  $("#duplicateNode").addEventListener("click", () => duplicateNode(node.id));
-  $("#deleteNode").addEventListener("click", deleteSelected);
+  on("#duplicateNode", "click", () => duplicateNode(node.id));
+  on("#deleteNode", "click", deleteSelected);
   $("#openFullConfig")?.addEventListener("click", () => openConfig(node.id));
   $("#browseInputSource")?.addEventListener("click", () => openInputPicker(node.id));
   $("#uploadInputSource")?.addEventListener("click", () => $("#inputSourceFile").click());

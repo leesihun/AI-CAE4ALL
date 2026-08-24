@@ -1,0 +1,80 @@
+% HI-MeshGraphNets (multiscale) arm for ex5, derived from
+% config_train_deforming_plate.txt -- identical in every optimization and
+% architecture key, differing ONLY in the output paths and the multiscale block
+% below, so the roster's himgn_ex5 vs meshgraphnets_ex5 comparison isolates
+% the hierarchy. Matches the existing ex9 HI arm's shape (voronoi_seedmean,
+% 2 levels, mp_per_level 4/6/8/6/4).
+%   voronoi_clusters 180, 36 is sized off this slot's SMALLEST sample
+%   (1078 nodes), so no sample can be asked for more clusters than it has
+%   nodes.
+model	MeshGraphNets
+mode	train
+gpu_ids	0
+parallel_mode	ddp
+log_file_dir	../../output/meshgraphnets/ex5/train_hi_deforming_plate.log
+modelpath	../output/meshgraphnets/ex5/model_hi_deforming_plate.pth
+inference_output_dir	../output/meshgraphnets/rollout/ex5/model_hi_deforming_plate
+%   ex5.h5: DeepMind deforming_plate, 100 trajectories, full 400-step rollout.
+%   Rigid actuator pressed into a hyperelastic plate -- the only ex4-ex6
+%   dataset with contact, so use_world_edges is exercised here. ex5_infer.h5
+%   holds out the 20 trajectories with the deepest actuator indentation as a
+%   genuine extrapolation test, not a same-distribution held-out sample -- see
+%   dataset/build_public_mgn.py and dataset/PUBLIC_DATASETS.md.
+dataset_dir	../dataset/ex5.h5
+infer_dataset	../dataset/ex5_infer.h5
+infer_timesteps	399
+split_seed	42
+input_var	4
+output_var	4
+feature_loss_weights	1.0, 1.0, 1.0, 1.0
+edge_var	8
+positional_features	4
+%   Architecture matched to Pfaff et al. ICLR'21: 15 MP steps, latent 128,
+%   batch 2, LR 1e-4 (see ex4's config for the scheduler caveat).
+%   Training_epochs 630 extends the paper's confirmed cylinder_flow 10M-step
+%   budget to this dataset's own size (80 train traj x 399 transitions /
+%   batch 2 = 15,960 steps/epoch; 10,000,000 / 15,960 ~= 630) -- the paper
+%   does not publish a separate step count for deforming_plate, so this
+%   assumes the same order-of-magnitude budget as its own confirmed number,
+%   not a second independently-cited figure.
+'
+message_passing_num	15
+Training_epochs	630
+Batch_size	2
+LearningR	0.0001
+Latent_dim	128
+num_workers	2
+prefetch_factor	2
+pin_memory	True
+std_noise	0.01
+weight_decay	0.0001
+augment_geometry	False
+grad_accum_steps	1
+'
+use_checkpointing	False
+'
+use_amp	True
+use_ema	True
+ema_decay	0.99
+test_interval	10
+val_interval	5
+'
+use_node_types	True
+'
+use_world_edges	True
+'
+test_batch_idx	0, 1, 2
+plot_feature_idx	-1
+'
+use_multiscale	True
+coarsening_type	voronoi_seedmean
+voronoi_clusters	180, 36
+multiscale_levels	2
+mp_per_level	4, 6, 8, 6, 4
+%   coarse_world_edges stays False (the native default): contact edges are built
+%   at the finest level only. Lifting them into coarse levels would be a second
+%   difference from the flat arm and is left as a separate ablation.
+coarse_world_edges	False
+'
+time_integration	ar_ot
+cond_var	0

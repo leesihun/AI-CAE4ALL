@@ -1,0 +1,77 @@
+% HI-MeshGraphNets (multiscale) arm for ex8, derived from
+% config_train_elasticity.txt -- identical in every optimization and
+% architecture key, differing ONLY in the output paths and the multiscale block
+% below, so the roster's himgn_ex8 vs meshgraphnets_ex8 comparison isolates
+% the hierarchy. Matches the existing ex9 HI arm's shape (voronoi_seedmean,
+% 2 levels, mp_per_level 4/6/8/6/4).
+%   voronoi_clusters 160, 32 is sized off this slot's SMALLEST sample
+%   (972 nodes), so no sample can be asked for more clusters than it has
+%   nodes.
+%   NOTE: at 972 nodes and T=1, coarsening buys little -- 15 flat MP steps
+%   already cover this graph's diameter. This arm exists for roster symmetry;
+%   expect it to match, not beat, the flat meshgraphnets_ex8 arm.
+model	MeshGraphNets
+mode	train
+gpu_ids	0
+parallel_mode	ddp
+log_file_dir	../../output/meshgraphnets/ex8/train_hi_elasticity.log
+modelpath	../output/meshgraphnets/ex8/model_hi_elasticity.pth
+inference_output_dir	../output/meshgraphnets/rollout/ex8/model_hi_elasticity
+%   dataset/ex8.h5, ex8_infer.h5 (Geo-FNO Random_UnitCell, 972-node point cloud,
+%   k=6 KNN mesh_edge, static T=1, canonical ntrain=1000/ntest=200 split --
+%   NOT extrapolation, this is a paper-replication benchmark, see
+%   dataset/build_geo_fno_elasticity.py). Never had an MGN config before this
+%   one -- the paper benchmarks only ever targeted Transolver/Neural_Operator.
+dataset_dir	../dataset/ex8.h5
+infer_dataset	../dataset/ex8_infer.h5
+infer_timesteps	1
+split_seed	42
+input_var	1
+output_var	1
+feature_loss_weights	1.0
+edge_var	8
+positional_features	0
+%   Architecture uses MeshGraphNets' own general default (15 MP steps,
+%   latent 128 -- Pfaff et al. ICLR'21), since elasticity was never
+%   benchmarked with MeshGraphNets in any paper (Geo-FNO/Transolver only).
+%   Training_epochs 500 matches this dataset's own established convention
+%   from its real published baselines (Geo-FNO elas_geofno.py: epochs=501;
+%   Transolver_Elas.sh implies the same via this repo's Transolver/FNO ex8
+%   configs) rather than a MeshGraphNets-specific number, since none exists.
+'
+message_passing_num	15
+Training_epochs	500
+Batch_size	4
+LearningR	0.0001
+Latent_dim	128
+num_workers	2
+prefetch_factor	2
+pin_memory	True
+std_noise	0.0
+weight_decay	0.0001
+augment_geometry	False
+grad_accum_steps	1
+'
+use_checkpointing	False
+'
+use_amp	True
+use_ema	True
+ema_decay	0.99
+test_interval	10
+val_interval	5
+'
+use_node_types	False
+'
+use_world_edges	False
+'
+test_batch_idx	0, 1, 2
+plot_feature_idx	-1
+'
+use_multiscale	True
+coarsening_type	voronoi_seedmean
+voronoi_clusters	160, 32
+multiscale_levels	2
+mp_per_level	4, 6, 8, 6, 4
+'
+time_integration	ar_ot
+cond_var	0

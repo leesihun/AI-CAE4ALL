@@ -336,6 +336,9 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .node:hover { border-color: color-mix(in srgb, var(--node-accent) 55%, #cfd2ca); }
 .node.selected { border-color: var(--node-accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--node-accent) 15%, transparent), 0 10px 28px rgba(31,44,39,.16); }
 .node.running { box-shadow: 0 0 0 3px rgba(183,107,42,.15), 0 10px 26px rgba(31,44,39,.14); }
+/* The block a failed run actually stopped on, so the canvas answers "where did
+   it break?" without reading the log. */
+.node.failed { border-color: var(--red); box-shadow: 0 0 0 3px rgba(184,77,72,.16), 0 10px 26px rgba(31,44,39,.14); }
 .node-head {
   display: grid;
   grid-template-columns: 26px minmax(0, 1fr) auto;
@@ -385,6 +388,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .status i { width: 6px; height: 6px; border-radius: 50%; background: #a5ada9; }
 .node.running .status i { background: var(--amber); animation: pulse 1s infinite; }
 .node.complete .status i { background: var(--green); }
+.node.failed .status i { background: var(--red); }
 .node-progress { height: 3px; margin: 6px 9px 0; overflow: hidden; border-radius: 3px; background: #e7e9e2; }
 .node-progress i { display: block; width: var(--progress, 0%); height: 100%; border-radius: inherit; background: var(--node-accent); transition: width .2s; }
 .node-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; padding: 7px 8px 8px; }
@@ -442,7 +446,9 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .spinner { width: 15px; height: 15px; border: 2px solid #e4c8aa; border-top-color: var(--amber); border-radius: 50%; animation: spin .75s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes pulse { 50% { transform: scale(1.55); opacity: .55; } }
-.canvas-help { position: absolute; z-index: 5; bottom: 13px; left: 13px; display: flex; align-items: center; gap: 7px; padding: 7px 9px; border: 1px solid rgba(199,201,193,.9); border-radius: 8px; color: var(--muted); background: rgba(251,250,246,.91); box-shadow: var(--shadow-sm); font-size: 7px; backdrop-filter: blur(7px); }
+/* Legend only, no interactive children: must never swallow clicks aimed at the
+   node sockets it floats over (reproduced at 1280x720). */
+.canvas-help { pointer-events: none; position: absolute; z-index: 5; bottom: 13px; left: 13px; display: flex; align-items: center; gap: 7px; padding: 7px 9px; border: 1px solid rgba(199,201,193,.9); border-radius: 8px; color: var(--muted); background: rgba(251,250,246,.91); box-shadow: var(--shadow-sm); font-size: 7px; backdrop-filter: blur(7px); }
 .canvas-help i { width: 3px; height: 3px; border-radius: 50%; background: #aab2ae; }
 .canvas-help kbd { padding: 2px 5px; border: 1px solid #d1d3cc; border-radius: 4px; color: #56635e; background: #fff; font-family: inherit; font-size: 6px; font-weight: 800; }
 .zoom { position: absolute; z-index: 5; right: 13px; bottom: 13px; display: flex; overflow: hidden; border: 1px solid var(--line-strong); border-radius: 8px; background: #fff; box-shadow: var(--shadow-sm); }
@@ -455,7 +461,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .inspect-empty { display: grid; place-items: center; height: 100%; padding: 34px; color: var(--muted); text-align: center; }
 .inspect-empty span { display: grid; place-items: center; width: 58px; height: 58px; margin-bottom: 13px; border: 1px dashed #b8bfba; border-radius: 18px; color: #9ca7a2; font-size: 22px; }
 .inspect-empty strong { display: block; color: var(--ink); font-size: 11px; }
-.inspect-empty p { max-width: 215px; margin: 7px 0 0; font-size: 8px; line-height: 1.55; }
+.inspect-empty p { max-width: 215px; margin: 7px 0 0; font-size: 11px; line-height: 1.55; }
 .inspect-hero { padding: 15px; border-bottom: 1px solid var(--line); }
 .inspect-meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
 .type-chip { padding: 3px 6px; border-radius: 5px; color: var(--green-dark); background: var(--green-soft); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 7px; font-weight: 750; }
@@ -512,10 +518,15 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .input-source-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; margin-top: 8px; }
 .input-source-help { margin: 8px 0 0; color: var(--muted); font-size: 9px; line-height: 1.5; }
 
+/* The topbar (z-index 90) deliberately sits above this overlay so nav tabs stay
+   clickable while a modal is open. The overlay must therefore start *below* the
+   topbar: a centred modal taller than the remaining viewport otherwise rides up
+   under it and buries its own header — including the × close button, which then
+   swallows clicks on the topbar instead (reproduced at 1366x768). */
 .overlay {
   position: fixed;
   z-index: 80;
-  inset: 0;
+  inset: var(--topbar-height, 66px) 0 0 0;
   display: none;
   place-items: center;
   padding: 20px;
@@ -546,7 +557,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   display: grid;
   grid-template-rows: 72px minmax(0,1fr) 48px;
   width: min(1500px, calc(100vw - 40px));
-  height: min(920px, calc(100vh - 40px));
+  height: min(920px, calc(100vh - var(--topbar-height, 66px) - 40px));
   overflow: hidden;
   border: 1px solid rgba(255,255,255,.2);
   border-radius: 16px;
@@ -607,7 +618,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   display: grid;
   grid-template-rows: 66px minmax(0,1fr);
   width: min(1340px, calc(100vw - 48px));
-  height: min(840px, calc(100vh - 48px));
+  height: min(840px, calc(100vh - var(--topbar-height, 66px) - 48px));
   overflow: hidden;
   border: 1px solid rgba(255,255,255,.2);
   border-radius: 16px;
@@ -624,7 +635,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .studio-nav-icon { display: grid; place-items: center; width: 27px; height: 27px; border-radius: 7px; color: var(--section-color); background: #fff; }
 .studio-nav-copy strong { display: block; font-size: 9px; }
 .studio-nav-copy small { display: block; margin-top: 2px; color: var(--muted); font-size: 6px; }
-.studio-nav-button > small { color: var(--quiet); font-size: 7px; font-weight: 800; }
+.studio-nav-button > small { color: var(--quiet); font-size: 10px; font-weight: 800; }
 .studio-main { min-width: 0; min-height: 0; overflow-y: auto; background: #faf9f5; }
 .studio-hero { display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: end; gap: 20px; padding: 23px 25px 18px; border-bottom: 1px solid var(--line); background: #fff; }
 .studio-kicker { color: var(--green); font-size: 7px; font-weight: 900; letter-spacing: .1em; text-transform: uppercase; }
@@ -673,7 +684,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   display: grid;
   grid-template-rows: 62px minmax(0,1fr) 48px;
   width: min(1240px, calc(100vw - 54px));
-  height: min(790px, calc(100vh - 54px));
+  height: min(790px, calc(100vh - var(--topbar-height, 66px) - 54px));
   overflow: hidden;
   border: 1px solid rgba(255,255,255,.2);
   border-radius: 16px;
@@ -843,9 +854,49 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
    short of first dismissing the drawer. Keep it visible but click-through
    whenever a modal is open; closing the modal restores full interaction. */
 .overlay.open ~ .runtime-drawer { pointer-events: none; }
-.runtime-drawer.minimized { height: auto; }
+.runtime-other-jobs {
+  padding: 3px 8px; border-radius: 999px; color: #d8f3e4;
+  background: rgba(255,255,255,.14); font-size: 10px; font-weight: 800; white-space: nowrap;
+}
+/* Minimized means minimized: a pill in the corner, not a full-width header bar.
+   It keeps the status dot, a truncated job title and the restore/dismiss
+   buttons -- enough to know a job is alive and to get back to it -- and gives
+   the whole rest of the corner back to the canvas. */
+.runtime-drawer.minimized {
+  width: auto;
+  max-width: min(320px, calc(100vw - 28px));
+  height: auto;
+  grid-template-rows: auto;
+  border-radius: 999px;
+}
 .runtime-drawer.minimized .runtime-log,
-.runtime-drawer.minimized .runtime-actions { display: none; }
+.runtime-drawer.minimized .runtime-actions,
+.runtime-drawer.minimized .runtime-head small,
+.runtime-drawer.minimized #runtimeExperiments { display: none; }
+.runtime-drawer.minimized .runtime-head {
+  gap: 8px;
+  padding: 7px 8px 7px 12px;
+  background: transparent;
+}
+.runtime-drawer.minimized .runtime-head > span:first-child { grid-template-columns: auto auto; }
+.runtime-drawer.minimized #runtimeJobTitle {
+  max-width: 170px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.runtime-drawer.minimized .runtime-head-actions .button.square {
+  width: 22px;
+  height: 22px;
+}
+
+/* The drawer is fixed to the viewport corner and the zoom cluster is absolute in
+   the same corner of the stage, so without this the canvas controls are buried
+   for the entire run. Lift them by the drawer's real height, and let them settle
+   back to just above the pill once it is minimized. */
+body.drawer-open { --drawer-clearance: calc(min(360px, 100vh - 100px) + 24px); }
+body.drawer-open.drawer-mini { --drawer-clearance: 58px; }
+body.drawer-open .zoom { bottom: calc(16px + var(--drawer-clearance, 0px)); }
 .runtime-head,
 .runtime-actions {
   display: flex;
@@ -890,7 +941,9 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: #fff;
 }
 .live-toolbar span { display: flex; align-items: center; gap: 7px; }
-.live-toolbar input,
+/* Text-like fields only: a bare `input` selector also matches the Strict checkbox,
+   stretching it to 180px and stranding its label ~110px away. */
+.live-toolbar input:not([type="checkbox"]):not([type="radio"]),
 .live-toolbar select {
   min-width: 180px; border: 1px solid var(--line); border-radius: 7px; padding: 7px 9px; font-size: 9px; background: #fff;
 }
@@ -925,7 +978,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .live-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; }
 .live-summary > span { padding: 12px; border: 1px solid var(--line); border-radius: 9px; background: #fff; }
 .live-summary strong { display: block; font-size: 14px; }
-.live-summary small { color: var(--muted); font-size: 8px; }
+/* Carries the full interpreter path in the System workspace, which has no spaces to break on. */
+.live-summary small { color: var(--muted); font-size: 10px; overflow-wrap: anywhere; }
 .training-metrics-toolbar > span:first-child { min-width: 0; }
 .training-metrics-toolbar > span:first-child small {
   overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap;
@@ -1280,7 +1334,7 @@ body {
   background: #fff;
   font-size: 14px;
 }
-.maturity { margin-top: 5px; padding: 2px 6px; font-size: 8px; }
+.maturity { margin-top: 5px; padding: 2px 6px; font-size: 10px; }
 
 .workspace { position: relative; min-width: 0; background: var(--canvas-bg); }
 .canvas-toolbar {
@@ -1508,6 +1562,7 @@ body {
   right: 16px;
   bottom: 16px;
   height: 40px;
+  transition: bottom .16s ease;
   border-color: rgba(185,198,191,.9);
   border-radius: 10px;
   background: rgba(249,251,249,.94);
@@ -1558,4 +1613,162 @@ body {
   .top-actions #buildExe { display: none; }
   .canvas-actions #arrangeGraph { display: none; }
   .saved-state { display: none; }
+}
+
+/* ---- Studio usability: shortcuts panel + non-occluding runtime drawer ---- */
+
+/* The `?` affordance in the topbar. `ghost` keeps it visually quieter than
+   Validate / Run so it reads as help, not as a fourth primary action. */
+.button.square.ghost {
+  color: var(--muted);
+  background: transparent;
+  border-color: rgba(255,255,255,.22);
+  font-weight: 800;
+}
+.button.square.ghost:hover { color: #fff; background: rgba(255,255,255,.12); }
+
+.shortcuts-shell {
+  display: grid;
+  grid-template-rows: 66px minmax(0, 1fr);
+  width: min(620px, calc(100vw - 48px));
+  max-height: min(660px, calc(100vh - var(--topbar-height, 66px) - 48px));
+  overflow: hidden;
+  border: 1px solid rgba(255,255,255,.7);
+  border-radius: 16px;
+  background: #f5f4ee;
+  box-shadow: 0 30px 90px rgba(8,25,18,.28);
+}
+.shortcuts-body { overflow: auto; padding: 16px 20px 20px; }
+.shortcut-group + .shortcut-group { margin-top: 18px; }
+.shortcut-group h3 {
+  margin: 0 0 8px;
+  color: var(--quiet, #6d7a74);
+  font-size: 10px;
+  font-weight: 820;
+  letter-spacing: .09em;
+  text-transform: uppercase;
+}
+.shortcut-row {
+  display: grid;
+  grid-template-columns: 132px minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+  padding: 7px 0;
+  border-top: 1px solid var(--line, #e2e0d8);
+  font-size: 12px;
+}
+.shortcut-row:first-of-type { border-top: 0; }
+.shortcut-row kbd {
+  justify-self: start;
+  padding: 3px 8px;
+  border: 1px solid #cfcdc4;
+  border-bottom-width: 2px;
+  border-radius: 6px;
+  background: #fff;
+  box-shadow: 0 1px 0 rgba(0,0,0,.04);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 750;
+  white-space: nowrap;
+}
+.shortcut-row span { color: #3d4a44; }
+
+/* A fixed bottom-right drawer and a centred modal both want the same corner.
+   run.js collapses the drawer to its header for as long as any modal is open;
+   `modal-yielded` marks the collapse as automatic rather than user-chosen, so
+   it can also step back visually instead of sitting on top at full contrast. */
+.runtime-drawer.modal-yielded {
+  right: auto;
+  left: 14px;
+  width: auto;
+  max-width: min(380px, calc(100vw - 28px));
+  opacity: .95;
+}
+/* While yielded the drawer is click-through (see the pointer-events rule
+   above), so its buttons would only look live without being live. Show the
+   status -- dot, job name, how many other jobs are running -- and drop the
+   dead controls until the modal closes and the drawer is interactive again. */
+.runtime-drawer.modal-yielded .runtime-head-actions .button,
+.runtime-drawer.modal-yielded .runtime-head small { display: none; }
+.runtime-drawer.modal-yielded .runtime-head { cursor: default; }
+
+/* First-run orientation. The studio opens on a fully populated pipeline, which
+   is great for someone who already knows what a block is and disorienting for
+   someone who does not -- there is no empty state to explain itself. Shown once
+   per browser, then never again unless localStorage is cleared. */
+.welcome-shell {
+  display: grid;
+  gap: 16px;
+  width: min(660px, calc(100vw - 48px));
+  max-height: calc(100vh - var(--topbar-height, 66px) - 48px);
+  overflow: auto;
+  padding: 22px 24px 18px;
+  border: 1px solid rgba(255,255,255,.7);
+  border-radius: 16px;
+  background: #f5f4ee;
+  box-shadow: 0 30px 90px rgba(8,25,18,.28);
+}
+.welcome-shell > header { display: flex; align-items: center; gap: 12px; }
+.welcome-shell h2 { margin: 0; font-size: 17px; letter-spacing: -.015em; }
+.welcome-shell > header p { margin: 3px 0 0; color: var(--muted); font-size: 11px; }
+.welcome-steps { display: grid; gap: 12px; margin: 0; padding: 0; list-style: none; counter-reset: welcome; }
+.welcome-steps li {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr);
+  gap: 4px 12px;
+  counter-increment: welcome;
+}
+.welcome-steps li::before {
+  content: counter(welcome);
+  display: grid;
+  place-items: center;
+  grid-row: span 2;
+  width: 26px;
+  height: 26px;
+  border-radius: 999px;
+  color: var(--green-dark, #1b4134);
+  background: var(--green-soft, #e4f2e6);
+  font-size: 12px;
+  font-weight: 820;
+}
+.welcome-steps strong { font-size: 13px; }
+.welcome-steps span { color: #47544e; font-size: 12px; line-height: 1.55; }
+.welcome-steps em { font-style: normal; font-weight: 750; color: #2c3a34; }
+.welcome-steps code { padding: 1px 4px; border-radius: 4px; background: #e6e4dc; font-size: 11px; }
+.welcome-shell > footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line, #e2e0d8);
+  color: var(--muted);
+  font-size: 11px;
+}
+.welcome-shell > footer > span:last-child { display: flex; gap: 8px; }
+.welcome-shell kbd {
+  padding: 2px 6px;
+  border: 1px solid #cfcdc4;
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  background: #fff;
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 750;
+}
+
+/* Read-out of what a run produced. Deliberately shaped like a field so the row
+   still scans as part of the form, but flat and unfocusable so it never reads
+   as something you can type into. */
+.form-row.run-evidence .field.readonly {
+  display: block;
+  overflow: hidden;
+  padding: 9px 10px;
+  border: 1px dashed var(--line-strong, #c7c9c1);
+  border-radius: 8px;
+  color: var(--muted, #5d6a64);
+  background: rgba(0, 0, 0, .03);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }

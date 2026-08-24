@@ -2,7 +2,8 @@ import { $, $$, escapeHtml, toast } from "./dom.js";
 import { state, snapshot, nodePortRows, nodeHeight } from "./state.js";
 import {
   ICONS, BLOCK_SPECS, MODEL_CATALOG, TYPE_META, TEMPLATES,
-  NODE_WIDTH, PORT_START_Y, PORT_GAP, INPUT_SOURCE_META
+  NODE_WIDTH, PORT_START_Y, PORT_GAP, INPUT_SOURCE_META,
+  MIN_ZOOM, MAX_ZOOM, FIT_MIN_ZOOM
 } from "./constants.js";
 import { previewGraphic, nodeVisualLabel, parametersTableGraphic } from "./graphics.js";
 import { typeColor, compatible, validateGraph } from "./validate.js";
@@ -28,7 +29,7 @@ export function paletteRender(query = "") {
     if (!entries.length) return "";
     return `<section class="palette-group">
       <header class="palette-group-head"><span>${category}</span><span>${entries.length}</span></header>
-      ${entries.map(([type, spec]) => `<button class="palette-item" draggable="true" data-block-type="${type}" style="--accent:${spec.accent}">
+      ${entries.map(([type, spec]) => `<button class="palette-item" draggable="true" data-block-type="${type}" style="--accent:${spec.accent}" title="${escapeHtml(spec.label)} — ${escapeHtml(spec.description)}">
         <span class="palette-icon">${ICONS[spec.icon]}</span>
         <span class="palette-copy">
           <span class="palette-name">${escapeHtml(spec.label)}</span>
@@ -50,7 +51,7 @@ export function paletteRender(query = "") {
 }
 
 export function loadTemplate(name, saveHistory = true) {
-  const template = TEMPLATES[name] || TEMPLATES.simulgen;
+  const template = TEMPLATES[name] || TEMPLATES.himgn;
   if (saveHistory && state.nodes.length) snapshot();
   state.nodes = template.nodes.map(([id, type, x, y, config]) => ({
     id, type, x, y, config: { ...BLOCK_SPECS[type].defaults, ...(config || {}) },
@@ -287,6 +288,14 @@ function compactPath(value) {
 
 export function nodeEvidenceLabel(node, spec) {
   const config = node.config || {};
+  // An Inference block's evidence is how many samples it predicted. Showing the
+  // count on the canvas is the difference between "did that run produce
+  // anything?" and having to open the block to find out -- and it distinguishes
+  // a finished run from one that only looks finished because the job completed.
+  if (node.type === "run.inference" && config.results_path) {
+    const count = Number(config.results_samples || 0);
+    return count ? `${count} predicted sample${count === 1 ? "" : "s"}` : compactPath(config.results_path);
+  }
   const evidence = compactPath(
     config.export_path
     || config.report_path
@@ -307,6 +316,7 @@ export function nodeEvidenceLabel(node, spec) {
   if (node.type === "optimize.design") return "No report yet";
   if (node.type === "output.export") return "No export yet";
   if (node.type === "deploy.api") return compactPath(config.checkpoint_path) || "Select checkpoint";
+  if (node.type === "run.inference") return "No results yet · Run to predict";
   if (node.type.startsWith("run.")) return "No run yet";
   const path = compactPath(config.path || config.output_dataset);
   if (path) return `path · ${path}`;
@@ -735,7 +745,7 @@ export function arrangeGraph() {
 
 export function setZoom(value, anchor = null) {
   const previous = state.view.scale;
-  const next = Math.min(1.6, Math.max(.45, value));
+  const next = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, value));
   if (anchor && next !== previous) {
     const rect = $("#stage").getBoundingClientRect();
     const localX = anchor.x - rect.left;
@@ -762,13 +772,29 @@ export function fitGraphView() {
   const maxX = Math.max(...state.nodes.map(node => node.x + NODE_WIDTH));
   const maxY = Math.max(...state.nodes.map(node => node.y + nodeHeight(node)));
   const rect = $("#stage").getBoundingClientRect();
-  const scale = Math.min(1.1, Math.max(.45, Math.min(
+  // "Fit" is the one gesture that explicitly asks to see everything, so it may
+  // zoom out past the manual floor. It used to share that floor, and then still
+  // centred as though the graph had fit: the overflow was split evenly across
+  // both edges, which parks the top row underneath .canvas-toolbar -- where the
+  // toolbar swallows pointer events and the blocks' sockets simply stop being
+  // clickable. Seven blocks in one column (what Auto layout produces before
+  // anything is wired) was already past that point.
+  const scale = Math.min(1.1, Math.max(FIT_MIN_ZOOM, Math.min(
     (rect.width - 90) / Math.max(1, maxX - minX),
     (rect.height - 110) / Math.max(1, maxY - minY)
   )));
+  const width = (maxX - minX) * scale;
+  const height = (maxY - minY) * scale;
   state.view.scale = scale;
-  state.view.x = (rect.width - (maxX - minX) * scale) / 2 - minX * scale;
-  state.view.y = (rect.height - (maxY - minY) * scale) / 2 - minY * scale;
+  // Centre only while the graph really fits; once it cannot, anchor to the
+  // top-left margin so the first blocks stay reachable and the rest is a pan
+  // away, instead of hiding a row behind the chrome at both ends.
+  state.view.x = width <= rect.width - 90
+    ? (rect.width - width) / 2 - minX * scale
+    : 45 - minX * scale;
+  state.view.y = height <= rect.height - 110
+    ? (rect.height - height) / 2 - minY * scale
+    : 55 - minY * scale;
   applyViewTransform();
   schedulePipelineSave();
 }

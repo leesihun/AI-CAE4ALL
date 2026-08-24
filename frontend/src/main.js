@@ -11,14 +11,35 @@ import { defaultCamera } from "./render3d.js";
 import { renderRuntimeJob, dismissRuntimeJob } from "./run.js";
 import { bindEvents } from "./events.js";
 import { restorePipelineState, savePipelineState } from "./persistence.js";
-import { applyGraphAutofill, autoFillMeta, markManualConfigValue } from "./autofill.js";
+import { applyGraphAutofill, autoFillMeta, markManualConfigValue, registerCheckpointRefresh } from "./autofill.js";
+
+function templateOptionsRender() {
+  const select = $("#templateSelect");
+  const saved = select.querySelector('option[value="saved"]');
+  select.innerHTML = "";
+  if (saved) select.append(saved);
+  Object.entries(TEMPLATES).forEach(([key, template]) => {
+    const option = document.createElement("option");
+    option.value = key;
+    option.textContent = template.name;
+    select.append(option);
+  });
+}
 
 function initialize() {
+  // Checkpoint metadata arrives after the first paint, so the canvas and the
+  // inspector have to be told to pick it up; without this a saved model block
+  // stays "auto-detect" until the next unrelated interaction.
+  registerCheckpointRefresh(() => {
+    applyGraphAutofill();
+    render();
+  });
   paletteRender();
+  templateOptionsRender();
   bindEvents();
   const params = new URLSearchParams(location.search);
   const review = params.get("review");
-  const template = review === "optimization" ? "generative" : "simulgen";
+  const template = review === "optimization" ? "generative" : "himgn";
   const restored = !review && restorePipelineState();
   if (restored) {
     $("#templateSelect").value = "saved";

@@ -1,5 +1,6 @@
 import { BLOCK_SPECS, MODEL_CATALOG } from "./constants.js";
 import { state } from "./state.js";
+import { checkpointMetadata, checkpointMetaNow } from "./api.js";
 
 const CSV_EXT = /\.csv$/i;
 const IMAGE_EXT = /\.(?:png|jpe?g|bmp|tiff?|webp)$/i;
@@ -108,9 +109,48 @@ function datasetPath(node) {
   return configPath(node, ["dataset_path", "truth_path", "path"]);
 }
 
+/**
+ * Ask the runtime what a checkpoint is, and re-run autofill once it answers.
+ *
+ * Synchronous by necessity -- `desiredAutofill` cannot await -- so the first
+ * pass sees nothing and requests the read; the resolution re-enters autofill
+ * with the answer cached. Both `checkpointMetadata` and the notifier are
+ * idempotent per path, so this cannot loop.
+ */
+let onCheckpointResolved = null;
+
+export function registerCheckpointRefresh(hook) {
+  onCheckpointResolved = typeof hook === "function" ? hook : null;
+}
+
+const checkpointSubscribed = new Set();
+
+function checkpointFacts(path) {
+  const value = text(path);
+  if (!value) return null;
+  const known = checkpointMetaNow(value);
+  if (known) return known.ok ? known : null;
+  if (checkpointSubscribed.has(value)) return null;
+  const pending = checkpointMetadata(value);
+  if (pending && typeof pending.then === "function") {
+    // One subscription per path, ever. Autofill runs several passes per call
+    // and is itself re-entered by the refresh, so subscribing per call would
+    // multiply the callbacks instead of adding one.
+    checkpointSubscribed.add(value);
+    pending.then(() => onCheckpointResolved?.());
+  }
+  return null;
+}
+
 function checkpointPaths(node) {
   if (!node) return {};
-  if (node.type === "source.checkpoint") return { checkpoint_path: configPath(node, ["path"]) };
+  if (node.type === "source.checkpoint") {
+    const path = configPath(node, ["path"]);
+    // The saved model names its own family. Without this, an Inference block
+    // fed from a checkpoint block had no way to know which method to launch,
+    // so it emitted no run step at all.
+    return { checkpoint_path: path, model_id: checkpointFacts(path)?.model || "" };
+  }
   const spec = BLOCK_SPECS[node.type];
   if (spec?.isModel) {
     return {
@@ -134,9 +174,13 @@ function outputArtifactPath(node) {
   if (!node) return "";
   if (node.type === "source.hdf5" || node.type === "source.cad" || node.type === "source.checkpoint") return configPath(node, ["path"]);
   if (node.type === "prep.geometry") return fromGeometryPath(configPath(node, ["output_dataset"]));
+  // `results_path` first: it is the only key that names where a finished run
+  // actually wrote its predictions, so without it the Evaluate Predictions block
+  // downstream of an Inference block received no prediction_path at all and had
+  // nothing to score.
   return configPath(node, [
-    "report_path", "metrics_csv", "prediction_path", "output_path", "output_csv",
-    "candidate_csv", "csv_path", "source_path", "path"
+    "results_path", "report_path", "metrics_csv", "prediction_path", "output_path",
+    "output_csv", "candidate_csv", "csv_path", "source_path", "path"
   ]) || text(node.optimizationReport);
 }
 
@@ -229,6 +273,19 @@ function designParameterAutofill(desired, node) {
 }
 
 function genericAutofill(desired, node) {
+  if (node.type === "source.checkpoint") {
+    // Read back what the file actually is, so a saved model on the canvas says
+    // which method trained it instead of the placeholder "auto-detect".
+    const facts = checkpointFacts(configPath(node, ["path"]));
+    if (facts?.model) {
+      const label = MODEL_CATALOG[facts.model]?.label || facts.model;
+      const epoch = Number.isFinite(Number(facts.epoch)) ? ` · epoch ${facts.epoch}` : "";
+      put(desired, node, "model_id", candidate(facts.model, node, "model family recorded in the checkpoint"));
+      put(desired, node, "compatibility", candidate(`${label}${epoch}`, node, `resolved from ${facts.model_source || "the checkpoint"}`));
+    }
+    return;
+  }
+
   if (node.type === "prep.geometry") {
     const link = linkedInputs(node, "geometry")[0];
     const path = configPath(link?.node, ["path"]);

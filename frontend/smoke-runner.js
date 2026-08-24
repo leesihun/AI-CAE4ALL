@@ -13,6 +13,14 @@ function assert(condition, message) {
 (async () => {
   const browser = await chromium.launch({ channel: "chrome", headless: true });
   const page = await browser.newPage({ viewport: { width: 1600, height: 960 } });
+  // The studio shows a one-time orientation card to first-run users, and every
+  // smoke run starts from a clean browser profile -- so without this it would
+  // meet that modal on every launch. Seed the "already welcomed" flag instead of
+  // clicking the card away, so the runs exercise the studio a returning user sees.
+  await page.addInitScript(() => {
+    try { localStorage.setItem("ai-cae4all.studio.welcomed.v1", "1"); } catch { /* storage blocked */ }
+  });
+
   const browserErrors = [];
   page.on("pageerror", error => browserErrors.push(`pageerror: ${error.message}`));
   page.on("console", message => {
@@ -26,15 +34,33 @@ function assert(condition, message) {
       assert((await page.locator(".route-health").innerText()).toLowerCase().includes("11/11 routes live"), "Live registry did not connect");
     }
 
-    const contract = await page.evaluate(() => ({
-      models: Object.keys(window.__AI_CAE_FRONTEND__.MODEL_CATALOG).length,
-      simulgenKeys: window.__AI_CAE_FRONTEND__.MODEL_CATALOG.simulgenvae.keys.length,
-      simulgenModes: window.__AI_CAE_FRONTEND__.MODEL_CATALOG.simulgenvae.modes.length
-    }));
+    // Key and required-key counts come from the live MethodSpec rather than
+    // being hard-coded, so a spec change reads as a spec change instead of as a
+    // frontend regression. What is asserted is that the UI reports the SAME
+    // numbers the launcher does -- which is the property that actually matters.
+    const contract = await page.evaluate(() => {
+      const model = window.__AI_CAE_FRONTEND__.MODEL_CATALOG.simulgenvae;
+      return {
+        models: Object.keys(window.__AI_CAE_FRONTEND__.MODEL_CATALOG).length,
+        simulgenKeys: model.keys.length,
+        simulgenModes: model.modes.length,
+        requiredTrain: (model.required?.train || []).length,
+        requiredReconstruct: (model.required?.reconstruct || []).length
+      };
+    });
+    // Ten *trainable* models -- one fewer than the 11 live routes above, which
+    // also count geometry_ingest (a data-prep utility with its own block, not a
+    // model). The key count tracks the live MethodSpec and moves when it does.
     assert(contract.models === 10, "Expected all ten live trainable model routes");
-    assert(contract.simulgenKeys === 67, "Expected all 67 SimulGen keys");
+    assert(contract.simulgenKeys === 68, "Expected all 68 SimulGen keys");
     assert(contract.simulgenModes === 4, "Expected all four SimulGen modes");
 
+    // This whole section is about the SimulGen pipeline's shape (it asserts the
+    // simulgen block, its condition wiring, and its link count), so load it
+    // explicitly instead of relying on it being the startup default -- which it
+    // stopped being when HI-MGN became the default template.
+    await page.locator("#templateSelect").selectOption("simulgen");
+    await page.waitForFunction(() => document.querySelectorAll(".node").length === 7);
     assert(await page.locator(".node").count() === 7, "Expected seven blocks in the SimulGen pipeline");
     assert(await page.locator("#edgeLayer path.edge").count() === 9, "Expected nine semantically valid default links");
     assert(
@@ -96,7 +122,7 @@ function assert(condition, message) {
       !(await page.locator("#studioShell").evaluate(element => element.classList.contains("inspector-collapsed"))),
       "Selecting a block did not open the inspector"
     );
-    assert((await page.locator("#inspectorContent").innerText()).includes("67 live keys"), "67-key inspector summary is missing");
+    assert((await page.locator("#inspectorContent").innerText()).includes(`${contract.simulgenKeys} live keys`), "Live-key inspector summary is missing");
     assert((await page.locator("#inspectorContent").innerText()).includes("Dataset gate"), "Fixed-geometry contract is missing");
     await page.waitForTimeout(300);
     await page.screenshot({ path: path.join(__dirname, "runtime", "pipeline-inspector.png"), fullPage: false });
@@ -166,8 +192,8 @@ function assert(condition, message) {
 
     await page.locator("#openFullConfig").click();
     assert(await page.locator("#configOverlay").evaluate(element => element.classList.contains("open")), "Configuration did not open");
-    assert((await page.locator("#configBadges").innerText()).includes("67 accepted"), "Accepted-key count is wrong");
-    assert((await page.locator("#configBadges").innerText()).includes("18 required"), "Train required-key count is wrong");
+    assert((await page.locator("#configBadges").innerText()).includes(`${contract.simulgenKeys} accepted`), "Accepted-key count is wrong");
+    assert((await page.locator("#configBadges").innerText()).includes(`${contract.requiredTrain} required`), "Train required-key count is wrong");
     assert((await page.locator("#configRaw").inputValue()).includes("vae_modelpath"), "VAE checkpoint key is missing");
     assert((await page.locator("#configRaw").inputValue()).includes("lc_modelpath"), "LC checkpoint key is missing");
     await page.screenshot({ path: path.join(__dirname, "runtime", "config-v2.png"), fullPage: false });
@@ -195,7 +221,7 @@ function assert(condition, message) {
     }
 
     await page.locator("#configMode").selectOption("reconstruct");
-    assert((await page.locator("#configBadges").innerText()).includes("13 required"), "Reconstruct required-key count is wrong");
+    assert((await page.locator("#configBadges").innerText()).includes(`${contract.requiredReconstruct} required`), "Reconstruct required-key count is wrong");
     await page.locator('[data-close="configOverlay"]').click();
 
     if (liveRuntime) {
@@ -338,6 +364,9 @@ function assert(condition, message) {
 
     const compactContext = await browser.newContext({ viewport: { width: 1366, height: 768 } });
     const compactPage = await compactContext.newPage();
+    await compactPage.addInitScript(() => {
+      try { localStorage.setItem("ai-cae4all.studio.welcomed.v1", "1"); } catch { /* storage blocked */ }
+    });
     compactPage.on("pageerror", error => browserErrors.push(`compact pageerror: ${error.message}`));
     compactPage.on("console", message => {
       if (message.type() === "error") browserErrors.push(`compact console: ${message.text()}`);
@@ -365,5 +394,6 @@ function assert(condition, message) {
   }
 })().catch(error => {
   console.error(`FAIL: ${error.message}`);
+  console.error(String(error.stack).split(String.fromCharCode(10)).slice(0, 6).join(" << "));
   process.exitCode = 1;
 });

@@ -1,4 +1,4 @@
-import { $, $$, toast, closeOverlay } from "./dom.js";
+import { $, $$, toast, closeOverlay, watchOverlayOrder, topOverlayId } from "./dom.js";
 import { state, snapshot } from "./state.js";
 import { BLOCK_SPECS, MODEL_CATALOG, NODE_WIDTH, NODE_HEADER_HEIGHT } from "./constants.js";
 import { apiRequest, requireRuntime } from "./api.js";
@@ -9,10 +9,27 @@ import {
   setPanelVisibility, dragNode, panCanvas, stopNodeDrag, stopCanvasPan,
   addBlock, deleteSelected, render, selectNode, startCanvasPan, renderEdges
 } from "./graph.js";
-import { validatePipeline, runGraph, stopRun, dismissRuntimeJob } from "./run.js";
+import { validatePipeline, runGraph, stopRun, dismissRuntimeJob, toggleDrawerCollapsed, watchModalsForDrawer } from "./run.js";
 import { openStudio } from "./studio.js";
 import { downloadPipelineJson, importPipelineJson, savePipelineState, schedulePipelineSave } from "./persistence.js";
 import { applyGraphAutofill, markManualConfigValue, resetManualConfigValues } from "./autofill.js";
+
+function undoGraphChange() {
+  const previous = state.history.pop();
+  if (!previous) {
+    toast("Nothing to undo.", "warn");
+    return;
+  }
+  const parsed = JSON.parse(previous);
+  state.nodes = parsed.nodes;
+  state.edges = parsed.edges;
+  applyGraphAutofill();
+  state.selectedNode = null;
+  state.selectedEdge = null;
+  render();
+  schedulePipelineSave();
+  toast("Undid the last graph change.");
+}
 
 function retainExplicitConfig(node) {
   resetManualConfigValues(node);
@@ -28,6 +45,7 @@ import {
 } from "./viewer.js";
 
 export function bindEvents() {
+  watchOverlayOrder();
   $("#blockSearch").addEventListener("input", event => paletteRender(event.target.value));
   $("#templateSelect").addEventListener("change", event => loadTemplate(event.target.value));
   $("#savePipeline").addEventListener("click", () => {
@@ -62,34 +80,13 @@ export function bindEvents() {
     }
   });
   $("#arrangeGraph").addEventListener("click", arrangeGraph);
-  $("#undoGraph").addEventListener("click", () => {
-    const previous = state.history.pop();
-    if (!previous) {
-      toast("Nothing to undo.", "warn");
-      return;
-    }
-    const parsed = JSON.parse(previous);
-    state.nodes = parsed.nodes;
-    state.edges = parsed.edges;
-    applyGraphAutofill();
-    state.selectedNode = null;
-    state.selectedEdge = null;
-    render();
-    schedulePipelineSave();
-    toast("Undid the last graph change.");
-  });
+  $("#undoGraph").addEventListener("click", undoGraphChange);
   $("#pipelineName").addEventListener("input", schedulePipelineSave);
   $("#validateTop").addEventListener("click", () => validatePipeline());
   $("#runTop").addEventListener("click", () => runGraph());
   $("#stopRun").addEventListener("click", stopRun);
   $("#runtimeCancel").addEventListener("click", stopRun);
-  $("#runtimeMinimize").addEventListener("click", () => {
-    $("#runtimeDrawer").classList.toggle("minimized");
-    const minimized = $("#runtimeDrawer").classList.contains("minimized");
-    $("#runtimeMinimize").textContent = minimized ? "+" : "−";
-    $("#runtimeMinimize").setAttribute("aria-expanded", String(!minimized));
-    $("#runtimeMinimize").setAttribute("aria-label", minimized ? "Expand runtime log" : "Minimize runtime log");
-  });
+  $("#runtimeMinimize").addEventListener("click", toggleDrawerCollapsed);
   $("#runtimeExperiments").addEventListener("click", () => openStudio("experiments"));
   $("#runtimeDismiss").addEventListener("click", dismissRuntimeJob);
   $("#runtimeCopyLog").addEventListener("click", async () => {
@@ -100,7 +97,6 @@ export function bindEvents() {
       toast("Clipboard access was unavailable; select the log text manually.", "warn");
     }
   });
-  $("#buildExe").addEventListener("click", () => openStudio("deploy"));
   $("#brandHome").addEventListener("click", () => {
     closeOverlay("studioOverlay");
     toast("Pipeline workspace ready.");
@@ -230,6 +226,11 @@ export function bindEvents() {
     const button = $("#preflightConfig");
     button.disabled = true;
     button.textContent = "Running real preflight…";
+    // The panel used to keep the previous verdict on screen for the ~6s the
+    // authoritative preflight takes, so a confident answer about fields that had
+    // since been edited was indistinguishable from a fresh one.
+    state.configMessages = [{ type: "", text: "Running the authoritative launcher preflight… the verdict below is from the previous run until it returns." }];
+    renderConfig();
     try {
       const modelId = BLOCK_SPECS[node.type].modelId;
       const text = `${rawConfig(node.config, MODEL_CATALOG[modelId].keys)}\n`;
@@ -323,6 +324,13 @@ export function bindEvents() {
   });
   $("#stage").addEventListener("pointerdown", event => {
     if (event.target === $("#stage") || event.target === $("#canvasWorld")) {
+      // Clicking bare canvas has to take focus off whatever field held it.
+      // The canvas shortcuts are suppressed while a field is focused, and the
+      // canvas is not itself focusable, so without this the user renames the
+      // pipeline, clicks away, presses F to fit -- and instead of fitting, an
+      // "f" is appended to the pipeline name while every shortcut stays dead.
+      const active = document.activeElement;
+      if (active && active !== document.body && active.matches("input,textarea,select")) active.blur();
       startCanvasPan(event);
     }
   });
@@ -338,14 +346,135 @@ export function bindEvents() {
   });
   document.addEventListener("keydown", event => {
     if (event.key === "Escape") {
-      const open = [...$$(".overlay.open")].pop();
-      if (open) closeOverlay(open.id);
+      const open = topOverlayId();
+      if (open) closeOverlay(open);
       else {
         state.pendingPort = null;
         toast("Pending link cancelled.");
       }
+      return;
     }
-    if ((event.key === "Delete" || event.key === "Backspace") && !event.target.matches("input,textarea,select")) deleteSelected();
+
+    // Everything below is a canvas shortcut, so it must never fire while the
+    // user is typing a config value, a pipeline name, or a search term.
+    const typing = event.target.matches("input,textarea,select") || event.target.isContentEditable;
+    const chord = event.ctrlKey || event.metaKey;
+
+    if (chord && event.key.toLowerCase() === "z" && !typing) {
+      event.preventDefault();
+      undoGraphChange();
+      return;
+    }
+    if (chord && event.key === "Enter") {
+      event.preventDefault();
+      runGraph();
+      return;
+    }
+    if (chord) return;                       // leave every other browser chord alone
+
+    if (event.key === "?" ) {
+      event.preventDefault();
+      toggleShortcutsOverlay();
+      return;
+    }
+    if (typing) return;
+
+    if (event.key === "Delete" || event.key === "Backspace") { deleteSelected(); return; }
+    if (event.key === "/") {
+      event.preventDefault();
+      setPanelVisibility("library", true);
+      $("#blockSearch").focus();
+      $("#blockSearch").select();
+      return;
+    }
+    const key = event.key.toLowerCase();
+    if (key === "f") { fitGraphView(); return; }
+    if (key === "l") { arrangeGraph(); return; }
+    if (key === "v") { validatePipeline(); return; }
+    if (event.key === "+" || event.key === "=") { setZoom(state.view.scale * 1.12); return; }
+    if (event.key === "-" || event.key === "_") { setZoom(state.view.scale / 1.12); }
   });
+
+  $("#shortcutsTop").addEventListener("click", toggleShortcutsOverlay);
+  $("#welcomeDismiss").addEventListener("click", () => closeOverlay("welcomeOverlay"));
+  $("#welcomeTour").addEventListener("click", () => {
+    closeOverlay("welcomeOverlay");
+    toggleShortcutsOverlay();
+  });
+  watchModalsForDrawer();
+  maybeShowWelcome();
   window.addEventListener("resize", renderEdges);
+}
+
+const WELCOME_STORAGE_KEY = "ai-cae4all.studio.welcomed.v1";
+
+/**
+ * The studio boots straight into a populated pipeline, so there is no empty
+ * state in which to explain what a block is or what Validate does. Show the
+ * orientation card once per browser instead. A private-mode browser that throws
+ * on localStorage should still get a usable studio, so failures are swallowed.
+ */
+function maybeShowWelcome() {
+  // ?welcome=0 suppresses it and ?welcome=1 forces it. Smoke runners and demo
+  // machines start from a clean profile every time, so they would otherwise
+  // meet a modal on every launch; forcing it back is how you review the card
+  // itself without clearing storage by hand.
+  const wanted = new URLSearchParams(location.search).get("welcome");
+  if (wanted === "0") return;
+  if (wanted === "1") {
+    $("#welcomeOverlay")?.classList.add("open");
+    return;
+  }
+  let seen = true;
+  try {
+    seen = localStorage.getItem(WELCOME_STORAGE_KEY) === "1";
+  } catch {
+    return;                                  // storage blocked: never nag
+  }
+  if (seen) return;
+  $("#welcomeOverlay")?.classList.add("open");
+  try {
+    localStorage.setItem(WELCOME_STORAGE_KEY, "1");
+  } catch {
+    /* shown this session is better than a modal on every reload */
+  }
+}
+
+/**
+ * The canvas grew a real set of shortcuts, and an undiscoverable shortcut is
+ * worth about as much as no shortcut. The `?` panel is the only place that
+ * lists them, so it is generated from one table that doubles as the reference.
+ */
+const SHORTCUTS = [
+  ["Canvas", [
+    ["F", "Fit the whole pipeline in view"],
+    ["L", "Auto layout the blocks"],
+    ["+ / −", "Zoom in / out"],
+    ["Del", "Delete the selected block or link"],
+    ["Esc", "Close a dialog, or cancel a half-drawn link"]
+  ]],
+  ["Pipeline", [
+    ["Ctrl + Enter", "Run the pipeline"],
+    ["V", "Validate without running"],
+    ["Ctrl + S", "Save the pipeline in this browser"],
+    ["Ctrl + Z", "Undo the last graph change"]
+  ]],
+  ["Finding things", [
+    ["/", "Jump to the block search box"],
+    ["?", "Show or hide this list"]
+  ]]
+];
+
+function toggleShortcutsOverlay() {
+  const overlay = $("#shortcutsOverlay");
+  if (!overlay) return;
+  if (overlay.classList.contains("open")) {
+    closeOverlay("shortcutsOverlay");
+    return;
+  }
+  $("#shortcutsBody").innerHTML = SHORTCUTS.map(([group, rows]) => `<section class="shortcut-group">
+    <h3>${group}</h3>
+    ${rows.map(([keys, label]) => `<div class="shortcut-row"><kbd>${keys}</kbd><span>${label}</span></div>`).join("")}
+  </section>`).join("");
+  overlay.classList.add("open");
 }

@@ -8,6 +8,7 @@ from __future__ import annotations
 import csv
 import json
 import math
+import os
 import re
 import shutil
 import uuid
@@ -15,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from studio_backend.paths import FRONTEND_ROOT, RUNTIME_ROOT, SUITE_ROOT, relative, safe_repo_path, slug, utc_now
+from studio_backend.paths import result_roots
 
 
 def _finite_float(value: Any) -> float | None:
@@ -39,7 +41,7 @@ def run_field_evaluation(payload: dict[str, Any]) -> dict[str, Any]:
     except ImportError as exc:
         raise ValueError("Field evaluation requires h5py and numpy.") from exc
 
-    allowed = (SUITE_ROOT / "dataset", SUITE_ROOT / "output", SUITE_ROOT / "outputs", RUNTIME_ROOT)
+    allowed = result_roots()
     prediction_path = safe_repo_path(str(payload.get("prediction_path", "")), allowed)
     truth_path = safe_repo_path(str(payload.get("truth_path", "")), allowed)
     if not prediction_path.exists():
@@ -200,7 +202,7 @@ def comparison_schema(payload: dict[str, Any]) -> dict[str, Any]:
     common_columns: list[str] | None = None
     numeric_by_source: list[set[str]] = []
     for raw_path in raw_paths:
-        csv_path = safe_repo_path(raw_path, (SUITE_ROOT / "output", SUITE_ROOT / "outputs", RUNTIME_ROOT))
+        csv_path = safe_repo_path(raw_path, result_roots())
         if not csv_path.is_file() or csv_path.suffix.lower() != ".csv":
             raise ValueError(f"{raw_path!r} is not an existing CSV file.")
         with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
@@ -308,7 +310,7 @@ def run_model_comparison(payload: dict[str, Any]) -> dict[str, Any]:
     ranked: list[dict[str, Any]] = []
     total_rows = 0
     for raw_path in raw_paths:
-        csv_path = safe_repo_path(raw_path, (SUITE_ROOT / "output", SUITE_ROOT / "outputs", RUNTIME_ROOT))
+        csv_path = safe_repo_path(raw_path, result_roots())
         if not csv_path.is_file() or csv_path.suffix.lower() != ".csv":
             raise ValueError(f"{raw_path!r} is not an existing CSV file.")
         with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
@@ -399,6 +401,74 @@ def export_artifact(payload: dict[str, Any]) -> dict[str, Any]:
         "size": destination.stat().st_size,
         "created_at": utc_now(),
     }
+
+
+CANDIDATE_TABLE_NAME = "candidates.csv"
+
+
+def write_candidate_table(output_dir: Path) -> dict[str, Any] | None:
+    """Turn a generator run's `sample_*_meta.json` into a candidate CSV.
+
+    The Optimization block needs a CSV with numeric columns; SDFFlow's sample
+    mode writes STLs plus a metadata JSON that already holds exactly the right
+    numbers per shape (volume, area, extents, watertight, faces). Nothing joined
+    the two, so the `generator -> optimization` edge the shipped template draws
+    carried nothing usable and the only way to optimize generated geometry was
+    to build the table by hand outside the GUI.
+
+    Returns None when the directory holds no generator metadata, so callers can
+    treat "not a generation step" and "generation produced nothing" the same.
+    """
+    metas = sorted(output_dir.glob("sample_*_meta.json"))
+    if not metas:
+        return None
+    rows: list[dict[str, Any]] = []
+    for meta_path in metas:
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        seed = meta.get("seed")
+        cond_names = meta.get("cond_names") or []
+        cond_values = meta.get("cond_values")
+        # A batch's requested design point is what makes a sweep readable later;
+        # unconditional batches simply leave the columns blank.
+        requested = dict(zip(cond_names, cond_values)) if cond_values else {}
+        for entry in meta.get("results") or []:
+            if not entry.get("valid"):
+                continue
+            extents = list(entry.get("extents") or [])
+            while len(extents) < 3:
+                extents.append("")
+            volume = entry.get("volume")
+            area = entry.get("area")
+            row = {
+                "id": f"seed{seed}_{entry.get('index', len(rows)):03d}",
+                "seed": seed,
+                "volume": volume,
+                "area": area,
+                "bbox_x": extents[0],
+                "bbox_y": extents[1],
+                "bbox_z": extents[2],
+                "watertight": int(bool(entry.get("watertight"))),
+                "faces": entry.get("faces"),
+                "vertices": entry.get("vertices"),
+                "compactness": (volume / area) if isinstance(volume, (int, float)) and area else "",
+                "path": os.path.basename(str(entry.get("path", ""))),
+            }
+            for name in cond_names:
+                row[f"requested_{name}"] = requested.get(name, "")
+            rows.append(row)
+    if not rows:
+        return None
+    table = output_dir / CANDIDATE_TABLE_NAME
+    fieldnames = list(rows[0])
+    with table.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({key: row.get(key, "") for key in fieldnames})
+    return {"path": relative(table), "rows": len(rows)}
 
 
 def run_optimization(payload: dict[str, Any]) -> dict[str, Any]:

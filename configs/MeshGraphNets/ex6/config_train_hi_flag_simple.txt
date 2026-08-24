@@ -1,0 +1,85 @@
+% HI-MeshGraphNets (multiscale) arm for ex6, derived from
+% config_train_flag_simple.txt -- identical in every optimization and
+% architecture key, differing ONLY in the output paths and the multiscale block
+% below, so the roster's himgn_ex6 vs meshgraphnets_ex6 comparison isolates
+% the hierarchy. Matches the existing ex9 HI arm's shape (voronoi_seedmean,
+% 2 levels, mp_per_level 4/6/8/6/4).
+%   voronoi_clusters 250, 50 is sized off this slot's SMALLEST sample
+%   (1579 nodes), so no sample can be asked for more clusters than it has
+%   nodes.
+model	MeshGraphNets
+mode	train
+gpu_ids	0
+parallel_mode	ddp
+log_file_dir	../../output/meshgraphnets/ex6/train_hi_flag_simple.log
+modelpath	../output/meshgraphnets/ex6/model_hi_flag_simple.pth
+inference_output_dir	../output/meshgraphnets/rollout/ex6/model_hi_flag_simple
+%   ex6.h5: DeepMind flag_simple, 100 trajectories, full 401-step rollout.
+%   Cloth pinned to a pole in the wind, self-contact -> use_world_edges.
+%   UNLIKE cylinder_flow/deforming_plate, every trajectory shares the SAME
+%   1579-node/4606-edge template mesh (fixed topology), which none of ex1-ex3
+%   or the rest of ex4-ex6 exercise for a temporal AR dataset. node_type is
+%   schema-tagged "dynamic" by DeepMind but verified constant per trajectory
+%   in this build -- 7 rows, same node-type-guard caveat as cylinder_flow.
+%   ex6_infer.h5 holds out the 20 highest-motion trajectories as an
+%   extrapolation test; flag_simple has no stored per-trajectory control
+%   parameter (handle motion is ~constant across trajectories), so this is an
+%   outcome-magnitude proxy rather than a strict parameter extrapolation like
+%   ex4/ex5 -- see dataset/build_public_mgn.py and dataset/PUBLIC_DATASETS.md.
+dataset_dir	../dataset/ex6.h5
+infer_dataset	../dataset/ex6_infer.h5
+infer_timesteps	400
+split_seed	42
+input_var	3
+output_var	3
+feature_loss_weights	1.0, 1.0, 1.0
+edge_var	8
+positional_features	4
+%   Architecture matched to Pfaff et al. ICLR'21: 15 MP steps, latent 128,
+%   batch 2, LR 1e-4 (see ex4's config for the scheduler caveat).
+%   Training_epochs 625 extends the paper's confirmed cylinder_flow 10M-step
+%   budget to this dataset's own size (80 train traj x 400 transitions /
+%   batch 2 = 16,000 steps/epoch; 10,000,000 / 16,000 = 625) -- same
+%   same-order-of-magnitude assumption noted on ex5's config, flag_simple has
+%   no independently published step count either.
+'
+message_passing_num	15
+Training_epochs	625
+Batch_size	2
+LearningR	0.0001
+Latent_dim	128
+num_workers	2
+prefetch_factor	2
+pin_memory	True
+std_noise	0.01
+weight_decay	0.0001
+augment_geometry	False
+grad_accum_steps	1
+'
+use_checkpointing	False
+'
+use_amp	True
+use_ema	True
+ema_decay	0.99
+test_interval	10
+val_interval	5
+'
+use_node_types	True
+'
+use_world_edges	True
+'
+test_batch_idx	0, 1, 2
+plot_feature_idx	-1
+'
+use_multiscale	True
+coarsening_type	voronoi_seedmean
+voronoi_clusters	250, 50
+multiscale_levels	2
+mp_per_level	4, 6, 8, 6, 4
+%   coarse_world_edges stays False (the native default): contact edges are built
+%   at the finest level only. Lifting them into coarse levels would be a second
+%   difference from the flat arm and is left as a separate ablation.
+coarse_world_edges	False
+'
+time_integration	ar_ot
+cond_var	0

@@ -242,6 +242,29 @@ def _refresh_multiscale(graph, deformed_pos, ctx):
         current_pos = _refresh_one_partition(graph, str(level), current_pos, mean, std)
 
 
+def _displacement(state, ctx):
+    """The 3-D displacement implied by `state`, whatever its channel count.
+
+    Rows 3:6 of the shared contract are a displacement vector, but a model may
+    predict fewer than three of them -- ex9 plasticity solves a 2-D problem and
+    carries `input_var 2`. `inference_profiles/rollout.py` has always padded for
+    that case; AR-RT, which its own docstring calls the training-time twin of
+    that construction, sliced `state[:, :3]` unconditionally and so died on the
+    first step with "size of tensor a (3) must match the size of tensor b (2)".
+    Rollout training was therefore impossible for every 2-D dataset in the
+    suite, ex9 included.
+
+    Padding with a fresh zero block rather than assigning in place keeps the
+    result safe to differentiate through the gradient checkpoint.
+    """
+    if ctx.input_var >= 3:
+        return state[:, :3]
+    pad = torch.zeros(
+        state.shape[0], 3 - ctx.input_var, dtype=state.dtype, device=state.device
+    )
+    return torch.cat([state[:, :ctx.input_var], pad], dim=1)
+
+
 def _world_edge_search(graph, state, ctx):
     """Contact connectivity for `state` — the part that must NOT be checkpointed.
 
@@ -254,7 +277,7 @@ def _world_edge_search(graph, state, ctx):
     if not (ctx.use_world_edges and ctx.world_edge_radius is not None):
         return None
     with torch.no_grad():
-        deformed_pos = graph.pos + state[:, :3]
+        deformed_pos = graph.pos + _displacement(state, ctx)
         return world_edge_index_torch(
             deformed_pos, graph.edge_index,
             radius=float(ctx.world_edge_radius),
@@ -285,7 +308,7 @@ def _apply_state(graph, state, ctx, static_node_features, reference_edge_attr,
     normalized = (physical - ctx.node_mean) / ctx.node_std
     graph.x = torch.cat([normalized, static_node_features], dim=1)
 
-    deformed_pos = graph.pos + state[:, :3]
+    deformed_pos = graph.pos + _displacement(state, ctx)
 
     deformed_half = deformed_edge_attr_torch(deformed_pos, graph.edge_index)
     deformed_half = (deformed_half - ctx.edge_mean_def) / ctx.edge_std_def

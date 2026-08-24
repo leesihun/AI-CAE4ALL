@@ -1,8 +1,14 @@
 #!/usr/bin/env bash
 # All-in-one INFERENCE campaign for the ex4-ex9 benchmark roster
-# (configs/benchmarks_all/roster.tsv). Requires checkpoints already produced
-# by configs/benchmarks_all/train_all.sh (or equivalent) at each config's
-# `modelpath`.
+# (configs/benchmarks_all/roster.tsv): the same 42 arms train_all.sh trains --
+# a complete 7-model x 6-dataset grid as of 2026-08-24. Requires checkpoints
+# already produced by configs/benchmarks_all/train_all.sh (or equivalent) at
+# each config's `modelpath`.
+#
+# There is no separate inference roster and there are no separate inference
+# config files: this campaign reuses the TRAIN configs verbatim (see below),
+# so an arm added to roster.tsv for training automatically gains an inference
+# arm here.
 #
 # Each arm's canonical TRAIN config is never edited: campaign_runner.py
 # derives a run-scoped inference copy by rewriting `mode train` ->

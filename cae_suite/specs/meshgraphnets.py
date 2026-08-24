@@ -18,6 +18,10 @@ from .base import (
 MGN_KEYS = frozenset(
     {
         "model", "mode", "gpu_ids", "parallel_mode", "log_file_dir", "modelpath",
+        # Warm start: weights to initialize training from. The pretrain-one-step
+        # then fine-tune-on-rollout recipe (time_integration ar_ot -> ar_rt) is
+        # unexpressible without it.
+        "init_modelpath",
         "dataset_dir", "infer_dataset", "inference_output_dir", "infer_timesteps",
         "split_seed", "input_var", "output_var", "cond_var", "feature_loss_weights", "edge_var",
         "positional_features", "message_passing_num", "training_epochs", "batch_size",
@@ -226,6 +230,7 @@ def build_meshgraphnets_spec() -> MethodSpec:
         defaults_by_mode={"inference": {"inference_output_dir": "outputs/rollout"}},
         path_rules=(
             PathRule("dataset_dir", PathKind.INPUT_FILE, frozenset({"train"})),
+            PathRule("init_modelpath", PathKind.INPUT_FILE, frozenset({"train"})),
             PathRule("modelpath", PathKind.OUTPUT_FILE, frozenset({"train"})),
             PathRule("modelpath", PathKind.INPUT_FILE, frozenset({"inference"})),
             PathRule("infer_dataset", PathKind.INPUT_FILE, frozenset({"inference"})),

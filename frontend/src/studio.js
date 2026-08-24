@@ -1,4 +1,5 @@
-import { $, $$, escapeHtml, toast, formatBytes } from "./dom.js";
+import { $, $$, on, escapeHtml, toast, formatBytes, closeOverlay } from "./dom.js";
+import { applyPipelineDocument, savePipelineState } from "./persistence.js";
 import { state, snapshot } from "./state.js";
 import { ICONS, MODEL_CATALOG, BLOCK_SPECS, STUDIO_SECTIONS } from "./constants.js";
 import { apiRequest } from "./api.js";
@@ -134,7 +135,7 @@ async function renderModelConfigs(container, modelId) {
     <span><strong>${formatBytes(item.size)}</strong><small>${escapeHtml(item.modified)}</small></span>
     <span class="live-actions"><button class="button small primary" data-load-config="${escapeHtml(item.path)}">Load into block</button></span>
   </article>`).join("") || `<div class="live-empty">No checked-in configuration declares model ${escapeHtml(modelId)}.</div>`}</div>`;
-  $("#liveBackModels").addEventListener("click", () => renderModelsWorkspace(container));
+  on("#liveBackModels", "click", () => renderModelsWorkspace(container));
   $$("[data-load-config]", container).forEach(load => load.addEventListener("click", () => loadConfigExample(modelId, load.dataset.loadConfig)));
   return configs;
 }
@@ -205,12 +206,12 @@ async function renderModelDetail(container, model) {
     <span><strong>${job.returncode == null ? "running" : `exit ${job.returncode}`}</strong><small>${escapeHtml(job.step_label || "queued")}</small></span>
     <span class="live-actions">${metricJobIds.has(job.id) ? `<button class="button small" data-model-metrics-job="${escapeHtml(job.id)}">Metrics</button>` : ""}<button class="button small primary" data-open-job="${escapeHtml(job.id)}">Open log</button></span>
   </article>`).join("") || `<div class="live-empty">No persisted Studio job identifies ${escapeHtml(model.model)} yet. Run a configured block to see status here.</div>`}</div>`;
-  $("#liveBackModels").addEventListener("click", () => renderModelsWorkspace(container));
-  $("#modelConfigSearch").addEventListener("input", event => {
+  on("#liveBackModels", "click", () => renderModelsWorkspace(container));
+  on("#modelConfigSearch", "input", event => {
     $("#modelConfigList").innerHTML = modelConfigRows(model.known_keys, configValues, event.target.value, currentNode);
   });
-  $("#modelEditConfig").addEventListener("click", () => editModelConfig(model.model));
-  $("#modelConfigureLlm").addEventListener("click", () => editModelConfig(model.model, true));
+  on("#modelEditConfig", "click", () => editModelConfig(model.model));
+  on("#modelConfigureLlm", "click", () => editModelConfig(model.model, true));
   $$("[data-live-model]", container).forEach(button => button.addEventListener("click", () => {
     editModelConfig(button.dataset.liveModel);
   }));
@@ -383,7 +384,7 @@ async function renderTrainingMetricsWorkspace(container, nodeId = "", preferredJ
   if (!jobs.length) {
     container.innerHTML = `<div class="live-toolbar"><span><strong>Train Metrics</strong><small>Actual Studio job logs only</small></span><button class="button small" id="metricsBackJobs">All jobs</button></div>
       <div class="live-empty"><strong>No epoch metrics were found.</strong><br><br>Run a connected model first. Any metric written on an Epoch, Iteration, or Step line will appear automatically.</div>`;
-    $("#metricsBackJobs").addEventListener("click", () => renderJobsWorkspace(container));
+    on("#metricsBackJobs", "click", () => renderJobsWorkspace(container));
     return;
   }
 
@@ -433,26 +434,26 @@ async function renderTrainingMetricsWorkspace(container, nodeId = "", preferredJ
         }).join("") : `<div class="live-empty training-no-plots"><strong>No metrics selected.</strong><br><br>Check one or more metric items, or choose Plot all.</div>`}</section>
       </div>`;
 
-    $("#trainingJob").addEventListener("change", event => {
+    on("#trainingJob", "change", event => {
       const next = jobs.find(job => job.job_id === event.target.value);
       if (!next) return;
       selected = next;
       setMetricNodeConfig(node, { job_id: next.job_id, excluded_metrics: "" });
       renderDashboard();
     });
-    $("#metricsSelectAll").addEventListener("click", () => {
+    on("#metricsSelectAll", "click", () => {
       setMetricNodeConfig(node, { excluded_metrics: "" });
       renderDashboard();
     });
-    $("#metricsSelectNone").addEventListener("click", () => {
+    on("#metricsSelectNone", "click", () => {
       setMetricNodeConfig(node, { excluded_metrics: selected.metrics.map(metric => metric.key).join(",") });
       renderDashboard();
     });
-    $("#metricsSmoothing").addEventListener("change", event => {
+    on("#metricsSmoothing", "change", event => {
       setMetricNodeConfig(node, { smoothing: event.target.value });
       renderDashboard();
     });
-    $("#metricsDownload").addEventListener("click", () => downloadMetricCsv(selected, visible));
+    on("#metricsDownload", "click", () => downloadMetricCsv(selected, visible));
     $$("[data-metric-toggle]", container).forEach(control => control.addEventListener("change", () => {
       const nextExcluded = metricExclusions(node);
       if (control.checked) nextExcluded.delete(control.dataset.metricToggle);
@@ -460,9 +461,9 @@ async function renderTrainingMetricsWorkspace(container, nodeId = "", preferredJ
       setMetricNodeConfig(node, { excluded_metrics: [...nextExcluded].join(",") });
       renderDashboard();
     }));
-    $("#metricsRefresh").addEventListener("click", () => renderTrainingMetricsWorkspace(container, nodeId, selected.job_id, linkedModel));
-    $("#metricsBackJobs").addEventListener("click", () => renderJobsWorkspace(container));
-    $("#metricsOpenLog").addEventListener("click", async () => {
+    on("#metricsRefresh", "click", () => renderTrainingMetricsWorkspace(container, nodeId, selected.job_id, linkedModel));
+    on("#metricsBackJobs", "click", () => renderJobsWorkspace(container));
+    on("#metricsOpenLog", "click", async () => {
       const job = await apiRequest(`/api/jobs/${encodeURIComponent(selected.job_id)}`);
       renderRuntimeJob(job);
     });
@@ -516,7 +517,7 @@ export async function renderFilesWorkspace(container, kind) {
     }));
   };
   renderRows("");
-  $("#liveFileSearch").addEventListener("input", event => renderRows(event.target.value));
+  on("#liveFileSearch", "input", event => renderRows(event.target.value));
 }
 
 export async function inspectHdf5(container, path, kind) {
@@ -530,7 +531,7 @@ export async function inspectHdf5(container, path, kind) {
         <span><strong>${escapeHtml(item.dtype || "group")}</strong><small>${item.attrs ? `${Object.keys(item.attrs).length} attrs` : ""}</small></span>
         <span></span>
       </article>`).join("")}</div>`;
-    $("#liveBackFiles").addEventListener("click", () => renderFilesWorkspace(container, kind));
+    on("#liveBackFiles", "click", () => renderFilesWorkspace(container, kind));
   } catch (error) {
     liveError(container, error);
   }
@@ -546,12 +547,29 @@ export async function renderJobsWorkspace(container) {
     <span><strong>${escapeHtml(job.label)}</strong><small>${escapeHtml(job.id)} · ${escapeHtml(job.created_at)}</small></span>
     <span class="chip-row"><span class="chip">${escapeHtml(job.status)}</span><span class="chip">${job.current_step}/${job.total_steps}</span></span>
     <span><strong>${job.returncode == null ? "running" : `exit ${job.returncode}`}</strong><small>${escapeHtml(job.step_label || "queued")}</small></span>
-    <span class="live-actions">${metricJobs.has(job.id) ? `<button class="button small" data-job-metrics="${escapeHtml(job.id)}">Metrics</button>` : ""}<button class="button small primary" data-open-job="${escapeHtml(job.id)}">Open log</button></span>
+    <span class="live-actions">${job.has_pipeline ? `<button class="button small" data-load-pipeline="${escapeHtml(job.id)}">Load pipeline</button>` : ""}${metricJobs.has(job.id) ? `<button class="button small" data-job-metrics="${escapeHtml(job.id)}">Metrics</button>` : ""}<button class="button small primary" data-open-job="${escapeHtml(job.id)}">Open log</button></span>
   </article>`).join("") || `<div class="live-empty">No Studio jobs have been started. Run or validate a configured block.</div>`}</div>`;
-  $("#refreshJobs").addEventListener("click", () => renderJobsWorkspace(container));
+  on("#refreshJobs", "click", () => renderJobsWorkspace(container));
   $$("[data-open-job]", container).forEach(button => button.addEventListener("click", async () => {
     const job = await apiRequest(`/api/jobs/${encodeURIComponent(button.dataset.openJob)}`);
     renderRuntimeJob(job);
+  }));
+  // Restores the exact graph a run was launched from, saved alongside the job.
+  $$("[data-load-pipeline]", container).forEach(button => button.addEventListener("click", async () => {
+    try {
+      const job = await apiRequest(`/api/jobs/${encodeURIComponent(button.dataset.loadPipeline)}`);
+      if (!job.pipeline) {
+        toast("This run has no saved pipeline.", "warn");
+        return;
+      }
+      applyPipelineDocument(job.pipeline);
+      savePipelineState();
+      closeOverlay("studioOverlay");
+      render();
+      toast(`Loaded the pipeline from ${job.label || "this run"}.`);
+    } catch (error) {
+      toast(`Could not load that pipeline: ${error.message}`, "error");
+    }
   }));
   $$("[data-job-metrics]", container).forEach(button => button.addEventListener("click", () => {
     const metricJob = metricJobs.get(button.dataset.jobMetrics);
@@ -575,13 +593,13 @@ export async function renderDocsWorkspace(container) {
     $$("[data-open-doc]", container).forEach(button => button.addEventListener("click", () => openLiveDoc(container, button.dataset.openDoc)));
   };
   renderRows("");
-  $("#liveDocSearch").addEventListener("input", event => renderRows(event.target.value));
+  on("#liveDocSearch", "input", event => renderRows(event.target.value));
 }
 
 export async function openLiveDoc(container, path) {
   const doc = await apiRequest(`/api/doc?path=${encodeURIComponent(path)}`);
   container.innerHTML = `<div class="live-toolbar"><strong>${escapeHtml(doc.path)}</strong><button class="button small" id="liveBackDocs">Back to documents</button></div><pre class="live-document">${escapeHtml(doc.text)}</pre>`;
-  $("#liveBackDocs").addEventListener("click", () => renderDocsWorkspace(container));
+  on("#liveBackDocs", "click", () => renderDocsWorkspace(container));
 }
 
 export async function renderSystemWorkspace(container) {
@@ -615,8 +633,8 @@ export async function renderSystemWorkspace(container) {
     </div>
     <button class="button primary" id="saveLlmSettings" style="margin-top:8px">Save LLM settings</button>
   </div>`;
-  $("#runConfigAudit").addEventListener("click", () => runConfigAudit(container));
-  $("#saveLlmSettings").addEventListener("click", async () => {
+  on("#runConfigAudit", "click", () => runConfigAudit(container));
+  on("#saveLlmSettings", "click", async () => {
     const button = $("#saveLlmSettings");
     button.disabled = true;
     try {
@@ -675,10 +693,25 @@ async function runConfigAudit(container) {
 
 export async function renderBenchmarksWorkspace(container) {
   const configs = await apiRequest("/api/configs");
-  const items = configs.items.filter(item => item.path.toLowerCase().includes("benchmarks/"));
-  container.innerHTML = `<div class="live-toolbar"><span><strong>Checked-in benchmark protocols</strong><small>${items.length} real configs</small></span></div><div class="live-list">${items.map(item => `<article class="live-row">
+  const byPath = new Map(configs.items.map(item => [item.path, item]));
+  // Prefer the campaign roster. Filtering configs by a "benchmarks/" path
+  // finds nothing, because the arms live under each method's own config tree
+  // and only the roster knows which of them form the benchmark set.
+  const roster = await apiRequest("/api/benchmarks").catch(() => ({ items: [] }));
+  const items = roster.items?.length
+    ? roster.items.map(entry => ({
+      ...(byPath.get(entry.path) || {}),
+      name: entry.label || entry.path.split("/").pop(),
+      path: entry.path,
+      size: entry.size,
+      missing: !entry.exists,
+      ex_slot: entry.ex_slot,
+      light: entry.light
+    }))
+    : configs.items.filter(item => item.path.toLowerCase().includes("benchmarks/"));
+  container.innerHTML = `<div class="live-toolbar"><span><strong>Checked-in benchmark protocols</strong><small>${items.length} real configs${roster.roster ? ` · ${escapeHtml(roster.roster)}` : ""}${items.some(item => item.missing) ? ` · ${items.filter(item => item.missing).length} missing on disk` : ""}</small></span></div><div class="live-list">${items.map(item => `<article class="live-row">
     <span><strong>${escapeHtml(item.name)}</strong><small>${escapeHtml(item.path)}</small></span>
-    <span class="chip-row"><span class="chip">${escapeHtml(item.model || "unknown")}</span><span class="chip">${escapeHtml(item.mode || "unknown")}</span></span>
+    <span class="chip-row"><span class="chip">${escapeHtml(item.model || "unknown")}</span><span class="chip">${escapeHtml(item.mode || "unknown")}</span>${item.ex_slot ? `<span class="chip">${escapeHtml(item.ex_slot)}</span>` : ""}${item.missing ? '<span class="chip">missing</span>' : ""}</span>
     <span><strong>${formatBytes(item.size)}</strong><small>checked in · not executed here</small><small class="benchmark-preflight-result" data-benchmark-result="${escapeHtml(item.path)}"></small></span>
     <span class="live-actions"><button class="button small" data-benchmark-preflight="${escapeHtml(item.path)}">Preflight</button>${BLOCK_SPECS[`model.${item.model}`] ? `<button class="button small primary" data-benchmark-config="${escapeHtml(item.path)}" data-benchmark-model="${escapeHtml(item.model)}">Load</button>` : ""}</span>
   </article>`).join("")}</div>`;
@@ -806,9 +839,9 @@ export async function renderDeployWorkspace(container, nodeId = null) {
   };
   renderCheckpointWarning();
   ["deployCheckpoint", "deployInput", "deployOutput", "deployTimesteps", "deploySamples", "deployOdeSteps", "deployConditions"]
-    .forEach(id => $("#" + id).addEventListener("change", persistDeploy));
-  $("#deployCheckpoint").addEventListener("change", renderCheckpointWarning);
-  $("#runPortableInference").addEventListener("click", async () => {
+    .forEach(id => on("#" + id, "change", persistDeploy));
+  on("#deployCheckpoint", "change", renderCheckpointWarning);
+  on("#runPortableInference", "click", async () => {
     const checkpoint = $("#deployCheckpoint").value;
     if (!checkpoint) {
       toast("Select a real checkpoint first.", "error");
@@ -841,7 +874,7 @@ export async function renderDeployWorkspace(container, nodeId = null) {
       toast(error.message, "error");
     }
   });
-  $("#buildPortableExe").addEventListener("click", async () => {
+  on("#buildPortableExe", "click", async () => {
     if (!window.confirm("Build the real PyInstaller bundle? This can take several minutes and writes only under frontend/runtime/deploy.")) return;
     try {
       const job = await apiRequest("/api/build/exe", { method: "POST", body: {} });
@@ -946,10 +979,10 @@ export async function renderOptimizationWorkspace(container, nodeId = null) {
       $("#optimizationSchema").innerHTML = `<div class="live-empty"><strong>Schema inspection failed</strong><br><br>${escapeHtml(error.message)}</div>`;
     }
   };
-  $("#optimizationCsv").addEventListener("change", inspectCsv);
-  $("#optimizationConstraints").addEventListener("change", persistControls);
-  $("#optimizationTopK").addEventListener("change", persistControls);
-  $("#runOptimization").addEventListener("click", async () => {
+  on("#optimizationCsv", "change", inspectCsv);
+  on("#optimizationConstraints", "change", persistControls);
+  on("#optimizationTopK", "change", persistControls);
+  on("#runOptimization", "click", async () => {
     const csvPath = $("#optimizationCsv").value;
     const objectives = selectedObjectives();
     if (!csvPath || !objectives.length) {
@@ -1046,7 +1079,7 @@ export async function renderFieldEvaluationWorkspace(container, nodeId = null) {
   };
   ["evaluationPrediction", "evaluationTruth", "evaluationPredictionStart", "evaluationTruthStart", "evaluationFields"]
     .forEach(id => $("#" + id).addEventListener("change", persistEvaluation));
-  $("#runFieldEvaluation").addEventListener("click", async () => {
+  on("#runFieldEvaluation", "click", async () => {
     if (!$("#evaluationPrediction").value || !$("#evaluationTruth").value) {
       toast("Select both prediction and ground-truth HDF5 files.", "error");
       return;
@@ -1084,7 +1117,7 @@ export async function renderFieldEvaluationWorkspace(container, nodeId = null) {
         <span><strong>${Number(mae.mean).toExponential(4)}</strong><small>mean MAE</small></span>
         <span><strong>${Number(rmse.mean).toExponential(4)}</strong><small>mean RMSE</small></span>
       </div><div class="live-toolbar"><span><strong>Evidence saved</strong><small>${escapeHtml(report.per_sample_csv)} · ${escapeHtml(report.report_path)}${report.skipped.length ? ` · ${report.skipped.length} skipped` : ""}</small></span><button class="button small" id="exportEvaluation">Open Export</button></div>`;
-      $("#exportEvaluation").addEventListener("click", () => openStudio("export"));
+      on("#exportEvaluation", "click", () => openStudio("export"));
       toast(`Evaluated ${report.evaluated_samples} actual field samples.`);
     } catch (error) {
       toast(`Evaluation failed: ${error.message}`, "error");
@@ -1358,10 +1391,10 @@ export async function renderComparisonWorkspace(container, nodeId = null) {
   };
   $$("[data-run-select]").forEach(select => select.addEventListener("change", refreshComparisonSchema));
   $$("[data-remove-run]").forEach(button => button.addEventListener("click", refreshComparisonSchema));
-  $("#comparisonGroup").addEventListener("change", persistCsvComparison);
-  $("#comparisonMetric").addEventListener("change", persistCsvComparison);
-  $("#comparisonDirection").addEventListener("change", persistCsvComparison);
-  $("#comparisonAddRun").addEventListener("click", () => {
+  on("#comparisonGroup", "change", persistCsvComparison);
+  on("#comparisonMetric", "change", persistCsvComparison);
+  on("#comparisonDirection", "change", persistCsvComparison);
+  on("#comparisonAddRun", "click", () => {
     if ($$("[data-run-row]").length >= 12) {
       toast("Compare at most 12 runs at once.", "warn");
       return;
@@ -1380,7 +1413,7 @@ export async function renderComparisonWorkspace(container, nodeId = null) {
     });
   });
   await refreshComparisonSchema();
-  $("#runComparison").addEventListener("click", async () => {
+  on("#runComparison", "click", async () => {
     const csvPaths = selectedCsvPaths();
     if (!csvPaths.length) {
       toast("Select at least one real comparison CSV.", "error");
@@ -1455,9 +1488,9 @@ export async function renderExportWorkspace(container, nodeId = null) {
     snapshot();
     assignManualConfig(node, next);
   };
-  $("#exportPath").addEventListener("change", persistExport);
-  $("#exportLabel").addEventListener("change", persistExport);
-  $("#runExport").addEventListener("click", async () => {
+  on("#exportPath", "change", persistExport);
+  on("#exportLabel", "change", persistExport);
+  on("#runExport", "click", async () => {
     if (!$("#exportPath").value) {
       toast("Select or enter an existing repository artifact path.", "error");
       return;

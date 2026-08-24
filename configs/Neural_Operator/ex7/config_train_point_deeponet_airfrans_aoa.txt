@@ -1,0 +1,92 @@
+% ex7.h5/ex7_infer.h5 on Neural_Operator -- reads the same MGN HDF5 with no
+% conversion step. AirfRANS's published angle-of-attack EXTRAPOLATION split (804 train /
+%   196 test) -- test AoAs fall outside the train AoA range, which is the
+%   actual reason this dataset was picked. T=1 static regression over
+%   161k-194k nodes per sample. cond_var 5 = the trailing input-only rows
+%   (u_inf_x, u_inf_y, sdf, n_x, n_y). training_epochs 398 is AirfRANS's own
+%   published protocol, shared across every baseline architecture there.
+% See dataset/PUBLIC_DATASETS.md and dataset/build_public_mgn.py.
+model                          point_deeponet
+mode                           train
+gpu_ids                        0
+parallel_mode                  ddp
+log_file_dir                   ../../output/neural_operator/ex7/point_deeponet_airfrans_aoa.log
+modelpath                      ../output/neural_operator/ex7/point_deeponet_airfrans_aoa.pth
+dataset_dir                    ../dataset/ex7.h5
+infer_dataset                  ../dataset/ex7_infer.h5
+inference_output_dir           ../output/neural_operator/rollout/ex7/point_deeponet_airfrans_aoa
+infer_timesteps                1
+split_seed                     42
+input_var                      4
+output_var                     4
+feature_loss_weights           1.0, 1.0, 1.0, 1.0
+positional_features            4
+use_node_types                 True
+coordinate_normalization       centered_isotropic
+operator_dim                   auto
+dimension_tolerance            0.0001
+grid_padding                   0.05
+out_of_bounds_policy           error
+%   Optional geometric signals are not present in this conversion
+sdf_source                     none
+sdf_sidecar                    none
+global_condition_features      none
+integration_weight_source      none
+%   Point-DeepONet: PointNet branch over a sampled sensor subset + SIREN trunk.
+%   point_sensor_count 4096 stays under this slot's SMALLEST sample (160863 nodes),
+%   so every sample can supply a full sensor set without padding.
+point_variant                  mesh_state
+point_sensor_count             4096
+point_sampling                 random
+point_resample_each_epoch      True
+point_hidden_channels          128
+point_feature_dim              128
+pointnet_depth                 3
+pointnet_activation            relu
+pointnet_norm                  batch
+point_branch_merge             sum
+point_condition_depth          2
+point_trunk_depth              3
+point_refiner_depth            2
+point_siren_omega0             30.0
+point_output_activation        identity
+%   Optimization is copied VERBATIM from this slot's gino arm -- same epochs,
+%   batch, LR, warmup, noise, EMA and AMP -- so the roster compares ARCHITECTURES
+%   on an identical training budget. No published baseline pins this model on
+%   this dataset, so the sibling arm is the only defensible reference point.
+training_epochs                398
+batch_size                     1
+learningr                      0.0001
+weight_decay                   0.0001
+warmup_epochs                  3
+num_workers                    2
+prefetch_factor                2
+grad_accum_steps               1
+max_grad_norm                  3.0
+std_noise                      0.01
+noise_gamma                    1
+augment_geometry               False
+%   Runtime and evaluation
+use_amp                        True
+use_checkpointing              True
+use_ema                        True
+ema_decay                      0.99
+use_compile                    False
+%   ex7's ~170k query points are chunked to bound activation memory,
+%   the generic equivalent of the gino arm's gino_query_chunk_size.
+train_query_chunk_size         20000
+infer_query_chunk_size         20000
+val_interval                   5
+test_interval                  10
+test_max_batches               20
+test_batch_idx                 0, 1
+plot_feature_idx               -1
+display_trainset               True
+display_testset                True
+checkpoint_interval            10
+write_preprocessing            False
+use_world_edges                False
+use_multiscale                 False
+%   Time integration: ar_ot = one-step/teacher-forced (default)
+time_integration               ar_ot
+cond_var                       5

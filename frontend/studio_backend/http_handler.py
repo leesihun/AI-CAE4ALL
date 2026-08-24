@@ -8,6 +8,7 @@ path-based dispatch.
 from __future__ import annotations
 
 import json
+import os
 import traceback
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -15,6 +16,7 @@ from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
 from studio_backend.artifact_preview import artifact_sample, artifact_samples
+from studio_backend.prediction_preview import prediction_runs
 from studio_backend.audit import audit_configs, explain_config
 from studio_backend.analysis import (
     comparison_schema,
@@ -43,11 +45,12 @@ from studio_backend.paths import (
     SUITE_ROOT,
     json_safe,
     relative,
+    result_roots,
     safe_repo_path,
     slug,
 )
 from studio_backend.state import STATE, PreflightFailure
-from studio_backend.suite_bridge import config_catalog, documentation_catalog, file_catalog
+from studio_backend.suite_bridge import benchmark_roster, checkpoint_metadata, config_catalog, documentation_catalog, file_catalog
 from studio_backend.system_info import deployment_status, gpu_inventory
 from studio_backend.training_metrics import training_metrics_catalog
 
@@ -85,6 +88,24 @@ class StudioRequestHandler(SimpleHTTPRequestHandler):
         if not isinstance(payload, dict):
             raise ValueError("JSON request body must be an object.")
         return payload
+
+    @staticmethod
+    def _optional_truth(query: dict[str, list[str]]) -> Path | None:
+        """Resolve the optional `truth` dataset a preview may be compared against.
+
+        A rollout result holds only the prediction, so error can be shown only
+        when the caller also names the dataset it was predicted from. Absent or
+        unreadable means "show the prediction alone" -- never an error, because
+        the prediction is still perfectly viewable on its own.
+        """
+        raw = (query.get("truth") or [""])[0].strip()
+        if not raw:
+            return None
+        try:
+            resolved = safe_repo_path(raw, (SUITE_ROOT,))
+        except ValueError:
+            return None
+        return resolved if resolved.is_file() else None
 
     def receive_upload(self, kind: str) -> dict[str, Any]:
         suffixes = UPLOAD_SUFFIXES.get(kind)
@@ -172,10 +193,25 @@ class StudioRequestHandler(SimpleHTTPRequestHandler):
                         int(query.get("timestep", ["0"])[0]),
                     )
                 )
+            elif parsed.path == "/api/benchmarks":
+                self.send_json(benchmark_roster())
+            elif parsed.path == "/api/checkpoint":
+                # What a .pth records about itself. An Inference block whose
+                # trainer is not on the canvas gets its model family and the
+                # architecture the weights were fit under from here, which is
+                # what makes "point at a saved model and a held-out dataset,
+                # then run" a complete workflow rather than a dead end.
+                path = safe_repo_path(query.get("path", [""])[0], result_roots())
+                if path.suffix.lower() not in {".pth", ".pt", ".ckpt"}:
+                    raise ValueError("Select a .pth, .pt, or .ckpt checkpoint.")
+                STATE.require_suite()
+                self.send_json(checkpoint_metadata(path, STATE.registry, STATE.settings))
+            elif parsed.path == "/api/predictions":
+                self.send_json(prediction_runs())
             elif parsed.path == "/api/preview/samples":
                 path = safe_repo_path(query.get("path", [""])[0], (SUITE_ROOT,))
                 limit = max(1, min(int(query.get("limit", ["100"])[0]), 10000))
-                self.send_json(artifact_samples(path, limit=limit))
+                self.send_json(artifact_samples(path, limit=limit, truth=self._optional_truth(query)))
             elif parsed.path == "/api/preview/sample":
                 path = safe_repo_path(query.get("path", [""])[0], (SUITE_ROOT,))
                 self.send_json(
@@ -184,6 +220,7 @@ class StudioRequestHandler(SimpleHTTPRequestHandler):
                         query.get("sample", ["0"])[0],
                         int(query.get("feature", ["0"])[0]),
                         int(query.get("timestep", ["0"])[0]),
+                        truth=self._optional_truth(query),
                     )
                 )
             elif parsed.path == "/api/jobs":
@@ -233,7 +270,13 @@ class StudioRequestHandler(SimpleHTTPRequestHandler):
                     skip_native=bool(payload.get("skip_native", False)),
                     skip_environment=bool(payload.get("skip_environment", False)),
                 )
-                self.send_json(result, 200 if result["ok"] else 422)
+                # A config with errors is this endpoint's *successful* answer --
+                # producing the verdict is the whole job -- so it is 200 with
+                # ok:false, not 422. Answering 422 made every clean diagnostic
+                # round-trip surface in devtools as "Failed to load resource",
+                # which reads like a broken frontend rather than an invalid
+                # config. Clients already branch on `ok`.
+                self.send_json(result, 200)
             elif parsed.path == "/api/config/explain":
                 self.send_json(
                     explain_config(
@@ -258,6 +301,7 @@ class StudioRequestHandler(SimpleHTTPRequestHandler):
                     label=str(payload.get("label", "AI-CAE4ALL pipeline")),
                     strict=bool(payload.get("strict", False)),
                     target_node_id=str(payload.get("target_node_id", "")),
+                    pipeline=payload.get("pipeline") if isinstance(payload.get("pipeline"), dict) else None,
                 )
                 self.send_json(job, HTTPStatus.CREATED)
             elif parsed.path == "/api/inference/run":
@@ -307,9 +351,32 @@ class StudioRequestHandler(SimpleHTTPRequestHandler):
         print(f"[studio-http] {self.address_string()} - {fmt % args}", flush=True)
 
 
+class StudioHTTPServer(ThreadingHTTPServer):
+    """Threading server that refuses to share its port.
+
+    `socketserver.TCPServer.allow_reuse_address = 1` means SO_REUSEADDR, which
+    on Windows does not merely permit rebinding a TIME_WAIT socket -- it lets a
+    second process bind a port another process is actively listening on. Two
+    Studio instances then both "succeed" on 8099 and the OS splits requests
+    between them at random: observed exactly that, with `/api/models` answering
+    from a server whose registry predated a spec edit while static files came
+    from the new one, so a config key existed on disk, in the spec, and in the
+    served JS, yet never appeared in the UI.
+
+    Refusing the bind makes the second instance fail loudly, which `serve()`
+    already turns into "could not use port N, try another".
+    """
+
+    allow_reuse_address = False
+    # Windows-only and the actual teeth: without it SO_EXCLUSIVEADDRUSE is not
+    # set and another process can still steal the port. Harmless elsewhere.
+    if os.name == "nt":
+        allow_reuse_port = False
+
+
 def create_server(host: str, port: int) -> ThreadingHTTPServer:
     RUNTIME_ROOT.mkdir(parents=True, exist_ok=True)
-    return ThreadingHTTPServer((host, port), StudioRequestHandler)
+    return StudioHTTPServer((host, port), StudioRequestHandler)
 
 
 def serve(host: str, port: int) -> int:

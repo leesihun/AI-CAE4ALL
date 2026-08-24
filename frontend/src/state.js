@@ -43,11 +43,21 @@ export const state = {
   realArtifact: null,
   pendingEvaluationPrediction: "",
   pendingComparisonPaths: [],
+  // path -> what /api/checkpoint said about that .pth. This is what lets an
+  // Inference block run against a saved model whose trainer is not on the
+  // canvas: the checkpoint records the architecture its weights were fit under,
+  // which is exactly what the launcher's inference mode requires.
+  checkpointMeta: new Map(),
   api: {
     connected: false,
     health: null,
     models: [],
+    // activeJob is only the job the runtime drawer is currently showing.
+    // trackedJobs holds every non-terminal job being polled, so several
+    // pipelines can run concurrently (the backend already runs each in its
+    // own thread; the single-job limit was purely client-side).
     activeJob: null,
+    trackedJobs: new Map(),
     pollTimer: null,
     lastPreflight: null
   }
