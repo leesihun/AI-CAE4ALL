@@ -201,6 +201,24 @@ class ConditionalFMPrior(_ConditionalPriorBase):
         return self.sample_n(graph, 1, temperature=temperature)[:, 0]
 
     @torch.no_grad()
+    def sample_n_from_pooled(self, cond, n, steps=None):
+        """sample_n but taking the pooled conditioning vector directly.
+
+        The training loop already computed it on the forward pass; recomputing
+        condition(graph) would rerun the whole prior trunk. A reduced `steps`
+        (e.g. 8) is fine for training-time regularizers; inference keeps the
+        full num_steps.
+        """
+        steps = int(steps or self.num_steps)
+        c = cond.float().repeat_interleave(n, dim=0)
+        z = torch.randn(c.shape[0], self.flat_dim, device=c.device)
+        dt = 1.0 / steps
+        for k in range(steps):
+            t = torch.full((c.shape[0], 1), k * dt, device=c.device)
+            z = z + dt * self.velocity(z, t, c)
+        return z.view(cond.shape[0], n, self.num_z, self.z_dim).to(cond.dtype)
+
+    @torch.no_grad()
     def sample_n(self, graph, n, temperature=1.0):
         """Draw n z samples per graph via Euler ODE integration: [B, n, num_z, D].
 

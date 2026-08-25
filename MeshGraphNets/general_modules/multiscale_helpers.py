@@ -112,20 +112,15 @@ def build_multiscale_hierarchy(
             entry = _coarsen_one(current_ei, current_n, method_norm, n_clusters, level_ref_pos)
             hierarchy.append(entry)
 
-            ftc, c_ei, n_c, seeds, mode = (
-                entry['ftc'], entry['c_ei'], entry['n_c'], entry['seeds'], entry['mode']
-            )
+            c_ei, n_c = entry['c_ei'], entry['n_c']
             if n_c <= 1 or c_ei.shape[1] == 0:
                 break
 
-            # Chain to next level: seed-anchored modes use seed positions,
-            # centroid mode uses the arithmetic mean.
-            if mode in ('inherit', 'seedmean'):
-                level_ref_pos = level_ref_pos[seeds].astype(np.float32)
-            else:
-                level_ref_pos = compute_coarse_centroids(
-                    level_ref_pos, ftc, n_c
-                ).astype(np.float32)
+            # Chain to next level using the same seed-vs-centroid selection
+            # stats accumulation and graph attachment use, so all three can
+            # never diverge on which position anchors a coarse level.
+            level_ref_pos, _ = coarse_positions_for_entry(entry, level_ref_pos)
+            level_ref_pos = level_ref_pos.astype(np.float32)
             current_ei, current_n = c_ei, n_c
         else:
             if method_norm == 'bfs':
@@ -163,6 +158,30 @@ def lift_world_edges(world_ei: np.ndarray, ftc: np.ndarray) -> np.ndarray:
     return np.unique(np.stack([src_c[mask], dst_c[mask]], axis=0), axis=1).astype(np.int64)
 
 
+def coarse_positions_for_entry(entry, cur_ref, cur_def=None):
+    """Return the coarse positions defined by one hierarchy entry.
+
+    Keeping this selection shared by hierarchy construction, preprocessing,
+    and graph attachment is important: seed-anchored modes must compute their
+    normalization statistics from the same FPS seed positions that produce
+    the forward edge features. `cur_def` is optional so hierarchy-building
+    (which only tracks reference positions) can share this same selection
+    logic instead of duplicating the mode branch.
+    """
+    ftc = entry['ftc']
+    n_c = entry['n_c']
+    seeds = entry.get('seeds')
+    mode = entry.get('mode', 'centroid')
+
+    if mode in ('inherit', 'seedmean') and seeds is not None:
+        coarse_ref = cur_ref[seeds].astype(np.float64)
+        coarse_def = cur_def[seeds].astype(np.float64) if cur_def is not None else None
+        return coarse_ref, coarse_def
+    coarse_ref = compute_coarse_centroids(cur_ref, ftc, n_c)
+    coarse_def = compute_coarse_centroids(cur_def, ftc, n_c) if cur_def is not None else None
+    return coarse_ref, coarse_def
+
+
 def _attach_one_partition(graph, key, entry, cur_ref, cur_def, mean, std,
                           device, world_edge_index, expose_anchors):
     """Attach one partition's attributes to `graph` under `_{key}` names.
@@ -178,15 +197,7 @@ def _attach_one_partition(graph, key, entry, cur_ref, cur_def, mean, std,
     n_c = entry['n_c']
     seeds = entry.get('seeds')
     mode = entry.get('mode', 'centroid')
-
-    # Seed-anchored modes (inherit, seedmean): coarse anchor = FPS seed
-    # position. Centroid mode: coarse anchor = arithmetic centroid.
-    if mode in ('inherit', 'seedmean') and seeds is not None:
-        coarse_ref = cur_ref[seeds].astype(np.float64)
-        coarse_def = cur_def[seeds].astype(np.float64)
-    else:
-        coarse_ref = compute_coarse_centroids(cur_ref, ftc, n_c)
-        coarse_def = compute_coarse_centroids(cur_def, ftc, n_c)
+    coarse_ref, coarse_def = coarse_positions_for_entry(entry, cur_ref, cur_def)
 
     if c_ei.shape[1] > 0:
         c_ea_raw = compute_edge_attr(

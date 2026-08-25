@@ -26,9 +26,13 @@ infer_timesteps	1  # Inference timesteps
 num_vae_samples	5000  # Number of probabilistic generation
 
 %   Common params
-input_var	3  # number of input variables: x_disp, y_disp, z_disp (displacement only, no stress channel)
-output_var	3  # number of output variables: x_disp, y_disp, z_disp (displacement only, no stress channel)
-feature_loss_weights	1, 1, 1  # unweighted for reporting; training used 0.1, 0.1, 1
+%   Dataset columns: x y z dx dy dz stress thickness "Part No." -- thickness
+%   and Part No. are known per-node inputs the model never predicts, so they
+%   live in cond_var (input-only), not input_var/output_var (state).
+input_var	3  # number of input variables: x_disp, y_disp, z_disp, stress (state: input AND output)
+output_var	3  # number of output variables: x_disp, y_disp, z_disp, stress (state: input AND output)
+cond_var	3  # input-only conditioning rows: thickness, Part No. (read every step, never predicted)
+feature_loss_weights	0.1, 0.1, 1  # Per-feature loss weights for [x_disp, y_disp, z_disp, stress]
 edge_var	8  # deformed dx/dy/dz/dist + reference dx/dy/dz/dist
 positional_features	4  # Rotation-invariant node features: [centroid_dist, mean_edge_len, + encoding]
 
@@ -54,7 +58,7 @@ use_world_edges	False  # Add non-mesh radius edges for contacts
 
 %   Test set
 test_batch_idx	0, 1, 2, 3, 4, 5, 6, 7, 8, 9  # Batch indices used for periodic test/visualization
-plot_feature_idx	-1  # Feature index to visualize in plots (-1 = last feature, i.e., z_disp)
+plot_feature_idx	2  # Feature index to visualize in plots (2 = z_disp; index 3 is now stress, the new last channel)
 
 %   Multiscale - MUST match training
 use_multiscale	True  # Enable HI-MGN architecture

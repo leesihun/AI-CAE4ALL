@@ -169,6 +169,17 @@ def single_worker(config, config_filename='config.txt'):
                 valid_metrics = {}
                 valid_learned_prior_metrics = None
 
+            # best_by crps: rank checkpoints by the inference-mirroring CRPS
+            # (z from the learned prior) instead of posterior reconstruction.
+            # Posterior recon can keep improving while the generative path
+            # degrades; for a model whose product is the generated distribution,
+            # CRPS is the metric that matches the objective.
+            select_loss = valid_loss
+            if (str(config.get('best_by', 'recon')).lower().strip() == 'crps'
+                    and valid_learned_prior_metrics is not None
+                    and 'crps' in valid_learned_prior_metrics):
+                select_loss = float(valid_learned_prior_metrics['crps'])
+
             if use_vae:
                 train_mmd   = train_metrics.get('mmd_mean', 0.0)
                 train_aux   = train_metrics.get('aux_mean', 0.0)
@@ -208,10 +219,10 @@ def single_worker(config, config_filename='config.txt'):
                     )
 
             last_epoch = (epoch == total_epochs - 1)
-            is_best = do_val and valid_loss < best_valid_loss
+            is_best = do_val and select_loss < best_valid_loss
             if is_best or last_epoch:
                 if is_best:
-                    best_valid_loss = valid_loss
+                    best_valid_loss = select_loss
                 if do_val:
                     last_valid_loss = valid_loss
                 save_checkpoint(

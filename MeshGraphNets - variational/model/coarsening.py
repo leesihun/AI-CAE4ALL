@@ -491,7 +491,7 @@ def build_unpool_edges(
 # Regex to extract level index from attribute names like "fine_to_coarse_0"
 _LEVEL_RE = re.compile(
     r'^(fine_to_coarse|coarse_edge_index|coarse_edge_attr|coarse_centroid'
-    r'|unpool_edge_index|num_coarse|coarse_seed_idx)_(\d+)$'
+    r'|unpool_edge_index|num_coarse|coarse_seed_idx|coarse_anchor_idx)_(\d+)$'
 )
 
 
@@ -510,14 +510,16 @@ class MultiscaleData(Data):
                                             level i's node space (or fine-node
                                             space at i=0), same semantics as
                                             row 1 of ``unpool_edge_index_{i}``.
+        coarse_anchor_idx_{i} [M_i] long  — optional seed anchors used by AR-RT
+                                            to refresh seed-based coarse geometry.
 
     When Batch.from_data_list combines multiple MultiscaleData objects:
     - fine_to_coarse_{i} values are offset by cumulative num_coarse_{i} counts
     - coarse_edge_index_{i} values are offset by cumulative num_coarse_{i} counts
     - coarse_edge_attr_{i} is concatenated along dim 0 (no offset needed)
     - num_coarse_{i} values are concatenated → [B] tensor
-    - coarse_seed_idx_{i} (when present) is offset by cumulative previous-level
-      node counts
+    - coarse_seed_idx_{i} and coarse_anchor_idx_{i} (when present) are offset by
+      cumulative previous-level node counts
     """
 
     def __inc__(self, key: str, value, *args, **kwargs):
@@ -531,7 +533,7 @@ class MultiscaleData(Data):
                 coarse_inc = int(self[f'num_coarse_{level}'])
                 fine_inc = self.num_nodes if int(level) == 0 else int(self[f'num_coarse_{int(level) - 1}'])
                 return torch.tensor([[coarse_inc], [fine_inc]])
-            if prefix == 'coarse_seed_idx':
+            if prefix in ('coarse_seed_idx', 'coarse_anchor_idx'):
                 lvl = int(level)
                 return self.num_nodes if lvl == 0 else int(self[f'num_coarse_{lvl - 1}'])
         return super().__inc__(key, value, *args, **kwargs)
@@ -543,6 +545,6 @@ class MultiscaleData(Data):
             if prefix in ('coarse_edge_index', 'unpool_edge_index'):
                 return 1   # [2, E] — concatenate along edge dimension
             if prefix in ('fine_to_coarse', 'coarse_edge_attr', 'coarse_centroid',
-                          'coarse_seed_idx'):
+                          'coarse_seed_idx', 'coarse_anchor_idx'):
                 return 0   # [N, ...] — concatenate along node/edge dim
         return super().__cat_dim__(key, value, *args, **kwargs)

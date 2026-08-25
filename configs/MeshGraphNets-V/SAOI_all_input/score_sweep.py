@@ -1,0 +1,347 @@
+#!/usr/bin/env python
+"""Score every arm of the SAOI latent x regularization sweep into ONE report.
+
+Two independent signals are collected per arm, because neither alone is enough:
+
+  * From the TRAINING LOG (config's log_file_dir): best CRPS, final validation
+    reconstruction, and the [PriorDiag] prior/posterior spread ratio. CRPS is
+    the inference-mirroring score -- it is the number `best_by crps` selects on.
+  * From misc/eval_distribution.py: wild rate and the verification-rank
+    histogram on held-out geometries. Reconstruction loss cannot see either;
+    a model can improve its recon every epoch while the generative path rots.
+
+Both samplers are evaluated (`--sampler prior` and `--sampler normal`) because
+which one wins is itself the open question -- the conditional prior has already
+measured WORSE than plain N(0,I) once, on b8.
+
+eval_distribution.py batches the whole split at once, so on large SAOI meshes
+`--n-graphs 0` can OOM. This script retries with progressively fewer graphs and
+records which count actually ran, rather than silently reporting nothing.
+
+Outputs (into --out-dir, default outputs/saoi_sweep):
+    sweep_results.md    compact table -- this is the file to read/paste
+    sweep_results.json  everything, including full rank histograms
+
+Usage:
+    python configs/MeshGraphNets-V/SAOI_all_input/score_sweep.py
+    python .../score_sweep.py --arms sweep_z8_r1 sweep_z8_r4 --k 20
+"""
+import argparse
+import json
+import os
+import pathlib
+import re
+import subprocess
+import sys
+
+HERE = pathlib.Path(__file__).resolve().parent
+REPO_ROOT = HERE.parents[2]
+METHOD_REPO = REPO_ROOT / "MeshGraphNets - variational"
+EVAL_SCRIPT = METHOD_REPO / "misc" / "eval_distribution.py"
+
+Z_LEVELS = [128, 64, 16, 8]
+R_LEVELS = ["r1", "r2", "r3", "r4"]
+DEFAULT_ARMS = [f"sweep_z{z}_{r}" for z in Z_LEVELS for r in R_LEVELS]
+
+# Graph counts tried in order until one does not OOM.
+NGRAPH_LADDER = [0, 64, 32, 16, 8]
+
+
+def parse_config(path):
+    """Minimal reader for the native flat `key value` format.
+
+    Only the handful of keys this report needs. Mirrors the native quirks that
+    matter here: `%` starts a comment line, `#` starts an inline comment, and
+    key/value are split on the first run of whitespace.
+    """
+    out = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.split("#", 1)[0].strip()
+        if not line or line.startswith("%") or line == "'":
+            continue
+        parts = line.split(None, 1)
+        if len(parts) == 2:
+            out[parts[0].strip().lower()] = parts[1].strip()
+    return out
+
+
+def parse_training_log(log_path):
+    """Pull best CRPS / final losses / spread ratio out of a training log.
+
+    The log records a line per validation improvement plus the final epoch, so
+    the minimum CRPS across lines is the best the run achieved.
+    """
+    res = {"best_crps": None, "final_recon": None, "final_valid": None,
+           "final_epoch": None, "min_spread_ratio": None, "amp_p99_cov": None}
+    if not log_path.exists():
+        return res
+
+    crps_vals, spread_vals = [], []
+    last = None
+    num = r"([-+0-9.eE]+)"
+    epoch_re = re.compile(r"Epoch\s+(\d+)")
+    crps_re = re.compile(r"CRPS\s+" + num)
+    train_re = re.compile(r"Train\s+recon=" + num)
+    valid_re = re.compile(r"Valid\s+recon=" + num)
+    ratio_re = re.compile(r"ratio=([-+0-9.eE]+)")
+    cov_re = re.compile(r"p99_cov=([-+0-9.eE]+)")
+
+    def as_float(m):
+        try:
+            return float(m.group(1))
+        except (TypeError, ValueError):
+            return None
+
+    with log_path.open("r", encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            if "PriorDiag" in line:
+                spread_vals += [float(v) for v in ratio_re.findall(line)
+                                if _is_float(v)]
+                continue
+            if "PriorTail" in line:
+                m = cov_re.search(line)
+                if m and _is_float(m.group(1)):
+                    res["amp_p99_cov"] = float(m.group(1))
+                continue
+            if "Epoch" not in line:
+                continue
+            c = as_float(crps_re.search(line))
+            if c is not None:
+                crps_vals.append(c)
+            last = line
+
+    if crps_vals:
+        res["best_crps"] = min(crps_vals)
+    if spread_vals:
+        res["min_spread_ratio"] = min(spread_vals)
+    if last:
+        res["final_epoch"] = int(epoch_re.search(last).group(1)) if epoch_re.search(last) else None
+        res["final_recon"] = as_float(train_re.search(last))
+        res["final_valid"] = as_float(valid_re.search(last))
+    return res
+
+
+def _is_float(s):
+    try:
+        float(s)
+        return True
+    except ValueError:
+        return False
+
+
+EVAL_PATTERNS = {
+    "n_graphs": re.compile(r"n_graphs=(\d+)"),
+    "k": re.compile(r"K=(\d+)"),
+    "wild_pct": re.compile(r"WILD RATE = \d+ / \d+ \(([-+0-9.eE]+)%\)"),
+    "chi2": re.compile(r"chi2 = ([-+0-9.eE]+)"),
+    "crit": re.compile(r"critical ~([-+0-9.eE]+)"),
+    "shape": re.compile(r"shape: (.+)"),
+}
+HIST_RE = re.compile(r"RANK HISTOGRAM \(\d+ bins, expect ~[-+0-9.eE]+ each\): (\[.*\])")
+
+
+def parse_eval_stdout(text):
+    """Extract the diagnostic numbers from eval_distribution.py's printout."""
+    out = {"raw_tail": text.strip().splitlines()[-8:]}
+    for key, rx in EVAL_PATTERNS.items():
+        m = rx.search(text)
+        if m:
+            val = m.group(1).strip()
+            out[key] = val if key == "shape" else (
+                float(val) if _is_float(val) else None)
+    m = HIST_RE.search(text)
+    if m:
+        try:
+            hist = json.loads(m.group(1))
+            out["hist"] = hist
+            out["hist5"] = rebin(hist, 5)
+        except json.JSONDecodeError:
+            pass
+    return out
+
+
+def rebin(hist, nbins):
+    """Collapse a K+1-bin rank histogram into `nbins` contiguous groups, as %.
+
+    The tool's own `shape:` label uses hardcoded thresholds; a coarse rebin lets
+    a reader judge U / dome / skew directly instead of trusting that heuristic.
+    """
+    total = sum(hist) or 1
+    n = len(hist)
+    edges = [round(i * n / nbins) for i in range(nbins + 1)]
+    return [round(100.0 * sum(hist[edges[i]:edges[i + 1]]) / total, 1)
+            for i in range(nbins)]
+
+
+def run_eval(cfg_path, split, k, sampler, python, timeout):
+    """Run eval_distribution.py, stepping down --n-graphs until it fits."""
+    attempts = []
+    for n_graphs in NGRAPH_LADDER:
+        cmd = [python, str(EVAL_SCRIPT), "--config", str(cfg_path),
+               "--split", split, "--k", str(k), "--sampler", sampler,
+               "--n-graphs", str(n_graphs)]
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True,
+                                  timeout=timeout)
+        except subprocess.TimeoutExpired:
+            attempts.append(f"n_graphs={n_graphs}: timeout after {timeout}s")
+            continue
+        if proc.returncode == 0 and "WILD RATE" in proc.stdout:
+            res = parse_eval_stdout(proc.stdout)
+            res["ok"] = True
+            res["attempts"] = attempts
+            return res
+        tail = (proc.stderr or proc.stdout).strip().splitlines()[-3:]
+        attempts.append(f"n_graphs={n_graphs}: rc={proc.returncode} :: "
+                        + " | ".join(tail))
+        # Only an OOM is worth retrying smaller; anything else will just repeat.
+        if "out of memory" not in (proc.stderr + proc.stdout).lower():
+            break
+    return {"ok": False, "attempts": attempts}
+
+
+def fmt(v, spec=".2e", dash="-"):
+    return dash if v is None else format(v, spec)
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--arms", nargs="*", default=DEFAULT_ARMS)
+    ap.add_argument("--split", default="test", choices=["train", "val", "test"])
+    ap.add_argument("--k", type=int, default=50)
+    ap.add_argument("--python", default=sys.executable)
+    ap.add_argument("--out-dir", default=str(REPO_ROOT / "outputs" / "saoi_sweep"))
+    ap.add_argument("--timeout", type=int, default=3600,
+                    help="per eval invocation, seconds")
+    ap.add_argument("--samplers", nargs="*", default=["prior", "normal"],
+                    choices=["auto", "prior", "normal"])
+    args = ap.parse_args()
+
+    out_dir = pathlib.Path(args.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    rows = []
+    for arm in args.arms:
+        cfg_path = HERE / f"config_{arm}.txt"
+        row = {"arm": arm, "config": str(cfg_path)}
+        if not cfg_path.exists():
+            row["error"] = "config not found"
+            rows.append(row)
+            print(f"[{arm}] SKIP: no config", flush=True)
+            continue
+
+        cfg = parse_config(cfg_path)
+        row.update({
+            "z": cfg.get("vae_latent_dim"),
+            "alpha_recon": cfg.get("alpha_recon"),
+            "lambda_mmd": cfg.get("lambda_mmd"),
+        })
+
+        ckpt = (METHOD_REPO / cfg.get("modelpath", "")).resolve()
+        row["checkpoint"] = str(ckpt)
+        if not ckpt.exists():
+            row["error"] = "checkpoint missing (arm did not finish?)"
+            rows.append(row)
+            print(f"[{arm}] SKIP: no checkpoint at {ckpt}", flush=True)
+            continue
+
+        log_path = (METHOD_REPO / cfg.get("log_file_dir", "")).resolve()
+        row["train_log"] = parse_training_log(log_path)
+
+        print(f"[{arm}] evaluating ({', '.join(args.samplers)})...", flush=True)
+        row["eval"] = {
+            s: run_eval(cfg_path, args.split, args.k, s, args.python, args.timeout)
+            for s in args.samplers
+        }
+        rows.append(row)
+
+    json_path = out_dir / "sweep_results.json"
+    json_path.write_text(json.dumps(rows, indent=2), encoding="utf-8")
+
+    md = render_markdown(rows, args)
+    md_path = out_dir / "sweep_results.md"
+    md_path.write_text(md, encoding="utf-8")
+
+    # The report file is always UTF-8; the CONSOLE may not be (a cp949/cp1252
+    # Windows terminal raises UnicodeEncodeError and would lose the whole run's
+    # summary over a stray character). Degrade the echo, never the file.
+    try:
+        print("\n" + md)
+    except UnicodeEncodeError:
+        enc = sys.stdout.encoding or "ascii"
+        print("\n" + md.encode(enc, "replace").decode(enc))
+    print(f"\nWrote {md_path}")
+    print(f"Wrote {json_path}  (full rank histograms)")
+
+
+def render_markdown(rows, args):
+    L = []
+    L.append("# SAOI latent x regularization sweep -- results")
+    L.append("")
+    L.append(f"split={args.split}  K={args.k}  samplers={','.join(args.samplers)}")
+    L.append("")
+    L.append("AXIS 1 = vae_latent_dim (z). AXIS 2 = alpha_recon:lambda_mmd ratio.")
+    L.append("r1=1000:0.1  r2=1000:1  r3=100:1  r4=10:1")
+    L.append("")
+    L.append("**Read CRPS and wild%, not recon.** Reconstruction measures the")
+    L.append("posterior path; the generative path is what inference uses.")
+    L.append("Lower CRPS = better. Lower wild% = fewer out-of-envelope fields.")
+    L.append("chi2/crit < 1 means the rank histogram is consistent with uniform")
+    L.append("(calibrated). rank% is the rank histogram rebinned into 5 groups:")
+    L.append("flat ~ [20,20,20,20,20]; U-shape = under-dispersed; dome = over-dispersed.")
+    L.append("")
+
+    hdr = ("| arm | z | a:mmd | best CRPS | valid recon | spread | "
+           "wild% prior | wild% N(0,I) | chi2/crit | rank% (prior) | n |")
+    L.append(hdr)
+    L.append("|" + "---|" * 11)
+
+    for r in rows:
+        if r.get("error"):
+            L.append(f"| {r['arm']} | {r.get('z','?')} | | **{r['error']}** | "
+                     + "| " * 7 + "|")
+            continue
+        tl = r.get("train_log", {})
+        ev = r.get("eval", {})
+        ep, en = ev.get("prior", {}), ev.get("normal", {})
+        ratio = (ep.get("chi2") / ep["crit"]
+                 if ep.get("chi2") is not None and ep.get("crit") else None)
+        L.append(
+            f"| {r['arm']} | {r.get('z','?')} | "
+            f"{r.get('alpha_recon','?')}:{r.get('lambda_mmd','?')} | "
+            f"{fmt(tl.get('best_crps'))} | {fmt(tl.get('final_valid'))} | "
+            f"{fmt(tl.get('min_spread_ratio'), '.2f')} | "
+            f"{fmt(ep.get('wild_pct'), '.1f')} | {fmt(en.get('wild_pct'), '.1f')} | "
+            f"{fmt(ratio, '.2f')} | {ep.get('hist5', '-')} | "
+            f"{fmt(ep.get('n_graphs'), '.0f')} |"
+        )
+
+    L.append("")
+    L.append("## Per-arm detail")
+    for r in rows:
+        L.append("")
+        L.append(f"### {r['arm']}")
+        if r.get("error"):
+            L.append(f"- ERROR: {r['error']}")
+            continue
+        tl = r.get("train_log", {})
+        L.append(f"- final epoch {tl.get('final_epoch')}, "
+                 f"train recon {fmt(tl.get('final_recon'))}, "
+                 f"amp_p99_cov {fmt(tl.get('amp_p99_cov'), '.2f')}")
+        for s, ev in r.get("eval", {}).items():
+            if not ev.get("ok"):
+                L.append(f"- sampler `{s}`: FAILED -- {ev.get('attempts')}")
+                continue
+            L.append(f"- sampler `{s}`: wild {fmt(ev.get('wild_pct'), '.1f')}%, "
+                     f"chi2 {fmt(ev.get('chi2'), '.1f')} vs crit "
+                     f"{fmt(ev.get('crit'), '.1f')}, shape \"{ev.get('shape')}\", "
+                     f"rank5 {ev.get('hist5')}")
+            if ev.get("attempts"):
+                L.append(f"  - retries: {ev['attempts']}")
+    L.append("")
+    L.append("Full rank histograms are in sweep_results.json.")
+    return "\n".join(L)
+
+
+if __name__ == "__main__":
+    main()

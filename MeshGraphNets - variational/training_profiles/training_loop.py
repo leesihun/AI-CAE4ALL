@@ -86,6 +86,33 @@ def _loss_from_errors(errors, loss_weights):
     return loss_sum / loss_count, loss_sum.item(), loss_count
 
 
+_ES_EPOCH = []
+
+
+def energy_score(samples, target, batch, num_graphs):
+    """Multivariate energy score per graph, averaged. Strictly proper.
+
+        ES = E||X - y||  -  0.5 * E||X - X'||
+
+    samples: [S, N, F] fields decoded from PRIOR-sampled z (what inference does).
+    target:  [N, F].  Uses the whole per-graph field vector, so spatial structure
+    is scored -- element-wise CRPS would pass a model with correct node marginals
+    and wrong mode shape. Distances are RMS (not raw norms) so the term lands on
+    the same scale as recon and gamma_es can sit next to alpha_recon.
+    """
+    from torch_geometric.utils import scatter as _sc
+    S = samples.shape[0]
+
+    def gnorm(d):
+        return _sc(d.pow(2).sum(-1), batch, dim=0, dim_size=num_graphs,
+                   reduce='mean').clamp(min=1e-12).sqrt()
+
+    acc = sum(gnorm(samples[i] - target) for i in range(S)) / S
+    pairs = [(i, j) for i in range(S) for j in range(i + 1, S)]
+    rep = sum(gnorm(samples[i] - samples[j]) for i, j in pairs) / max(len(pairs), 1)
+    return (acc - 0.5 * rep).mean()
+
+
 def _recon_errors(predicted, target, recon_loss='huber'):
     """Element-wise reconstruction errors. 'mse' (squared error) penalizes large,
     extreme-node errors far more than Huber(delta=1), which caps them — important
@@ -182,7 +209,7 @@ class _ObjectiveTerms:
     it is evaluated.
     """
 
-    def __init__(self, config, inner_model, use_amp, amp_dtype, loss_weights):
+    def __init__(self, config, inner_model, use_amp, amp_dtype, loss_weights, epoch=0):
         self.use_amp = use_amp
         self.amp_dtype = amp_dtype
         self.loss_weights = loss_weights
@@ -192,6 +219,21 @@ class _ObjectiveTerms:
         self.alpha_recon = float(config.get('alpha_recon', 1.0))
         self.lambda_mmd = float(config.get('lambda_mmd', 1.0))
         self.beta_aux = float(config.get('beta_aux', 1.0))
+        # Energy score on decodes of GENERATIVELY sampled z: the only term that
+        # scores what inference actually produces. Default 0 = off (old
+        # objective unchanged). 'prior' draws z from the learned p(z|g) with a
+        # short Euler integration; 'normal' draws plain N(0,I) noise (no
+        # conditional prior needed at all -- the decoder itself becomes the
+        # generative map, scored end-to-end).
+        self.gamma_es = float(config.get('gamma_es', 0.0))
+        self.es_samples = int(config.get('es_samples', 2))
+        self.es_steps = int(config.get('es_steps', 8))
+        self.es_noise = str(config.get('es_noise_source', 'prior')).lower().strip()
+        # Warm start: ES costs es_samples extra full forwards per step. Until
+        # recon has shaped the decoder there is little to score, so long runs
+        # can skip ES for the first es_start_epoch epochs at zero quality cost.
+        if epoch < int(config.get('es_start_epoch', 0)):
+            self.gamma_es = 0.0
 
         prior_type = str(config.get('prior_type', '')).lower().strip()
         self.inner_model = inner_model
@@ -259,12 +301,43 @@ def _compose_loss(model, graph, terms):
                 z_fresh,
             )
 
+    # Energy score: decode S generatively-sampled z and score the resulting
+    # DISTRIBUTION against y. This is the only place the decoder ever sees a
+    # prior/noise-drawn z during training; without it, inference is the first
+    # time it meets one -- which is exactly what produces out-of-envelope
+    # "wild" fields at inference.
+    es_loss = torch.zeros((), device=predicted_acc.device, dtype=torch.float32)
+    _es_ready = (terms.es_noise == 'normal'
+                 or (prior_outputs is not None and prior_outputs.get('pooled') is not None))
+    if terms.use_vae and terms.gamma_es > 0.0 and _es_ready:
+        S = terms.es_samples
+        bt = getattr(graph, 'batch', None)
+        if bt is None:
+            bt = torch.zeros(graph.x.shape[0], dtype=torch.long, device=graph.x.device)
+        ng = int(bt.max().item()) + 1
+        if terms.es_noise == 'normal':
+            _nz = terms.inner_model.model.num_z
+            _zd = terms.inner_model.model.vae_latent_dim
+            z_es = torch.randn(ng, S, _nz, _zd, device=predicted_acc.device)
+        else:
+            z_es = terms.inner_model.prior.sample_n_from_pooled(
+                prior_outputs['pooled'].detach().float(), S, steps=terms.es_steps)
+        preds = []
+        for si in range(S):
+            with torch.amp.autocast('cuda', dtype=terms.amp_dtype, enabled=terms.use_amp):
+                p_s, _, _, _, _ = model(graph, add_noise=False, use_posterior=False,
+                                        fixed_z=z_es[:, si])
+            preds.append(p_s.float())
+        es_loss = energy_score(torch.stack(preds), target_acc.float(), bt, ng)
+        _ES_EPOCH.append(float(es_loss.detach()))
+
     with torch.amp.autocast('cuda', dtype=terms.amp_dtype, enabled=terms.use_amp):
         errors = _recon_errors(predicted_acc, target_acc, terms.recon_loss_kind)
         recon_loss, batch_loss_sum, _ = _loss_from_errors(errors, terms.loss_weights)
         if terms.use_vae:
             loss = (terms.alpha_recon * recon_loss
                     + terms.lambda_mmd * mmd_loss_val
+                    + terms.gamma_es * es_loss
                     + terms.beta_aux * aux_loss_val)
             # Joint GNN E2E prior contribution: density matching (mixture NLL or
             # flow-matching MSE; + small KL anchor for gmm).
@@ -443,7 +516,7 @@ def train_epoch(model, dataloader, optimizer, device, config, epoch, ema_model=N
     total_batches = len(dataloader)
     actual_accum = total_batches if grad_accum_steps == 0 else grad_accum_steps
 
-    objective_terms = _ObjectiveTerms(config, inner_model, use_amp, amp_dtype, loss_weights)
+    objective_terms = _ObjectiveTerms(config, inner_model, use_amp, amp_dtype, loss_weights, epoch=epoch)
     rollout_ctx = _build_rollout_context(config, device)
 
     # Per-epoch peak: without the reset the peak is cumulative since process
@@ -514,6 +587,10 @@ def train_epoch(model, dataloader, optimizer, device, config, epoch, ema_model=N
                         postfix['kl_a'] = f'{kl_anchor_val.item():.2e}'
                 postfix['total'] = f'{loss.item():.2e}'
             pbar.set_postfix(postfix)
+
+    if _ES_EPOCH:
+        tqdm.tqdm.write(f"  [ES] energy score = {sum(_ES_EPOCH) / len(_ES_EPOCH):.4e}")
+        _ES_EPOCH.clear()
 
     # Sync GPU accumulators once per epoch (vs once per batch previously).
     peak_gb, reserved_gb = _mem_gb()

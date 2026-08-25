@@ -21,10 +21,11 @@ from general_modules.world_edges import HAS_TORCH_CLUSTER, compute_world_edges
 
 # Multiscale coarsening (optional — only imported when use_multiscale=True)
 try:
-    from model.coarsening import MultiscaleData, compute_coarse_centroids
+    from model.coarsening import MultiscaleData
     from general_modules.multiscale_helpers import (
         attach_coarse_levels_to_graph,
         build_multiscale_hierarchy,
+        coarse_positions_for_entry,
     )
     HAS_COARSENING = True
 except ImportError:
@@ -84,6 +85,14 @@ def _copy_edge_stat(entry):
     if isinstance(entry, list):
         return [a.copy() for a in entry]
     return entry.copy()
+
+
+def _deformed_positions_from_state(ref_pos: np.ndarray, state: np.ndarray) -> np.ndarray:
+    """Apply at most the first three state channels as XYZ displacement."""
+    displacement = np.zeros_like(ref_pos)
+    num_components = min(3, state.shape[1])
+    displacement[:, :num_components] = state[:, :num_components]
+    return ref_pos + displacement
 
 
 class MeshGraphDataset(Dataset):
@@ -675,15 +684,8 @@ class MeshGraphDataset(Dataset):
         returned rather than accumulated here because a plain Python int
         can't be mutated by reference.
         """
-        ftc, c_ei, n_c = entry['ftc'], entry['c_ei'], entry['n_c']
-        seeds, mode = entry.get('seeds'), entry.get('mode', 'centroid')
-
-        if mode in ('inherit', 'seedmean') and seeds is not None:
-            coarse_ref = cur_ref[seeds].astype(np.float64)
-            coarse_def = cur_def[seeds].astype(np.float64)
-        else:
-            coarse_ref = compute_coarse_centroids(cur_ref, ftc, n_c)
-            coarse_def = compute_coarse_centroids(cur_def, ftc, n_c)
+        c_ei = entry['c_ei']
+        coarse_ref, coarse_def = coarse_positions_for_entry(entry, cur_ref, cur_def)
 
         added = 0
         if c_ei.shape[1] > 0:
@@ -774,9 +776,16 @@ class MeshGraphDataset(Dataset):
                     timesteps = [0]
 
                 for t in timesteps:
-                    pos_data = data_h5[:6, t, :]  # [6, nodes] — ref_pos + disp
-                    ref_pos = pos_data[:3, :].T         # [N, 3]
-                    deformed_pos = (pos_data[:3, :] + pos_data[3:6, :]).T  # [N, 3]
+                    ref_pos = data_h5[:3, t, :].T  # [N, 3]
+                    if self.num_timesteps == 1:
+                        # Static datasets predict their stored state from a
+                        # zero input, so forward uses no displacement here.
+                        state = np.zeros(
+                            (ref_pos.shape[0], self.input_dim), dtype=np.float32,
+                        )
+                    else:
+                        state = data_h5[3:3 + self.input_dim, t, :].T
+                    deformed_pos = _deformed_positions_from_state(ref_pos, state)
 
                     cur_ref, cur_def = ref_pos, deformed_pos
                     for level, entry in enumerate(hierarchy):
@@ -1095,15 +1104,12 @@ class MeshGraphDataset(Dataset):
             # direction) would need rotating here; keep augment_geometry False
             # for such datasets.
 
-        # Rows 3:6 are the displacement vector by the shared contract; for T=1
-        # they are zeros, so deformed_pos == pos. Guard input_var < 3 so a
-        # narrow state block can never let conditioning columns act as motion.
-        if self.input_dim >= 3:
-            displacement = x_raw[:, :3]  # [N, 3] - displacement (zeros for T=1)
-        else:
-            displacement = np.zeros((x_raw.shape[0], 3), dtype=np.float32)
-            displacement[:, :self.input_dim] = x_raw[:, :self.input_dim]
-        deformed_pos = pos + displacement  # [N, 3] - actual mesh position at time t
+        # Only state channels can move geometry; conditions and positional
+        # features beyond the first `input_dim` columns are never displacement.
+        # Static x_phys is zero, so deformed_pos == pos.
+        deformed_pos = _deformed_positions_from_state(
+            pos, x_raw[:, :self.input_dim],
+        )
 
         # Compute 8-D edge features from current and reference geometry.
         edge_attr_raw = compute_edge_attr(pos, deformed_pos, edge_index)

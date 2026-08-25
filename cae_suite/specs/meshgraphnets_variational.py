@@ -44,6 +44,13 @@ VAR_KEYS = frozenset(
         "prior_fm_steps", "prior_mp_layers", "prior_hidden_dim",
         "prior_temperature", "prior_kl_reg_weight", "prior_cov_rank",
         "prior_min_std", "prior_mixture_components",
+        # Energy-score generative term (scores decodes of prior/noise-sampled z
+        # against the target field; gamma_es 0 = off). es_noise_source:
+        # 'prior' (learned p(z|g)) or 'normal' (N(0,I), no conditional prior).
+        "gamma_es", "es_samples", "es_steps", "es_noise_source", "es_start_epoch",
+        # Checkpoint-selection metric: 'recon' (posterior validation loss,
+        # default) or 'crps' (inference-mirroring learned-prior CRPS).
+        "best_by",
     }
 )
 
@@ -102,6 +109,26 @@ def validate_variational(ctx: SpecValidationContext) -> None:
                     field_name="prior_mixture_components",
                     promote_in_strict=True,
                 )
+
+        es_noise = values.get("es_noise_source")
+        if es_noise is not None and str(es_noise).lower() not in {"prior", "normal"}:
+            ctx.add(
+                "MGNV-ES-NOISE",
+                Severity.ERROR,
+                "es_noise_source must be 'prior' or 'normal' (the native code silently "
+                "treats anything else as 'prior').",
+                field_name="es_noise_source",
+            )
+        if str(es_noise).lower() == "normal" and values.get("use_conditional_prior", False) is True:
+            ctx.add(
+                "MGNV-ES-NOISE-PRIOR",
+                Severity.WARNING,
+                "es_noise_source=normal trains the decoder against N(0,I) draws, but "
+                "use_conditional_prior=True makes inference sample the learned prior "
+                "instead — the scored path and the inference path disagree.",
+                field_name="es_noise_source",
+                promote_in_strict=True,
+            )
 
     if ctx.mode == "inference" and values.get("use_vae", False) is True:
         if "num_vae_samples" not in values:

@@ -52,6 +52,25 @@ def _uses_seed_anchor(mode: str) -> bool:
     return mode in ('inherit', 'seedmean')
 
 
+def coarse_level_positions(
+    positions: np.ndarray,
+    fine_to_coarse: np.ndarray,
+    num_coarse: int,
+    mode: str,
+    seeds: Optional[np.ndarray],
+) -> np.ndarray:
+    """Select the coarse geometry used by hierarchy construction and forward.
+
+    Seed-anchored modes gather their FPS seed positions.  If an older or
+    incomplete cache entry has no seeds, fall back to the cluster centroid,
+    matching the only geometry that can be reconstructed from the remaining
+    topology.
+    """
+    if _uses_seed_anchor(mode) and seeds is not None:
+        return positions[np.asarray(seeds, dtype=np.int64)]
+    return compute_coarse_centroids(positions, fine_to_coarse, num_coarse)
+
+
 def build_multiscale_hierarchy(
     edge_index: np.ndarray,
     num_nodes: int,
@@ -96,12 +115,11 @@ def build_multiscale_hierarchy(
         if n_c <= 1 or c_ei.shape[1] == 0:
             break
 
-        if _uses_seed_anchor(mode):
-            # Coarse anchor is the FPS seed node (on-manifold position).
-            # inherit: gather pool (writes coarse_seed_idx); seedmean: scatter-mean pool.
-            level_ref_pos = level_ref_pos[seeds].astype(np.float32)
-        else:
-            level_ref_pos = compute_coarse_centroids(level_ref_pos, ftc, n_c).astype(np.float32)
+        # inherit gathers node features while seedmean pools them by mean, but
+        # both use the FPS seed as their coarse geometric anchor.
+        level_ref_pos = coarse_level_positions(
+            level_ref_pos, ftc, n_c, mode, seeds,
+        ).astype(np.float32)
         current_ei, current_n = c_ei, n_c
 
     return hierarchy
@@ -143,8 +161,8 @@ def attach_coarse_levels_to_graph(
         unpool_edge_index_{i} (only if the entry carries 'up_ei'),
         coarse_seed_idx_{i}   (only if the entry's mode == 'inherit')
 
-    In ``inherit`` mode, ``coarse_centroid_{i}`` is the seed-anchor position (not
-    a centroid); the legacy attribute name is retained for backward-compat with
+    In seed-anchored modes, ``coarse_centroid_{i}`` is the seed position (not a
+    centroid); the legacy attribute name is retained for backward-compat with
     reader code that uses it for ``rel_pos``.
 
     If `device` is provided, tensors are moved to that device; otherwise they
@@ -160,12 +178,8 @@ def attach_coarse_levels_to_graph(
         mode = entry.get('mode', 'centroid')
         seeds = entry.get('seeds')
 
-        if _uses_seed_anchor(mode):
-            coarse_ref = cur_ref[seeds]
-            coarse_def = cur_def[seeds]
-        else:
-            coarse_ref = compute_coarse_centroids(cur_ref, ftc, n_c)
-            coarse_def = compute_coarse_centroids(cur_def, ftc, n_c)
+        coarse_ref = coarse_level_positions(cur_ref, ftc, n_c, mode, seeds)
+        coarse_def = coarse_level_positions(cur_def, ftc, n_c, mode, seeds)
 
         if c_ei.shape[1] > 0:
             c_ea_raw = compute_edge_attr(

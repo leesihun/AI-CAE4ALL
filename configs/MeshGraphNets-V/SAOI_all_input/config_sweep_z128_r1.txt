@@ -1,0 +1,172 @@
+%   ============================================================
+%   SAOI warpage — LATENT CAPACITY x REGULARIZATION SWEEP
+%   ARM 01/16 : vae_latent_dim 128  |  r1 (alpha_recon 1000, lambda_mmd 0.1)
+%   user-reported optimum on b8; recon:mmd = 10000:1
+%
+%   WHAT THIS SWEEP IS FOR
+%   The b8 ablation measured posterior recon corr 0.996 against generation corr
+%   -0.03: the posterior path reconstructs almost perfectly while the generative
+%   path tracks the conditioning not at all. That is not a capacity shortage --
+%   it is z carrying the whole answer while the graph pathway carries nothing,
+%   leaving the FM prior to regress a 384-dim vector encoding the entire field
+%   from geometry alone.
+%
+%   Two things let the encoder do that, and this sweep varies both:
+%     AXIS 1  vae_latent_dim {128, 64, 16, 8} -- how many numbers z can hold.
+%     AXIS 2  alpha_recon:lambda_mmd ratio {1e4, 1e3, 1e2, 1e1} -- how much the
+%             objective cares about anything other than reconstruction. Note
+%             clip_grad_norm_(max_norm=3.0) renormalizes the update every step,
+%             so only the RATIO between terms matters, not absolute magnitude.
+%
+%   The interaction is the interesting part: the diagnosis predicts small z helps
+%   MOST at high recon dominance (r1), because there the dimension is the only
+%   thing limiting what z can carry.
+%
+%   Full grid: z in {128,64,16,8} x r in {r1,r2,r3,r4} = 16 arms, 2 per GPU.
+%
+%   SCORE WITH (not the training loss -- that measures the posterior path):
+%       python misc/eval_distribution.py --config <cfg> --split test --k 50
+%   Compare generation corr / CRPS / wild rate across the grid.
+%
+%   BUDGET. Measured: 4 GPUs at Batch_size 2 = 2.5 min/epoch, i.e. N/10 samples
+%   per GPU-minute. One arm on one GPU processes all N samples => ~10 min/epoch;
+%   two arms sharing a GPU => ~20 min/epoch each. Wall clock for the grid is
+%   arms x epochs x 10min / 8 GPUs = 1.25 x arms x epochs minutes ~= epochs/3
+%   hours at 16 arms. 150 epochs ~= 46 h (the measurement was taken with
+%   val_interval 1, which runs the 8-forward CRPS eval every epoch; at
+%   val_interval 5 the per-epoch cost is ~7%% lower, so this is conservative).
+%   The main uncertainty is the two-jobs-per-GPU contention factor: at 1.7x it
+%   lands near 40 h, at 2.3x near 55 h.
+%
+%   DELTAS vs config_train_top.txt (identical in all 16 arms, so they cannot
+%   explain a difference between arms):
+%     Training_epochs 1000 -> 150     (unattended sweep budget; ~46 h wall)
+%     Batch_size      2    -> 4       (2 jobs share each GPU)
+%     num_workers     4    -> 2       (16 concurrent jobs; avoid worker storms)
+%     val_interval    1    -> 5       (prior-path eval costs 8 forwards/batch)
+%     test_interval   100  -> 150     (visualization at the end only)
+%     std_noise       0.1  -> 0.01    (SEE BELOW -- this one is a real fix)
+%     best_by              -> crps    (select on the generation metric)
+%     hierarchy_cache_keep -> True    (16 jobs share one cache; no job may delete
+%                                      it mid-sweep. DELETE IT MANUALLY after.)
+%   ============================================================
+model	MeshGraphNets-V  # MeshGraphNets, MeshGraphNets-V, point_deeponet, deeponet, fno, gino, transolver, sdfflow
+mode	train  # Train / Inference
+gpu_ids	0  # 2 arms share this GPU
+parallel_mode	ddp  # ddp, model_split
+log_file_dir	../../output/meshgraphnets-v/saoi_sweep/sweep_z128_r1.log
+modelpath	../output/meshgraphnets-v/saoi_sweep/sweep_z128_r1.pth
+
+%   Datasets
+%   NOTE: the native parser lowercases every string value, so the directory must
+%   be dataset/saoi/ (lowercase) on a case-sensitive filesystem.
+dataset_dir	../dataset/saoi/saoi_train_top.h5
+infer_dataset	../dataset/saoi/saoi_train_top.h5  # inference-only; unused in train mode
+infer_timesteps	1   # Inference timesteps
+split_seed	42  # Seed for the deterministic 80/10/10 random split
+num_vae_samples	10000   # Number of probabilistic generation
+
+%   Common params
+input_var	3  # x_disp, y_disp, z_disp (state: input AND output)
+output_var	3  # x_disp, y_disp, z_disp (state: input AND output)
+cond_var	3  # input-only conditioning rows (read every step, never predicted)
+feature_loss_weights	0.1, 0.1, 1  # Per-feature loss weights for [x_disp, y_disp, z_disp]
+edge_var	8  # deformed dx/dy/dz/dist + reference dx/dy/dz/dist
+positional_features	4  # Rotation-invariant node features: [centroid_dist, mean_edge_len, + encoding]
+
+%   Network parameters
+message_passing_num	15  # Only used for non-multiscale modes (vanilla MeshGraphNets only)
+Training_epochs	150  # unattended sweep budget (~46 h wall for the grid; production is 1000)
+Batch_size	4  # per-rank; 1 GPU per arm, 2 arms per GPU
+LearningR	0.0001
+Latent_dim	128  # Encoder/processor/decoder hidden width
+num_workers	2  # lowered from 4: 16 concurrent jobs
+%   std_noise 0.1 -> 0.01. This is the one delta that is a correction, not a
+%   sweep convenience. MeshGraphNets training noise exists to stabilize
+%   AUTOREGRESSIVE rollout (Pfaff et al. 2021) by teaching the model to correct
+%   its own accumulated error. This run is time_integration ar_ot with T=1, so
+%   there is no rollout. Worse, for static data mesh_dataset.py builds
+%   x_phys = np.zeros([N, input_var]) -- the state block is identically zero --
+%   so std_noise injects noise into channels that carry no signal at all, and
+%   simultaneously puts Gaussian noise of that size on graph.edge_attr, which
+%   for a geometry->field problem is the ONLY real signal. b8_all uses 0.01;
+%   the SAOI header documents every other scale-down from b8 but not this one,
+%   so 0.1 reads as a typo. augment_geometry already supplies real augmentation.
+std_noise	0.01  # was 0.1; see note above
+augment_geometry	True  # Training-only random Z-rotation + reflection augmentation
+grad_accum_steps	1  # Gradient accumulation steps
+
+%   Memory / performance
+use_checkpointing	True  # 2 jobs share a GPU
+use_amp	True  # Mixed precision training with bfloat16
+use_ema	True  # EMA shadow model for validation/inference
+ema_decay	0.99  # EMA decay factor
+test_interval	150  # Visualization at the end only
+val_interval	5  # Prior-path eval costs vae_valid_prior_samples forwards per batch
+
+%   Node types
+use_node_types	False  # Add one-hot encoded node types to node features
+
+%   World edges
+use_world_edges	False  # Add non-mesh radius edges for contacts
+
+%   Test set
+test_batch_idx	0, 1, 2, 3, 4, 5, 6, 7, 8, 9  # Batch indices used for periodic test/visualization
+plot_feature_idx	2  # Feature index to visualize in plots (2 = z_disp)
+
+%   Multiscale (Multiscale HI-MGN architecture)
+use_multiscale	True  # Enable HI-MGN architecture
+coarsening_type	voronoi_seedmean  # Use Voronoi_seedmean only for production
+voronoi_clusters	1000, 100  # Cluster count per multiscale level (Voronoi coarsening)
+multiscale_levels	2  # Number of coarsening levels
+mp_per_level	4, 6, 8, 6, 4  # Message-passing blocks per level: down arm, coarsest, up arm
+hierarchy_variants	4  # Independently-seeded coarsening partitions cached per sample
+%   All 16 arms share ONE cache file (vae_latent_dim / alpha_recon / lambda_mmd
+%   are not part of the coarsening signature). ensure_cache() takes an exclusive
+%   lock so exactly one job builds it and the rest poll.
+hierarchy_cache_keep	True  # no job may delete the shared cache mid-sweep
+
+%   VAE (MMD-InfoVAE) -- AXIS 1 and AXIS 2 live here
+use_vae	True  # Enable posterior encoder + stochastic latent path
+%   AXIS 1. Latent_dim is 128 and the injection is
+%   Linear(Latent_dim + vae_latent_dim -> Latent_dim), so the image of the
+%   z-injection is rank <= 128 per block: raising this ABOVE 128 buys nothing at
+%   the injection point. The sweep therefore only goes downward.
+vae_latent_dim	128  # AXIS 1: 128 / 64 / 16 / 8 -- this arm: 128
+vae_mp_layers	5  # Posterior graph-encoder message-passing depth
+vae_valid_prior_samples	8  # Prior draws per graph for the validation CRPS estimate
+recon_loss	mse  # huber or mse reconstruction objective
+%   AXIS 2. Only the ratio matters (see header note on clip_grad_norm_).
+alpha_recon	1000  # AXIS 2: this arm r1
+lambda_mmd	0.1  # AXIS 2: this arm r1
+%   Interpretation caveat: MMD is computed on the LOCAL batch with no cross-rank
+%   gather, so it estimates a vae_latent_dim-dimensional match from Batch_size
+%   (= 4) samples. 4 samples in 128 dims is close to noise; 4 in 8 dims is a
+%   real estimate. So the MMD term's EFFECTIVE strength grows as z shrinks even
+%   though lambda_mmd is held fixed down each column. If a small-z arm wins,
+%   confirm with one rerun at that z with lambda_mmd 0 before concluding it was
+%   the capacity effect.
+mmd_bandwidth	median  # MMD bandwidth mode (fixed or median)
+vae_graph_aware	True  # Include graph/input context when encoding the posterior
+beta_aux	1.0  # Auxiliary latent-statistics prediction loss weight
+posterior_min_std	0.05  # Posterior standard-deviation floor
+
+%   Prior - gnn_e2e joint training; prior_family fm = conditional flow matching.
+%   NOTE prior_nll_weight is close to a no-op: the prior's parameters get their
+%   own clip_grad_norm_(max_norm=3.0) and the prior loss is the only term that
+%   touches them, so scaling it mostly rescales a gradient that is then
+%   renormalized. Held at 1.0 in every arm.
+prior_type	gnn_e2e  # gnn_e2e enables the jointly trained graph-conditional prior
+use_conditional_prior	True  # Use learned conditional prior instead of N(0,I)
+prior_family	fm  # fm (flow matching) or gmm
+prior_nll_weight	1.0  # Prior density/flow-matching objective multiplier
+prior_fm_steps	40  # Euler integration steps for FM-prior sampling/validation
+prior_mp_layers	5  # Prior message-passing depth
+prior_hidden_dim	256  # HELD CONSTANT: a small-z arm must not win on prior capacity
+prior_temperature	1.0  # Sampling spread control (inference only)
+
+%   Checkpoint selection
+best_by	crps  # Select on the inference-mirroring generation metric, not posterior recon
+
+%   Time integration
+time_integration	ar_ot  # ar_ot = one-step/teacher-forced; ar_rt = full-trajectory rollout

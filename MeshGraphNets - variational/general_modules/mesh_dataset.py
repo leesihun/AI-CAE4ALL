@@ -17,11 +17,27 @@ from general_modules.world_edges import HAS_TORCH_CLUSTER, compute_world_edges
 
 # Multiscale coarsening (optional — only imported when use_multiscale=True)
 try:
-    from model.coarsening import MultiscaleData, compute_coarse_centroids
-    from general_modules.multiscale_helpers import attach_coarse_levels_to_graph
+    from model.coarsening import MultiscaleData
+    from general_modules.multiscale_helpers import (
+        attach_coarse_levels_to_graph,
+        coarse_level_positions,
+    )
     HAS_COARSENING = True
 except ImportError:
     HAS_COARSENING = False
+
+
+def _deformed_positions_from_state(
+    reference_pos: np.ndarray,
+    state_features: np.ndarray,
+    input_dim: int,
+) -> np.ndarray:
+    """Apply the displacement prefix of the model state to reference positions."""
+    displacement = np.zeros((reference_pos.shape[0], 3), dtype=np.float32)
+    vector_dim = min(3, int(input_dim), state_features.shape[1])
+    if vector_dim > 0:
+        displacement[:, :vector_dim] = state_features[:, :vector_dim]
+    return reference_pos + displacement
 
 
 class MeshGraphDataset(Dataset):
@@ -559,9 +575,18 @@ class MeshGraphDataset(Dataset):
                     timesteps = [0]
 
                 for t in timesteps:
-                    pos_data = data_h5[:6, t, :]  # [6, nodes] — ref_pos + disp
-                    ref_pos = pos_data[:3, :].T         # [N, 3]
-                    deformed_pos = (pos_data[:3, :] + pos_data[3:6, :]).T  # [N, 3]
+                    ref_pos = data_h5[:3, t, :].T  # [N, 3]
+                    if self.num_timesteps == 1:
+                        # Static models receive a zero state even though rows
+                        # 3+ contain their prediction target (e.g. ex8 stress).
+                        state = np.zeros(
+                            (num_nodes, self.input_dim), dtype=np.float32,
+                        )
+                    else:
+                        state = data_h5[3:3 + self.input_dim, t, :].T
+                    deformed_pos = _deformed_positions_from_state(
+                        ref_pos, state, self.input_dim,
+                    )
 
                     cur_ref, cur_def = ref_pos, deformed_pos
                     for level, entry in enumerate(hierarchy):
@@ -571,12 +596,14 @@ class MeshGraphDataset(Dataset):
                         mode_l = entry.get('mode', 'centroid')
                         seeds_l = entry.get('seeds')
 
-                        if mode_l == 'inherit':
-                            coarse_ref = cur_ref[seeds_l]
-                            coarse_def = cur_def[seeds_l]
-                        else:
-                            coarse_ref = compute_coarse_centroids(cur_ref, ftc_l, n_c_l)
-                            coarse_def = compute_coarse_centroids(cur_def, ftc_l, n_c_l)
+                        # Use exactly the same coarse geometry definition as
+                        # hierarchy construction and forward feature assembly.
+                        coarse_ref = coarse_level_positions(
+                            cur_ref, ftc_l, n_c_l, mode_l, seeds_l,
+                        )
+                        coarse_def = coarse_level_positions(
+                            cur_def, ftc_l, n_c_l, mode_l, seeds_l,
+                        )
 
                         if c_ei_l.shape[1] > 0:
                             c_edge_attr = compute_edge_attr(
@@ -888,15 +915,9 @@ class MeshGraphDataset(Dataset):
             # are rotation-invariant, unchanged. Conditions sit past column
             # input_var, so the [:, :3] slices above never touch them.
 
-        # Rows 3:6 are the displacement vector by the shared contract; for T=1
-        # they are zeros, so deformed_pos == pos. Guard input_var < 3 so a
-        # narrow state block can never let conditioning columns act as motion.
-        if self.input_dim >= 3:
-            displacement = x_raw[:, :3]  # [N, 3] - displacement (zeros for T=1)
-        else:
-            displacement = np.zeros((x_raw.shape[0], 3), dtype=np.float32)
-            displacement[:, :self.input_dim] = x_raw[:, :self.input_dim]
-        deformed_pos = pos + displacement  # [N, 3] - actual mesh position at time t
+        # The first min(3, input_var) state channels are displacement; for T=1
+        # they are zeros, so target or conditioning columns cannot act as motion.
+        deformed_pos = _deformed_positions_from_state(pos, x_raw, self.input_dim)
 
         # Compute 8-D edge features from current and reference geometry.
         edge_attr_raw = compute_edge_attr(pos, deformed_pos, edge_index)

@@ -722,7 +722,14 @@ def run_rollout(config, config_filename='config.txt'):
                                     prior_batch, temperature=prior_temperature,
                                 ).to(device)
                             else:
-                                z_batch = torch.randn(B, vae_latent_dim, device=device)
+                                # Independent noise PER z-slot, matching how
+                                # training draws z everywhere ([B, num_z, D]);
+                                # a single [B, D] z replicated across slots is a
+                                # distribution the decoder never trained on.
+                                num_z = int(getattr(getattr(model, 'model', model),
+                                                    'num_z', 1))
+                                z_batch = torch.randn(B, num_z, vae_latent_dim,
+                                                      device=device)
                     else:
                         graphs = [ctx.build_step_graph(states[b]) for b in range(B)]
 

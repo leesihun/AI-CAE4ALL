@@ -355,10 +355,18 @@ def _train_worker_inner(rank, world_size, config, gpu_ids, config_filename):
         # Only rank 0 saves checkpoints — only when validation improves or on last epoch.
         if rank == 0:
             last_epoch = epoch == config.get('training_epochs') - 1
-            is_best = valid_loss < best_valid_loss
+            # best_by crps: rank checkpoints by the inference-mirroring CRPS
+            # (z from the learned prior) instead of posterior reconstruction —
+            # recon can improve while the generative path degrades.
+            select_loss = valid_loss
+            if (str(config.get('best_by', 'recon')).lower().strip() == 'crps'
+                    and valid_learned_prior_metrics is not None
+                    and 'crps' in valid_learned_prior_metrics):
+                select_loss = float(valid_learned_prior_metrics['crps'])
+            is_best = select_loss < best_valid_loss
             if is_best or last_epoch:
                 if is_best:
-                    best_valid_loss = valid_loss
+                    best_valid_loss = select_loss
                 last_valid_loss = valid_loss
                 last_saved_epoch = epoch
                 save_checkpoint(
