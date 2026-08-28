@@ -220,7 +220,11 @@ def single_worker(config, config_filename='config.txt'):
 
             last_epoch = (epoch == total_epochs - 1)
             is_best = do_val and select_loss < best_valid_loss
-            if is_best or last_epoch:
+            # `modelname` holds ONE checkpoint, so saving unconditionally on the
+            # final epoch overwrote the best one — which left `best_by` mattering
+            # only for runs that were killed early. Keep the best; fall back to
+            # the last epoch only when validation never saved anything at all.
+            if is_best or (last_epoch and last_saved_epoch < 0):
                 if is_best:
                     best_valid_loss = select_loss
                 if do_val:
@@ -233,8 +237,8 @@ def single_worker(config, config_filename='config.txt'):
                 reason = []
                 if is_best:
                     reason.append(f"new best ({valid_loss:.2e})")
-                if last_epoch:
-                    reason.append("last epoch")
+                if last_epoch and not is_best:
+                    reason.append("last epoch; no validated checkpoint existed")
                 print(f"  -> Model saved at epoch {epoch}: {', '.join(reason)}")
 
             if log_file:
@@ -272,9 +276,17 @@ def single_worker(config, config_filename='config.txt'):
 
             dump_memory_snapshot(epoch, mem_recording, config)
 
-        print(f"\nTraining finished. Last model saved at epoch {last_saved_epoch} with validation loss {last_valid_loss:.2e}")
+        # The kept checkpoint is the BEST one, not the final epoch, so
+        # name the criterion: an epoch well below total_epochs here is
+        # the expected outcome, not a sign the run stopped early.
+        criterion = str(config.get("best_by", "recon")).lower().strip()
+        print(f"\nTraining finished. Kept checkpoint: epoch {last_saved_epoch} "
+              f"(best by {criterion}), validation loss {last_valid_loss:.2e}")
     except KeyboardInterrupt:
-        print(f"\nTraining interrupted by user. Last model saved at epoch {last_saved_epoch} with validation loss {last_valid_loss:.2e}")
+        criterion = str(config.get("best_by", "recon")).lower().strip()
+        print(f"\nTraining interrupted by user. Kept checkpoint: epoch "
+              f"{last_saved_epoch} (best by {criterion}), validation loss "
+              f"{last_valid_loss:.2e}")
 
     cleanup_dataloaders(train_loader, val_loader, test_loader)
     release_hierarchy_cache(config, train_dataset, val_dataset, test_dataset)
