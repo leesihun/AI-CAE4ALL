@@ -72,18 +72,23 @@ log_for()  { echo "$LOG_ROOT/${1}.log"; }
 cache_ready() { compgen -G "$CACHE_GLOB" > /dev/null 2>&1; }
 
 run_arm() {
-    local arm=$1 cfg log
+    local arm=$1 cfg log rc
     cfg="$(cfg_for "$arm")"
     log="$(log_for "$arm")"
     if [ ! -f "$cfg" ]; then
         echo "[$arm] SKIP: config not found ($cfg)" >&2
         return 0
     fi
-    if "$PYTHON" AI_CAE4ALL_main.py --config "$cfg" > "$log" 2>&1; then
+    # Capture the status directly. `$?` read after an `if` whose condition was
+    # false and which has no else branch is the status of the *if statement*
+    # (0), not of the command -- it always printed "exit 0" for a failed arm.
+    "$PYTHON" AI_CAE4ALL_main.py --config "$cfg" > "$log" 2>&1
+    rc=$?
+    if [ "$rc" -eq 0 ]; then
         echo "[$arm] DONE"
         return 0
     fi
-    echo "[$arm] FAILED (exit $?) — see $log" >&2
+    echo "[$arm] FAILED (exit $rc) — see $log" >&2
     return 1
 }
 
@@ -123,8 +128,12 @@ started=$(date +%s)
 pids=(); names=()
 
 # ---- Warm the shared multiscale cache with a single arm --------------------
-first_arm="$(echo "$ARMS" | awk '{print $1}')"
-rest_arms="$(echo "$ARMS" | cut -d' ' -f2-)"
+# Word-split into an array: `cut -d' ' -f2-` echoes the WHOLE line back when it
+# finds no delimiter, so a single-arm ARMS would have launched that one arm
+# twice -- two jobs writing the same checkpoint and log.
+read -r -a arm_list <<< "$ARMS"
+first_arm="${arm_list[0]}"
+rest_arms="${arm_list[*]:1}"
 
 if cache_ready; then
     echo "Multiscale cache already present — launching all arms at once."
@@ -197,6 +206,7 @@ if [ "$SCORE" = "1" ]; then
             --k "$SCORE_K" \
             --python "$PYTHON" \
             --out-dir outputs/saoi_sweep \
+            --run-logs "$LOG_ROOT" \
             > "$LOG_ROOT/score_sweep.log" 2>&1; then
         echo "Scoring complete."
     else
@@ -214,7 +224,7 @@ if [ "$SCORE" = "1" ]; then
     fi
 else
     echo "SCORE=0 — skipped. Run it later with:"
-    echo "  $PYTHON $CFG_DIR/score_sweep.py --split $SCORE_SPLIT --k $SCORE_K"
+    echo "  $PYTHON $CFG_DIR/score_sweep.py --split $SCORE_SPLIT --k $SCORE_K --run-logs $LOG_ROOT"
 fi
 
 echo ""

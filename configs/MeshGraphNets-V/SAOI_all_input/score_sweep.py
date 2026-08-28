@@ -65,19 +65,27 @@ def parse_config(path):
     return out
 
 
-def parse_training_log(log_path):
-    """Pull best CRPS / final losses / spread ratio out of a training log.
+def parse_training_log(log_path, transcript_path=None):
+    """Pull best CRPS / final losses / spread ratio out of a run's logs.
 
-    The log records a line per validation improvement plus the final epoch, so
-    the minimum CRPS across lines is the best the run achieved.
+    The trainer splits these across TWO files, so both are read:
+
+      * `log_path` -- the config's `log_file_dir`, one `f.write()` line per
+        epoch carrying recon and CRPS. The minimum CRPS across lines is the
+        best the run achieved.
+      * `transcript_path` -- run_sweep.sh's per-arm stdout capture. `[PriorDiag]`
+        and `[PriorTail]` are emitted with `tqdm.write`, i.e. to STDOUT ONLY;
+        they never reach the epoch log, so spread ratio and p99 coverage come
+        from here and are simply absent when no transcript is available.
+
+    Every field degrades to None rather than raising: an arm that died early,
+    logged nothing, or ran with `val_interval > 1` (most epoch lines then read
+    "Valid skipped" with no CRPS at all) must still produce a report row.
     """
     res = {"best_crps": None, "final_recon": None, "final_valid": None,
-           "final_epoch": None, "min_spread_ratio": None, "amp_p99_cov": None}
-    if not log_path.exists():
-        return res
+           "final_epoch": None, "min_spread_ratio": None, "amp_p99_cov": None,
+           "sources": [], "searched": []}
 
-    crps_vals, spread_vals = [], []
-    last = None
     num = r"([-+0-9.eE]+)"
     epoch_re = re.compile(r"Epoch\s+(\d+)")
     crps_re = re.compile(r"CRPS\s+" + num)
@@ -87,35 +95,75 @@ def parse_training_log(log_path):
     cov_re = re.compile(r"p99_cov=([-+0-9.eE]+)")
 
     def as_float(m):
+        # `search` returns None on every epoch line without the field -- with
+        # val_interval > 1 that is most of them. `None.group()` raises
+        # AttributeError, which the TypeError/ValueError guard does not catch,
+        # and one such line aborted the entire report.
+        if m is None:
+            return None
         try:
             return float(m.group(1))
         except (TypeError, ValueError):
             return None
 
-    with log_path.open("r", encoding="utf-8", errors="replace") as fh:
-        for line in fh:
-            if "PriorDiag" in line:
-                spread_vals += [float(v) for v in ratio_re.findall(line)
-                                if _is_float(v)]
-                continue
-            if "PriorTail" in line:
-                m = cov_re.search(line)
-                if m and _is_float(m.group(1)):
-                    res["amp_p99_cov"] = float(m.group(1))
-                continue
-            if "Epoch" not in line:
-                continue
-            c = as_float(crps_re.search(line))
-            if c is not None:
-                crps_vals.append(c)
-            last = line
+    def readable(path):
+        return path is not None and path.exists()
+
+    crps_vals, spread_vals, last = [], [], None
+
+    # Per-epoch numbers: the epoch log is authoritative (.4e). The transcript's
+    # console lines carry the same values at .2e, so it is the fallback.
+    # Fall through on a file that EXISTS but holds no epoch line, not just on a
+    # missing one -- `init_log_file` creates the epoch log (header + embedded
+    # config) before the first epoch runs, so a stale or misdirected log is
+    # present-but-empty and would otherwise shadow a perfectly good transcript.
+    for path in (log_path, transcript_path):
+        if not readable(path):
+            if path is not None:
+                res["searched"].append(f"{path}  (missing)")
+            continue
+        res["searched"].append(str(path))
+        with path.open("r", encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                if "Epoch" not in line:
+                    continue
+                c = as_float(crps_re.search(line))
+                if c is not None:
+                    crps_vals.append(c)
+                last = line
+        if last is not None:
+            res["sources"].append(path.name)
+            break
+        crps_vals.clear()
+
+    # Prior diagnostics: stdout-only, so the transcript is the real source.
+    for path in (transcript_path, log_path):
+        if not readable(path):
+            continue
+        found = False
+        with path.open("r", encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                if "PriorDiag" in line:
+                    spread_vals += [float(v) for v in ratio_re.findall(line)
+                                    if _is_float(v)]
+                    found = True
+                elif "PriorTail" in line:
+                    m = cov_re.search(line)
+                    if m and _is_float(m.group(1)):
+                        res["amp_p99_cov"] = float(m.group(1))
+                        found = True
+        if found:
+            if path.name not in res["sources"]:
+                res["sources"].append(path.name)
+            break
 
     if crps_vals:
         res["best_crps"] = min(crps_vals)
     if spread_vals:
         res["min_spread_ratio"] = min(spread_vals)
     if last:
-        res["final_epoch"] = int(epoch_re.search(last).group(1)) if epoch_re.search(last) else None
+        m = epoch_re.search(last)
+        res["final_epoch"] = int(m.group(1)) if m else None
         res["final_recon"] = as_float(train_re.search(last))
         res["final_valid"] = as_float(valid_re.search(last))
     return res
@@ -211,6 +259,10 @@ def main():
     ap.add_argument("--k", type=int, default=50)
     ap.add_argument("--python", default=sys.executable)
     ap.add_argument("--out-dir", default=str(REPO_ROOT / "outputs" / "saoi_sweep"))
+    ap.add_argument("--run-logs",
+                    default=str(REPO_ROOT / "outputs" / "saoi_sweep" / "run_logs"),
+                    help="run_sweep.sh's per-arm stdout transcripts; the only "
+                         "place [PriorDiag]/[PriorTail] are recorded")
     ap.add_argument("--timeout", type=int, default=3600,
                     help="per eval invocation, seconds")
     ap.add_argument("--samplers", nargs="*", default=["prior", "normal"],
@@ -219,6 +271,7 @@ def main():
 
     out_dir = pathlib.Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    run_logs = pathlib.Path(args.run_logs)
 
     rows = []
     for arm in args.arms:
@@ -245,8 +298,15 @@ def main():
             print(f"[{arm}] SKIP: no checkpoint at {ckpt}", flush=True)
             continue
 
-        log_path = (METHOD_REPO / cfg.get("log_file_dir", "")).resolve()
-        row["train_log"] = parse_training_log(log_path)
+        # The trainer writes the epoch log to `outputs/<log_file_dir>` relative
+        # to the method repo (training_profiles/setup.py::init_log_file), which
+        # is exactly why the configs' log_file_dir carries a leading '../..'
+        # that `modelpath` does not. Resolving it without that 'outputs/' prefix
+        # lands one directory ABOVE the monorepo, and every training-log column
+        # then renders as '-' with no error anywhere.
+        log_path = (METHOD_REPO / "outputs" / cfg.get("log_file_dir", "")).resolve()
+        transcript = run_logs / f"{arm}.log"
+        row["train_log"] = parse_training_log(log_path, transcript)
 
         print(f"[{arm}] evaluating ({', '.join(args.samplers)})...", flush=True)
         row["eval"] = {
@@ -298,8 +358,9 @@ def render_markdown(rows, args):
 
     for r in rows:
         if r.get("error"):
+            # arm, z, a:mmd, error + 6 blanks + close = the header's 11 columns.
             L.append(f"| {r['arm']} | {r.get('z','?')} | | **{r['error']}** | "
-                     + "| " * 7 + "|")
+                     + "| " * 6 + "|")
             continue
         tl = r.get("train_log", {})
         ev = r.get("eval", {})
@@ -325,9 +386,17 @@ def render_markdown(rows, args):
             L.append(f"- ERROR: {r['error']}")
             continue
         tl = r.get("train_log", {})
-        L.append(f"- final epoch {tl.get('final_epoch')}, "
+        # Name the files that were actually read: a row of '-' means "no log
+        # found", which looks identical to "the run produced no numbers".
+        L.append(f"- final epoch {fmt(tl.get('final_epoch'), '.0f')}, "
                  f"train recon {fmt(tl.get('final_recon'))}, "
-                 f"amp_p99_cov {fmt(tl.get('amp_p99_cov'), '.2f')}")
+                 f"amp_p99_cov {fmt(tl.get('amp_p99_cov'), '.2f')} "
+                 f"[logs read: {', '.join(tl.get('sources') or []) or 'NONE FOUND'}]")
+        if not tl.get("sources"):
+            # Print the exact paths, because "no numbers" and "wrong path" look
+            # identical in the table and only one of them is a training problem.
+            L.append("  - no epoch lines found. Searched: "
+                     + ("; ".join(tl.get("searched") or []) or "(nothing)"))
         for s, ev in r.get("eval", {}).items():
             if not ev.get("ok"):
                 L.append(f"- sampler `{s}`: FAILED -- {ev.get('attempts')}")

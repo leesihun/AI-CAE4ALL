@@ -58,6 +58,26 @@ STATS = {
 }
 
 
+def graph_slices(flat, batch, n):
+    """Split a batched [total_nodes, F] tensor into one numpy array per graph.
+
+    Real CAE meshes do NOT share a node count -- SAOI's warpage geometries all
+    differ -- so `total_nodes // n` is not a per-graph node count, and reshaping
+    the batch to [n, nodes, F] raises a size error (or, when the counts happen
+    to divide evenly, silently mixes two graphs' nodes into one row). Use the
+    offsets PyG already recorded when it concatenated the batch.
+
+    One host transfer per call, not one per graph.
+    """
+    ptr = getattr(batch, 'ptr', None)
+    if ptr is None:
+        counts = torch.bincount(batch.batch, minlength=n)
+        ptr = torch.cat([counts.new_zeros(1), counts.cumsum(0)])
+    ptr = ptr.tolist()
+    arr = flat.detach().cpu().numpy()
+    return [arr[ptr[i]:ptr[i + 1]] for i in range(n)]
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--config', required=True)
@@ -110,15 +130,14 @@ def main():
     n = len(sub) if args.n_graphs <= 0 else min(args.n_graphs, len(sub))
     graphs = [sub[i] for i in range(n)]
     g = Batch.from_data_list(graphs).to(dev)
-    nn_per_graph = g.x.shape[0] // n
     n_feat = int(c2['output_var'])
     fi = args.feature_idx if args.feature_idx >= 0 else n_feat + args.feature_idx
-    gt = (g.y * dst + dm).reshape(n, nn_per_graph, n_feat)
     stat_fn = STATS[args.stat]
-    gt_stat = np.array([float(stat_fn(gt[i].cpu().numpy()[:, [fi]] if args.stat != 'l2'
-                                       else gt[i].cpu().numpy()))
-                         for i in range(n)])
-    gt_lo, gt_hi = float(gt[:, :, fi].min()), float(gt[:, :, fi].max())
+    reduce = lambda f: float(stat_fn(f if args.stat == 'l2' else f[:, [fi]]))
+
+    gt = g.y * dst + dm                       # [total_nodes, n_feat], physical
+    gt_stat = np.array([reduce(f) for f in graph_slices(gt, g, n)])
+    gt_lo, gt_hi = float(gt[:, fi].min()), float(gt[:, fi].max())
     margin = 0.5 * (gt_hi - gt_lo)
 
     K = args.k
@@ -135,15 +154,12 @@ def main():
             gg = Batch.from_data_list(graphs).to(dev)
             gg.y = None
             p, *_ = model(gg, add_noise=False, use_posterior=False, fixed_z=zc[:, j])
-            v = (p.float() * dst + dm).reshape(n, nn_per_graph, n_feat)
-        vf = v[:, :, fi]
-        vlo = vf.min(-1).values.cpu().numpy()
-        vhi = vf.max(-1).values.cpu().numpy()
-        wild += int(((vlo < gt_lo - margin) | (vhi > gt_hi + margin)).sum())
-        for i in range(n):
-            s = float(stat_fn(v[i].cpu().numpy()[:, [fi]] if args.stat != 'l2'
-                               else v[i].cpu().numpy()))
-            gen_stats[j, i] = s
+            v = p.float() * dst + dm          # [total_nodes, n_feat], physical
+        for i, f in enumerate(graph_slices(v, gg, n)):
+            col = f[:, fi]
+            if col.min() < gt_lo - margin or col.max() > gt_hi + margin:
+                wild += 1
+            gen_stats[j, i] = reduce(f)
     for i in range(n):
         ranks[i] = int((gen_stats[:, i] < gt_stat[i]).sum())
 
