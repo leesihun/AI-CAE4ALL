@@ -58,6 +58,33 @@ STATS = {
 }
 
 
+def resolve_device(cfg):
+    """Pick the GPU the config actually asked for.
+
+    The trainer uses `gpu_ids` as PHYSICAL device indices
+    (`torch.cuda.set_device(gpu_id)` in training_profiles/single_training.py) and
+    nothing in this repo sets CUDA_VISIBLE_DEVICES, so a hardcoded `cuda:0` here
+    scores on a different card than the one the arm trained on -- fighting
+    whatever else lives on GPU 0 and misreporting where the numbers came from.
+    """
+    if not torch.cuda.is_available():
+        return torch.device('cpu')
+    gid = cfg.get('gpu_ids', 0)
+    if isinstance(gid, list):
+        gid = gid[0] if gid else 0
+    try:
+        gid = int(gid)
+    except (TypeError, ValueError):
+        gid = 0
+    if not 0 <= gid < torch.cuda.device_count():
+        print(f"  [note] gpu_ids={gid} is not visible ({torch.cuda.device_count()} "
+              f"device(s)); falling back to cuda:0")
+        gid = 0
+    torch.cuda.set_device(gid)
+    print(f"  device: cuda:{gid}  ({torch.cuda.get_device_name(gid)})")
+    return torch.device(f'cuda:{gid}')
+
+
 def graph_slices(flat, batch, n):
     """Split a batched [total_nodes, F] tensor into one numpy array per graph.
 
@@ -89,6 +116,10 @@ def main():
                           'default -1 = last output channel (e.g. z_disp when '
                           'output_var is [x_disp,y_disp,z_disp]).')
     ap.add_argument('--n-graphs', type=int, default=0, help='0 = use every graph')
+    ap.add_argument('--chunk-size', type=int, default=8,
+                     help='graphs materialized and scored at a time. Bounds peak '
+                          'HOST and device memory; results are identical either '
+                          'way. 0 = the whole split at once (old behaviour).')
     ap.add_argument('--sampler', default='auto', choices=['auto', 'prior', 'normal'],
                      help="auto = use the conditional prior if the checkpoint has one, "
                           "else N(0,I); force with 'prior' or 'normal'.")
@@ -96,7 +127,7 @@ def main():
 
     cfg = load_config(args.config)
     cfg['num_timesteps'] = 1
-    dev = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+    dev = resolve_device(cfg)
     ds = load_data(cfg)
     tr, va, te = ds.split(0.8, 0.1, 0.1, seed=int(cfg['split_seed']))
     sub = {'train': tr, 'val': va, 'test': te}[args.split]
@@ -128,40 +159,83 @@ def main():
     nz, zd = model.model.num_z, int(c2['vae_latent_dim'])
 
     n = len(sub) if args.n_graphs <= 0 else min(args.n_graphs, len(sub))
-    graphs = [sub[i] for i in range(n)]
-    g = Batch.from_data_list(graphs).to(dev)
     n_feat = int(c2['output_var'])
     fi = args.feature_idx if args.feature_idx >= 0 else n_feat + args.feature_idx
     stat_fn = STATS[args.stat]
     reduce = lambda f: float(stat_fn(f if args.stat == 'l2' else f[:, [fi]]))
-
-    gt = g.y * dst + dm                       # [total_nodes, n_feat], physical
-    gt_stat = np.array([reduce(f) for f in graph_slices(gt, g, n)])
-    gt_lo, gt_hi = float(gt[:, fi].min()), float(gt[:, fi].max())
-    margin = 0.5 * (gt_hi - gt_lo)
-
     K = args.k
-    torch.manual_seed(1234)
-    with torch.no_grad():
-        zc = (prior.sample_n(g, K, temperature=1.0) if use_prior
-              else torch.randn(n, K, nz, zd, device=dev))
+    chunk = args.chunk_size if args.chunk_size > 0 else n
 
-    ranks = np.zeros(n, dtype=int)
-    wild = 0
+    # Score in chunks of graphs. Materializing the WHOLE split at once was the
+    # expensive part, and most of that cost is not on the GPU at all:
+    # `sub[i]` reads the sample from HDF5, rebuilds its edge features and its
+    # cached hierarchy, and normalizes it -- all on the CPU -- and every graph
+    # so produced is held in host RAM until the batch is collated, which then
+    # makes a second full copy. On SAOI-sized meshes a full split is tens of GB
+    # of host memory before a single kernel launches, which is why the process
+    # can sit at near-zero GPU utilization for a long time and still grow.
+    #
+    # Chunking bounds both: peak memory scales with `chunk`, not with split
+    # size. The only cross-graph quantity is the ground-truth envelope, and that
+    # is accumulated as a running min/max and applied to the stored per-draw
+    # extrema once every chunk is in, so `wild` and the rank histogram are what
+    # they would have been in one pass.
+    gt_stat = np.zeros(n)
     gen_stats = np.zeros((K, n))
-    for j in range(K):
+    gen_lo = np.zeros((K, n))
+    gen_hi = np.zeros((K, n))
+    gt_lo, gt_hi = float('inf'), float('-inf')
+    torch.manual_seed(1234)
+    # Draw the N(0,I) latents for the whole split up front -- they are tiny --
+    # so `--sampler normal` gives the same numbers at any --chunk-size. The
+    # conditional prior draws its own noise inside sample_n, so for
+    # `--sampler prior` the specific draws do depend on the chunk size (they
+    # stay reproducible for a given one).
+    zc_all = None if use_prior else torch.randn(n, K, nz, zd, device=dev)
+
+    for start in range(0, n, chunk):
+        stop = min(start + chunk, n)
+        graphs = [sub[i] for i in range(start, stop)]
+        m = len(graphs)
+        g = Batch.from_data_list(graphs).to(dev)
+        del graphs                            # collated; the Data list is dead
+
+        gt = g.y * dst + dm                   # [chunk_nodes, n_feat], physical
+        for k, f in enumerate(graph_slices(gt, g, m)):
+            gt_stat[start + k] = reduce(f)
+        gt_lo = min(gt_lo, float(gt[:, fi].min()))
+        gt_hi = max(gt_hi, float(gt[:, fi].max()))
+        del gt
+
         with torch.no_grad():
-            gg = Batch.from_data_list(graphs).to(dev)
-            gg.y = None
-            p, *_ = model(gg, add_noise=False, use_posterior=False, fixed_z=zc[:, j])
-            v = p.float() * dst + dm          # [total_nodes, n_feat], physical
-        for i, f in enumerate(graph_slices(v, gg, n)):
-            col = f[:, fi]
-            if col.min() < gt_lo - margin or col.max() > gt_hi + margin:
-                wild += 1
-            gen_stats[j, i] = reduce(f)
-    for i in range(n):
-        ranks[i] = int((gen_stats[:, i] < gt_stat[i]).sum())
+            zc = (prior.sample_n(g, K, temperature=1.0) if use_prior
+                  else zc_all[start:stop])
+
+        # One collated batch serves every draw in this chunk: only `fixed_z`
+        # differs, and the model never writes into its input (`add_noise=False`
+        # skips the sole in-place block, and the encoder returns a fresh Data
+        # that each processor step rebinds).
+        g.y = None                            # gt already extracted
+        for j in range(K):
+            with torch.no_grad():
+                p, *_ = model(g, add_noise=False, use_posterior=False,
+                              fixed_z=zc[:, j])
+                v = p.float() * dst + dm      # [chunk_nodes, n_feat], physical
+            for k, f in enumerate(graph_slices(v, g, m)):
+                col = f[:, fi]
+                gen_lo[j, start + k] = col.min()
+                gen_hi[j, start + k] = col.max()
+                gen_stats[j, start + k] = reduce(f)
+            del p, v                          # release before the next forward
+        del g, zc
+        if dev.type == 'cuda':
+            torch.cuda.empty_cache()          # give the chunk's blocks back
+        print("  scored graphs %d-%d of %d" % (start, stop - 1, n), flush=True)
+
+    margin = 0.5 * (gt_hi - gt_lo)
+    wild = int(((gen_lo < gt_lo - margin) | (gen_hi > gt_hi + margin)).sum())
+    ranks = np.array([int((gen_stats[:, i] < gt_stat[i]).sum()) for i in range(n)],
+                     dtype=int)
 
     hist = np.bincount(ranks, minlength=K + 1)
     expected = n / (K + 1)

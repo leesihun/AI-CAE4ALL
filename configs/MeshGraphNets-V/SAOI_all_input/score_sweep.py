@@ -33,6 +33,7 @@ import pathlib
 import re
 import subprocess
 import sys
+import time
 
 HERE = pathlib.Path(__file__).resolve().parent
 REPO_ROOT = HERE.parents[2]
@@ -221,31 +222,65 @@ def rebin(hist, nbins):
             for i in range(nbins)]
 
 
-def run_eval(cfg_path, split, k, sampler, python, timeout):
-    """Run eval_distribution.py, stepping down --n-graphs until it fits."""
+def run_eval(cfg_path, split, k, sampler, python, timeout, eval_log, arm):
+    """Run eval_distribution.py, stepping down --n-graphs until it fits.
+
+    One invocation is a many-minute, silent job: it re-fits the train-split
+    normalization statistics, then runs `--k` full forward passes over the whole
+    requested split. Two things follow from that, and both are deliberate here:
+
+      * The child's output is TEE'd to `eval_log` instead of being captured into
+        memory, so `tail -f` shows progress while it runs. `capture_output=True`
+        made the whole ladder invisible until it finished.
+      * Each attempt announces itself with its elapsed time, so a run that looks
+        hung can be told apart from one that is merely slow.
+    """
     attempts = []
     for n_graphs in NGRAPH_LADDER:
         cmd = [python, str(EVAL_SCRIPT), "--config", str(cfg_path),
                "--split", split, "--k", str(k), "--sampler", sampler,
                "--n-graphs", str(n_graphs)]
-        try:
-            proc = subprocess.run(cmd, capture_output=True, text=True,
-                                  timeout=timeout)
-        except subprocess.TimeoutExpired:
-            attempts.append(f"n_graphs={n_graphs}: timeout after {timeout}s")
+        label = f"n_graphs={n_graphs or 'all'}"
+        print(f"  [{arm}] {sampler} {label} ... (tail -f {eval_log})",
+              flush=True)
+        start = time.time()
+        offset = eval_log.stat().st_size if eval_log.exists() else 0
+        timed_out = False
+        with eval_log.open("a", encoding="utf-8", errors="replace") as fh:
+            fh.write(f"\n===== {sampler} {label} @ "
+                     f"{time.strftime('%Y-%m-%d %H:%M:%S')} =====\n")
+            fh.flush()
+            try:
+                proc = subprocess.run(cmd, stdout=fh, stderr=subprocess.STDOUT,
+                                      timeout=timeout)
+            except subprocess.TimeoutExpired:
+                timed_out = True
+        elapsed = time.time() - start
+        # Read back only what this attempt appended.
+        with eval_log.open("r", encoding="utf-8", errors="replace") as fh:
+            fh.seek(offset)
+            text = fh.read()
+
+        if timed_out:
+            print(f"  [{arm}] {sampler} {label} TIMEOUT after {elapsed:.0f}s",
+                  flush=True)
+            attempts.append(f"{label}: timeout after {timeout}s")
             continue
-        if proc.returncode == 0 and "WILD RATE" in proc.stdout:
-            res = parse_eval_stdout(proc.stdout)
+        if proc.returncode == 0 and "WILD RATE" in text:
+            print(f"  [{arm}] {sampler} {label} ok ({elapsed:.0f}s)", flush=True)
+            res = parse_eval_stdout(text)
             res["ok"] = True
             res["attempts"] = attempts
+            res["log"] = str(eval_log)
             return res
-        tail = (proc.stderr or proc.stdout).strip().splitlines()[-3:]
-        attempts.append(f"n_graphs={n_graphs}: rc={proc.returncode} :: "
-                        + " | ".join(tail))
+        tail = text.strip().splitlines()[-3:]
+        print(f"  [{arm}] {sampler} {label} rc={proc.returncode} "
+              f"({elapsed:.0f}s): {' | '.join(tail)}", flush=True)
+        attempts.append(f"{label}: rc={proc.returncode} :: " + " | ".join(tail))
         # Only an OOM is worth retrying smaller; anything else will just repeat.
-        if "out of memory" not in (proc.stderr + proc.stdout).lower():
+        if "out of memory" not in text.lower():
             break
-    return {"ok": False, "attempts": attempts}
+    return {"ok": False, "attempts": attempts, "log": str(eval_log)}
 
 
 def fmt(v, spec=".2e", dash="-"):
@@ -272,6 +307,24 @@ def main():
     out_dir = pathlib.Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     run_logs = pathlib.Path(args.run_logs)
+    eval_logs = out_dir / "eval_logs"
+    eval_logs.mkdir(parents=True, exist_ok=True)
+    print(f"Live eval output: {eval_logs}/<arm>.<sampler>.log  (tail -f these)\n",
+          flush=True)
+
+    # A missing hierarchy cache makes the FIRST eval silently rebuild the whole
+    # thing -- the same build run_sweep.sh budgets 6 hours for -- before it can
+    # score anything. run_sweep.sh tells you to delete the cache when the sweep
+    # ends; that has to happen AFTER scoring, not before.
+    for probe_arm in args.arms:
+        probe_cfg = HERE / f"config_{probe_arm}.txt"
+        if not probe_cfg.exists():
+            continue
+        ds = (METHOD_REPO / parse_config(probe_cfg).get("dataset_dir", "")).resolve()
+        if ds.exists() and not list(ds.parent.glob(f"{ds.stem}.mscache.*.h5")):
+            print(f"NOTE: no hierarchy cache next to {ds.name} -- the first eval "
+                  f"has to rebuild it before it can score anything.\n", flush=True)
+        break
 
     rows = []
     for arm in args.arms:
@@ -310,7 +363,8 @@ def main():
 
         print(f"[{arm}] evaluating ({', '.join(args.samplers)})...", flush=True)
         row["eval"] = {
-            s: run_eval(cfg_path, args.split, args.k, s, args.python, args.timeout)
+            s: run_eval(cfg_path, args.split, args.k, s, args.python,
+                        args.timeout, eval_logs / f"{arm}.{s}.log", arm)
             for s in args.samplers
         }
         rows.append(row)
