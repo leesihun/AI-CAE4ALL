@@ -232,8 +232,22 @@ def main():
             torch.cuda.empty_cache()          # give the chunk's blocks back
         print("  scored graphs %d-%d of %d" % (start, stop - 1, n), flush=True)
 
-    margin = 0.5 * (gt_hi - gt_lo)
-    wild = int(((gen_lo < gt_lo - margin) | (gen_hi > gt_hi + margin)).sum())
+    # `margin` is a FRACTION OF THE WHOLE OBSERVED RANGE, so the historical
+    # 0.5 asks whether a draw leaves [min - 50% of range, max + 50% of range]
+    # -- twice the data's own width. That is a blow-up detector, and a model in
+    # roughly the right ballpark scores 0 on it no matter how badly calibrated
+    # it is. Report a ladder so the number can actually separate arms: at 0.00
+    # it asks the sharp question, "did this draw step outside the data envelope
+    # at all?".
+    span = gt_hi - gt_lo
+
+    def wild_at(frac):
+        m = frac * span
+        return int(((gen_lo < gt_lo - m) | (gen_hi > gt_hi + m)).sum())
+
+    MARGINS = (0.0, 0.1, 0.25, 0.5)
+    margin = 0.5 * span
+    wild = wild_at(0.5)
     ranks = np.array([int((gen_stats[:, i] < gt_stat[i]).sum()) for i in range(n)],
                      dtype=int)
 
@@ -244,18 +258,56 @@ def main():
     # Rough uniform-chi2 5% critical value via Wilson-Hilferty approx (no scipy dep).
     crit = dof * (1 - 2 / (9 * dof) + 1.645 * (2 / (9 * dof)) ** 0.5) ** 3
 
+    # The K+1-bin histogram has as many bins as there are DRAWS per graph, but
+    # only `n` observations to fill them -- at K=50 with a 100-graph split that
+    # is 1.96 expected per bin, well under the >=5 a chi-square test needs.
+    # Collapsing to 5 bins fixes it: measured over 600 synthetic replays at
+    # (n=100, K=50) the 5-bin test rejects a calibrated forecast 6% of the time
+    # and an over-dispersed one 100%, where the 51-bin `shape` label calls
+    # over-dispersion "roughly flat" about half the time.
+    edges = [round(i * (K + 1) / 5) for i in range(6)]
+    five = np.array([hist[edges[i]:edges[i + 1]].sum() for i in range(5)])
+    e5 = n / 5.0
+    chi5 = float(((five - e5) ** 2 / max(e5, 1e-9)).sum())
+    CRIT5 = 9.488  # chi2(4), 5%
+
     print("DIAGNOSTIC cfg=%s split=%s n_graphs=%d K=%d sampler=%s stat=%s feature_idx=%d" %
           (os.path.basename(args.config), args.split, n, K,
            'prior' if use_prior else 'N(0,I)', args.stat, fi))
     print("  GT envelope [%.1f, %.1f]  margin +/-%.1f" % (gt_lo, gt_hi, margin))
     print("  WILD RATE = %d / %d (%.1f%%)" % (wild, K * n, 100.0 * wild / (K * n)))
+    print("  WILD LADDER (margin x GT range): " + "  ".join(
+        "%.2f=%.1f%%" % (f, 100.0 * wild_at(f) / max(K * n, 1)) for f in MARGINS))
+    print("  [note] the envelope is taken from these %d graphs only, so wild%% "
+          "is comparable across arms only at equal n_graphs." % n)
     print("  RANK HISTOGRAM (%d bins, expect ~%.1f each): %s" %
           (K + 1, expected, hist.tolist()))
     print("  chi2 = %.1f  (uniform-fit 5%% critical ~%.1f; below = can't reject uniform)" %
           (chi2, crit))
-    shape = ('U-shaped (under-dispersed)' if hist[0] + hist[-1] > 2 * expected * 2
-             else 'dome-shaped (over-dispersed)' if hist[K // 2] > 2 * expected
-             else 'skewed' if abs(hist[:len(hist) // 2].sum() - hist[len(hist) // 2:].sum()) > n * 0.3
+    print("  RANK5 = %s %%  (5 bins, expect 20%% each)" %
+          [round(100.0 * float(v) / max(n, 1), 1) for v in five])
+    print("  chi2_5 = %.1f  (5-bin critical %.1f; THIS is the reliable test)" %
+          (chi5, CRIT5))
+    if n < 50:
+        # Measured: at n=40 the shape label still recovers a genuine U only ~66%
+        # of the time (Poisson noise on ~13-count tails); at n>=100 it is ~90%+.
+        print("  [warn] only %d graphs (%.1f per 5-bin): the shape label and "
+              "chi2_5 are indicative here, not conclusive." % (n, e5))
+
+    # Shape from the 5-bin view. The old test asked `hist[K//2] > 2*expected`
+    # -- a SINGLE middle bin out of K+1. An over-dispersed forecast spreads its
+    # mass across many middle bins, so that bin often fails the threshold and
+    # the label came back "roughly flat"; measured miss rate ~50% at K=50 and
+    # ~85% at K=9. Comparing the outer fifths against the middle fifth is the
+    # same question asked at a resolution the data can actually support.
+    # A U needs BOTH outer fifths heavy. Testing their SUM (as the old rule did
+    # via hist[0]+hist[-1]) cannot tell a genuine U from a one-sided pile-up,
+    # which is what made pure bias read as under-dispersion; requiring both
+    # separately lets the U test run first without swallowing the skew case.
+    lo5, mid5, hi5 = five[0] / max(n, 1), five[2] / max(n, 1), five[-1] / max(n, 1)
+    shape = ('U-shaped (under-dispersed)' if lo5 > 0.25 and hi5 > 0.25
+             else 'skewed' if abs(five[:2].sum() - five[-2:].sum()) > n * 0.3
+             else 'dome-shaped (over-dispersed)' if mid5 > 0.30
              else 'roughly flat')
     print("  shape: %s" % shape)
 

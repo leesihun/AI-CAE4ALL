@@ -39,12 +39,12 @@ positional_features	4  # Rotation-invariant node features: [centroid_dist, mean_
 
 %   Network parameters
 message_passing_num	15  # Only used for non-multiscale modes (vanilla MeshGraphNets only)
-Training_epochs	1000
-Batch_size	2  # per-rank; global batch = 2 x 4 GPUs = 8
+Training_epochs	5000
+Batch_size	16  # per-rank; global batch = 2 x 4 GPUs = 8
 LearningR	0.0001
 Latent_dim	128  # Encoder/processor/decoder hidden width
 num_workers	4  # number of workers for dataloader
-std_noise	0.0  # Gaussian physical-input noise (training only)
+std_noise	0.01  # Gaussian physical-input noise (training only)
 augment_geometry	True  # Training-only random Z-rotation + reflection augmentation
 grad_accum_steps	1  # Gradient accumulation steps
 
@@ -53,8 +53,8 @@ use_checkpointing	True  #faster; set True if OOM
 use_amp	True  # Mixed precision training with bfloat16
 use_ema	True  # EMA shadow model for validation/inference
 ema_decay	0.99  # EMA decay factor
-test_interval	100  # Run test/visualization every N epochs
-val_interval	1  # Run val eval every N epochs
+test_interval	500  # Run test/visualization every N epochs
+val_interval	100  # Run val eval every N epochs
 
 %   Node types
 use_node_types	False  # Add one-hot encoded node types to node features (Boundary condition, part No, Material assignments, etc.)
@@ -82,10 +82,10 @@ hierarchy_variants	4  # Independently-seeded coarsening partitions cached per sa
 
 %   VAE (MMD-InfoVAE)
 use_vae	True  # Enable posterior encoder + stochastic latent path (variational losses)
-vae_latent_dim	128  # Posterior/global latent width (must match checkpoint)
+vae_latent_dim	16  # Posterior/global latent width (must match checkpoint)
 vae_mp_layers	5  # Posterior graph-encoder message-passing depth
 recon_loss	mse  # huber or mse reconstruction objective
-alpha_recon	10  # Reconstruction-loss multiplier
+alpha_recon	1000  # Reconstruction-loss multiplier
 lambda_mmd	1  # Aggregate-posterior MMD loss multiplier
 mmd_bandwidth	median  # MMD bandwidth mode (fixed or median)
 vae_graph_aware	True  # Include graph/input context when encoding the posterior
@@ -99,7 +99,7 @@ prior_type	gnn_e2e  # gnn_e2e enables the jointly trained graph-conditional prio
 use_conditional_prior	True  # Use learned conditional prior instead of N(0,I)
 prior_family	fm  # fm (flow matching) or gmm
 prior_nll_weight	1.0  # Prior density/flow-matching objective multiplier
-prior_fm_steps	40  # Euler integration steps for FM-prior sampling/validation
+prior_fm_steps	100  # Euler integration steps for FM-prior sampling/validation
 prior_mp_layers	5  # Prior message-passing depth
 prior_hidden_dim	256  # Conditional-prior hidden width
 prior_temperature	1.0  # Sampling spread control (inference only)

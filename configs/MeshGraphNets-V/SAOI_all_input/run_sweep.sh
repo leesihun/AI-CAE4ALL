@@ -1,25 +1,38 @@
 #!/usr/bin/env bash
-# One-click runner for the SAOI 16-arm latent x regularization sweep.
+# One-click runner for the SAOI WAVE 2 sweep (8 arms).
 #
-#   AXIS 1  vae_latent_dim  {128, 64, 16, 8}
-#   AXIS 2  alpha_recon:lambda_mmd  {1000:0.1, 1000:1, 100:1, 10:1}
+#   AXIS 1  generative-path recipe: e0 gamma_es 0 (control) | e1 ES 100 vs
+#           N(0,I) | e2 ES 1000 vs N(0,I) | e3 ES 100 vs the learned prior.
+#           e1/e2 also flip use_conditional_prior False so the distribution ES
+#           trains against is the one inference samples.
+#   AXIS 2  lambda_mmd {0, 1} at Batch_size 8, where MMD actually has signal.
+#           m0 (lambda_mmd 0) is the control for wave 1's small-z win.
 #
-# 16 arms, 2 per GPU across GPUs 0-7. Each arm pins its GPU in its own config
+# 8 arms, ONE per GPU across GPUs 0-7. Each arm pins its GPU in its own config
 # (gpu_ids), so this script only has to launch them; it does not set
 # CUDA_VISIBLE_DEVICES.
+#
+# WATCH THE FIRST ARM'S `VRAM peak=` LOG LINE. Batch_size went 4 -> 8; if it
+# does not fit, set Batch_size 4 in every arm (the axes survive, the MMD
+# signal-to-noise just halves).
 #
 # THIS IS A MULTI-DAY RUN. Start it detached:
 #   nohup bash configs/MeshGraphNets-V/SAOI_all_input/run_sweep.sh > sweep.out 2>&1 &
 #   tail -f sweep.out
-#   tail -f outputs/saoi_sweep/run_logs/sweep_z8_r1.log     # watch one arm
+#   tail -f outputs/saoi_sweep2/run_logs/sweep_e0_m0.log    # watch one arm
 #
-# Multiscale cache: all 16 arms hash to ONE cache file (vae_latent_dim /
-# alpha_recon / lambda_mmd are not part of the coarsening signature). An
+# Multiscale cache: all 8 arms hash to ONE cache file (none of the swept keys
+# are part of the coarsening signature). An
 # exclusive O_EXCL lock in general_modules/multiscale_cache.py lets exactly one
 # process build it while the rest poll. Rather than have 15 jobs idle through a
 # potentially hours-long build, this script launches ONE arm first and waits for
-# the cache to appear before launching the other 15 — and aborts the whole
+# the cache to appear before launching the other 7 — and aborts the whole
 # batch if that first arm dies, so a config error costs minutes, not days.
+#
+# DELETE ANY LEFTOVER CACHE BEFORE STARTING: cache_ready() only globs the file
+# name, so a stale cache from a previous run makes this script skip the warm-up
+# and launch all 8 straight into a cache MISS (the signature pins the source
+# HDF5's mtime, which write_preprocessing_to_hdf5 bumps every run).
 #
 # The configs set hierarchy_cache_keep True so no finishing arm deletes the
 # cache out from under the others. DELETE IT MANUALLY when the sweep is done:
@@ -27,8 +40,8 @@
 #
 # Environment overrides:
 #   PYTHON        interpreter (default: python)
-#   LOG_ROOT      transcript directory (default: outputs/saoi_sweep/run_logs)
-#   ARMS          space-separated arm names (default: all 16)
+#   LOG_ROOT      transcript directory (default: outputs/saoi_sweep2/run_logs)
+#   ARMS          space-separated arm names (default: all 8)
 #   PREFLIGHT     1 = --check every arm before launching any (default); 0 = skip
 #   WARM_TIMEOUT  seconds to wait for the shared cache (default: 21600 = 6h)
 #   SCORE         1 = run score_sweep.py when training ends (default); 0 = skip
@@ -37,7 +50,7 @@
 #
 # Usage:
 #   bash configs/MeshGraphNets-V/SAOI_all_input/run_sweep.sh
-#   ARMS="sweep_z8_r1 sweep_z8_r4" bash .../run_sweep.sh    # subset
+#   ARMS="sweep_e0_m0 sweep_e2_m1" bash .../run_sweep.sh    # subset
 #   PREFLIGHT=0 bash .../run_sweep.sh                       # skip validation
 
 # NOT `set -e`: per-arm failures are collected so one bad arm cannot kill the batch.
@@ -55,14 +68,12 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 cd "$REPO_ROOT" || exit 1
 
 CFG_DIR="configs/MeshGraphNets-V/SAOI_all_input"
-LOG_ROOT="${LOG_ROOT:-outputs/saoi_sweep/run_logs}"
+LOG_ROOT="${LOG_ROOT:-outputs/saoi_sweep2/run_logs}"
 CACHE_GLOB="dataset/saoi/saoi_train_top.mscache.*.h5"
 
 DEFAULT_ARMS="\
-sweep_z128_r1 sweep_z128_r2 sweep_z128_r3 sweep_z128_r4 \
-sweep_z64_r1 sweep_z64_r2 sweep_z64_r3 sweep_z64_r4 \
-sweep_z16_r1 sweep_z16_r2 sweep_z16_r3 sweep_z16_r4 \
-sweep_z8_r1 sweep_z8_r2 sweep_z8_r3 sweep_z8_r4"
+sweep_e0_m0 sweep_e0_m1 sweep_e1_m0 sweep_e1_m1 \
+sweep_e2_m0 sweep_e2_m1 sweep_e3_m0 sweep_e3_m1"
 ARMS="${ARMS:-$DEFAULT_ARMS}"
 
 mkdir -p "$LOG_ROOT"
@@ -92,7 +103,7 @@ run_arm() {
     return 1
 }
 
-echo "SAOI latent x regularization sweep"
+echo "SAOI wave 2 -- generative path x posterior regularization"
 echo "  REPO_ROOT = $REPO_ROOT"
 echo "  PYTHON    = $PYTHON"
 echo "  LOG_ROOT  = $LOG_ROOT"
@@ -189,7 +200,7 @@ echo ""
 echo "Training finished in $(( (ended - started) / 3600 ))h $(( ((ended - started) % 3600) / 60 ))m (rc=$rc)."
 echo ""
 echo "Transcripts : $LOG_ROOT/<arm>.log"
-echo "Checkpoints : output/meshgraphnets-v/saoi_sweep/<arm>.pth"
+echo "Checkpoints : output/meshgraphnets-v/saoi_sweep2/<arm>.pth"
 echo ""
 
 # ---- Score the grid --------------------------------------------------------
@@ -197,7 +208,7 @@ echo ""
 # uses, so the sweep is decided by CRPS + wild rate + rank calibration. Runs
 # even when rc != 0 so a partially-failed batch still yields a report for the
 # arms that did finish (score_sweep.py skips arms with no checkpoint).
-REPORT="outputs/saoi_sweep/sweep_results.md"
+REPORT="outputs/saoi_sweep2/sweep_results.md"
 if [ "$SCORE" = "1" ]; then
     echo "Scoring the grid (this runs eval_distribution.py per arm, both samplers)..."
     if "$PYTHON" "$CFG_DIR/score_sweep.py" \
@@ -205,7 +216,7 @@ if [ "$SCORE" = "1" ]; then
             --split "$SCORE_SPLIT" \
             --k "$SCORE_K" \
             --python "$PYTHON" \
-            --out-dir outputs/saoi_sweep \
+            --out-dir outputs/saoi_sweep2 \
             --run-logs "$LOG_ROOT" \
             > "$LOG_ROOT/score_sweep.log" 2>&1; then
         echo "Scoring complete."
@@ -220,7 +231,7 @@ if [ "$SCORE" = "1" ]; then
         echo "==========================================="
         echo ""
         echo "Report   : $REPORT      <-- paste this file to Claude"
-        echo "Raw JSON : outputs/saoi_sweep/sweep_results.json"
+        echo "Raw JSON : outputs/saoi_sweep2/sweep_results.json"
     fi
 else
     echo "SCORE=0 — skipped. Run it later with:"

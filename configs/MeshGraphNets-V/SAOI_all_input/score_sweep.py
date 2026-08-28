@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Score every arm of the SAOI latent x regularization sweep into ONE report.
+"""Score every arm of the SAOI wave-2 sweep into ONE report.
 
 Two independent signals are collected per arm, because neither alone is enough:
 
@@ -18,13 +18,13 @@ eval_distribution.py batches the whole split at once, so on large SAOI meshes
 `--n-graphs 0` can OOM. This script retries with progressively fewer graphs and
 records which count actually ran, rather than silently reporting nothing.
 
-Outputs (into --out-dir, default outputs/saoi_sweep):
+Outputs (into --out-dir, default outputs/saoi_sweep2):
     sweep_results.md    compact table -- this is the file to read/paste
     sweep_results.json  everything, including full rank histograms
 
 Usage:
     python configs/MeshGraphNets-V/SAOI_all_input/score_sweep.py
-    python .../score_sweep.py --arms sweep_z8_r1 sweep_z8_r4 --k 20
+    python .../score_sweep.py --arms sweep_e0_m0 sweep_e2_m1 --k 20
 """
 import argparse
 import json
@@ -40,9 +40,11 @@ REPO_ROOT = HERE.parents[2]
 METHOD_REPO = REPO_ROOT / "MeshGraphNets - variational"
 EVAL_SCRIPT = METHOD_REPO / "misc" / "eval_distribution.py"
 
-Z_LEVELS = [128, 64, 16, 8]
-R_LEVELS = ["r1", "r2", "r3", "r4"]
-DEFAULT_ARMS = [f"sweep_z{z}_{r}" for z in Z_LEVELS for r in R_LEVELS]
+# Wave 2: AXIS 1 = generative-path recipe (gamma_es x es_noise_source x
+# use_conditional_prior), AXIS 2 = posterior regularization (lambda_mmd).
+E_LEVELS = ["e0", "e1", "e2", "e3"]
+M_LEVELS = ["m0", "m1"]
+DEFAULT_ARMS = [f"sweep_{e}_{m}" for e in E_LEVELS for m in M_LEVELS]
 
 # Graph counts tried in order until one does not OOM.
 NGRAPH_LADDER = [0, 64, 32, 16, 8]
@@ -182,8 +184,17 @@ EVAL_PATTERNS = {
     "n_graphs": re.compile(r"n_graphs=(\d+)"),
     "k": re.compile(r"K=(\d+)"),
     "wild_pct": re.compile(r"WILD RATE = \d+ / \d+ \(([-+0-9.eE]+)%\)"),
+    # margin 0.0 = "did the draw leave the observed data envelope at all?".
+    # The headline WILD RATE uses margin 0.5 (half the whole range on each
+    # side), which almost nothing trips -- it detects blow-ups, not calibration.
+    "wild0_pct": re.compile(r"WILD LADDER.*?0\.00=([-+0-9.eE]+)%"),
     "chi2": re.compile(r"chi2 = ([-+0-9.eE]+)"),
     "crit": re.compile(r"critical ~([-+0-9.eE]+)"),
+    # The K+1-bin chi2 above is unusable at these sample sizes (K=50 puts 51
+    # bins against ~n observations). eval_distribution.py also reports a 5-bin
+    # version, which is the one the table should show.
+    "chi2_5": re.compile(r"chi2_5 = ([-+0-9.eE]+)"),
+    "crit_5": re.compile(r"5-bin critical ([-+0-9.eE]+)"),
     "shape": re.compile(r"shape: (.+)"),
 }
 HIST_RE = re.compile(r"RANK HISTOGRAM \(\d+ bins, expect ~[-+0-9.eE]+ each\): (\[.*\])")
@@ -293,9 +304,9 @@ def main():
     ap.add_argument("--split", default="test", choices=["train", "val", "test"])
     ap.add_argument("--k", type=int, default=50)
     ap.add_argument("--python", default=sys.executable)
-    ap.add_argument("--out-dir", default=str(REPO_ROOT / "outputs" / "saoi_sweep"))
+    ap.add_argument("--out-dir", default=str(REPO_ROOT / "outputs" / "saoi_sweep2"))
     ap.add_argument("--run-logs",
-                    default=str(REPO_ROOT / "outputs" / "saoi_sweep" / "run_logs"),
+                    default=str(REPO_ROOT / "outputs" / "saoi_sweep2" / "run_logs"),
                     help="run_sweep.sh's per-arm stdout transcripts; the only "
                          "place [PriorDiag]/[PriorTail] are recorded")
     ap.add_argument("--timeout", type=int, default=3600,
@@ -341,6 +352,10 @@ def main():
             "z": cfg.get("vae_latent_dim"),
             "alpha_recon": cfg.get("alpha_recon"),
             "lambda_mmd": cfg.get("lambda_mmd"),
+            "gamma_es": cfg.get("gamma_es"),
+            "es_noise_source": cfg.get("es_noise_source"),
+            "use_conditional_prior": cfg.get("use_conditional_prior"),
+            "batch_size": cfg.get("batch_size"),
         })
 
         ckpt = (METHOD_REPO / cfg.get("modelpath", "")).resolve()
@@ -390,43 +405,61 @@ def main():
 
 def render_markdown(rows, args):
     L = []
-    L.append("# SAOI latent x regularization sweep -- results")
+    L.append("# SAOI wave 2 -- generative path x posterior regularization")
     L.append("")
     L.append(f"split={args.split}  K={args.k}  samplers={','.join(args.samplers)}")
     L.append("")
-    L.append("AXIS 1 = vae_latent_dim (z). AXIS 2 = alpha_recon:lambda_mmd ratio.")
-    L.append("r1=1000:0.1  r2=1000:1  r3=100:1  r4=10:1")
+    L.append("AXIS 1 = generative-path recipe. e0 gamma_es 0 (control) |")
+    L.append("e1 ES 100 vs N(0,I) | e2 ES 1000 vs N(0,I) | e3 ES 100 vs prior.")
+    L.append("e1/e2 also set use_conditional_prior False so the path ES trains")
+    L.append("against is the path inference samples.")
+    L.append("AXIS 2 = lambda_mmd at Batch_size 8. m0 = 0 (no regularization,")
+    L.append("the control for wave 1's small-z win) | m1 = 1.")
+    L.append("z is fixed at 8 (wave 1's winner) in every arm.")
     L.append("")
     L.append("**Read CRPS and wild%, not recon.** Reconstruction measures the")
     L.append("posterior path; the generative path is what inference uses.")
-    L.append("Lower CRPS = better. Lower wild% = fewer out-of-envelope fields.")
+    L.append("Lower CRPS = better. wild0% counts (graph, draw) pairs whose field")
+    L.append("leaves the observed data envelope AT ALL -- that is the")
+    L.append("discriminating one. wild% uses the old margin of half the whole")
+    L.append("range on each side, which only catches outright blow-ups.")
     L.append("chi2/crit < 1 means the rank histogram is consistent with uniform")
-    L.append("(calibrated). rank% is the rank histogram rebinned into 5 groups:")
-    L.append("flat ~ [20,20,20,20,20]; U-shape = under-dispersed; dome = over-dispersed.")
+    L.append("(calibrated). This is the 5-BIN test: the raw K+1-bin one puts 51")
+    L.append("bins against ~n observations and cannot be trusted -- measured, its")
+    L.append("shape label called over-dispersion \"roughly flat\" about half the time.")
+    L.append("rank% is that 5-bin histogram: flat ~ [20,20,20,20,20];")
+    L.append("both ends heavy = under-dispersed; middle heavy = over-dispersed;")
+    L.append("one end heavy = biased location.")
     L.append("")
 
-    hdr = ("| arm | z | a:mmd | best CRPS | valid recon | spread | "
-           "wild% prior | wild% N(0,I) | chi2/crit | rank% (prior) | n |")
+    hdr = ("| arm | gamma_es | ES z | mmd | best CRPS | valid recon | spread | "
+           "wild0% prior | wild0% N(0,I) | wild% prior | chi2/crit | "
+           "rank% (prior) | n |")
     L.append(hdr)
-    L.append("|" + "---|" * 11)
+    L.append("|" + "---|" * 13)
 
     for r in rows:
         if r.get("error"):
-            # arm, z, a:mmd, error + 6 blanks + close = the header's 11 columns.
-            L.append(f"| {r['arm']} | {r.get('z','?')} | | **{r['error']}** | "
-                     + "| " * 6 + "|")
+            # arm, gamma_es, ES z, error + 8 blanks + close = 13 columns.
+            L.append(f"| {r['arm']} | {r.get('gamma_es','?')} | | **{r['error']}** | "
+                     + "| " * 8 + "|")
             continue
         tl = r.get("train_log", {})
         ev = r.get("eval", {})
         ep, en = ev.get("prior", {}), ev.get("normal", {})
-        ratio = (ep.get("chi2") / ep["crit"]
-                 if ep.get("chi2") is not None and ep.get("crit") else None)
+        # Prefer the 5-bin test; fall back to the fine one only for logs from
+        # an eval_distribution.py that predates it.
+        num, den = ep.get("chi2_5"), ep.get("crit_5")
+        if num is None or not den:
+            num, den = ep.get("chi2"), ep.get("crit")
+        ratio = num / den if num is not None and den else None
         L.append(
-            f"| {r['arm']} | {r.get('z','?')} | "
-            f"{r.get('alpha_recon','?')}:{r.get('lambda_mmd','?')} | "
+            f"| {r['arm']} | {r.get('gamma_es','?')} | "
+            f"{r.get('es_noise_source') or '-'} | {r.get('lambda_mmd','?')} | "
             f"{fmt(tl.get('best_crps'))} | {fmt(tl.get('final_valid'))} | "
             f"{fmt(tl.get('min_spread_ratio'), '.2f')} | "
-            f"{fmt(ep.get('wild_pct'), '.1f')} | {fmt(en.get('wild_pct'), '.1f')} | "
+            f"{fmt(ep.get('wild0_pct'), '.1f')} | {fmt(en.get('wild0_pct'), '.1f')} | "
+            f"{fmt(ep.get('wild_pct'), '.1f')} | "
             f"{fmt(ratio, '.2f')} | {ep.get('hist5', '-')} | "
             f"{fmt(ep.get('n_graphs'), '.0f')} |"
         )
