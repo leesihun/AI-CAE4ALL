@@ -56,6 +56,7 @@ HDF5 file for training.
 | --- | --- | --- |
 | `input_var` | model, data | Number of physical input channels after xyz coordinates. Current configs use `3` for displacement. |
 | `output_var` | model, data | Number of predicted delta channels. Current configs use `3`. |
+| `cond_var` | model, data | Trailing **input-only** rows after the state block: known boundary/flight/process conditions the model reads every step but never predicts. Dataset row layout is `[3 : 3+input_var]` state, then `[3+input_var : +cond_var]` conditions. They land in `graph.x` as `[state \| conditions \| positional \| node-type one-hot]`, get their own normalization stats, are read even in the static (T=1) case where the state block is zeroed, and are carried unchanged through an autoregressive rollout. Default `0`, which reproduces the pre-conditioning behaviour exactly. |
 | `edge_var` | model, data | Must be `8`. The code validates this against `EDGE_FEATURE_DIM`. |
 | `positional_features` | data, model | Number of extra node features appended to physical channels (centroid distance, mean edge length, then RWPE). |
 | `use_node_types` | data, model | Adds one-hot node type features from feature index 7 when available. |
@@ -90,6 +91,8 @@ ref_dx, ref_dy, ref_dz, ref_dist
 | `hierarchy_cache_wait_timeout` | data | Seconds to wait for another job's cache build before failing. Default `36000`. |
 | `hierarchy_cache_keep` | data | Keep the hierarchy cache after training instead of deleting it. Default `false`. |
 | `static_cache_per_worker` | data | Per-worker LRU cap for positional features (non-multiscale runs only). Default `64`. |
+| `hierarchy_variants` | data | Independently-seeded coarsening partitions cached per sample, rotated across epochs. Without this, training sees ONE fixed partition for every epoch while inference builds a fresh one it has never seen. Validation stays pinned to variant 0 so its loss stays comparable. Costs K x cache build time and K x cache disk; `1` reproduces the old behaviour bit-for-bit. |
+| `hierarchy_seed` | inference | Seeds the otherwise-unseeded FPS draw at inference so a rollout is reproducible, and so it can be made to match the partitions training was fit to. A list rotates seeds across z-sample batches. |
 
 When `use_multiscale True`, `message_passing_num` is not used by the processor;
 the block counts come from `mp_per_level`. Unpooling always uses the learned
@@ -130,10 +133,14 @@ same mesh topology. For this objective, keep `lambda_mmd` low (≈ 0.1) and
 | `vae_latent_dim` | model | Global latent `z` dimension. 32 recommended for spread modeling. |
 | `vae_mp_layers` | VAE encoder | Message-passing layers inside the posterior encoder. Default `5` in model construction. |
 | `vae_graph_aware` | VAE encoder | Fuses graph input `x` with target `y` in the posterior encoder. Recommended `True` for multi-type datasets: enables type-conditional spread encoding. |
+| `z_conditioning` | model | How `z` reaches the processor. `concat` (default, legacy) applies a bare `Linear([x, z])` before every block: since `z` is broadcast, that adds ONE constant vector per graph, and the non-residual Linear compounds a ~1.33x gain per block under the repo's kaiming init. `adaln` emits `(shift, scale, gate)` from `z` and modulates the block instead — zero-initialized so it is EXACTLY the unconditioned block at init. **Renames the per-block conditioning parameters**, so it is persisted in the checkpoint's `model_config` and a checkpoint only loads under the value it trained with. See [MESHGRAPHNET_ARCHITECTURE.md](MESHGRAPHNET_ARCHITECTURE.md). |
+| `mmd_gather_ranks` | training | All-gather `z` across DDP ranks before the MMD (default `True`). MMD is a two-SAMPLE statistic evaluated inside the model forward, so without this it only ever sees the PER-RANK batch — on 4 GPUs at `Batch_size 16` the global batch is 64 but the estimator used 16. `z` is tiny, so the collective is free. No-op at `world_size 1`. |
 | `alpha_recon` | training | Reconstruction-loss weight. |
 | `lambda_mmd` | training | MMD regularizer weight matching aggregate posterior to `N(0,I)`. Keep low (≈ 0.1) for spread modeling; residual MMD > 0 is acceptable and expected. |
 | `beta_aux` | training | Weight for auxiliary latent decoder predicting per-graph output stats from `z`. Keep high (≈ 1.0) to prevent mode collapse. |
-| `posterior_min_std` | VAE encoder | Floor on the posterior std. ≈ 0.05 recommended so the prior cannot memorize point masses. |
+| `posterior_min_std` | VAE encoder | Floor on the posterior std. ≈ 0.05 recommended so the prior cannot memorize point masses. It also sets the noise level the DECODER is trained at, which is the level it should be able to tolerate from the prior at inference. |
+| `mmd_bandwidth` | training | RBF bandwidth mode for the MMD. `fixed` uses constant sigmas tuned for ~64-D `z` and **saturates at high `vae_latent_dim`** — pairwise squared distances grow ~2D, every kernel goes to 0, and the penalty silently disappears along with its gradient. `median` sets the base scale from the median pairwise distance each step and stays sensitive at any latent width. |
+| `best_by` | training | Checkpoint-selection metric: `recon` (posterior validation loss, default) or `crps` (the learned-prior CRPS that mirrors inference). Reconstruction measures the POSTERIOR path, which a model can keep improving while its generative path rots — select on `crps` whenever the run exists to generate. |
 | `recon_loss` | training | `huber` (default) or `mse`. MSE preserves extreme-node amplitude better. |
 | `num_vae_samples` | inference | Number of rollout samples per scene. Can exceed training set size to extrapolate spread. |
 | `vae_batch_size` | inference | Trajectories advanced together per batched forward pass. |
@@ -142,8 +149,10 @@ same mesh topology. For this objective, keep `lambda_mmd` low (≈ 0.1) and
 | `use_conditional_prior` | inference | At inference, sample z from the joint-trained conditional prior (a model submodule). Default `True`; set `False` to force N(0,I). |
 | `prior_type` | model, training | `gnn_e2e` (default when `use_vae True`) enables the joint graph-conditional prior submodule. |
 | `prior_family` | prior | Density family of the gnn_e2e prior: `fm` (conditional flow matching, **default**) or `gmm` (Gaussian mixture, legacy). Persisted in the checkpoint; pre-FM checkpoints load as `gmm` automatically. |
-| `prior_nll_weight` | training | Weight of the prior density-matching objective — flow-matching MSE (`fm`) or mixture NLL (`gmm`). Default `1.0`. |
-| `prior_fm_steps` | prior (fm) | Euler ODE steps when sampling from the FM prior. Default `20`. |
+| `prior_nll_weight` | training | Weight of the prior density-matching objective — flow-matching MSE (`fm`) or mixture NLL (`gmm`). Default `1.0`. Read it RELATIVE to `alpha_recon`: at `alpha_recon 1000` a weight of 1 makes this ~0.1% of the objective. |
+| `prior_grad_to_encoder` | training | How much of the prior's flow-matching gradient reaches the ENCODER. `0.0` (default) is the historical one-way coupling: the posterior is detached, the prior chases a `q` that never moves toward it, and the CVAE rate term `KL(q(z\|y,g) \|\| p(z\|g))` is absent from the objective entirely. `1.0` closes the loop and restores that term. Values in between scale the backward pass without changing the loss value. **Requires `beta_aux > 0`**: the pressure this adds is toward a `z` predictable from the graph alone, and MMD does not guard against that (a deterministic `z = h(g)` matches `N(0,I)` perfectly) — `beta_aux`'s I(z;y) floor is what does. Preflight warns (`MGNV-PRIOR-GRAD-AUX`) if `beta_aux` is 0 while this is on. |
+| `prior_fm_steps` | prior (fm) | ODE steps when sampling from the FM prior. Default `20`. Sampling-only — it never affects training. |
+| `prior_fm_solver` | prior (fm) | ODE integrator: `heun` (default, 2nd-order trapezoid predictor-corrector, two velocity evaluations per step) or `euler` (1st order, the old behaviour). The velocity is most curved near `t = 1`, which is exactly where Euler overshoots into the `z` tails; measured on `dz/dt = z`, Heun at 30 steps is ~27x more accurate than Euler at 100 and ~40% cheaper. |
 | `prior_hidden_dim` | prior | Prior hidden width. Defaults to `latent_dim`. |
 | `prior_mp_layers` | prior | Prior graph message-passing layers. Default `3`. |
 | `prior_mixture_components` | prior (gmm) | Mixture components. Default `50`. |
@@ -158,7 +167,10 @@ Removed legacy keys: `alpha_prior_max`, `alpha_prior_warmup_frac`,
 `gmm_covariance_type`, `gmm_reg_covar`, `train_conditional_prior`,
 `bipartite_unpool`, `residual_scale`, `use_pairnorm`, `extreme_weight`,
 `positional_encoding`, `fine_mp_pre`/`coarse_mp_num`/`fine_mp_post`
-(deleted in the 2026-07 refactor — these keys are now ignored or rejected).
+(deleted in the 2026-07 refactor — these keys are now ignored or rejected);
+`gamma_es`, `es_samples`, `es_steps`, `es_noise_source`, `es_start_epoch`
+(the energy-score generative term, deleted from the objective — the launcher
+flags them as `MGNV-REMOVED`).
 
 ## Training And Performance Keys
 
@@ -171,6 +183,10 @@ Removed legacy keys: `alpha_prior_max`, `alpha_prior_warmup_frac`,
 | `num_workers` | DataLoader | Worker count for simulator training. |
 | `std_noise` | model forward | Adds Gaussian noise to node and edge inputs during training. |
 | `noise_gamma` | model forward | Target correction factor when input noise is applied. Default `0.1`. |
+| `noise_std_ratio` | model forward | **Computed, not configured.** `setup.py` fills it with `node_std / delta_std` per output channel so the target correction for input noise is applied in the right units. Setting it by hand overrides a value derived from the dataset. |
+| `weight_decay` | training | Adam weight decay. |
+| `prefetch_factor` | DataLoader | Batches each worker prefetches. |
+| `time_integration` | training | `ar_ot` (default) trains one step at a time against the teacher-forced target. `ar_rt` unrolls the full trajectory and backpropagates through it, which is what a rollout actually does at inference — but it requires `num_timesteps > 1`, so static (T=1) datasets must use `ar_ot`. |
 | `grad_accum_steps` | training | `1` steps per batch, `N` accumulates N batches, `0` accumulates the whole epoch. |
 | `use_checkpointing` | model | Activation checkpointing in training. |
 | `use_amp` | training | bfloat16 autocast. |
@@ -187,9 +203,26 @@ Removed legacy keys: `alpha_prior_max`, `alpha_prior_warmup_frac`,
 | `augment_geometry` | data | Training-only random z rotation and x/y reflection. |
 | `test_max_batches` | training | Cap on test batches per visualization pass. Default `200`. |
 
-Simulator loss is Huber or MSE (`recon_loss`) on normalized deltas. VAE training
-adds MMD and auxiliary latent losses according to the configured weights. For
-manufacturing spread modeling, set `lambda_mmd 0.1`, `beta_aux 1.0`.
+Simulator loss is Huber or MSE (`recon_loss`) on normalized deltas. With
+`use_vae True` the full objective is
+
+```text
+L = alpha_recon      * recon(f(z_q, g), y)          reconstruction
+  + lambda_mmd       * MMD(q(z) || N(0,I))          aggregate rate: shape/scale of the latent
+  + beta_aux         * aux(z -> per-graph y stats)  I(z;y) floor, guards against collapse
+  + prior_nll_weight * FM(v_theta ; z_q, g)         conditional rate: where each graph lands
+  [+ prior_kl_reg_weight * KL anchor]               gmm family only
+```
+
+The three weights are only meaningful RELATIVE to `alpha_recon`; at
+`alpha_recon 1000` with the others at 1, the regularizers are ~0.1% of the
+objective and are effectively off. Check the `mmd` and `fm_p` entries of the
+training progress bar against `total` in the first epochs.
+
+`prior_grad_to_encoder` decides whether the FM term is a one-way regression
+(prior chases a detached `q`) or the actual CVAE rate term. For manufacturing
+spread modeling the historical starting point is `lambda_mmd 0.1`,
+`beta_aux 1.0`.
 
 ## Inference Keys
 
@@ -200,10 +233,14 @@ manufacturing spread modeling, set `lambda_mmd 0.1`, `beta_aux 1.0`.
 | `num_vae_samples` | inference | Number of stochastic samples per scene when VAE is enabled. |
 | `prior_temperature` | inference | Conditional-prior sampling spread control. |
 | `eval_dataset` | inference | Ground-truth eval HDF5 used for the inline z_disp spread-histogram comparison. When set (and VAE enabled), rollout writes `histogram_compare.png` next to the `.h5` outputs. No GT path → comparison skipped. |
-| `make_histogram` | inference | Force the spread histogram on/off. Defaults to `True` when `use_vae` and `eval_dataset` are both set. |
+| `make_histogram` | inference | Force the spread histogram on/off. Defaults to `True` when `use_vae` and `eval_dataset` are both set. Alongside the PNG it prints machine-readable `[SPREAD] GT/GEN mean= std= min= max= n=` lines and writes `spread_values.npz` (the raw `gt`/`gen` arrays) into `inference_output_dir` — with `save_rollouts False` that npz is the only surviving record. |
 | `show_histogram` | inference | Open the saved `histogram_compare.png` in the OS default viewer after rollout. Default `True`; best-effort (silently degrades on a headless box). |
 | `histogram_bins` | inference | Histogram bin count (default `60`). |
 | `histogram_clip_quantile` | inference | Symmetric quantile clip for the binning range, e.g. `0.001` trims the 0.1% tails (default `0` = no clip). |
+| `vae_batch_size_min` | inference | Floor for the automatic VAE batch sizer. Default `1`. |
+| `vae_batch_size_max` | inference | Ceiling for the automatic sizer. Default `0` = no ceiling. |
+| `vae_batch_vram_fraction` | inference | Fraction of free VRAM the sizer aims to use when `vae_batch_size` is not set explicitly. Default `0.70`, clamped to (0, 1]. |
+| `save_rollouts` | inference | Write one trajectory HDF5 per (scene, VAE sample). Default `True`. Set `False` for a distribution study: `num_vae_samples` draws across many scenes is thousands of files per run, and the histogram only needs the spread scalars. Sampling, `histogram_compare.png`, the `[SPREAD]` log lines and `spread_values.npz` all still happen. |
 
 Inference output files are named like:
 

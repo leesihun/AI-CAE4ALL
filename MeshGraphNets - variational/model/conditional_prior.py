@@ -148,6 +148,10 @@ class ConditionalFMPrior(_ConditionalPriorBase):
     def __init__(self, config):
         super().__init__(config)
         self.num_steps = int(config.get('prior_fm_steps', 20))
+        self.solver = str(config.get('prior_fm_solver', 'heun')).lower().strip()
+        if self.solver not in ('heun', 'euler'):
+            raise ValueError(
+                f"prior_fm_solver must be 'heun' or 'euler', got '{self.solver}'")
         self.flat_dim = self.num_z * self.z_dim
         # Fourier features of t: [sin(2^k π t), cos(2^k π t)], k = 0..15.
         freqs = (2.0 ** torch.arange(16, dtype=torch.float32)) * math.pi
@@ -195,6 +199,28 @@ class ConditionalFMPrior(_ConditionalPriorBase):
             pred_v = self.velocity(z_t, t, c)
             return torch.nn.functional.mse_loss(pred_v, target_v)
 
+    def _integrate(self, z, c, steps):
+        """Transport z ~ N(0,I) along v_theta from t=0 to t=1.
+
+        'heun' is the second-order explicit trapezoid (predictor-corrector):
+        local error O(dt^3) against Euler's O(dt^2), for two velocity
+        evaluations per step. The FM velocity is largest and most curved near
+        t=1, which is exactly where first-order Euler overshoots into the z
+        tails — the "Gen_max spike" that forced prior_fm_steps from 20 up to
+        100. Heun at ~25 steps is more accurate than Euler at 100 and half the
+        cost. 'euler' keeps the old integrator for comparison.
+        """
+        dt = 1.0 / steps
+        for k in range(steps):
+            t = torch.full((z.shape[0], 1), k * dt, device=z.device)
+            v1 = self.velocity(z, t, c)
+            if self.solver == 'euler':
+                z = z + dt * v1
+                continue
+            v2 = self.velocity(z + dt * v1, t + dt, c)
+            z = z + 0.5 * dt * (v1 + v2)
+        return z
+
     @torch.no_grad()
     def sample(self, graph, temperature=1.0):
         """Sample z of shape [B, num_z, D] — same interface as the mixture."""
@@ -212,10 +238,7 @@ class ConditionalFMPrior(_ConditionalPriorBase):
         steps = int(steps or self.num_steps)
         c = cond.float().repeat_interleave(n, dim=0)
         z = torch.randn(c.shape[0], self.flat_dim, device=c.device)
-        dt = 1.0 / steps
-        for k in range(steps):
-            t = torch.full((c.shape[0], 1), k * dt, device=c.device)
-            z = z + dt * self.velocity(z, t, c)
+        z = self._integrate(z, c, steps)
         return z.view(cond.shape[0], n, self.num_z, self.z_dim).to(cond.dtype)
 
     @torch.no_grad()
@@ -232,10 +255,7 @@ class ConditionalFMPrior(_ConditionalPriorBase):
             bn = c.shape[0]
             z = torch.randn(bn, self.flat_dim, device=c.device)
             z = z * math.sqrt(max(float(temperature), 1e-6))
-            dt = 1.0 / self.num_steps
-            for k in range(self.num_steps):
-                t = torch.full((bn, 1), k * dt, device=c.device)
-                z = z + dt * self.velocity(z, t, c)
+            z = self._integrate(z, c, self.num_steps)
         B = cond.shape[0]
         return z.view(B, n, self.num_z, self.z_dim).to(cond.dtype)
 
@@ -438,6 +458,7 @@ def build_prior_config(config):
         'prior_mp_layers': config.get('prior_mp_layers', 10),
         # fm family only:
         'prior_fm_steps': config.get('prior_fm_steps', 20),
+        'prior_fm_solver': config.get('prior_fm_solver', 'heun'),
         # gmm family only:
         'prior_mixture_components': config.get('prior_mixture_components', 50),
         'prior_min_std': config.get('prior_min_std', 0.1),

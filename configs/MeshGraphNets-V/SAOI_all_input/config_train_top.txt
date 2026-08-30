@@ -91,6 +91,16 @@ mmd_bandwidth	median  # MMD bandwidth mode (fixed or median)
 vae_graph_aware	True  # Include graph/input context when encoding the posterior
 beta_aux	1.0  # Auxiliary latent-statistics prediction loss weight
 posterior_min_std	0.05  # Posterior standard-deviation floor
+z_conditioning	adaln  # AdaLN-Zero z modulation (identity at init) instead of the
+%   legacy concat fuser Linear([x, z]). The fuser could only add ONE constant
+%   vector per graph and, being a bare non-residual Linear between all 28
+%   processor blocks, compounded a ~1.33x gain per block -- inflating the
+%   residual stream ~10^3 and burying the V-cycle's unit-scale unpool branch
+%   under the inflated skip branch. Renames parameters, so it is persisted in
+%   the checkpoint's model_config and inference reads it from there.
+mmd_gather_ranks	True  # All-gather z over DDP ranks before MMD. MMD is a two-sample
+%   statistic and runs inside the model forward, so without this it only ever
+%   saw the PER-RANK batch (16 of the 64 global samples on 4 GPUs).
 
 %   Prior - gnn_e2e joint training; prior_family fm = conditional flow matching.
 %   prior_fm_steps 40: sampling-only (validation CRPS + inference); halves Euler
@@ -99,7 +109,21 @@ prior_type	gnn_e2e  # gnn_e2e enables the jointly trained graph-conditional prio
 use_conditional_prior	True  # Use learned conditional prior instead of N(0,I)
 prior_family	fm  # fm (flow matching) or gmm
 prior_nll_weight	1.0  # Prior density/flow-matching objective multiplier
-prior_fm_steps	100  # Euler integration steps for FM-prior sampling/validation
+prior_grad_to_encoder	1.0  # Let the flow-matching gradient reach the ENCODER, not just
+%   the prior. With this at 0 (the old behaviour) q is detached, so the prior
+%   chases a posterior that never moves toward it and the CVAE rate term
+%   KL(q(z|y,g) || p(z|g)) is absent from the objective entirely. At 1.0 the
+%   loop is closed and the three terms cover the bound: recon = z must be
+%   informative, MMD = the aggregate q(z) keeps the shape/scale of N(0,I) that
+%   the prior integrates FROM, FM = where inside that ball each graph lands.
+%   REQUIRES beta_aux > 0: MMD only pins the aggregate, which a deterministic
+%   z = h(g) satisfies perfectly, so beta_aux's I(z;y) floor is what keeps y
+%   in the latent once this pressure is on.
+prior_fm_steps	30  # Integration steps for FM-prior sampling/validation
+prior_fm_solver	heun  # 2nd-order trapezoid predictor-corrector. Euler's O(dt^2)
+%   local error overshoots into the z tails exactly where the velocity is most
+%   curved (t -> 1) -- the Gen_max spike that had forced steps 20 -> 100.
+%   Heun at 30 steps is more accurate than Euler at 100 and ~40% cheaper.
 prior_mp_layers	5  # Prior message-passing depth
 prior_hidden_dim	256  # Conditional-prior hidden width
 prior_temperature	1.0  # Sampling spread control (inference only)

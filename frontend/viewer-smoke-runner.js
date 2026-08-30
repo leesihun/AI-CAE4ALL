@@ -8,6 +8,28 @@ function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
 
+async function replaceTemplate(page, name) {
+  const option = page.locator(`#templateSelect option[value="${name}"]`);
+  const expectedLabel = (await option.textContent())?.trim();
+  const dialogPromise = page.waitForEvent("dialog");
+  const selectionPromise = page.locator("#templateSelect").selectOption(name);
+  const dialog = await dialogPromise;
+  const message = dialog.message();
+  try {
+    assert(dialog.type() === "confirm", `Template replacement opened an unexpected ${dialog.type()} dialog`);
+    assert(
+      expectedLabel && message.includes(`"${expectedLabel}"`) && message.includes("Undo step"),
+      `Unexpected template replacement confirmation: ${message}`
+    );
+  } catch (error) {
+    await dialog.dismiss();
+    await selectionPromise.catch(() => {});
+    throw error;
+  }
+  await dialog.accept();
+  await selectionPromise;
+}
+
 async function openNodeCatalog(page, nodeId, expectedPath) {
   await page.evaluate(id => window.__AI_CAE_FRONTEND__.openArtifact(id), nodeId);
   await page.waitForFunction(
@@ -96,7 +118,13 @@ async function assertViewportPainted(page, message) {
     await page.waitForFunction(() => document.querySelector(".route-health")?.textContent.includes("routes live"));
 
     await page.locator("#templateSelect").selectOption("geometry");
-    await openNodeCatalog(page, "cad", "processed-car-pressure-data/data");
+    await page.locator('[data-node-id="cad"] .node-head').click();
+    await page.locator("#createGeometrySample").click();
+    await page.waitForFunction(() =>
+      window.__AI_CAE_FRONTEND__.state.nodes
+        .find(node => node.id === "cad")?.config.path.includes("frontend/runtime/geometry-smoke/sample_cad")
+    );
+    await openNodeCatalog(page, "cad", "frontend/runtime/geometry-smoke/sample_cad");
     await page.screenshot({ path: path.join(__dirname, "runtime", "viewer-no-default-sample.png"), fullPage: false });
     await selectSample(page);
     assert((await drawState(page)).drewFaces, "CAD preview did not render real mesh elements");
@@ -148,7 +176,7 @@ async function assertViewportPainted(page, message) {
     await page.screenshot({ path: path.join(__dirname, "runtime", "viewer-cad-fixed.png"), fullPage: false });
     await page.locator('[data-close="artifactOverlay"]').click();
 
-    await page.locator("#templateSelect").selectOption("simulgen");
+    await replaceTemplate(page, "simulgen");
     await openNodeCatalog(page, "dataset", "dataset/ex1.h5");
     await selectSample(page);
     const meshDraw = await drawState(page);
@@ -254,6 +282,6 @@ async function assertViewportPainted(page, message) {
     await browser.close();
   }
 })().catch(error => {
-  console.error(`FAIL: ${error.message}`);
+  console.error(`FAIL: ${error.stack || error.message}`);
   process.exitCode = 1;
 });

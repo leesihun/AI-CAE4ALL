@@ -98,6 +98,60 @@ function parameterColumns(node) {
   }
 }
 
+const FINITE_DECIMAL = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i;
+
+/**
+ * Resolve the one spreadsheet row explicitly chosen as an execution candidate.
+ *
+ * SDFFlow's native `cond_values` contract is positional, so Input columns are
+ * read left-to-right exactly as they appear in `parameter_table.columns`.
+ * Output columns are deliberately excluded. Keeping the resolution here gives
+ * the viewer, inspector, validation, and executable-config paths one meaning of
+ * "selected candidate" instead of four subtly different parsers.
+ */
+export function selectedParameterCandidate(node) {
+  let table = null;
+  try { table = JSON.parse(node?.config?.parameter_table || "null"); } catch { /* Report the empty selection below. */ }
+  const selectedSampleId = text(table?.selected_sample_id);
+  const rows = Array.isArray(table?.rows) ? table.rows : [];
+  const row = selectedSampleId
+    ? rows.find(candidate => text(candidate?.sample_id) === selectedSampleId) || null
+    : null;
+  const columns = Array.isArray(table?.columns)
+    ? table.columns.filter(column => column?.kind === "input")
+    : [];
+  const inputs = columns.map(column => {
+    const name = text(column.name);
+    const rawValue = text(row?.values?.[column.id]);
+    const numericValue = FINITE_DECIMAL.test(rawValue) ? Number(rawValue) : Number.NaN;
+    return {
+      id: String(column.id || ""),
+      name,
+      value: rawValue,
+      numericValue,
+      valid: Boolean(rawValue) && Number.isFinite(numericValue)
+    };
+  });
+  const normalizedNames = inputs.map(input => input.name.toLowerCase()).filter(Boolean);
+  const duplicateNames = [...new Set(normalizedNames.filter((name, index) => normalizedNames.indexOf(name) !== index))];
+  const missingNames = inputs.filter(input => !input.name);
+  const invalidInputs = inputs.filter(input => !input.valid);
+  const ready = Boolean(row) && inputs.length > 0
+    && !missingNames.length && !duplicateNames.length && !invalidInputs.length;
+  return {
+    table,
+    selectedSampleId,
+    row,
+    inputs,
+    missingNames,
+    duplicateNames,
+    invalidInputs,
+    conditionNames: inputs.map(input => input.name).join(","),
+    condValues: ready ? inputs.map(input => input.value).join(",") : "",
+    ready
+  };
+}
+
 function commaNames(node, key) {
   return text(node?.config?.[key]).split(",").map(value => value.trim()).filter(Boolean);
 }
@@ -321,8 +375,22 @@ function genericAutofill(desired, node) {
     }
     const binding = actualBindingPath(parameters?.node);
     if (binding) put(desired, node, "parameter_path", candidate(binding, parameters.node, "generation conditions from graph", parameters.edge.fromPort));
-    const names = commaNames(parameters?.node, "condition_names");
+    const selected = selectedParameterCandidate(parameters?.node);
+    const tableNames = selected.inputs.map(input => input.name).filter(Boolean);
+    const names = tableNames.length ? tableNames : commaNames(parameters?.node, "condition_names");
     if (names.length) put(desired, node, "condition_names", candidate(names.join(","), parameters.node, "condition columns from spreadsheet", parameters.edge.fromPort));
+    if (selected.row) {
+      const selectionLabel = `${selected.row.sample_label || `Dataset row ${selected.selectedSampleId}`} (ID: ${selected.row.sample_id})`;
+      put(desired, node, "condition_sample", candidate(selectionLabel, parameters.node, "selected spreadsheet generation candidate", parameters.edge.fromPort));
+    }
+    if (selected.ready) {
+      put(desired, node, "cond_values", candidate(
+        selected.condValues,
+        parameters.node,
+        `selected row ${selected.selectedSampleId}; Input columns in spreadsheet order`,
+        parameters.edge.fromPort
+      ));
+    }
     return;
   }
 

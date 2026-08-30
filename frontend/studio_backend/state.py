@@ -360,8 +360,35 @@ class StudioState:
         skip_environment: bool = False,
         skip_dataset: bool = False,
     ) -> tuple[dict[str, Any], Path, Any]:
-        self.require_suite()
         config_path = self.save_config(text, label, "preflight")
+        payload, result = self._preflight_config_path(
+            config_path,
+            strict=strict,
+            skip_filesystem=skip_filesystem,
+            skip_native=skip_native,
+            skip_environment=skip_environment,
+            skip_dataset=skip_dataset,
+        )
+        return payload, config_path, result
+
+    def _preflight_config_path(
+        self,
+        config_path: Path,
+        *,
+        strict: bool = False,
+        skip_filesystem: bool = False,
+        skip_native: bool = False,
+        skip_environment: bool = False,
+        skip_dataset: bool = False,
+    ) -> tuple[dict[str, Any], Any]:
+        """Validate the exact config file that a native process will receive.
+
+        ``preflight`` is the text-entry API and therefore serializes first. The
+        pipeline launch gate calls this path-based form so it re-reads the saved
+        snapshot immediately before launch instead of validating a second copy
+        or stale browser text.
+        """
+        self.require_suite()
         result = run_preflight(
             config_path,
             suite_root=SUITE_ROOT,
@@ -403,7 +430,7 @@ class StudioState:
             "dataset_metadata": json_safe(result.dataset_metadata),
             "checkpoint_metadata": json_safe(result.checkpoint_metadata),
         }
-        return payload, config_path, result
+        return payload, result
 
     # Blocks that do analysis rather than launching a native process. They were
     # drawn on the canvas, typed, and edge-connected, but "Run pipeline" only
@@ -863,16 +890,116 @@ class StudioState:
                 if final_code != 0:
                     break
                 continue
-            command = [
-                sys.executable,
-                str(SUITE_ROOT / "AI_CAE4ALL_main.py"),
-                "--config",
-                str(item["path"]),
-                "--no-color",
-            ]
-            if strict:
-                command.append("--strict")
             self._append_log(job, f"\n[studio] Step {index}/{len(prepared)}: {item['label']}\n")
+            self._append_log(
+                job,
+                "[studio] Launch preflight (exact saved config): {0}\n".format(item["path"]),
+            )
+            checked_at = utc_now()
+            try:
+                # Submission-time checks deliberately defer downstream paths
+                # that an upstream step has not produced yet. At this boundary
+                # those dependencies must exist: validate every layer against
+                # the exact serialized file, then launch the command returned by
+                # that same authoritative result.
+                payload, result = self._preflight_config_path(
+                    Path(item["path"]),
+                    strict=strict,
+                    skip_filesystem=False,
+                    skip_native=False,
+                    skip_environment=False,
+                    skip_dataset=False,
+                )
+            except Exception as exc:
+                diagnostic = {
+                    "code": "STUDIO-LAUNCH-PREFLIGHT-001",
+                    "severity": "error",
+                    "original_severity": "error",
+                    "message": f"Launch preflight could not run: {type(exc).__name__}: {exc}",
+                    "field": None,
+                    "hint": "The native process was not started.",
+                }
+                payload = {
+                    "ok": False,
+                    "strict": strict,
+                    "config_path": relative(Path(item["path"])),
+                    "report": {
+                        "summary": {"errors": 1, "warnings": 0, "notices": 0},
+                        "diagnostics": [diagnostic],
+                    },
+                    "route": None,
+                    "resolved_paths": {},
+                    "dataset_metadata": {},
+                    "checkpoint_metadata": {},
+                }
+                result = None
+
+            if payload["ok"] and (
+                result is None or result.resolved is None or not result.command
+            ):
+                diagnostic = {
+                    "code": "STUDIO-LAUNCH-PREFLIGHT-002",
+                    "severity": "error",
+                    "original_severity": "error",
+                    "message": "Launch preflight passed without producing a native command.",
+                    "field": None,
+                    "hint": "Check the selected model route and method installation.",
+                }
+                payload["ok"] = False
+                payload["report"]["diagnostics"].append(diagnostic)
+                payload["report"]["summary"]["errors"] += 1
+
+            # Replace the deferred submission result so downstream artifact
+            # discovery sees the fully resolved output paths from this gate.
+            item["preflight"] = payload
+            item["result"] = result
+            summary = payload["report"]["summary"]
+            self._append_log(
+                job,
+                "[studio] Launch preflight {0}: {1} error(s), {2} warning(s), {3} notice(s).\n".format(
+                    "passed" if payload["ok"] else "failed",
+                    summary.get("errors", 0),
+                    summary.get("warnings", 0),
+                    summary.get("notices", 0),
+                ),
+            )
+            for diagnostic in payload["report"].get("diagnostics", []):
+                if diagnostic.get("severity") not in {"error", "warning"}:
+                    continue
+                self._append_log(
+                    job,
+                    "[studio] [{0}] {1}\n".format(
+                        diagnostic.get("code", "PREFLIGHT"), diagnostic.get("message", "")
+                    ),
+                )
+            with self.lock:
+                steps = job.get("steps") or []
+                if index - 1 < len(steps):
+                    steps[index - 1]["route"] = payload.get("route")
+                    steps[index - 1]["summary"] = summary
+                    steps[index - 1]["launch_preflight"] = {
+                        **payload,
+                        "checked_at": checked_at,
+                    }
+                if not payload["ok"]:
+                    job["diagnostics"] = [
+                        {
+                            **diagnostic,
+                            "nodeId": item.get("node_id", ""),
+                            "stepLabel": item["label"],
+                        }
+                        for diagnostic in payload["report"].get("diagnostics", [])
+                        if diagnostic.get("severity") == "error"
+                    ]
+                self._persist_job(job)
+            if not payload["ok"]:
+                self._append_log(job, "[studio] Native process was not started.\n")
+                final_code = 2
+                break
+
+            assert result is not None and result.resolved is not None
+            command = list(result.command)
+            command_cwd = result.resolved.repository_root
             self._append_log(job, f"[studio] Command: {subprocess.list2cmdline(command)}\n\n")
             creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
             env = os.environ.copy()
@@ -883,7 +1010,7 @@ class StudioState:
             try:
                 process = subprocess.Popen(
                     command,
-                    cwd=SUITE_ROOT,
+                    cwd=command_cwd,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     # Binary, so _collapse_progress can still see tqdm's '\r'.

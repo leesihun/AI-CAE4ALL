@@ -34,134 +34,778 @@ def parse_constraint(text: str) -> tuple[str, str, float]:
     return match.group(1), match.group(2), float(match.group(3))
 
 
-def run_field_evaluation(payload: dict[str, Any]) -> dict[str, Any]:
+HDF5_SUFFIXES = {".h5", ".hdf5"}
+EVALUATION_FILE_LIMIT = 512
+_PREDICTION_ARRAYS = (
+    "Y_pred", "predictions", "prediction", "arrays/predictions",
+    "Y", "targets", "arrays/targets",
+)
+_TRUTH_ARRAYS = (
+    "Y", "Y_true", "targets", "arrays/targets",
+    "predictions", "Y_pred", "arrays/predictions",
+)
+
+
+def _evaluation_imports():
     try:
         import h5py
         import numpy as np
     except ImportError as exc:
         raise ValueError("Field evaluation requires h5py and numpy.") from exc
+    return h5py, np
 
-    allowed = result_roots()
-    prediction_path = safe_repo_path(str(payload.get("prediction_path", "")), allowed)
-    truth_path = safe_repo_path(str(payload.get("truth_path", "")), allowed)
-    if not prediction_path.exists():
-        raise ValueError("Prediction path does not exist.")
-    if not truth_path.is_file() or truth_path.suffix.lower() not in {".h5", ".hdf5"}:
-        raise ValueError("Ground truth must be an existing HDF5 file.")
 
+def _decode_hdf5(value: Any) -> str:
+    return value.decode("utf-8", "replace") if isinstance(value, bytes) else str(value)
+
+
+def _hdf5_names(handle: Any, key: str) -> list[str]:
+    """Read a small string name vector without materializing numeric arrays."""
+
+    sources = [handle]
+    metadata = handle.get("metadata") if hasattr(handle, "get") else None
+    if metadata is not None:
+        sources.append(metadata)
+    for source in sources:
+        try:
+            if key in source.attrs:
+                raw = source.attrs[key]
+            elif key in source:
+                raw = source[key][()]
+            else:
+                continue
+        except (KeyError, OSError, TypeError, ValueError):
+            continue
+        if isinstance(raw, (bytes, str)):
+            return [_decode_hdf5(raw)]
+        try:
+            return [_decode_hdf5(item) for item in raw]
+        except TypeError:
+            return [_decode_hdf5(raw)]
+    return []
+
+
+def _field_names(names: list[str], count: int) -> list[str]:
+    clean = [str(name).strip() for name in names[:count]]
+    clean += [f"field {index}" for index in range(len(clean), count)]
+    return clean
+
+
+def _hdf5_source(raw: Any, label: str) -> tuple[Path, list[Path], bool]:
+    path = safe_repo_path(str(raw or ""), result_roots())
+    if not path.exists():
+        raise ValueError(f"{label} path does not exist.")
+    if path.is_file():
+        if path.suffix.lower() not in HDF5_SUFFIXES:
+            raise ValueError(f"{label} must be an HDF5 file or a directory containing HDF5 files.")
+        return path, [path], False
+    candidates = sorted(
+        item for item in path.rglob("*")
+        if item.is_file() and item.suffix.lower() in HDF5_SUFFIXES
+    )
+    if not candidates:
+        raise ValueError(f"{label} directory contains no HDF5 files.")
+    return path, candidates[:EVALUATION_FILE_LIMIT], len(candidates) > EVALUATION_FILE_LIMIT
+
+
+def _sample_aliases(path: Path, sample_id: str, handle: Any) -> list[str]:
+    aliases = [str(sample_id), path.stem]
+    declared = handle.attrs.get("sample_id")
+    if declared is not None:
+        aliases.append(_decode_hdf5(declared))
+    match = re.search(r"sample[_-]?(\d+)", path.stem, re.IGNORECASE)
+    if match:
+        aliases.append(match.group(1))
+    return list(dict.fromkeys(alias for alias in aliases if alias))
+
+
+def _mesh_target_indices(handle: Any, field_count: int) -> tuple[list[int], str]:
+    """Use builder metadata when available; never guess condition rows as targets."""
+
+    try:
+        input_count = int(handle.attrs.get("builder_input_var", handle.attrs.get("input_var", 0)) or 0)
+        condition_count = int(handle.attrs.get("builder_cond_var", handle.attrs.get("cond_var", 0)) or 0)
+        output_count = int(handle.attrs.get("builder_output_var", handle.attrs.get("output_var", 0)) or 0)
+    except (TypeError, ValueError):
+        return [], ""
+    start = input_count + condition_count
+    if output_count > 0 and start >= 0 and start + output_count <= field_count:
+        return list(range(start, start + output_count)), "builder input/condition/output metadata"
+    return [], ""
+
+
+def _inspect_hdf5_file(path: Path, role: str) -> dict[str, Any]:
+    h5py, np = _evaluation_imports()
+    with h5py.File(path, "r") as handle:
+        data = handle.get("data")
+        if isinstance(data, h5py.Group):
+            records: list[dict[str, Any]] = []
+            counts: list[int] = []
+            for sample_id in sorted(data.keys(), key=lambda value: (not str(value).isdigit(), str(value))):
+                group = data[sample_id]
+                name = "nodal_data" if "nodal_data" in group else "nodal_field" if "nodal_field" in group else ""
+                if not name:
+                    continue
+                dataset = group[name]
+                shape = [int(value) for value in dataset.shape]
+                if dataset.ndim == 3:
+                    counts.append(shape[0])
+                records.append({
+                    "id": str(sample_id),
+                    "aliases": _sample_aliases(path, str(sample_id), handle),
+                    "file": relative(path),
+                    "dataset": f"data/{sample_id}/{name}",
+                    "shape": shape,
+                    "rank_ok": dataset.ndim == 3,
+                    "explicit_id": True,
+                })
+            count = counts[0] if counts else 0
+            names = _field_names(_hdf5_names(handle, "feature_names"), count)
+            target_indices, target_basis = _mesh_target_indices(handle, count)
+            return {
+                "contract": "mesh_state",
+                "kind": "mesh",
+                "records": records,
+                "field_count": count,
+                "field_names": names,
+                "declared_field_names": bool(_hdf5_names(handle, "feature_names")),
+                "target_indices": target_indices,
+                "target_basis": target_basis,
+                "arrays": [{"path": "data/{sample}/nodal_data", "shape": records[0]["shape"] if records else []}],
+                "embedded_truth": False,
+            }
+
+        nodes = handle.get("nodes")
+        predicted_name = next(
+            (name for name in ("predicted_denorm", "predicted_norm") if isinstance(nodes, h5py.Group) and name in nodes),
+            None,
+        )
+        if isinstance(nodes, h5py.Group) and "pos" in nodes and predicted_name:
+            target_name = next((name for name in ("target_denorm", "target_norm") if name in nodes), None)
+            predicted = nodes[predicted_name]
+            count = int(predicted.shape[1]) if predicted.ndim == 2 else 1
+            sample_id = _decode_hdf5(handle.attrs.get("sample_id", path.stem))
+            record = {
+                "id": sample_id,
+                "aliases": _sample_aliases(path, sample_id, handle),
+                "file": relative(path),
+                "dataset": f"nodes/{predicted_name}",
+                "truth_dataset": f"nodes/{target_name}" if target_name else "",
+                "shape": [int(value) for value in predicted.shape],
+                "truth_shape": [int(value) for value in nodes[target_name].shape] if target_name else [],
+                "rank_ok": predicted.ndim in {1, 2},
+                "explicit_id": True,
+            }
+            names = _field_names(_hdf5_names(handle, "output_names"), count)
+            return {
+                "contract": "native_inference_result",
+                "kind": "mesh",
+                "records": [record],
+                "field_count": count,
+                "field_names": names,
+                "declared_field_names": bool(_hdf5_names(handle, "output_names")),
+                "target_indices": list(range(count)),
+                "target_basis": "paired inference output channels",
+                "arrays": [
+                    {"path": record["dataset"], "shape": record["shape"]},
+                    *([{"path": record["truth_dataset"], "shape": record["truth_shape"]}] if target_name else []),
+                ],
+                "embedded_truth": bool(target_name),
+            }
+
+        candidates = _PREDICTION_ARRAYS if role == "prediction" else _TRUTH_ARRAYS
+        array_name = next(
+            (
+                name for name in candidates
+                if name in handle and isinstance(handle[name], h5py.Dataset)
+                and np.issubdtype(handle[name].dtype, np.number)
+            ),
+            None,
+        )
+        if array_name is None:
+            return {
+                "contract": "unsupported",
+                "kind": "unsupported",
+                "records": [],
+                "field_count": 0,
+                "field_names": [],
+                "declared_field_names": False,
+                "target_indices": [],
+                "target_basis": "",
+                "arrays": [],
+                "embedded_truth": False,
+            }
+        dataset = handle[array_name]
+        row_count = int(dataset.shape[0]) if dataset.ndim else 1
+        field_count = int(dataset.shape[1]) if dataset.ndim >= 2 else 1
+        id_values = _hdf5_names(handle, "sample_ids")
+        explicit_ids = len(id_values) == row_count
+        records = [
+            {
+                "id": id_values[index] if explicit_ids else str(index),
+                "aliases": [id_values[index] if explicit_ids else str(index)],
+                "file": relative(path),
+                "dataset": array_name,
+                "row": index,
+                "shape": [int(value) for value in dataset.shape],
+                "rank_ok": dataset.ndim >= 1,
+                "explicit_id": explicit_ids,
+            }
+            for index in range(row_count)
+        ]
+        declared_names = _hdf5_names(handle, "output_names") or _hdf5_names(handle, "feature_names")
+        embedded_name = next(
+            (
+                name for name in ("Y_true", "targets", "arrays/targets")
+                if role == "prediction" and name in handle and isinstance(handle[name], h5py.Dataset)
+                and list(handle[name].shape) == list(dataset.shape)
+            ),
+            None,
+        )
+        if embedded_name:
+            for record in records:
+                record["truth_dataset"] = embedded_name
+                record["truth_shape"] = record["shape"]
+        contract = "operator_grid" if dataset.ndim >= 3 and "common/query_xy" in handle else "table"
+        return {
+            "contract": contract,
+            "kind": "table",
+            "records": records,
+            "field_count": field_count,
+            "field_names": _field_names(declared_names, field_count),
+            "declared_field_names": bool(declared_names),
+            "target_indices": list(range(field_count)),
+            "target_basis": "output array columns",
+            "arrays": [
+                {"path": array_name, "shape": [int(value) for value in dataset.shape]},
+                *([{"path": embedded_name, "shape": [int(value) for value in handle[embedded_name].shape]}] if embedded_name else []),
+            ],
+            "embedded_truth": bool(embedded_name),
+        }
+
+
+def _inspect_hdf5_source(path: Path, files: list[Path], truncated: bool, role: str) -> dict[str, Any]:
+    inspections: list[dict[str, Any]] = []
+    unreadable: list[str] = []
+    for file_path in files:
+        try:
+            inspections.append(_inspect_hdf5_file(file_path, role))
+        except (OSError, ValueError) as exc:
+            unreadable.append(f"{relative(file_path)}: {exc}")
+    contracts = {item["contract"] for item in inspections}
+    primary = inspections[0] if inspections else {
+        "contract": "unsupported", "kind": "unsupported", "field_count": 0,
+        "field_names": [], "declared_field_names": False, "target_indices": [],
+        "target_basis": "", "embedded_truth": False,
+    }
+    records = [record for item in inspections for record in item["records"]]
+    arrays: list[dict[str, Any]] = []
+    for item in inspections:
+        for array in item["arrays"]:
+            if array not in arrays:
+                arrays.append(array)
+    field_counts = {int(item["field_count"]) for item in inspections if item["field_count"]}
+    mixed = len(contracts) > 1 or len(field_counts) > 1
+    return {
+        "path": relative(path),
+        "kind": "mixed" if mixed else primary["kind"],
+        "contract": "mixed" if mixed else primary["contract"],
+        "files": len(files),
+        "samples": len(records),
+        "field_count": int(primary["field_count"]),
+        "field_names": list(primary["field_names"]),
+        "declared_field_names": bool(primary["declared_field_names"]),
+        "target_indices": list(primary["target_indices"]),
+        "target_basis": primary["target_basis"],
+        "arrays": arrays,
+        "sample_records": records,
+        "embedded_truth": bool(inspections) and all(item["embedded_truth"] for item in inspections),
+        "truncated": truncated,
+        "unreadable": unreadable[:20],
+    }
+
+
+def _match_sample_records(prediction: dict[str, Any], truth: dict[str, Any]) -> tuple[list[tuple[dict[str, Any], dict[str, Any]]], str]:
+    predicted = prediction["sample_records"]
+    actual = truth["sample_records"]
+    if not predicted or not actual:
+        return [], "none"
+    if prediction["kind"] == "table" and truth["kind"] == "table":
+        explicit = all(item["explicit_id"] for item in predicted) and all(item["explicit_id"] for item in actual)
+        if not explicit:
+            if len(predicted) != len(actual):
+                return [], "position-count-mismatch"
+            return list(zip(predicted, actual)), "position"
+    available = list(actual)
+    matched: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    for left in predicted:
+        left_aliases = set(left["aliases"])
+        index = next(
+            (index for index, right in enumerate(available) if left["id"] == right["id"]),
+            None,
+        )
+        if index is None:
+            index = next(
+                (index for index, right in enumerate(available) if left_aliases.intersection(right["aliases"])),
+                None,
+            )
+        if index is not None:
+            matched.append((left, available.pop(index)))
+    if not matched and len(predicted) == len(actual) == 1:
+        return [(predicted[0], actual[0])], "single"
+    return matched, "id"
+
+
+def _recommended_field_pairs(prediction: dict[str, Any], truth: dict[str, Any]) -> tuple[list[dict[str, Any]], str, list[str]]:
+    warnings: list[str] = []
+    prediction_indices = prediction["target_indices"] or list(range(prediction["field_count"]))
+    truth_indices = truth["target_indices"] or list(range(truth["field_count"]))
+    prediction_names = prediction["field_names"]
+    truth_names = truth["field_names"]
+    if prediction["declared_field_names"] and truth["declared_field_names"]:
+        truth_by_name = {
+            truth_names[index]: index for index in truth_indices
+            if truth_names.count(truth_names[index]) == 1
+        }
+        pairs = [
+            {
+                "name": prediction_names[index],
+                "prediction_index": index,
+                "truth_index": truth_by_name[prediction_names[index]],
+                "prediction_name": prediction_names[index],
+                "truth_name": prediction_names[index],
+            }
+            for index in prediction_indices
+            if prediction_names[index] in truth_by_name
+            and prediction_names.count(prediction_names[index]) == 1
+        ]
+        if pairs:
+            return pairs, "declared field names", warnings
+    if len(prediction_indices) == len(truth_indices) and prediction_indices:
+        warnings.append(
+            "Field names were absent or did not match; equal-sized output fields are mapped by position. Confirm this mapping before scoring."
+        )
+        pairs = []
+        for prediction_index, truth_index in zip(prediction_indices, truth_indices):
+            name = truth_names[truth_index] if truth["declared_field_names"] else prediction_names[prediction_index]
+            pairs.append({
+                "name": name,
+                "prediction_index": prediction_index,
+                "truth_index": truth_index,
+                "prediction_name": prediction_names[prediction_index],
+                "truth_name": truth_names[truth_index],
+            })
+        return pairs, "equal output count by position", warnings
+    return [], "", warnings
+
+
+def _schema_payload(payload: dict[str, Any]) -> tuple[dict[str, Any], Path, Path]:
+    prediction_path, prediction_files, prediction_truncated = _hdf5_source(payload.get("prediction_path"), "Prediction")
+    truth_path, truth_files, truth_truncated = _hdf5_source(payload.get("truth_path"), "Ground truth")
+    prediction = _inspect_hdf5_source(prediction_path, prediction_files, prediction_truncated, "prediction")
+    truth = _inspect_hdf5_source(truth_path, truth_files, truth_truncated, "truth")
+    errors: list[str] = []
+    warnings: list[str] = []
+    if prediction["contract"] in {"unsupported", "mixed"}:
+        errors.append(
+            "Prediction HDF5 contract is unsupported or mixed. Use mesh data/{sample}/nodal_data, MLP Y_pred/predictions, operator arrays/predictions, or native nodes/predicted_* arrays."
+        )
+    if truth["contract"] in {"unsupported", "mixed"}:
+        errors.append(
+            "Ground-truth HDF5 contract is unsupported or mixed. Use mesh data/{sample}/nodal_data or table Y/targets arrays."
+        )
+    if prediction["unreadable"]:
+        warnings.append(f"{len(prediction['unreadable'])} prediction HDF5 file(s) could not be read.")
+    if truth["unreadable"]:
+        warnings.append(f"{len(truth['unreadable'])} truth HDF5 file(s) could not be read.")
+    if prediction["truncated"] or truth["truncated"]:
+        warnings.append(f"Contract inspection is limited to {EVALUATION_FILE_LIMIT} files per source.")
+
+    embedded = prediction["embedded_truth"]
+    matched, strategy = _match_sample_records(prediction, truth)
+    if not matched and not embedded:
+        if strategy == "position-count-mismatch":
+            errors.append(
+                "Table row counts differ and neither file declares sample_ids; add matching sample_ids or select arrays with equal rows."
+            )
+        else:
+            errors.append("No prediction samples match ground truth by sample ID.")
+
+    if not embedded and prediction["kind"] != truth["kind"]:
+        errors.append(
+            f"Prediction contract {prediction['contract']} cannot be compared directly with truth contract {truth['contract']}."
+        )
+
+    if embedded:
+        field_pairs = [
+            {
+                "name": prediction["field_names"][index],
+                "prediction_index": index,
+                "truth_index": index,
+                "prediction_name": prediction["field_names"][index],
+                "truth_name": prediction["field_names"][index],
+            }
+            for index in (prediction["target_indices"] or range(prediction["field_count"]))
+        ]
+        mapping_basis = "paired truth array stored beside each prediction"
+        mode = "embedded"
+        warnings.append(
+            "The prediction files contain shape-aligned truth arrays; scoring will use those exact paired arrays. The selected truth file is retained as provenance."
+        )
+    else:
+        field_pairs, mapping_basis, field_warnings = _recommended_field_pairs(prediction, truth)
+        warnings.extend(field_warnings)
+        mode = prediction["kind"]
+        if not field_pairs and prediction["kind"] not in {"unsupported", "mixed"}:
+            errors.append(
+                "No safe field mapping was found. Select named prediction/truth fields explicitly; do not assume unequal channel layouts align."
+            )
+
+    incompatible_shapes = 0
+    compatible_shapes = 0
+    for left, right in matched:
+        left_shape = left["shape"]
+        right_shape = right["shape"]
+        if prediction["kind"] == truth["kind"] == "mesh":
+            ok = (
+                left.get("rank_ok") and right.get("rank_ok")
+                and len(left_shape) == len(right_shape) == 3
+                and left_shape[2] == right_shape[2]
+            )
+        else:
+            left_tail = left_shape[2:] if len(left_shape) >= 2 else []
+            right_tail = right_shape[2:] if len(right_shape) >= 2 else []
+            ok = left.get("rank_ok") and right.get("rank_ok") and left_tail == right_tail
+        compatible_shapes += int(bool(ok))
+        incompatible_shapes += int(not ok)
+    if matched and not compatible_shapes and not embedded:
+        errors.append(
+            "Matched samples have incompatible value shapes (mesh node counts or table trailing dimensions differ)."
+        )
+    elif incompatible_shapes:
+        warnings.append(f"{incompatible_shapes} matched sample(s) have incompatible shapes and will be skipped.")
+
+    recommended = {
+        "mode": mode,
+        "prediction_array": prediction["arrays"][0]["path"] if prediction["arrays"] else "",
+        "truth_array": (
+            prediction["arrays"][1]["path"]
+            if embedded and len(prediction["arrays"]) > 1
+            else truth["arrays"][0]["path"] if truth["arrays"] else ""
+        ),
+        "field_pairs": field_pairs,
+        "sample_strategy": "embedded" if embedded else strategy,
+        "basis": mapping_basis,
+        "confidence": "exact" if embedded or mapping_basis == "declared field names" else "confirm",
+    }
+    prediction_indices = [item["prediction_index"] for item in field_pairs]
+    truth_indices = [item["truth_index"] for item in field_pairs]
+    if prediction_indices and prediction_indices == list(range(min(prediction_indices), max(prediction_indices) + 1)):
+        recommended["prediction_start"] = min(prediction_indices)
+    if truth_indices and truth_indices == list(range(min(truth_indices), max(truth_indices) + 1)):
+        recommended["truth_start"] = min(truth_indices)
+    if prediction_indices and truth_indices:
+        recommended["num_fields"] = len(field_pairs)
+
+    schema = {
+        "compatible": not errors,
+        "errors": errors,
+        "warnings": warnings,
+        "prediction": prediction,
+        "truth": truth,
+        "sample_matching": {
+            "strategy": "embedded" if embedded else strategy,
+            "prediction_count": prediction["samples"],
+            "truth_count": truth["samples"],
+            "overlap_count": len(matched),
+            "compatible_shape_count": compatible_shapes,
+            "incompatible_shape_count": incompatible_shapes,
+            "matched_ids": [left["id"] for left, _ in matched[:50]],
+            "truncated": len(matched) > 50,
+        },
+        "recommended_mapping": recommended,
+    }
+    return schema, prediction_path, truth_path
+
+
+def evaluation_schema(payload: dict[str, Any]) -> dict[str, Any]:
+    """Inspect two HDF5 sources and return an evidence-backed scoring contract."""
+
+    schema, _, _ = _schema_payload(payload)
+    return schema
+
+
+def _resolved_field_pairs(payload: dict[str, Any], schema: dict[str, Any]) -> list[dict[str, Any]]:
+    requested = payload.get("field_pairs")
+    if not isinstance(requested, list) or not requested:
+        return list(schema["recommended_mapping"]["field_pairs"])
+    prediction = schema["prediction"]
+    truth = schema["truth"]
+    pairs: list[dict[str, Any]] = []
+    for raw in requested:
+        if not isinstance(raw, dict):
+            raise ValueError("Each field_pairs entry must be an object.")
+        prediction_name = str(raw.get("prediction_name", raw.get("name", ""))).strip()
+        truth_name = str(raw.get("truth_name", raw.get("name", ""))).strip()
+        try:
+            prediction_index = (
+                int(raw["prediction_index"])
+                if "prediction_index" in raw
+                else prediction["field_names"].index(prediction_name)
+            )
+            truth_index = (
+                int(raw["truth_index"])
+                if "truth_index" in raw
+                else truth["field_names"].index(truth_name)
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"Could not resolve requested field pair {raw!r}.") from exc
+        if not 0 <= prediction_index < prediction["field_count"]:
+            raise ValueError(f"Prediction field index {prediction_index} is outside the available fields.")
+        truth_limit = prediction["field_count"] if schema["recommended_mapping"]["mode"] == "embedded" else truth["field_count"]
+        if not 0 <= truth_index < truth_limit:
+            raise ValueError(f"Truth field index {truth_index} is outside the available fields.")
+        pairs.append({
+            "name": str(raw.get("name") or truth_name or prediction_name or f"field {len(pairs)}"),
+            "prediction_index": prediction_index,
+            "truth_index": truth_index,
+            "prediction_name": prediction["field_names"][prediction_index],
+            "truth_name": (
+                prediction["field_names"][truth_index]
+                if schema["recommended_mapping"]["mode"] == "embedded"
+                else truth["field_names"][truth_index]
+            ),
+        })
+    if len({item["prediction_index"] for item in pairs}) != len(pairs) or len({item["truth_index"] for item in pairs}) != len(pairs):
+        raise ValueError("Field mapping cannot reuse a prediction or truth field index.")
+    return pairs
+
+
+def _metric_row(np: Any, prediction: Any, truth: Any, metadata: dict[str, Any]) -> dict[str, Any] | None:
+    if prediction.shape != truth.shape:
+        return None
+    finite = np.isfinite(prediction) & np.isfinite(truth)
+    if not finite.any():
+        return None
+    prediction_values = prediction[finite]
+    truth_values = truth[finite]
+    difference = prediction_values - truth_values
+    denominator = max(float(np.linalg.norm(truth_values)), np.finfo(np.float64).eps)
+    truth_centered = truth_values - truth_values.mean()
+    total_variance = float(np.dot(truth_centered, truth_centered))
+    squared_error = float(np.dot(difference, difference))
+    return {
+        **metadata,
+        "values": int(prediction_values.size),
+        "relative_l2": float(np.linalg.norm(difference) / denominator),
+        "mae": float(np.mean(np.abs(difference))),
+        "rmse": float(np.sqrt(np.mean(np.square(difference)))),
+        "max_absolute_error": float(np.max(np.abs(difference))),
+        "r2": float(1.0 - squared_error / total_variance) if total_variance > 0 else None,
+    }
+
+
+def _record_path(record: dict[str, Any]) -> Path:
+    return safe_repo_path(record["file"], result_roots())
+
+
+def _evaluate_mesh(
+    schema: dict[str, Any], field_pairs: list[dict[str, Any]], prediction_start: int,
+    truth_start: int, num_fields: int, use_legacy_rows: bool,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    h5py, np = _evaluation_imports()
+    matched, _ = _match_sample_records(schema["prediction"], schema["truth"])
+    if use_legacy_rows:
+        field_pairs = [
+            {
+                "name": f"field {offset}",
+                "prediction_index": prediction_start + offset,
+                "truth_index": truth_start + offset,
+            }
+            for offset in range(num_fields)
+        ]
+    rows: list[dict[str, Any]] = []
+    skipped: list[str] = []
+    for left, right in matched:
+        with h5py.File(_record_path(left), "r") as prediction_handle, h5py.File(_record_path(right), "r") as truth_handle:
+            prediction_dataset = prediction_handle[left["dataset"]]
+            truth_dataset = truth_handle[right["dataset"]]
+            prediction_indices = [item["prediction_index"] for item in field_pairs]
+            truth_indices = [item["truth_index"] for item in field_pairs]
+            if (
+                not prediction_indices or max(prediction_indices) >= prediction_dataset.shape[0]
+                or max(truth_indices) >= truth_dataset.shape[0]
+            ):
+                skipped.append(f"{left['file']}:{left['id']} field mapping is outside nodal_data")
+                continue
+            if prediction_dataset.ndim != 3 or truth_dataset.ndim != 3 or prediction_dataset.shape[2] != truth_dataset.shape[2]:
+                skipped.append(f"{left['file']}:{left['id']} has incompatible rank or node count")
+                continue
+            timesteps = min(int(prediction_dataset.shape[1]), int(truth_dataset.shape[1]))
+            prediction = np.asarray(prediction_dataset[prediction_indices, :timesteps, :], dtype=np.float64)
+            truth = np.asarray(truth_dataset[truth_indices, :timesteps, :], dtype=np.float64)
+        row = _metric_row(np, prediction, truth, {
+            "contract": "mesh_state",
+            "prediction_file": left["file"],
+            "prediction_sample": left["id"],
+            "truth_sample": right["id"],
+            "fields": len(field_pairs),
+            "timesteps": timesteps,
+            "nodes": int(prediction.shape[2]),
+        })
+        if row is None:
+            skipped.append(f"{left['file']}:{left['id']} contains no finite, shape-aligned values")
+        else:
+            rows.append(row)
+    return rows, skipped
+
+
+def _evaluate_table(schema: dict[str, Any], field_pairs: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str]]:
+    h5py, np = _evaluation_imports()
+    matched, _ = _match_sample_records(schema["prediction"], schema["truth"])
+    prediction_indices = [item["prediction_index"] for item in field_pairs]
+    truth_indices = [item["truth_index"] for item in field_pairs]
+    rows: list[dict[str, Any]] = []
+    skipped: list[str] = []
+    for left, right in matched:
+        with h5py.File(_record_path(left), "r") as prediction_handle, h5py.File(_record_path(right), "r") as truth_handle:
+            prediction_dataset = prediction_handle[left["dataset"]]
+            truth_dataset = truth_handle[right["dataset"]]
+            if max(prediction_indices, default=-1) >= (prediction_dataset.shape[1] if prediction_dataset.ndim >= 2 else 1):
+                skipped.append(f"{left['file']}:{left['id']} prediction field mapping is outside {left['dataset']}")
+                continue
+            if max(truth_indices, default=-1) >= (truth_dataset.shape[1] if truth_dataset.ndim >= 2 else 1):
+                skipped.append(f"{right['file']}:{right['id']} truth field mapping is outside {right['dataset']}")
+                continue
+            if prediction_dataset.ndim == 1:
+                prediction = np.asarray([prediction_dataset[left["row"]]], dtype=np.float64)
+            else:
+                prediction = np.asarray(prediction_dataset[left["row"], prediction_indices, ...], dtype=np.float64)
+            if truth_dataset.ndim == 1:
+                truth = np.asarray([truth_dataset[right["row"]]], dtype=np.float64)
+            else:
+                truth = np.asarray(truth_dataset[right["row"], truth_indices, ...], dtype=np.float64)
+        row = _metric_row(np, prediction, truth, {
+            "contract": schema["prediction"]["contract"],
+            "prediction_file": left["file"],
+            "prediction_sample": left["id"],
+            "truth_sample": right["id"],
+            "fields": len(field_pairs),
+            "timesteps": 1,
+            "nodes": int(prediction.size // max(1, len(field_pairs))),
+        })
+        if row is None:
+            skipped.append(f"{left['file']}:{left['id']} contains no finite, shape-aligned values")
+        else:
+            rows.append(row)
+    return rows, skipped
+
+
+def _evaluate_embedded(schema: dict[str, Any], field_pairs: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str]]:
+    h5py, np = _evaluation_imports()
+    prediction_indices = [item["prediction_index"] for item in field_pairs]
+    truth_indices = [item["truth_index"] for item in field_pairs]
+    rows: list[dict[str, Any]] = []
+    skipped: list[str] = []
+    for record in schema["prediction"]["sample_records"]:
+        with h5py.File(_record_path(record), "r") as handle:
+            prediction_dataset = handle[record["dataset"]]
+            truth_dataset = handle[record["truth_dataset"]]
+            if prediction_dataset.ndim == 1:
+                prediction = np.asarray([prediction_dataset[()]], dtype=np.float64)
+                truth = np.asarray([truth_dataset[()]], dtype=np.float64)
+            elif schema["prediction"]["contract"] == "native_inference_result":
+                prediction = np.asarray(prediction_dataset[:, prediction_indices].T, dtype=np.float64)
+                truth = np.asarray(truth_dataset[:, truth_indices].T, dtype=np.float64)
+            else:
+                row_index = int(record.get("row", 0))
+                prediction = np.asarray(prediction_dataset[row_index, prediction_indices, ...], dtype=np.float64)
+                truth = np.asarray(truth_dataset[row_index, truth_indices, ...], dtype=np.float64)
+        row = _metric_row(np, prediction, truth, {
+            "contract": schema["prediction"]["contract"],
+            "prediction_file": record["file"],
+            "prediction_sample": record["id"],
+            "truth_sample": f"embedded:{record['id']}",
+            "fields": len(field_pairs),
+            "timesteps": 1,
+            "nodes": int(prediction.size // max(1, len(field_pairs))),
+        })
+        if row is None:
+            skipped.append(f"{record['file']}:{record['id']} embedded truth is not shape-aligned or finite")
+        else:
+            rows.append(row)
+    return rows, skipped
+
+
+def run_field_evaluation(payload: dict[str, Any]) -> dict[str, Any]:
+    """Score mesh, table, operator-grid, or paired native inference arrays."""
+
+    _, np = _evaluation_imports()
+    schema, prediction_path, truth_path = _schema_payload(payload)
+    mode = schema["recommended_mapping"]["mode"]
+    explicit_pairs = isinstance(payload.get("field_pairs"), list) and bool(payload["field_pairs"])
+    use_legacy_rows = (
+        mode == "mesh"
+        and not explicit_pairs
+        and any(key in payload for key in ("prediction_start", "truth_start", "num_fields"))
+    )
+    structural_errors = [
+        message for message in schema["errors"]
+        if not message.startswith("No safe field mapping was found.")
+    ]
+    if structural_errors:
+        raise ValueError("Evaluation contract is incompatible: " + " ".join(structural_errors))
+    mapping = schema["recommended_mapping"]
+    if (
+        not explicit_pairs
+        and not use_legacy_rows
+        and mapping.get("confidence") == "confirm"
+        and not bool(payload.get("confirm_mapping"))
+    ):
+        raise ValueError(
+            "The available fields can only be mapped by position. Inspect and explicitly confirm the field mapping before scoring."
+        )
+    field_pairs = _resolved_field_pairs(payload, schema)
+    if not field_pairs and not use_legacy_rows:
+        raise ValueError("Select at least one explicit prediction/truth field pair before scoring.")
     prediction_start = max(0, int(payload.get("prediction_start", 3)))
     truth_start = max(0, int(payload.get("truth_start", 3)))
     num_fields = max(1, int(payload.get("num_fields", 1)))
-    prediction_files = (
-        sorted(path for path in prediction_path.rglob("*") if path.suffix.lower() in {".h5", ".hdf5"})
-        if prediction_path.is_dir()
-        else [prediction_path]
-    )
-    if not prediction_files:
-        raise ValueError("Prediction path contains no HDF5 files.")
-
-    with h5py.File(truth_path, "r") as truth_handle:
-        if "data" not in truth_handle:
-            raise ValueError("Ground-truth HDF5 is missing the /data group.")
-        truth_ids = {str(sample_id) for sample_id in truth_handle["data"].keys()}
-
-    pairs: list[tuple[Path, str, str]] = []
-    for file_path in prediction_files:
-        try:
-            with h5py.File(file_path, "r") as handle:
-                if "data" not in handle:
-                    continue
-                for sample_id in handle["data"].keys():
-                    truth_id = str(sample_id)
-                    if truth_id not in truth_ids:
-                        match = re.search(r"sample(\d+)", file_path.stem, re.IGNORECASE)
-                        if match and match.group(1) in truth_ids:
-                            truth_id = match.group(1)
-                        elif len(truth_ids) == 1:
-                            truth_id = next(iter(truth_ids))
-                        else:
-                            continue
-                    pairs.append((file_path, str(sample_id), truth_id))
-        except OSError:
-            continue
-    if not pairs:
-        raise ValueError("No prediction samples could be matched to ground-truth sample IDs.")
-
-    rows: list[dict[str, Any]] = []
-    skipped: list[str] = []
-    for file_path, prediction_id, truth_id in pairs:
-        with h5py.File(file_path, "r") as prediction_handle, h5py.File(truth_path, "r") as truth_handle:
-            prediction_key = f"data/{prediction_id}/nodal_data"
-            truth_key = f"data/{truth_id}/nodal_data"
-            if prediction_key not in prediction_handle or truth_key not in truth_handle:
-                skipped.append(f"{relative(file_path)}:{prediction_id} missing nodal_data")
-                continue
-            prediction_dataset = prediction_handle[prediction_key]
-            truth_dataset = truth_handle[truth_key]
-            if prediction_dataset.ndim != 3 or truth_dataset.ndim != 3:
-                skipped.append(f"{relative(file_path)}:{prediction_id} requires rank-3 nodal_data")
-                continue
-            if prediction_start + num_fields > prediction_dataset.shape[0] or truth_start + num_fields > truth_dataset.shape[0]:
-                skipped.append(f"{relative(file_path)}:{prediction_id} field range is outside nodal_data")
-                continue
-            if prediction_dataset.shape[2] != truth_dataset.shape[2]:
-                skipped.append(
-                    f"{relative(file_path)}:{prediction_id} node mismatch "
-                    f"{prediction_dataset.shape[2]} != {truth_dataset.shape[2]}"
-                )
-                continue
-            timesteps = min(prediction_dataset.shape[1], truth_dataset.shape[1])
-            prediction = np.asarray(
-                prediction_dataset[prediction_start:prediction_start + num_fields, :timesteps, :],
-                dtype=np.float64,
-            )
-            truth = np.asarray(
-                truth_dataset[truth_start:truth_start + num_fields, :timesteps, :],
-                dtype=np.float64,
-            )
-        finite = np.isfinite(prediction) & np.isfinite(truth)
-        if not finite.any():
-            skipped.append(f"{relative(file_path)}:{prediction_id} contains no finite paired values")
-            continue
-        prediction_values = prediction[finite]
-        truth_values = truth[finite]
-        difference = prediction_values - truth_values
-        denominator = max(float(np.linalg.norm(truth_values)), np.finfo(np.float64).eps)
-        truth_centered = truth_values - truth_values.mean()
-        total_variance = float(np.dot(truth_centered, truth_centered))
-        squared_error = float(np.dot(difference, difference))
-        rows.append(
-            {
-                "prediction_file": relative(file_path),
-                "prediction_sample": prediction_id,
-                "truth_sample": truth_id,
-                "fields": num_fields,
-                "timesteps": timesteps,
-                "nodes": int(prediction.shape[2]),
-                "values": int(prediction_values.size),
-                "relative_l2": float(np.linalg.norm(difference) / denominator),
-                "mae": float(np.mean(np.abs(difference))),
-                "rmse": float(np.sqrt(np.mean(np.square(difference)))),
-                "max_absolute_error": float(np.max(np.abs(difference))),
-                "r2": float(1.0 - squared_error / total_variance) if total_variance > 0 else None,
-            }
+    if mode == "embedded":
+        rows, skipped = _evaluate_embedded(schema, field_pairs)
+        truth_source = "embedded"
+    elif mode == "table":
+        rows, skipped = _evaluate_table(schema, field_pairs)
+        truth_source = "selected"
+    elif mode == "mesh":
+        if schema["prediction"]["contract"] != "mesh_state" or schema["truth"]["contract"] != "mesh_state":
+            raise ValueError("External mesh evaluation requires mesh-state HDF5 on both sides.")
+        rows, skipped = _evaluate_mesh(
+            schema, field_pairs, prediction_start, truth_start, num_fields, use_legacy_rows
         )
+        if use_legacy_rows:
+            field_pairs = [
+                {"name": f"field {offset}", "prediction_index": prediction_start + offset, "truth_index": truth_start + offset}
+                for offset in range(num_fields)
+            ]
+        truth_source = "selected"
+    else:
+        raise ValueError("Evaluation contract is unsupported.")
     if not rows:
-        raise ValueError("Matched files were found, but none had compatible field arrays. Check the reported field rows and node count.")
+        detail = f" First issue: {skipped[0]}" if skipped else ""
+        raise ValueError("Matched samples were found, but none had compatible finite arrays." + detail)
 
-    metric_names = ("relative_l2", "mae", "rmse", "max_absolute_error", "r2")
     aggregate: dict[str, Any] = {}
-    for metric in metric_names:
+    for metric in ("relative_l2", "mae", "rmse", "max_absolute_error", "r2"):
         values = np.asarray([row[metric] for row in rows if row[metric] is not None], dtype=np.float64)
-        if not values.size:
-            continue
-        aggregate[metric] = {
-            "mean": float(values.mean()),
-            "median": float(np.median(values)),
-            "p95": float(np.percentile(values, 95)),
-            "min": float(values.min()),
-            "max": float(values.max()),
-        }
+        if values.size:
+            aggregate[metric] = {
+                "mean": float(values.mean()),
+                "median": float(np.median(values)),
+                "p95": float(np.percentile(values, 95)),
+                "min": float(values.min()),
+                "max": float(values.max()),
+            }
 
     report_id = uuid.uuid4().hex[:12]
     report_dir = RUNTIME_ROOT / "evaluation" / report_id
@@ -176,9 +820,12 @@ def run_field_evaluation(payload: dict[str, Any]) -> dict[str, Any]:
         "created_at": utc_now(),
         "prediction_path": relative(prediction_path),
         "truth_path": relative(truth_path),
-        "prediction_start": prediction_start,
-        "truth_start": truth_start,
-        "num_fields": num_fields,
+        "contract": schema["prediction"]["contract"],
+        "truth_source": truth_source,
+        "field_pairs": field_pairs,
+        "prediction_start": prediction_start if use_legacy_rows else None,
+        "truth_start": truth_start if use_legacy_rows else None,
+        "num_fields": len(field_pairs),
         "evaluated_samples": len(rows),
         "skipped": skipped,
         "aggregate": aggregate,

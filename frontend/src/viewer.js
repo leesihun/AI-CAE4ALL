@@ -6,7 +6,7 @@ import { previewGraphic, parametersTableGraphic } from "./graphics.js";
 import { openStudio } from "./studio.js";
 import { createRenderer, createFallbackRenderer, defaultCamera, fieldColor, turboColor } from "./render3d.js";
 import { schedulePipelineSave } from "./persistence.js";
-import { applyGraphAutofill } from "./autofill.js";
+import { applyGraphAutofill, selectedParameterCandidate } from "./autofill.js";
 
 export { fieldColor };
 
@@ -19,6 +19,31 @@ const PREVIEW_EXTENSIONS = [...HDF5_EXTENSIONS, ...GEOMETRY_EXTENSIONS];
 
 let viewport = null;
 let renderer = null;
+
+// Async preview work is latest-selection-wins. Fetch cannot reliably be
+// cancelled once the server starts reading a large HDF5 artifact, so each
+// request captures a generation and verifies it before touching shared state
+// or viewer DOM.
+let artifactLoadGeneration = 0;
+let sampleLoadGeneration = 0;
+let datasetPickerGeneration = 0;
+let playbackGeneration = 0;
+
+function beginArtifactLoad() {
+  sampleLoadGeneration += 1;
+  artifactLoadGeneration += 1;
+  return artifactLoadGeneration;
+}
+
+function isCurrentArtifactLoad(generation) {
+  return generation === artifactLoadGeneration;
+}
+
+function isCurrentSampleLoad(generation, artifact, sampleIndex) {
+  return generation === sampleLoadGeneration
+    && state.realArtifact === artifact
+    && state.artifactSample === sampleIndex;
+}
 
 const PARAMETER_SHEET_MIN_ROWS = 14;
 const PARAMETER_CATALOG_LIMIT = 10000;
@@ -68,6 +93,7 @@ function parameterContext(node) {
     modelId,
     modelLabel: modelSpec?.label || "Condition",
     paired: modelId === "mlp",
+    generative: outgoing.some(candidate => candidate.type === "run.cad_generator"),
     datasetPath: String(node.config.parameter_dataset || datasetNode?.config?.path || (/\.(h5|hdf5)$/i.test(node.config.binding || "") ? node.config.binding : ""))
   };
 }
@@ -78,7 +104,8 @@ function storedParameterTable(node) {
     if (!parsed || !Array.isArray(parsed.columns) || !Array.isArray(parsed.rows)) return null;
     return {
       version: PARAMETER_TABLE_VERSION,
-      dataset_path: String(parsed.dataset_path || node.config.parameter_dataset || ""),
+      dataset_path: String(Object.hasOwn(parsed, "dataset_path") ? parsed.dataset_path : node.config.parameter_dataset || ""),
+      selected_sample_id: String(parsed.selected_sample_id || ""),
       total_samples: Number(parsed.total_samples) || parsed.rows.length,
       truncated: Boolean(parsed.truncated),
       columns: parsed.columns
@@ -121,6 +148,7 @@ function parameterTableFor(node, catalog = null) {
     version: PARAMETER_TABLE_VERSION,
     profile: context.paired ? "mlp_paired" : "conditions",
     dataset_path: "",
+    selected_sample_id: "",
     total_samples: PARAMETER_SHEET_MIN_ROWS,
     truncated: false,
     columns: initialParameterColumns(node, context),
@@ -182,6 +210,7 @@ function parameterTableFor(node, catalog = null) {
   table.dataset_path = String(catalog.path || node.config.binding || "");
   table.total_samples = Number(catalog.total_samples) || table.rows.length;
   table.truncated = Boolean(catalog.truncated);
+  if (!table.rows.some(row => row.sample_id === table.selected_sample_id)) table.selected_sample_id = "";
   return table;
 }
 
@@ -200,10 +229,11 @@ function saveParameterTable(node, table) {
   schedulePipelineSave();
 }
 
-function parameterSheetRow(table, row, index) {
-  return `<tr data-parameter-row="${index}" data-sample-id="${escapeHtml(row.sample_id)}">
+function parameterSheetRow(table, row, index, selectable) {
+  const selected = table.selected_sample_id === row.sample_id;
+  return `<tr data-parameter-row="${index}" data-sample-id="${escapeHtml(row.sample_id)}"${selected ? ` class="generation-selected"` : ""}>
     <th scope="row">${index + 1}</th>
-    <td class="parameter-sample-cell"><strong>${escapeHtml(row.sample_label)}</strong><small>ID: ${escapeHtml(row.sample_id)}</small></td>
+    <td class="parameter-sample-cell"><strong>${escapeHtml(row.sample_label)}</strong><small>ID: ${escapeHtml(row.sample_id)}</small>${selectable ? `<label class="parameter-generation-choice"><input type="radio" name="parameter-generation-candidate" data-select-parameter-row="${index}"${selected ? " checked" : ""}> Use for generation</label>` : ""}</td>
     ${table.columns.map(column => `<td><input class="parameter-sheet-value" data-column-id="${escapeHtml(column.id)}" data-row="${index}" value="${escapeHtml(row.values[column.id] || "")}" aria-label="${escapeHtml(column.name)}, dataset row ${index + 1}" autocomplete="off" spellcheck="false"></td>`).join("")}
   </tr>`;
 }
@@ -218,6 +248,7 @@ function refreshParameterSheetInfo(node, table = storedParameterTable(node) || p
   const inputs = table.columns.filter(column => column.kind === "input");
   const outputs = table.columns.filter(column => column.kind === "output");
   const source = table.dataset_path || node.config.parameter_dataset || parameterContext(node).datasetPath || "No HDF5 dataset selected";
+  const selected = selectedParameterCandidate(node);
   const info = $("#parameterSheetInfo");
   if (!info) return;
   info.innerHTML = `<section class="info-block">
@@ -230,6 +261,10 @@ function refreshParameterSheetInfo(node, table = storedParameterTable(node) || p
       <div class="stat-card"><strong>${outputs.length}</strong><small>output columns</small></div>
     </div>
     ${table.truncated ? `<p class="parameter-sheet-warning">Showing the first ${table.rows.length} of ${table.total_samples} samples.</p>` : ""}
+    ${context.generative ? selected.ready
+      ? `<p class="parameter-sheet-selection"><strong>Generation candidate:</strong> ${escapeHtml(selected.row.sample_label)} (ID: ${escapeHtml(selected.selectedSampleId)})<br><code>${escapeHtml(selected.conditionNames)} → ${escapeHtml(selected.condValues)}</code></p>`
+      : `<p class="parameter-sheet-warning"><strong>No runnable generation candidate.</strong> Choose one row and give every Input column a unique name and finite numeric value.</p>`
+      : ""}
   </section>
   <section class="info-block">
     <div class="section-title">Dataset source</div>
@@ -279,6 +314,15 @@ function bindParameterSheetCells(node, table) {
     saveParameterTable(node, table);
     renderParameterSpreadsheet(node, state.realArtifact, table);
   }));
+  $$("[data-select-parameter-row]").forEach(control => control.addEventListener("change", () => {
+    const row = table.rows[Number(control.dataset.selectParameterRow)];
+    if (!row || !control.checked) return;
+    snapshot();
+    table.selected_sample_id = row.sample_id;
+    saveParameterTable(node, table);
+    renderParameterSpreadsheet(node, state.realArtifact, table);
+    toast(`Generation candidate set to ${row.sample_label} (ID: ${row.sample_id}).`);
+  }));
 }
 
 function setParameterSheetMode(enabled) {
@@ -291,12 +335,13 @@ function setParameterSheetMode(enabled) {
   const footerCopy = $(".artifact-shell > .modal-foot > span:first-child");
   if (footerCopy) {
     footerCopy.textContent = enabled
-      ? "Rows stay locked to the HDF5 sample order; editable column definitions and per-sample values are stored on this Design Parameters block."
+      ? "Rows stay locked to HDF5 order; the explicitly selected generation row is materialized as native cond_values in Input-column order."
       : "Geometry, topology, samples, and field values are read from the configured repository artifact through the local Studio API.";
   }
 }
 
 function renderParameterSpreadsheet(node, catalog = null, providedTable = null) {
+  sampleLoadGeneration += 1;
   stopViewerPlayback();
   closeArtifactDatasetPicker();
   state.artifactNode = node.id;
@@ -314,12 +359,13 @@ function renderParameterSpreadsheet(node, catalog = null, providedTable = null) 
   $("#sampleInfo").innerHTML = `<div id="parameterSheetInfo"></div>`;
 
   const table = providedTable || parameterTableFor(node, catalog);
+  if (node.config.parameter_table !== JSON.stringify(table)) saveParameterTable(node, table);
   const context = parameterContext(node);
   $("#artifactTitle").textContent = context.paired ? "Design Parameters · MLP paired dataset" : `Design Parameters · ${context.modelLabel} conditions`;
   $("#artifactSubtitle").textContent = context.paired
     ? "Each row pairs the inputs and target outputs for the HDF5 sample at the same position"
     : "Each row maps condition values to the HDF5 sample at the same position";
-  $("#viewerVisual").innerHTML = `<section class="parameter-sheet" aria-label="Design Parameters spreadsheet">
+  $("#viewerVisual").innerHTML = `<section class="parameter-sheet${context.generative ? " generative" : ""}" aria-label="Design Parameters spreadsheet">
     <header class="parameter-sheet-head">
       <span><strong>${context.paired ? "MLP input / output pairs" : `${escapeHtml(context.modelLabel)} per-sample conditions`}</strong><small>${table.dataset_path ? `${table.rows.length} rows locked to HDF5 order` : "Add an HDF5 dataset to lock row order"}</small></span>
       <span class="parameter-sheet-actions"><button class="button small" data-add-parameter-column="input" type="button">+ Input column</button>${context.paired ? `<button class="button small" data-add-parameter-column="output" type="button">+ Output column</button>` : ""}</span>
@@ -327,7 +373,7 @@ function renderParameterSpreadsheet(node, catalog = null, providedTable = null) 
     <div class="parameter-sheet-table-wrap">
       <table class="parameter-sheet-table" aria-label="Dataset-aligned Design Parameters spreadsheet">
         <thead><tr><th aria-label="Row number">#</th><th class="parameter-sample-heading">Dataset sample</th>${table.columns.map(column => `<th class="parameter-column-heading" data-column-heading="${escapeHtml(column.id)}"><div><span class="parameter-column-kind ${column.kind}">${column.kind}</span><input class="parameter-column-name" data-column-id="${escapeHtml(column.id)}" value="${escapeHtml(column.name)}" aria-label="Rename ${escapeHtml(column.kind)} column ${escapeHtml(column.name)}" autocomplete="off" spellcheck="false"><button type="button" data-remove-parameter-column="${escapeHtml(column.id)}" aria-label="Remove ${escapeHtml(column.name)} column">×</button></div></th>`).join("")}</tr></thead>
-        <tbody id="parameterSheetRows">${table.rows.map((row, index) => parameterSheetRow(table, row, index)).join("")}</tbody>
+        <tbody id="parameterSheetRows">${table.rows.map((row, index) => parameterSheetRow(table, row, index, context.generative)).join("")}</tbody>
       </table>
     </div>
   </section>`;
@@ -554,6 +600,7 @@ export function bindViewerInteractions() {
 }
 
 function renderEmptyViewer(message = "Choose a sample from the left to visualize its actual values.") {
+  sampleLoadGeneration += 1;
   if (state.realArtifact) state.realArtifact.currentSample = null;
   $$("[data-view-mode]").forEach(button => {
     button.disabled = true;
@@ -662,9 +709,10 @@ function parameterBlock(sample) {
 
 export async function renderRealArtifactSample(sampleIndex, feature = null, timestep = 0) {
   const artifact = state.realArtifact;
-  if (!artifact) return;
+  if (!artifact) return false;
   const selected = artifact.samples[sampleIndex];
-  if (!selected) return;
+  if (!selected) return false;
+  const requestGeneration = ++sampleLoadGeneration;
   const changingSample = state.artifactSample !== sampleIndex;
   state.artifactSample = sampleIndex;
   if (changingSample) state.realArtifact.currentSample = null;
@@ -677,6 +725,7 @@ export async function renderRealArtifactSample(sampleIndex, feature = null, time
     const sample = await apiRequest(
       `/api/preview/sample?path=${encodeURIComponent(artifact.path)}&sample=${encodeURIComponent(selected.id)}&feature=${requestedFeature}&timestep=${timestep}${artifact.truth_path ? `&truth=${encodeURIComponent(artifact.truth_path)}` : ""}`
     );
+    if (!isCurrentSampleLoad(requestGeneration, artifact, sampleIndex)) return false;
     state.realArtifact.currentSample = sample;
     // A new sample chooses its own orientation; reloading a feature or
     // timestep on the same sample must not throw the camera away.
@@ -726,12 +775,15 @@ export async function renderRealArtifactSample(sampleIndex, feature = null, time
     if (playButton) playButton.disabled = sample.timestep_count <= 1;
     $(".viewer-timeline span").textContent = `t = ${sample.timestep} / ${Math.max(0, sample.timestep_count - 1)}`;
     timeline.onchange = () => renderRealArtifactSample(sampleIndex, sample.feature, Number(timeline.value));
+    return true;
   } catch (error) {
+    if (!isCurrentSampleLoad(requestGeneration, artifact, sampleIndex)) return false;
     state.realArtifact.currentSample = null;
     $("#artifactDownload").disabled = true;
     $("#viewerReset").disabled = true;
     showViewerMessage(`Could not visualize this real sample: ${error.message}`);
     $("#sampleInfo").innerHTML = `<section class="info-block"><h3>Reader error</h3><p>${escapeHtml(error.message)}</p></section>`;
+    return false;
   }
 }
 
@@ -865,9 +917,17 @@ function formatBytes(value) {
 async function loadArtifactPath(path, showToast = true) {
   const node = state.nodes.find(item => item.id === state.artifactNode) || state.realArtifact?.node;
   if (!node) throw new Error("The sample viewer is not attached to a pipeline block.");
+  const requestGeneration = beginArtifactLoad();
   stopViewerPlayback();
   $("#artifactDatasetList").innerHTML = `<div class="live-empty">Reading ${escapeHtml(path)}…</div>`;
-  const catalog = await loadPreviewCatalog(path, node.type === "source.parameters" ? PARAMETER_CATALOG_LIMIT : null);
+  let catalog;
+  try {
+    catalog = await loadPreviewCatalog(path, node.type === "source.parameters" ? PARAMETER_CATALOG_LIMIT : null);
+  } catch (error) {
+    if (!isCurrentArtifactLoad(requestGeneration)) return false;
+    throw error;
+  }
+  if (!isCurrentArtifactLoad(requestGeneration)) return false;
   if (node.type === "source.parameters") {
     snapshot();
     const table = parameterTableFor(node, catalog);
@@ -876,7 +936,7 @@ async function loadArtifactPath(path, showToast = true) {
     if (showToast) {
       toast(`Matched ${table.rows.length} spreadsheet rows to ${catalog.path || path}.`);
     }
-    return;
+    return true;
   }
   state.realArtifact = { ...catalog, node, currentSample: null };
   state.artifactSample = null;
@@ -890,6 +950,7 @@ async function loadArtifactPath(path, showToast = true) {
   renderEmptyViewer();
   closeArtifactDatasetPicker();
   if (showToast) toast(`Opened ${catalog.path}. Choose a sample to visualize.`);
+  return true;
 }
 
 export function renderArtifactDatasetChoices(query = "") {
@@ -908,7 +969,8 @@ export function renderArtifactDatasetChoices(query = "") {
     button.addEventListener("click", async () => {
       button.disabled = true;
       try {
-        await loadArtifactPath(button.dataset.previewDataset);
+        const loaded = await loadArtifactPath(button.dataset.previewDataset);
+        if (!loaded) button.disabled = false;
       } catch (error) {
         button.disabled = false;
         toast(`Could not open dataset: ${error.message}`, "error");
@@ -923,6 +985,9 @@ export async function openArtifactDatasetPicker() {
     return;
   }
   const picker = $("#artifactDatasetPicker");
+  const requestGeneration = ++datasetPickerGeneration;
+  const artifactGeneration = artifactLoadGeneration;
+  const artifactNode = state.artifactNode;
   picker.hidden = false;
   $("#artifactDatasetSearch").value = "";
   $("#artifactDatasetList").innerHTML = `<div class="live-empty">Scanning repository datasets and geometry…</div>`;
@@ -933,6 +998,10 @@ export async function openArtifactDatasetPicker() {
       apiRequest("/api/files?kind=dataset"),
       parametersOnly ? Promise.resolve({ items: [] }) : apiRequest("/api/files?kind=geometry")
     ]);
+    if (requestGeneration !== datasetPickerGeneration
+      || artifactGeneration !== artifactLoadGeneration
+      || artifactNode !== state.artifactNode
+      || picker.hidden) return;
     const unique = new Map();
     [...(datasets.items || []), ...(geometry.items || [])]
       .filter(item => PREVIEW_EXTENSIONS.includes(String(item.extension || "").toLowerCase()))
@@ -944,11 +1013,16 @@ export async function openArtifactDatasetPicker() {
     renderArtifactDatasetChoices($("#artifactDatasetSearch").value);
     $("#artifactDatasetSearch").focus();
   } catch (error) {
+    if (requestGeneration !== datasetPickerGeneration
+      || artifactGeneration !== artifactLoadGeneration
+      || artifactNode !== state.artifactNode
+      || picker.hidden) return;
     $("#artifactDatasetList").innerHTML = `<div class="live-empty">Could not list datasets: ${escapeHtml(error.message)}</div>`;
   }
 }
 
 export function closeArtifactDatasetPicker() {
+  datasetPickerGeneration += 1;
   $("#artifactDatasetPicker").hidden = true;
 }
 
@@ -967,6 +1041,9 @@ export async function uploadArtifactDataset(file) {
   const kind = HDF5_EXTENSIONS.some(extension => lowerName.endsWith(extension)) ? "dataset" : "geometry";
   const button = $("#artifactUploadDataset");
   const original = button.textContent;
+  const uploadArtifactGeneration = artifactLoadGeneration;
+  const uploadArtifactNode = state.artifactNode;
+  let loadingUploadedArtifact = false;
   button.disabled = true;
   button.textContent = `Uploading ${file.name}…`;
   try {
@@ -977,10 +1054,15 @@ export async function uploadArtifactDataset(file) {
     });
     const result = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
     if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
-    await loadArtifactPath(result.path, false);
-    toast(`Uploaded ${file.name} (${formatBytes(result.size)}). Choose a sample to visualize.`);
+    if (uploadArtifactGeneration !== artifactLoadGeneration || uploadArtifactNode !== state.artifactNode) return;
+    loadingUploadedArtifact = true;
+    const loaded = await loadArtifactPath(result.path, false);
+    if (loaded) toast(`Uploaded ${file.name} (${formatBytes(result.size)}). Choose a sample to visualize.`);
   } catch (error) {
-    toast(`Upload failed: ${error.message}`, "error");
+    if (loadingUploadedArtifact
+      || (uploadArtifactGeneration === artifactLoadGeneration && uploadArtifactNode === state.artifactNode)) {
+      toast(`Upload failed: ${error.message}`, "error");
+    }
   } finally {
     button.disabled = false;
     button.textContent = original;
@@ -991,8 +1073,11 @@ export async function openArtifact(nodeId) {
   const node = state.nodes.find(item => item.id === nodeId);
   if (!node) return;
   const spec = BLOCK_SPECS[node.type];
+  const requestGeneration = beginArtifactLoad();
+  stopViewerPlayback();
   if (spec.isModel) {
     const { openModelDetailWorkspace } = await import("./studio.js");
+    if (!isCurrentArtifactLoad(requestGeneration)) return;
     await openModelDetailWorkspace(spec.modelId);
     return;
   }
@@ -1002,10 +1087,12 @@ export async function openArtifact(nodeId) {
     if (state.api.connected && datasetPath) {
       try {
         const catalog = await loadPreviewCatalog(datasetPath, PARAMETER_CATALOG_LIMIT);
+        if (!isCurrentArtifactLoad(requestGeneration)) return;
         const table = parameterTableFor(node, catalog);
         saveParameterTable(node, table);
         renderParameterSpreadsheet(node, catalog, table);
       } catch (error) {
+        if (!isCurrentArtifactLoad(requestGeneration)) return;
         toast(`Could not match Design Parameters to ${datasetPath}: ${error.message}`, "error");
       }
     }
@@ -1015,7 +1102,6 @@ export async function openArtifact(nodeId) {
     toast("Runtime is offline; actual samples cannot be read. Start with START_STUDIO.bat.", "error");
     return;
   }
-  stopViewerPlayback();
   closeArtifactDatasetPicker();
   setParameterSheetMode(false);
   state.artifactNode = nodeId;
@@ -1041,6 +1127,7 @@ export async function openArtifact(nodeId) {
   $("#artifactSampleSearch").value = "";
   try {
     const catalog = await resolvePreview(node, spec);
+    if (!isCurrentArtifactLoad(requestGeneration)) return;
     state.realArtifact = { ...catalog, node, currentSample: null };
     state.viewerMode = catalog.default_mode || "field";
     $("#artifactTitle").textContent = `${spec.label} · repository samples`;
@@ -1048,11 +1135,35 @@ export async function openArtifact(nodeId) {
     renderArtifactCatalog();
     renderEmptyViewer();
   } catch (error) {
+    if (!isCurrentArtifactLoad(requestGeneration)) return;
     $("#sampleList").innerHTML = "";
     showViewerMessage(error.message);
     $("#sampleInfo").innerHTML = `<section class="info-block"><h3>No actual preview available</h3><p>${escapeHtml(error.message)}</p></section>`;
     toast(`Actual sample viewer: ${error.message}`, "error");
   }
+}
+
+function scheduleViewerPlayback(generation) {
+  if (!state.viewerPlaying || generation !== playbackGeneration) return;
+  state.viewerPlayTimer = window.setTimeout(async () => {
+    state.viewerPlayTimer = null;
+    if (!state.viewerPlaying || generation !== playbackGeneration) return;
+    const timeline = $(".viewer-timeline input");
+    const sample = state.realArtifact?.currentSample;
+    if (!timeline || timeline.disabled || !sample) {
+      stopViewerPlayback();
+      return;
+    }
+    const max = Number(timeline.max) || 0;
+    const next = Number(timeline.value) >= max ? 0 : Number(timeline.value) + 1;
+    await renderRealArtifactSample(state.artifactSample, sample.feature, next);
+    if (!state.viewerPlaying || generation !== playbackGeneration) return;
+    if (!state.realArtifact?.currentSample) {
+      stopViewerPlayback();
+      return;
+    }
+    scheduleViewerPlayback(generation);
+  }, 450);
 }
 
 export function toggleViewerPlayback() {
@@ -1065,20 +1176,13 @@ export function toggleViewerPlayback() {
   if (!timeline || timeline.disabled || !state.realArtifact?.currentSample) return;
   state.viewerPlaying = true;
   if (playButton) playButton.textContent = "❚❚";
-  state.viewerPlayTimer = window.setInterval(() => {
-    const max = Number(timeline.max) || 0;
-    const next = Number(timeline.value) >= max ? 0 : Number(timeline.value) + 1;
-    const sample = state.realArtifact?.currentSample;
-    if (!sample) {
-      stopViewerPlayback();
-      return;
-    }
-    renderRealArtifactSample(state.artifactSample, sample.feature, next);
-  }, 450);
+  const generation = ++playbackGeneration;
+  scheduleViewerPlayback(generation);
 }
 
 export function stopViewerPlayback() {
-  if (state.viewerPlayTimer) window.clearInterval(state.viewerPlayTimer);
+  playbackGeneration += 1;
+  if (state.viewerPlayTimer) window.clearTimeout(state.viewerPlayTimer);
   state.viewerPlayTimer = null;
   state.viewerPlaying = false;
   const playButton = $("#viewerPlay");

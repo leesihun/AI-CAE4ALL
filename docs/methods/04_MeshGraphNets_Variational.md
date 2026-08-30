@@ -37,7 +37,8 @@ added on top.
   decoder reproduce the training distribution's per-graph output mean/std.
 - **Two conditional-prior families**:
   - **`fm`** (default): conditional **flow matching** — a velocity field transporting
-    `N(0,I)` onto the posterior of `z` per graph; sampled by Euler ODE.
+    `N(0,I)` onto the posterior of `z` per graph; sampled by a Heun (default) or
+    Euler ODE integrator.
   - **`gmm`** (legacy): graph-conditioned **Gaussian mixture** with optional low-rank
     covariance.
 - **Joint training**: the prior trains *inside* the same loop as the simulator
@@ -120,11 +121,28 @@ spread).
 
 ### Latent injection
 
-`z` is fused into the simulator processor via per-block linear **`z_fusers`** (flat:
-one per block; multiscale: separate fusers for each pre/coarsest/post arm, with `z`
-mapped to coarse nodes through pooled batch assignments). During **training** the
-posterior `z` is used; during **inference**, `z` comes from the conditional prior (or
-`N(0,I)`).
+One conditioning module per processor block (flat: one per block; multiscale:
+separate lists for each pre/coarsest/post arm, with `z` mapped to coarse nodes
+through pooled batch assignments). During **training** the posterior `z` is used;
+during **inference**, `z` comes from the conditional prior (or `N(0,I)`).
+
+`z_conditioning` picks the mechanism, and it is persisted in the checkpoint's
+`model_config` because it renames the per-block parameters:
+
+- **`concat`** (legacy default) — `x <- Linear([x, z])`. Since `z` is broadcast,
+  this adds ONE constant vector per graph: no scaling, no gating, no spatial
+  selection. It is also a bare non-residual Linear between every pair of blocks,
+  and under the repo's kaiming init its x-half has gain ~1.33, which compounds
+  over the stack. On the SAOI V-cycle the residual stream reaches ~2.8e2 at the
+  coarsest level (vs ~4.4 without fusers), and since `UnpoolBlock` ends in a
+  LayerNorm the coarse-to-fine merge then weights global information at 1:28
+  instead of 1:3.3 — the multiscale arm is attenuated by the `z` injection.
+- **`adaln`** — AdaLN-Zero (DiT). `z` emits `(shift, scale, gate)`;
+  `x_mod = (1+scale)·x + shift`, `x_out = x + gate·(Block(x_mod) − x_mod)`.
+  Zero-initialized with gate bias 1, so at init it is EXACTLY the unconditioned
+  block (measured `max|f(z1) − f(z2)| = 0`) and the residual stream stays flat.
+  `scale`/`gate` give `z` multiplicative reach. Cheaper than the fuser it
+  replaces.
 
 ### Conditional prior — `model/conditional_prior.py`
 
@@ -133,8 +151,12 @@ A shared graph **trunk** (`node_encoder`, `edge_encoder`, `prior_mp_layers`
 
 - **`ConditionalFMPrior`** (`fm`): a velocity net `v(z_t, t, cond)` (flat latent +
   Fourier time embedding + condition). Trained by **conditional flow-matching MSE** on
-  straight-line paths toward fresh **detached** posterior samples; sampled by
-  `prior_fm_steps` Euler steps. Temperature scales initial noise std by `√T`.
+  straight-line paths toward fresh posterior samples (detached or not —
+  see `prior_grad_to_encoder`); sampled by `prior_fm_steps` steps of
+  `prior_fm_solver`, `heun` (default, 2nd-order) or `euler`. The velocity is
+  most curved near `t = 1`, exactly where a first-order step overshoots into the
+  `z` tails; Heun at 30 steps beats Euler at 100 and costs less. Temperature
+  scales initial noise std by `√T`.
 - **`ConditionalMixturePrior`** (`gmm`): head emits mixture logits/means/log-stds
   (optional low-rank covariance `prior_cov_rank`). Trained by mixture NLL + small
   analytical-KL anchor (`prior_kl_reg_weight`). Temperature divides logits, scales
@@ -150,15 +172,37 @@ the encoder from collapsing all spread into a tiny subspace.
 ## Training objective
 
 ```text
-loss = alpha_recon · recon_loss(huber|mse)          # simulator fit
-     + lambda_mmd  · MMD(q(z), N(0,I))               # keep LOW  (≈0.1)
-     + beta_aux    · auxiliary_stats_loss            # keep HIGH (≈1.0)
-     + prior_nll_weight · prior_objective            # fm-MSE or gmm-NLL (joint)
+loss = alpha_recon      · recon_loss(huber|mse)      # simulator fit
+     + lambda_mmd       · MMD(q(z), N(0,I))          # AGGREGATE rate: shape/scale of the latent
+     + beta_aux         · auxiliary_stats_loss       # I(z;y) floor
+     + prior_nll_weight · prior_objective            # CONDITIONAL rate: fm-MSE or gmm-NLL
 ```
+
+The CVAE bound is reconstruction plus the rate `KL(q(z|y,g) ‖ p(z|g))`. `p(z|g)`
+is a flow-matching model with no closed-form density, so the rate is approximated
+by two surrogates that constrain different things and therefore do not compete:
+MMD pins only the MARGINAL `q(z)` (keeping the latent the unit ball the FM prior
+integrates from — a minibatch of different graphs is exactly what it wants, since
+`q(z)` is by definition a mixture over the dataset), while the FM term pins the
+CONDITIONAL structure inside that ball.
+
+**`prior_grad_to_encoder`** decides whether the FM term is the rate term at all.
+At `0.0` (historical default) the posterior is detached, so the prior chases a
+`q` that never moves toward it and the rate term is absent. At `1.0` the loop is
+closed. Opening it adds pressure toward a `z` predictable from the graph alone,
+and MMD does NOT guard against that (a deterministic `z = h(g)` distributed as
+`N(0,I)` satisfies MMD perfectly) — `beta_aux`'s I(z;y) floor does, so it must
+stay `> 0`. A rising `aux` loss is the signal that this collapse is under way.
+
+All three regularizer weights are only meaningful RELATIVE to `alpha_recon`: at
+`alpha_recon 1000` with the others at 1, each is ~0.1% of the objective and
+effectively off. Watch `mmd` and `fm_p` against `total` on the progress bar.
 
 > Spread-modeling guidance (from `docs/MESHGRAPHNET_ARCHITECTURE.md`): residual MMD
 > `> 0` is expected and healthy — forcing it to zero erases real spread structure.
 > The deterministic `z=0` pass (`lambda_det`) was **removed**; do not reintroduce it.
+> An energy-score term over decodes of prior-sampled `z` (`gamma_es`, `es_*`) was
+> also removed — the launcher flags those keys as `MGNV-REMOVED`.
 
 ---
 
@@ -183,6 +227,8 @@ The full catalog is the repo's `docs/CONFIG_REFERENCE.md`.
 | `beta_aux` | Auxiliary latent-stats weight (keep high ≈1.0) |
 | `posterior_min_std` | Floor on posterior std (≈0.05) |
 | `num_z` | Per-level z slots (default `multiscale_levels + 1`, else 1) |
+| `z_conditioning` | `concat` (legacy fuser) or `adaln` (AdaLN-Zero, identity at init). Renames parameters; stored in the checkpoint |
+| `mmd_gather_ranks` | All-gather `z` over DDP ranks before MMD so the estimator sees the global batch, not the per-rank one (default True) |
 
 ### Conditional prior
 
@@ -191,10 +237,12 @@ The full catalog is the repo's `docs/CONFIG_REFERENCE.md`.
 | `prior_type` | `gnn_e2e` — jointly trained graph-conditional prior submodule |
 | `use_conditional_prior` | Inference: sample `z` from the prior (default True; False → `N(0,I)`) |
 | `prior_family` | `fm` (flow matching, default) or `gmm` (mixture, legacy) |
-| `prior_nll_weight` | Prior density-matching weight (default 1.0) |
+| `prior_nll_weight` | Prior density-matching weight (default 1.0; read it relative to `alpha_recon`) |
+| `prior_grad_to_encoder` | How much of the FM gradient reaches the encoder. 0 = detached (no CVAE rate term), 1 = end-to-end. **Requires `beta_aux > 0`** |
 | `prior_mp_layers` | Prior trunk message-passing depth |
 | `prior_hidden_dim` | Prior hidden width (defaults to `latent_dim`) |
-| `prior_fm_steps` | Euler ODE steps for FM sampling (default 20; 40 halves tail overshoot) |
+| `prior_fm_steps` | ODE steps for FM sampling (default 20). Sampling-only, never affects training |
+| `prior_fm_solver` | `heun` (default, 2nd-order) or `euler`. Heun@30 ≈ 27x more accurate than Euler@100, and cheaper |
 | `prior_temperature` | Inference spread control (scales noise/covariance) |
 | `prior_mixture_components` | (`gmm`) mixture components (default 50) |
 | `prior_min_std` | (`gmm`) min component std (default 0.1) |
@@ -223,6 +271,8 @@ mp_per_level     4, 8, 12, 8, 4
 use_vae          True
 vae_latent_dim   128
 vae_mp_layers    5
+z_conditioning   adaln
+mmd_gather_ranks True
 recon_loss       mse
 alpha_recon      1000
 lambda_mmd       0.2
@@ -230,6 +280,14 @@ beta_aux         1.0
 prior_type       gnn_e2e
 use_conditional_prior True
 prior_family     fm
-prior_fm_steps   40
+prior_fm_steps   30
+prior_fm_solver  heun
+prior_grad_to_encoder 1.0
 num_vae_samples  10000
 ```
+
+For an inference run that only needs the spread distribution, add
+`save_rollouts False`: sampling, the `histogram_compare.png` and the
+`spread_values.npz` dump all still happen, but no per-(scene, draw) trajectory
+HDF5s are written — otherwise `num_vae_samples` draws across many scenes is
+thousands of files per run.

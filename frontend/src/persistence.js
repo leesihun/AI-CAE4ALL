@@ -1,5 +1,5 @@
 import { BLOCK_SPECS, FIT_MIN_ZOOM, MAX_ZOOM } from "./constants.js";
-import { state, registerMutationHook } from "./state.js";
+import { state, registerMutationHook, snapshot } from "./state.js";
 import { applyGraphAutofill } from "./autofill.js";
 
 export const PIPELINE_STORAGE_KEY = "ai-cae4all.studio.pipeline.v1";
@@ -64,7 +64,24 @@ function validateDocument(payload) {
   }
 }
 
-export function applyPipelineDocument(payload) {
+export class PipelineLoadCancelledError extends Error {
+  constructor() {
+    super("Pipeline replacement cancelled.");
+    this.name = "PipelineLoadCancelledError";
+  }
+}
+
+function confirmPipelineReplacement(payload) {
+  if (typeof window === "undefined" || typeof window.confirm !== "function") return true;
+  const name = String(payload.name || "Untitled pipeline");
+  return window.confirm(`Replace the current pipeline with "${name}"?\n\nYour current pipeline will be kept as one Undo step.`);
+}
+
+export function applyPipelineDocument(payload, {
+  confirmReplacement = true,
+  recordHistory = true,
+  resetHistory = false
+} = {}) {
   validateDocument(payload);
   const ids = new Set();
   const nodes = payload.nodes.map((raw, index) => {
@@ -137,12 +154,18 @@ export function applyPipelineDocument(payload) {
     });
   }
   if (visited !== nodes.length) throw new Error("Pipeline JSON contains a dependency cycle.");
+  // Build and validate the entire incoming graph before asking for confirmation
+  // or touching history. A malformed/cancelled load must leave both untouched.
+  if (confirmReplacement && !confirmPipelineReplacement(payload)) {
+    throw new PipelineLoadCancelledError();
+  }
+  if (recordHistory) snapshot();
   state.nodes = nodes;
   state.edges = edges;
   state.selectedNode = null;
   state.selectedEdge = null;
   state.pendingPort = null;
-  state.history = [];
+  if (resetHistory) state.history = [];
   state.nodeCounter = Math.min(1_000_000, Math.max(1, Math.floor(finite(payload.node_counter, nodes.length + 1))));
   state.view = {
     x: finite(payload.view?.x, 22),
@@ -192,7 +215,13 @@ export function restorePipelineState() {
     const serialized = localStorage.getItem(PIPELINE_STORAGE_KEY);
     if (!serialized) return false;
     const payload = JSON.parse(serialized);
-    applyPipelineDocument(payload);
+    // Startup restore is not a user replacement and should start a fresh undo
+    // session. Every interactive caller keeps the default protected behavior.
+    applyPipelineDocument(payload, {
+      confirmReplacement: false,
+      recordHistory: false,
+      resetHistory: true
+    });
     lastFingerprint = JSON.stringify({ ...payload, saved_at: "" });
     return true;
   } catch (error) {

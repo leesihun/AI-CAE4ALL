@@ -69,10 +69,43 @@ export function registerMutationHook(hook) {
   mutationHook = typeof hook === "function" ? hook : null;
 }
 
+function pipelineNameInput() {
+  return typeof document === "undefined" ? null : document.getElementById("pipelineName");
+}
+
+/**
+ * Restore one entry created by snapshot(). Older entries contained only nodes
+ * and edges, so every newer field is optional for backwards compatibility.
+ */
+export function restoreSnapshot(serialized) {
+  const previous = typeof serialized === "string" ? JSON.parse(serialized) : serialized;
+  if (!previous || !Array.isArray(previous.nodes) || !Array.isArray(previous.edges)) {
+    throw new Error("Pipeline history entry is invalid.");
+  }
+  state.nodes = previous.nodes;
+  state.edges = previous.edges;
+  if (previous.view && typeof previous.view === "object") {
+    state.view = { ...previous.view };
+  }
+  if (Number.isFinite(Number(previous.nodeCounter))) {
+    state.nodeCounter = Number(previous.nodeCounter);
+  }
+  const name = Object.hasOwn(previous, "pipelineName") ? previous.pipelineName : previous.name;
+  const nameInput = pipelineNameInput();
+  if (nameInput && typeof name === "string") nameInput.value = name;
+  return previous;
+}
+
 export function snapshot() {
-  state.history.push(JSON.stringify({ nodes: state.nodes, edges: state.edges }));
+  state.history.push(JSON.stringify({
+    nodes: state.nodes,
+    edges: state.edges,
+    pipelineName: pipelineNameInput()?.value ?? "Untitled pipeline",
+    view: state.view,
+    nodeCounter: state.nodeCounter
+  }));
   if (state.history.length > 25) state.history.shift();
-  const savedState = document.getElementById("savedState");
+  const savedState = typeof document === "undefined" ? null : document.getElementById("savedState");
   if (savedState) savedState.textContent = "Unsaved changes";
   queueMicrotask(() => mutationHook?.());
 }

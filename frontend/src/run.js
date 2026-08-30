@@ -293,7 +293,7 @@ export async function validatePipeline(targetId = null) {
   // metrics, so it has to be called out here or it never gets noticed.
   inferenceDatasetWarnings().forEach(message => toast(message, "warn"));
   $("#runBanner").classList.add("show");
-  $("#runTitle").textContent = "Authoritative preflight";
+  $("#runTitle").textContent = "Submission preflight";
   const lines = [];
   let passed = true;
   for (let index = 0; index < steps.length; index += 1) {
@@ -320,11 +320,12 @@ export async function validatePipeline(targetId = null) {
       break;
     }
     const summary = result.report?.summary || { errors: 1, warnings: 0, notices: 0 };
-    lines.push(`${result.ok ? "PASS" : "FAIL"} ${step.label}: ${summary.errors} errors, ${summary.warnings} warnings, ${summary.notices} notices${index > 0 ? " · dependency checks deferred" : ""}`);
+    lines.push(`${result.ok ? "PASS" : "FAIL"} ${step.label}: ${summary.errors} errors, ${summary.warnings} warnings, ${summary.notices} notices${index > 0 ? " · dependency checks deferred until this step launches" : ""}`);
     result.report?.diagnostics?.forEach(item => lines.push(`  [${item.code}] ${item.message}`));
     if (!result.ok) passed = false;
   }
   $("#runBanner").classList.remove("show");
+  if (passed) lines.push("\nEvery native step will receive a full filesystem, dataset, environment, and native launch gate against its exact saved config immediately before it starts.");
   renderRuntimeJob({
     id: "preflight",
     label: `${$("#pipelineName").value} · preflight`,
@@ -333,7 +334,7 @@ export async function validatePipeline(targetId = null) {
     total_steps: steps.length,
     log: lines.join("\n")
   });
-  toast(passed ? "Authoritative preflight passed." : "Preflight failed. Read the real diagnostics.", passed ? "" : "error");
+  toast(passed ? "Submission checks passed; every native step will be fully rechecked at launch." : "Preflight failed. Read the real diagnostics.", passed ? "" : "error");
   return passed;
 }
 
@@ -352,11 +353,11 @@ export async function runGraph(targetId = null) {
     return;
   }
   const preview = steps.map((step, index) => `${index + 1}. ${step.label}`).join("\n");
-  if (!window.confirm(`Execute the real AI-CAE4ALL launcher?\n\n${preview}\n\nThis may use CUDA, write checkpoints, and run for a long time. Preflight runs before the process starts.`)) return;
+  if (!window.confirm(`Execute the real AI-CAE4ALL launcher?\n\n${preview}\n\nThis may use CUDA, write checkpoints, and run for a long time. Submission checks run now, and each native step is fully revalidated against its saved config immediately before launch.`)) return;
   state.running = true;
   $("#runBanner").classList.add("show");
   $("#runTitle").textContent = "Submitting real pipeline";
-  $("#runDetail").textContent = "authoritative preflight → native launcher";
+  $("#runDetail").textContent = "submission checks → per-step launch gate → native process";
   try {
     const job = await apiRequest("/api/pipeline/run", {
       method: "POST",

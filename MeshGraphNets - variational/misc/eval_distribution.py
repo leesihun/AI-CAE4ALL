@@ -25,12 +25,14 @@ Usage:
 Interpreting the histogram (K+1 bins):
     flat / uniform  -> calibrated (this is the target)
     U-shaped        -> under-dispersed: truth is often outside the generated range
-                       (raise gamma_es / es_samples, check gamma_es warm-start epoch,
-                       or check for the exact failure this tool was built to catch:
-                       a conditional-prior/N(0,I) mismatch between train and inference)
-    dome-shaped     -> over-dispersed: generated spread is too wide (lower gamma_es,
-                       check for a poorly-conditioned prior amplifying noise --
-                       see MeshGraphNets - variational note on es_noise_source)
+                       (raise posterior_min_std so the decoder is trained at the
+                       noise level the prior actually delivers, or check for the
+                       exact failure this tool was built to catch: a conditional-
+                       prior/N(0,I) mismatch between train and inference)
+    dome-shaped     -> over-dispersed: generated spread is too wide (raise
+                       lambda_mmd, or check for a poorly-conditioned prior
+                       amplifying noise -- try prior_fm_solver heun, since Euler
+                       overshoots into the z tails)
     skewed to one side -> biased location, independent of spread
 """
 import argparse

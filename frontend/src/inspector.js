@@ -8,8 +8,8 @@ import { duplicateNode, deleteSelected, nodeEvidenceLabel, render } from "./grap
 import { openConfig } from "./config.js";
 import { openArtifact } from "./viewer.js";
 import { runGraph } from "./run.js";
-import { openStudio, openModelDetailWorkspace, openTrainingMetricsWorkspace, renderStudio, liveShell, liveError } from "./studio.js";
-import { applyGraphAutofill, autoFillCount, autoFillMeta, markManualConfigValue } from "./autofill.js";
+import { activateStudioWorkspace, openStudio, openModelDetailWorkspace, openTrainingMetricsWorkspace, liveShell, liveError } from "./studio.js";
+import { applyGraphAutofill, autoFillCount, autoFillMeta, markManualConfigValue, selectedParameterCandidate } from "./autofill.js";
 
 export function inspectorCard(title, status, text, stateClass = "") {
   return `<article class="inspect-card"><header class="inspect-card-head"><strong>${escapeHtml(title)}</strong><span class="state-pill ${stateClass}">${escapeHtml(status)}</span></header><p>${escapeHtml(text)}</p></article>`;
@@ -29,6 +29,9 @@ function parameterTableEditor(node) {
   const outputCount = table?.columns?.filter(column => column.kind === "output").length || parameterNames(node, "feature_names").length;
   const rowCount = table?.rows?.length || 0;
   const datasetPath = table?.dataset_path || node.config.parameter_dataset || "Uses the HDF5 dataset connected to the target model";
+  const feedsGenerator = state.edges.some(edge => edge.fromNode === node.id
+    && state.nodes.find(candidate => candidate.id === edge.toNode)?.type === "run.cad_generator");
+  const selected = selectedParameterCandidate(node);
   return `<section class="inspect-section parameter-editor">
     <div class="parameter-editor-head">
       <div>
@@ -40,8 +43,12 @@ function parameterTableEditor(node) {
     <div class="stat-grid">
       <div class="stat-card"><strong>${rowCount || "—"}</strong><small>matched rows</small></div>
       <div class="stat-card"><strong>${inputCount} / ${outputCount}</strong><small>input / output columns</small></div>
+      ${feedsGenerator ? `<div class="stat-card"><strong>${selected.ready ? escapeHtml(selected.selectedSampleId) : "—"}</strong><small>generation row</small></div>` : ""}
     </div>
     <p class="parameter-editor-help">${escapeHtml(datasetPath)}</p>
+    ${feedsGenerator ? `<p class="parameter-editor-help">${selected.ready
+      ? `Native conditions: ${escapeHtml(selected.conditionNames)} → ${escapeHtml(selected.condValues)}`
+      : "Open the spreadsheet, choose one generation row, and enter finite numeric values for every Input column."}</p>` : ""}
   </section>`;
 }
 
@@ -119,12 +126,11 @@ export async function openInputPicker(nodeId) {
   const node = state.nodes.find(item => item.id === nodeId);
   const meta = node && INPUT_SOURCE_META[node.type];
   if (!node || !meta || !requireRuntime()) return;
-  state.studioSection = "data";
-  $("#studioOverlay").classList.add("open");
-  renderStudio();
-  const container = liveShell(`Select ${meta.label}`, "Choose a real repository file. The path will be written to the selected source block.");
+  const request = activateStudioWorkspace("data", node.id);
+  const container = liveShell(`Select ${meta.label}`, "Choose a real repository file. The path will be written to the selected source block.", request);
   try {
     const result = await apiRequest(`/api/files?kind=${encodeURIComponent(meta.kind)}`);
+    if (!container?.isConnected) return;
     const accepted = new Set(meta.accept.split(","));
     const files = result.items
       .filter(item => accepted.has(item.extension))

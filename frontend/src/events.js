@@ -1,5 +1,5 @@
 import { $, $$, toast, closeOverlay, watchOverlayOrder, topOverlayId } from "./dom.js";
-import { state, snapshot } from "./state.js";
+import { state, snapshot, restoreSnapshot } from "./state.js";
 import { BLOCK_SPECS, MODEL_CATALOG, NODE_WIDTH, NODE_HEADER_HEIGHT } from "./constants.js";
 import { apiRequest, requireRuntime } from "./api.js";
 import { rawConfig, parseConfig, applyPreset, renderConfig, explainConfig, explainMessages, configureViaLlm } from "./config.js";
@@ -11,7 +11,10 @@ import {
 } from "./graph.js";
 import { validatePipeline, runGraph, stopRun, dismissRuntimeJob, toggleDrawerCollapsed, watchModalsForDrawer } from "./run.js";
 import { openStudio } from "./studio.js";
-import { downloadPipelineJson, importPipelineJson, savePipelineState, schedulePipelineSave } from "./persistence.js";
+import {
+  PipelineLoadCancelledError, downloadPipelineJson, importPipelineJson,
+  savePipelineState, schedulePipelineSave
+} from "./persistence.js";
 import { applyGraphAutofill, markManualConfigValue, resetManualConfigValues } from "./autofill.js";
 
 function undoGraphChange() {
@@ -20,12 +23,12 @@ function undoGraphChange() {
     toast("Nothing to undo.", "warn");
     return;
   }
-  const parsed = JSON.parse(previous);
-  state.nodes = parsed.nodes;
-  state.edges = parsed.edges;
+  restoreSnapshot(previous);
   applyGraphAutofill();
   state.selectedNode = null;
   state.selectedEdge = null;
+  state.pendingPort = null;
+  $("#templateSelect").value = "saved";
   render();
   schedulePipelineSave();
   toast("Undid the last graph change.");
@@ -47,7 +50,9 @@ import {
 export function bindEvents() {
   watchOverlayOrder();
   $("#blockSearch").addEventListener("input", event => paletteRender(event.target.value));
-  $("#templateSelect").addEventListener("change", event => loadTemplate(event.target.value));
+  $("#templateSelect").addEventListener("change", event => {
+    if (loadTemplate(event.target.value) === false) event.target.value = "saved";
+  });
   $("#savePipeline").addEventListener("click", () => {
     try {
       savePipelineState({ announce: true });
@@ -70,13 +75,13 @@ export function bindEvents() {
     event.target.value = "";
     if (!file) return;
     try {
-      snapshot();
       await importPipelineJson(file);
       $("#templateSelect").value = "saved";
       render();
       toast(`Imported ${file.name}.`);
     } catch (error) {
-      toast(`Pipeline import failed: ${error.message}`, "error");
+      if (error instanceof PipelineLoadCancelledError) toast("Pipeline import cancelled.", "warn");
+      else toast(`Pipeline import failed: ${error.message}`, "error");
     }
   });
   $("#arrangeGraph").addEventListener("click", arrangeGraph);

@@ -63,7 +63,7 @@ in that method's working directory and Python interpreter.
 
 ---
 
-## The model zoo — 11 routes, one contract
+## The model zoo — 12 routes, one contract
 
 Every one of these is selected purely by the `model` field in a flat text config.
 No code changes, no format conversion, no per-method CLI to memorize.
@@ -72,6 +72,7 @@ No code changes, no format conversion, no per-method CLI to memorize.
 | --- | --- | --- | --- |
 | `meshgraphnets` | **MeshGraphNets and HI-MGN** | `train`, `inference` | Encode–process–decode GNN mesh simulator with a multiscale V-cycle processor, world edges, and learned attention transfer operators |
 | `meshgraphnets-v` | **MeshGraphNets (variational)** | `train`, `inference` | Probabilistic superset: VAE latent path + a **learned conditional prior** (flow-matching or GMM) → a *distribution* of plausible trajectories |
+| `chi-mgnflow` | **cHI-MGNflow** | `train`, `inference` | Hierarchical conditional MeshGraphNet with flow-matching field generation, deterministic readout, and sampled or ensemble inference |
 | `point_deeponet` | **Point-DeepONet** | `train`, `inference` | PointNet branch + SIREN trunk with early fusion; arbitrary query points |
 | `deeponet` | **DeepONet** | `train`, `inference` | Canonical fixed-sensor branch/trunk operator |
 | `fno` | **FNO** | `train`, `inference` | Native spectral (Fourier) convolutions — no `neuraloperator` dependency |
@@ -174,8 +175,9 @@ diagnostics.
 
 ### Real analysis, not decoration
 
-- **Field evaluation** against ground truth: relative L2, MAE, RMSE, maximum
-  error, R².
+- **Field evaluation** against ground truth: schema and sample-ID inspection,
+  explicit named-field mapping (confirmation for positional mappings), relative
+  L2, MAE, RMSE, maximum error, and R².
 - **Cross-model ranking** from real CSVs, with schema inspection that lists the
   actual finite numeric columns before you rank — identifier and metadata
   columns are excluded from objective suggestions, and every objective requires

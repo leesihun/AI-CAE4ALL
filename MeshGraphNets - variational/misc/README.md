@@ -7,6 +7,8 @@ not part of the main training or rollout path.
 
 | File | Purpose |
 | --- | --- |
+| `eval_distribution.py` | Generative-distribution diagnostic for a trained VAE checkpoint: draws K samples per held-out geometry and builds the verification-rank (PIT) histogram plus the "wild rate". Flat histogram = calibrated; U-shaped = under-dispersed; dome = over-dispersed. Needs no synthetic labels — real data has one ground truth per geometry, which is exactly what the rank test is built for. |
+| `field_intrinsic_dim.py` | Answers whether a GLOBAL latent `z` is a bottleneck or a well-matched inductive bias, before any model is built. (A) what fraction of each sample's field a low-order polynomial in the reference coordinates explains; (B) how many PCA components of the sample-to-sample variation carry 95% of the variance — directly comparable to `vae_latent_dim`; (C) whether those leading variation modes are global (smooth, needs multiscale reach) or local. Verified against synthetic fields of known rank. |
 | `plot_loss.py` | Legacy static training-loss plotter. |
 | `plot_loss_realtime.py` | Legacy FastAPI dashboard for live loss plotting. |
 | `debug_model_output.py` | Loads a checkpoint and dataset sample to inspect model output magnitudes. |

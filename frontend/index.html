@@ -186,12 +186,12 @@
       </div>
 
       <footer class="modal-foot">
-        <span>Form and .txt stay synchronized · preset changes show a diff · preflight remains authoritative.</span>
+        <span>Edits apply to the selected block immediately · Save writes a runtime .txt copy and closes · preflight remains authoritative.</span>
         <span>
           <button class="button" id="llmConfigure" title="Ask the local LLM helper to fill this configuration">Configure via LLM</button>
           <button class="button" id="explainConfig" title="Show which keys are configured, defaulted, inactive, or owned by a checkpoint">Explain config</button>
           <button class="button" id="preflightConfig" title="Run the real launcher validation against these values">Run preflight</button>
-          <button class="button primary" id="saveConfig" title="Write these values back onto the selected block">Save to block</button>
+          <button class="button primary" id="saveConfig" title="Write a launcher-ready runtime .txt copy, then close; field edits are already on the block">Save file &amp; close</button>
         </span>
       </footer>
     </section>

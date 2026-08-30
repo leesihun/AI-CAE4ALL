@@ -208,6 +208,11 @@ def build_model_config(config) -> dict:
         'vae_mp_layers':     config.get('vae_mp_layers', 5),
         'vae_graph_aware':   config.get('vae_graph_aware', False),
         'posterior_min_std': config.get('posterior_min_std', 0),
+        # Architecture-defining: 'adaln' renames every per-block conditioning
+        # parameter, so a checkpoint only loads under the value it trained with.
+        # Absent in pre-AdaLN checkpoints, where the native default 'concat' is
+        # exactly what they were trained with.
+        'z_conditioning':    str(config.get('z_conditioning', 'concat')).lower().strip(),
         'num_z':             config.get('num_z',
                                 (config.get('multiscale_levels', 1) + 1)
                                 if config.get('use_multiscale', False) else 1),

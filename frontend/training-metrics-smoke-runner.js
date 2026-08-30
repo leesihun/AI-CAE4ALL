@@ -7,6 +7,28 @@ function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
 
+async function replaceTemplate(page, name) {
+  const option = page.locator(`#templateSelect option[value="${name}"]`);
+  const expectedLabel = (await option.textContent())?.trim();
+  const dialogPromise = page.waitForEvent("dialog");
+  const selectionPromise = page.locator("#templateSelect").selectOption(name);
+  const dialog = await dialogPromise;
+  const message = dialog.message();
+  try {
+    assert(dialog.type() === "confirm", `Template replacement opened an unexpected ${dialog.type()} dialog`);
+    assert(
+      expectedLabel && message.includes(`"${expectedLabel}"`) && message.includes("Undo step"),
+      `Unexpected template replacement confirmation: ${message}`
+    );
+  } catch (error) {
+    await dialog.dismiss();
+    await selectionPromise.catch(() => {});
+    throw error;
+  }
+  await dialog.accept();
+  await selectionPromise;
+}
+
 const metric = (key, label, values) => ({
   key,
   label,
@@ -133,7 +155,7 @@ const metric = (key, label, values) => ({
     await page.screenshot({ path: path.join(__dirname, "runtime", "training-metrics.png"), fullPage: false });
 
     await page.locator('[data-close="studioOverlay"]').click();
-    await page.locator("#templateSelect").selectOption("blank");
+    await replaceTemplate(page, "blank");
     await page.locator('.palette-item[data-block-type="evaluate.training_metrics"]').click();
     await page.locator('.palette-item[data-block-type="evaluate.training_metrics"]').click();
     await page.locator('.palette-item[data-block-type="evaluate.compare"]').click();

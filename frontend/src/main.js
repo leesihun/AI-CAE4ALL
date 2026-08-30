@@ -39,7 +39,11 @@ function initialize() {
   bindEvents();
   const params = new URLSearchParams(location.search);
   const review = params.get("review");
-  const template = review === "optimization" ? "generative" : "himgn";
+  const template = review === "optimization"
+    ? "generative"
+    : review === "config"
+      ? "simulgen"
+      : "himgn";
   const restored = !review && restorePipelineState();
   if (restored) {
     $("#templateSelect").value = "saved";
@@ -62,7 +66,10 @@ function initialize() {
       if (node) openConfig(node.id);
     }, 100);
   }
-  connectRuntime();
+  connectRuntime(() => {
+    paletteRender();
+    render();
+  });
 }
 
 window.__AI_CAE_FRONTEND__ = {

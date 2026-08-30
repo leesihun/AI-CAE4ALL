@@ -112,8 +112,15 @@ def walk_files(
                 except OSError:
                     continue
     records.sort(key=lambda item: item["modified"], reverse=True)
-    truncated = len(records) > FILE_LIMIT
-    return {"items": records[:FILE_LIMIT], "truncated": truncated, "visited": visited}
+    matched = len(records)
+    truncated = matched > FILE_LIMIT
+    return {
+        "items": records[:FILE_LIMIT],
+        "truncated": truncated,
+        "visited": visited,
+        "matched": matched,
+        "limit": FILE_LIMIT,
+    }
 
 
 def result_roots() -> tuple[Path, ...]:

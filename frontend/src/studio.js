@@ -12,15 +12,101 @@ function assignManualConfig(node, values) {
   Object.assign(node.config, values);
   Object.entries(values).forEach(([key, value]) => markManualConfigValue(node, key, value));
   applyGraphAutofill();
+  savePipelineState();
 }
 
-export async function openStudio(section, nodeId = null) {
-  if (!STUDIO_SECTIONS[section]) return;
+let studioWorkspaceRevision = 0;
+let activeStudioWorkspace = null;
+
+function sameStudioNode(left, right) {
+  return String(left ?? "") === String(right ?? "");
+}
+
+export function activateStudioWorkspace(section, nodeId = null) {
+  const request = {
+    revision: ++studioWorkspaceRevision,
+    section,
+    nodeId
+  };
+  activeStudioWorkspace = request;
   state.studioSection = section;
   state.studioNode = nodeId;
   $("#studioOverlay").classList.add("open");
   renderStudio();
-  await renderLiveWorkspace(section);
+  return request;
+}
+
+function isActiveStudioRequest(request) {
+  return Boolean(
+    request
+    && activeStudioWorkspace
+    && request.revision === activeStudioWorkspace.revision
+    && request.section === state.studioSection
+    && sameStudioNode(request.nodeId, state.studioNode)
+  );
+}
+
+function studioContainer(element) {
+  if (!element) return null;
+  return element.matches?.(".live-grid") ? element : element.closest?.(".live-grid");
+}
+
+function isActiveStudioContainer(element) {
+  const container = studioContainer(element);
+  const main = $("#studioMain");
+  return Boolean(
+    container
+    && container.isConnected
+    && main?.contains(container)
+    && activeStudioWorkspace
+    && container.dataset.studioWorkspaceRevision === String(activeStudioWorkspace.revision)
+    && container.dataset.studioSection === activeStudioWorkspace.section
+    && sameStudioNode(container.dataset.studioNode, activeStudioWorkspace.nodeId)
+  );
+}
+
+function beginStudioRender(element) {
+  const container = studioContainer(element);
+  if (!isActiveStudioContainer(container)) return null;
+  const revision = Number(container.dataset.studioRenderRevision || 0) + 1;
+  container.dataset.studioRenderRevision = String(revision);
+  return {
+    workspaceRevision: Number(container.dataset.studioWorkspaceRevision),
+    renderRevision: revision
+  };
+}
+
+function currentStudioRender(element) {
+  const container = studioContainer(element);
+  if (!isActiveStudioContainer(container)) return null;
+  return {
+    workspaceRevision: Number(container.dataset.studioWorkspaceRevision),
+    renderRevision: Number(container.dataset.studioRenderRevision || 0)
+  };
+}
+
+function isCurrentStudioRender(element, request) {
+  const container = studioContainer(element);
+  return Boolean(
+    request
+    && isActiveStudioContainer(container)
+    && Number(container.dataset.studioWorkspaceRevision) === request.workspaceRevision
+    && Number(container.dataset.studioRenderRevision || 0) === request.renderRevision
+  );
+}
+
+function onStudio(container, selector, event, handler, options) {
+  if (!isActiveStudioContainer(container)) return false;
+  const element = $(selector, container);
+  if (!element) return false;
+  element.addEventListener(event, handler, options);
+  return true;
+}
+
+export async function openStudio(section, nodeId = null) {
+  if (!STUDIO_SECTIONS[section]) return;
+  const request = activateStudioWorkspace(section, nodeId);
+  await renderLiveWorkspace(section, request);
 }
 
 export function studioCards(section) {
@@ -70,12 +156,19 @@ export function renderStudio() {
   }));
 }
 
-export function liveShell(title, description) {
+export function liveShell(title, description, request = activeStudioWorkspace) {
+  if (!isActiveStudioRequest(request)) return null;
   $("#studioMain").innerHTML = `<section class="studio-hero"><span><span class="studio-kicker">Live repository data</span><h3>${escapeHtml(title)}</h3><p>${escapeHtml(description)}</p></span></section><section class="live-grid"><div class="live-empty">Loading real AI-CAE4ALL state…</div></section>`;
-  return $(".live-grid", $("#studioMain"));
+  const container = $(".live-grid", $("#studioMain"));
+  container.dataset.studioWorkspaceRevision = String(request.revision);
+  container.dataset.studioRenderRevision = "0";
+  container.dataset.studioSection = request.section;
+  container.dataset.studioNode = String(request.nodeId ?? "");
+  return container;
 }
 
 export function liveError(container, error) {
+  if (!isActiveStudioContainer(container)) return;
   container.innerHTML = `<div class="live-empty"><strong>Could not load live data</strong><br><br>${escapeHtml(error.message || String(error))}<br><br>Restart with frontend/START_STUDIO.bat.</div>`;
 }
 
@@ -99,16 +192,19 @@ function editModelConfig(modelId, useLlm = false) {
 }
 
 export async function renderModelsWorkspace(container) {
+  const request = beginStudioRender(container);
+  if (!request) return;
   const models = [...(state.api.models.length ? state.api.models : (await apiRequest("/api/models")).items)]
     .sort((left, right) =>
       left.model.localeCompare(right.model, undefined, { sensitivity: "base" })
     );
+  if (!isCurrentStudioRender(container, request)) return;
   container.innerHTML = `<div class="live-summary">
     <span><strong>${models.length}</strong><small>registered routes</small></span>
     <span><strong>${models.filter(model => model.healthy).length}</strong><small>healthy installations</small></span>
     <span><strong>${models.reduce((sum, model) => sum + model.modes.length, 0)}</strong><small>actual route modes</small></span>
     <span><strong>${models.reduce((sum, model) => sum + model.known_keys.length, 0)}</strong><small>accepted-key entries</small></span>
-  </div><div class="live-list">${models.map(model => `<article class="live-row live-row-clickable" data-model-row="${escapeHtml(model.model)}">
+  </div><div class="config-help catalog-status" role="status">Showing all ${models.length} registered model routes. The model registry is not truncated in this view.</div><div class="live-list">${models.map(model => `<article class="live-row live-row-clickable" data-model-row="${escapeHtml(model.model)}">
     <span><strong>${escapeHtml(model.model)} · ${escapeHtml(model.method)}</strong><small>${escapeHtml(model.repository)} → ${escapeHtml(model.entrypoint)}</small></span>
     <span class="chip-row">${model.modes.map(mode => `<span class="chip">${escapeHtml(mode)}</span>`).join("")}</span>
     <span><strong>${model.known_keys.length} keys</strong><small>${escapeHtml(model.dataset_kind || "no dataset contract")} · ${model.healthy ? "healthy" : "broken"}</small></span>
@@ -128,14 +224,17 @@ export async function renderModelsWorkspace(container) {
 }
 
 async function renderModelConfigs(container, modelId) {
+  const request = beginStudioRender(container);
+  if (!request) return;
   const configs = await apiRequest(`/api/configs?model=${encodeURIComponent(modelId)}`);
+  if (!isCurrentStudioRender(container, request)) return;
   container.innerHTML = `<div class="live-toolbar"><strong>${escapeHtml(modelId)} checked-in configurations</strong><button class="button small" id="liveBackModels">Back to models</button></div><div class="live-list">${configs.items.map(item => `<article class="live-row">
     <span><strong>${escapeHtml(item.name)}</strong><small>${escapeHtml(item.path)}</small></span>
     <span class="chip-row"><span class="chip">${escapeHtml(item.mode || "unknown mode")}</span></span>
     <span><strong>${formatBytes(item.size)}</strong><small>${escapeHtml(item.modified)}</small></span>
     <span class="live-actions"><button class="button small primary" data-load-config="${escapeHtml(item.path)}">Load into block</button></span>
   </article>`).join("") || `<div class="live-empty">No checked-in configuration declares model ${escapeHtml(modelId)}.</div>`}</div>`;
-  on("#liveBackModels", "click", () => renderModelsWorkspace(container));
+  onStudio(container, "#liveBackModels", "click", () => renderModelsWorkspace(container));
   $$("[data-load-config]", container).forEach(load => load.addEventListener("click", () => loadConfigExample(modelId, load.dataset.loadConfig)));
   return configs;
 }
@@ -161,12 +260,15 @@ function modelConfigRows(keys, values, query = "", node = null) {
  * configs, and every matching job from this server session. */
 async function renderModelDetail(container, model) {
   if (!model) return;
+  const request = beginStudioRender(container);
+  if (!request) return;
   container.innerHTML = `<div class="live-empty">Loading ${escapeHtml(model.model)} details…</div>`;
   const [configs, jobs, metricCatalog] = await Promise.all([
     apiRequest(`/api/configs?model=${encodeURIComponent(model.model)}`),
     apiRequest("/api/jobs"),
     apiRequest(`/api/training-metrics?model_id=${encodeURIComponent(model.model)}`)
   ]);
+  if (!isCurrentStudioRender(container, request)) return;
   const blockSpec = BLOCK_SPECS[`model.${model.model}`];
   const currentNode = state.nodes.find(item => item.type === `model.${model.model}`);
   applyGraphAutofill();
@@ -206,18 +308,20 @@ async function renderModelDetail(container, model) {
     <span><strong>${job.returncode == null ? "running" : `exit ${job.returncode}`}</strong><small>${escapeHtml(job.step_label || "queued")}</small></span>
     <span class="live-actions">${metricJobIds.has(job.id) ? `<button class="button small" data-model-metrics-job="${escapeHtml(job.id)}">Metrics</button>` : ""}<button class="button small primary" data-open-job="${escapeHtml(job.id)}">Open log</button></span>
   </article>`).join("") || `<div class="live-empty">No persisted Studio job identifies ${escapeHtml(model.model)} yet. Run a configured block to see status here.</div>`}</div>`;
-  on("#liveBackModels", "click", () => renderModelsWorkspace(container));
-  on("#modelConfigSearch", "input", event => {
-    $("#modelConfigList").innerHTML = modelConfigRows(model.known_keys, configValues, event.target.value, currentNode);
+  onStudio(container, "#liveBackModels", "click", () => renderModelsWorkspace(container));
+  onStudio(container, "#modelConfigSearch", "input", event => {
+    $("#modelConfigList", container).innerHTML = modelConfigRows(model.known_keys, configValues, event.target.value, currentNode);
   });
-  on("#modelEditConfig", "click", () => editModelConfig(model.model));
-  on("#modelConfigureLlm", "click", () => editModelConfig(model.model, true));
+  onStudio(container, "#modelEditConfig", "click", () => editModelConfig(model.model));
+  onStudio(container, "#modelConfigureLlm", "click", () => editModelConfig(model.model, true));
   $$("[data-live-model]", container).forEach(button => button.addEventListener("click", () => {
     editModelConfig(button.dataset.liveModel);
   }));
   $$("[data-load-config]", container).forEach(load => load.addEventListener("click", () => loadConfigExample(model.model, load.dataset.loadConfig)));
   $$("[data-open-job]", container).forEach(button => button.addEventListener("click", async () => {
+    const actionRequest = currentStudioRender(container);
     const job = await apiRequest(`/api/jobs/${encodeURIComponent(button.dataset.openJob)}`);
+    if (!isCurrentStudioRender(container, actionRequest)) return;
     renderRuntimeJob(job);
   }));
   $$("[data-model-metrics-job]", container).forEach(button => button.addEventListener("click", () => {
@@ -233,11 +337,10 @@ export async function openModelDetailWorkspace(modelId) {
     toast("Runtime is offline, so training status is unavailable; opened the full config editor instead.", "warn");
     return;
   }
-  state.studioSection = "models";
-  $("#studioOverlay").classList.add("open");
-  renderStudio();
+  const request = activateStudioWorkspace("models", null);
   const section = STUDIO_SECTIONS.models;
-  const container = liveShell(section.title, section.description);
+  const container = liveShell(section.title, section.description, request);
+  if (!container) return;
   try {
     const models = state.api.models.length ? state.api.models : (await apiRequest("/api/models")).items;
     const model = models.find(item => item.model === modelId);
@@ -368,6 +471,8 @@ function setMetricNodeConfig(node, values) {
 }
 
 async function renderTrainingMetricsWorkspace(container, nodeId = "", preferredJobId = "", linkedModelOverride = null) {
+  const request = beginStudioRender(container);
+  if (!request) return;
   const pipelineNode = state.nodes.find(item => item.id === nodeId);
   if (nodeId && (!pipelineNode || pipelineNode.type !== "evaluate.training_metrics")) {
     container.innerHTML = `<div class="live-empty">The Train Metrics block is no longer in this pipeline.</div>`;
@@ -375,6 +480,7 @@ async function renderTrainingMetricsWorkspace(container, nodeId = "", preferredJ
   }
   const node = pipelineNode || { config: { job_id: preferredJobId, excluded_metrics: "", smoothing: "0" } };
   const result = await apiRequest("/api/training-metrics");
+  if (!isCurrentStudioRender(container, request)) return;
   const linkedModel = linkedModelOverride || connectedTrainingModel(nodeId);
   const jobs = [...result.items].sort((left, right) => {
     const leftMatch = linkedModel && left.models.includes(linkedModel.id) ? 1 : 0;
@@ -384,7 +490,7 @@ async function renderTrainingMetricsWorkspace(container, nodeId = "", preferredJ
   if (!jobs.length) {
     container.innerHTML = `<div class="live-toolbar"><span><strong>Train Metrics</strong><small>Actual Studio job logs only</small></span><button class="button small" id="metricsBackJobs">All jobs</button></div>
       <div class="live-empty"><strong>No epoch metrics were found.</strong><br><br>Run a connected model first. Any metric written on an Epoch, Iteration, or Step line will appear automatically.</div>`;
-    on("#metricsBackJobs", "click", () => renderJobsWorkspace(container));
+    onStudio(container, "#metricsBackJobs", "click", () => renderJobsWorkspace(container));
     return;
   }
 
@@ -394,6 +500,7 @@ async function renderTrainingMetricsWorkspace(container, nodeId = "", preferredJ
   if (!node.config.job_id) node.config.job_id = selected.job_id;
 
   const renderDashboard = () => {
+    if (!isCurrentStudioRender(container, request)) return;
     const excluded = metricExclusions(node);
     const visible = selected.metrics.filter(metric => !excluded.has(metric.key));
     const smoothing = Math.max(0, Math.min(.95, Number(node.config.smoothing) || 0));
@@ -434,26 +541,26 @@ async function renderTrainingMetricsWorkspace(container, nodeId = "", preferredJ
         }).join("") : `<div class="live-empty training-no-plots"><strong>No metrics selected.</strong><br><br>Check one or more metric items, or choose Plot all.</div>`}</section>
       </div>`;
 
-    on("#trainingJob", "change", event => {
+    onStudio(container, "#trainingJob", "change", event => {
       const next = jobs.find(job => job.job_id === event.target.value);
       if (!next) return;
       selected = next;
       setMetricNodeConfig(node, { job_id: next.job_id, excluded_metrics: "" });
       renderDashboard();
     });
-    on("#metricsSelectAll", "click", () => {
+    onStudio(container, "#metricsSelectAll", "click", () => {
       setMetricNodeConfig(node, { excluded_metrics: "" });
       renderDashboard();
     });
-    on("#metricsSelectNone", "click", () => {
+    onStudio(container, "#metricsSelectNone", "click", () => {
       setMetricNodeConfig(node, { excluded_metrics: selected.metrics.map(metric => metric.key).join(",") });
       renderDashboard();
     });
-    on("#metricsSmoothing", "change", event => {
+    onStudio(container, "#metricsSmoothing", "change", event => {
       setMetricNodeConfig(node, { smoothing: event.target.value });
       renderDashboard();
     });
-    on("#metricsDownload", "click", () => downloadMetricCsv(selected, visible));
+    onStudio(container, "#metricsDownload", "click", () => downloadMetricCsv(selected, visible));
     $$("[data-metric-toggle]", container).forEach(control => control.addEventListener("change", () => {
       const nextExcluded = metricExclusions(node);
       if (control.checked) nextExcluded.delete(control.dataset.metricToggle);
@@ -461,10 +568,12 @@ async function renderTrainingMetricsWorkspace(container, nodeId = "", preferredJ
       setMetricNodeConfig(node, { excluded_metrics: [...nextExcluded].join(",") });
       renderDashboard();
     }));
-    on("#metricsRefresh", "click", () => renderTrainingMetricsWorkspace(container, nodeId, selected.job_id, linkedModel));
-    on("#metricsBackJobs", "click", () => renderJobsWorkspace(container));
-    on("#metricsOpenLog", "click", async () => {
+    onStudio(container, "#metricsRefresh", "click", () => renderTrainingMetricsWorkspace(container, nodeId, selected.job_id, linkedModel));
+    onStudio(container, "#metricsBackJobs", "click", () => renderJobsWorkspace(container));
+    onStudio(container, "#metricsOpenLog", "click", async () => {
+      const actionRequest = currentStudioRender(container);
       const job = await apiRequest(`/api/jobs/${encodeURIComponent(selected.job_id)}`);
+      if (!isCurrentStudioRender(container, actionRequest)) return;
       renderRuntimeJob(job);
     });
   };
@@ -474,10 +583,9 @@ async function renderTrainingMetricsWorkspace(container, nodeId = "", preferredJ
 
 /** Open the information surface owned by a Train Metrics pipeline block. */
 export async function openTrainingMetricsWorkspace(nodeId = "", preferredJobId = "", linkedModel = null) {
-  state.studioSection = "experiments";
-  $("#studioOverlay").classList.add("open");
-  renderStudio();
-  const container = liveShell("Train Metrics", "Plot every metric found in an actual connected model run, then exclude only the series you do not need.");
+  const request = activateStudioWorkspace("experiments", nodeId || null);
+  const container = liveShell("Train Metrics", "Plot every metric found in an actual connected model run, then exclude only the series you do not need.", request);
+  if (!container) return;
   try {
     if (!state.api.connected) throw new Error("Start the Studio runtime to read persisted training logs.");
     await renderTrainingMetricsWorkspace(container, nodeId, preferredJobId, linkedModel);
@@ -487,24 +595,42 @@ export async function openTrainingMetricsWorkspace(nodeId = "", preferredJobId =
 }
 
 export async function renderFilesWorkspace(container, kind) {
+  const request = beginStudioRender(container);
+  if (!request) return;
   const result = await apiRequest(`/api/files?kind=${encodeURIComponent(kind)}`);
+  if (!isCurrentStudioRender(container, request)) return;
   const title = kind === "dataset" ? "Repository datasets and parameter files" : "Output artifacts and checkpoints";
-  container.innerHTML = `<div class="live-toolbar"><span><strong>${title}</strong><small>${result.items.length}${result.truncated ? "+" : ""} files</small></span><input id="liveFileSearch" type="search" placeholder="Filter path or extension"></div><div class="live-list" id="liveFileList"></div>`;
-  const renderRows = query => {
+  const serverLimit = Number(result.limit || result.items.length);
+  const repositoryMatches = Number(result.matched || result.items.length);
+  container.innerHTML = `<div class="live-toolbar"><span><strong>${title}</strong><small>${result.items.length} loaded${result.truncated ? ` · newest ${serverLimit} only` : " · complete catalog"}</small></span><input id="liveFileSearch" type="search" placeholder="Filter path or extension"></div><div class="config-help catalog-status" id="liveFileCatalogStatus" role="status" aria-live="polite"></div><div class="live-list" id="liveFileList"></div>`;
+  let visibleLimit = 250;
+  const renderRows = (query, resetLimit = false) => {
+    if (!isCurrentStudioRender(container, request)) return;
+    if (resetLimit) visibleLimit = 250;
     const text = query.trim().toLowerCase();
-    const items = result.items.filter(item => !text || item.path.toLowerCase().includes(text)).slice(0, 250);
+    const matches = result.items.filter(item => !text || item.path.toLowerCase().includes(text));
+    const items = matches.slice(0, visibleLimit);
     const pipelineType = item => {
       if ([".h5", ".hdf5"].includes(item.extension)) return "source.hdf5";
       if ([".pth", ".pt", ".ckpt"].includes(item.extension)) return "source.checkpoint";
       if ([".stl", ".step", ".stp", ".iges", ".igs", ".brep", ".obj", ".ply", ".off", ".msh", ".vtk", ".vtu", ".vtp"].includes(item.extension)) return "source.cad";
       return "";
     };
-    $("#liveFileList").innerHTML = items.map(item => `<article class="live-row">
+    const status = $("#liveFileCatalogStatus", container);
+    status.innerHTML = `Showing <strong>${items.length}</strong> of <strong>${matches.length}</strong> loaded match${matches.length === 1 ? "" : "es"}${text ? ` for <code>${escapeHtml(query)}</code>` : ""}.${result.truncated ? ` The server catalog is capped at the newest ${serverLimit} files${repositoryMatches > result.items.length ? ` out of ${repositoryMatches} repository matches` : ""}; older matches are not available in this view.` : ` All ${repositoryMatches} repository matches are loaded.`}`;
+    $("#liveFileList", container).innerHTML = items.map(item => `<article class="live-row">
       <span><strong>${escapeHtml(item.name)}</strong><small>${escapeHtml(item.path)}</small></span>
       <span class="chip-row"><span class="chip">${escapeHtml(item.extension || "file")}</span><span class="chip">${escapeHtml(item.kind)}</span></span>
       <span><strong>${formatBytes(item.size)}</strong><small>${escapeHtml(item.modified)}</small></span>
       <span class="live-actions">${[".h5", ".hdf5"].includes(item.extension) ? `<button class="button small" data-inspect-hdf5="${escapeHtml(item.path)}">Inspect HDF5</button>` : ""}${pipelineType(item) ? `<button class="button small primary" data-use-file="${escapeHtml(item.path)}" data-use-type="${pipelineType(item)}">Use in pipeline</button>` : ""}</span>
-    </article>`).join("") || `<div class="live-empty">No files match this filter.</div>`;
+    </article>`).join("") || `<div class="live-empty">No loaded files match this filter.${result.truncated ? " Older files outside the server catalog limit were not searched." : ""}</div>`;
+    if (items.length < matches.length) {
+      $("#liveFileList", container).insertAdjacentHTML("beforeend", `<div class="live-toolbar"><span><small>${matches.length - items.length} more loaded matches are available.</small></span><button class="button small" id="liveFileShowMore">Show next ${Math.min(250, matches.length - items.length)}</button></div>`);
+      onStudio(container, "#liveFileShowMore", "click", () => {
+        visibleLimit += 250;
+        renderRows($("#liveFileSearch", container).value);
+      });
+    }
     $$("[data-inspect-hdf5]", container).forEach(button => button.addEventListener("click", () => inspectHdf5(container, button.dataset.inspectHdf5, kind)));
     $$("[data-use-file]", container).forEach(button => button.addEventListener("click", () => {
       addBlock(button.dataset.useType);
@@ -517,31 +643,61 @@ export async function renderFilesWorkspace(container, kind) {
     }));
   };
   renderRows("");
-  on("#liveFileSearch", "input", event => renderRows(event.target.value));
+  onStudio(container, "#liveFileSearch", "input", event => renderRows(event.target.value, true));
 }
 
 export async function inspectHdf5(container, path, kind) {
+  const request = beginStudioRender(container);
+  if (!request) return;
   container.innerHTML = `<div class="live-empty">Reading HDF5 structure without loading the full dataset…</div>`;
   try {
     const data = await apiRequest(`/api/hdf5?path=${encodeURIComponent(path)}`);
+    if (!isCurrentStudioRender(container, request)) return;
+    const valueText = value => Array.isArray(value)
+      ? value.map(item => String(item)).join(", ")
+      : value && typeof value === "object"
+        ? JSON.stringify(value)
+        : String(value ?? "");
+    const attrRows = attrs => Object.entries(attrs || {}).map(([key, value]) =>
+      `<span class="chip" title="${escapeHtml(valueText(value))}">${escapeHtml(key)}: ${escapeHtml(valueText(value))}</span>`
+    ).join("");
+    const contractNames = new Set([
+      "feature_names", "condition_names", "input_names", "output_names",
+      "split_names", "sample_ids", "train_ids", "val_ids", "test_ids"
+    ]);
+    const contractItems = data.items.filter(item =>
+      contractNames.has(item.path.split("/").at(-1)) || Object.keys(item.attrs || {}).some(key => contractNames.has(key))
+    );
     container.innerHTML = `<div class="live-toolbar"><span><strong>${escapeHtml(data.path)}</strong><small>${formatBytes(data.size)} · ${data.items.length}${data.truncated ? "+" : ""} objects</small></span><button class="button small" id="liveBackFiles">Back</button></div>
+      <section class="config-card"><strong>Root metadata</strong><div class="chip-row" style="margin-top:7px">${attrRows(data.root_attrs) || `<span class="config-help">No root attributes declared.</span>`}</div></section>
+      <section class="config-card"><strong>Dataset contract</strong><p class="config-help">Feature, condition, input/output, split, sample, and provenance declarations exposed by this file.</p>
+        <div class="live-list">${contractItems.map(item => `<article class="live-row">
+          <span><strong>${escapeHtml(item.path)}</strong><small>${escapeHtml(item.type)}</small></span>
+          <span class="chip-row">${(item.values || []).slice(0, 24).map(value => `<span class="chip">${escapeHtml(value)}</span>`).join("")}${item.values?.length > 24 ? `<span class="chip">+${item.values.length - 24} more</span>` : ""}</span>
+          <span class="chip-row">${attrRows(item.attrs)}</span><span></span>
+        </article>`).join("") || `<div class="live-empty">No named feature/condition/split declarations were found. Shape and object metadata are still shown below.</div>`}</div>
+      </section>
+      ${data.truncated ? `<div class="diagnostic warn"><i></i><span>Structure preview is capped at 300 objects. The file is intact; only this catalog view is abbreviated.</span></div>` : ""}
       <div class="live-list">${data.items.map(item => `<article class="live-row">
         <span><strong>${escapeHtml(item.path)}</strong><small>${escapeHtml(item.type)}</small></span>
         <span class="chip-row">${item.shape ? item.shape.map(value => `<span class="chip">${escapeHtml(value)}</span>`).join("") : ""}</span>
-        <span><strong>${escapeHtml(item.dtype || "group")}</strong><small>${item.attrs ? `${Object.keys(item.attrs).length} attrs` : ""}</small></span>
-        <span></span>
+        <span><strong>${escapeHtml(item.dtype || "group")}</strong><small>${item.values?.length ? escapeHtml(item.values.slice(0, 4).join(", ")) : item.attrs ? `${Object.keys(item.attrs).length} attrs` : ""}</small></span>
+        <span class="chip-row">${attrRows(item.attrs)}</span>
       </article>`).join("")}</div>`;
-    on("#liveBackFiles", "click", () => renderFilesWorkspace(container, kind));
+    onStudio(container, "#liveBackFiles", "click", () => renderFilesWorkspace(container, kind));
   } catch (error) {
-    liveError(container, error);
+    if (isCurrentStudioRender(container, request)) liveError(container, error);
   }
 }
 
 export async function renderJobsWorkspace(container) {
+  const request = beginStudioRender(container);
+  if (!request) return;
   const [result, metricCatalog] = await Promise.all([
     apiRequest("/api/jobs"),
     apiRequest("/api/training-metrics")
   ]);
+  if (!isCurrentStudioRender(container, request)) return;
   const metricJobs = new Map(metricCatalog.items.map(item => [item.job_id, item]));
   container.innerHTML = `<div class="live-toolbar"><span><strong>Studio-launched processes</strong><small>${result.items.length} persisted jobs</small></span><button class="button small" id="refreshJobs">Refresh</button></div><div class="live-list">${result.items.map(job => `<article class="live-row">
     <span><strong>${escapeHtml(job.label)}</strong><small>${escapeHtml(job.id)} · ${escapeHtml(job.created_at)}</small></span>
@@ -549,15 +705,19 @@ export async function renderJobsWorkspace(container) {
     <span><strong>${job.returncode == null ? "running" : `exit ${job.returncode}`}</strong><small>${escapeHtml(job.step_label || "queued")}</small></span>
     <span class="live-actions">${job.has_pipeline ? `<button class="button small" data-load-pipeline="${escapeHtml(job.id)}">Load pipeline</button>` : ""}${metricJobs.has(job.id) ? `<button class="button small" data-job-metrics="${escapeHtml(job.id)}">Metrics</button>` : ""}<button class="button small primary" data-open-job="${escapeHtml(job.id)}">Open log</button></span>
   </article>`).join("") || `<div class="live-empty">No Studio jobs have been started. Run or validate a configured block.</div>`}</div>`;
-  on("#refreshJobs", "click", () => renderJobsWorkspace(container));
+  onStudio(container, "#refreshJobs", "click", () => renderJobsWorkspace(container));
   $$("[data-open-job]", container).forEach(button => button.addEventListener("click", async () => {
+    const actionRequest = currentStudioRender(container);
     const job = await apiRequest(`/api/jobs/${encodeURIComponent(button.dataset.openJob)}`);
+    if (!isCurrentStudioRender(container, actionRequest)) return;
     renderRuntimeJob(job);
   }));
   // Restores the exact graph a run was launched from, saved alongside the job.
   $$("[data-load-pipeline]", container).forEach(button => button.addEventListener("click", async () => {
+    const actionRequest = currentStudioRender(container);
     try {
       const job = await apiRequest(`/api/jobs/${encodeURIComponent(button.dataset.loadPipeline)}`);
+      if (!isCurrentStudioRender(container, actionRequest)) return;
       if (!job.pipeline) {
         toast("This run has no saved pipeline.", "warn");
         return;
@@ -579,34 +739,57 @@ export async function renderJobsWorkspace(container) {
 }
 
 export async function renderDocsWorkspace(container) {
+  const request = beginStudioRender(container);
+  if (!request) return;
   const result = await apiRequest("/api/docs");
-  container.innerHTML = `<div class="live-toolbar"><span><strong>Repository documentation</strong><small>${result.items.length}${result.truncated ? "+" : ""} Markdown files</small></span><input id="liveDocSearch" type="search" placeholder="Filter documentation"></div><div class="live-list" id="liveDocList"></div>`;
-  const renderRows = query => {
+  if (!isCurrentStudioRender(container, request)) return;
+  const serverLimit = Number(result.limit || result.items.length);
+  const repositoryMatches = Number(result.matched || result.items.length);
+  container.innerHTML = `<div class="live-toolbar"><span><strong>Repository documentation</strong><small>${result.items.length} loaded${result.truncated ? ` · newest ${serverLimit} only` : " · complete catalog"}</small></span><input id="liveDocSearch" type="search" placeholder="Filter documentation"></div><div class="config-help catalog-status" id="liveDocCatalogStatus" role="status" aria-live="polite"></div><div class="live-list" id="liveDocList"></div>`;
+  let visibleLimit = 250;
+  const renderRows = (query, resetLimit = false) => {
+    if (!isCurrentStudioRender(container, request)) return;
+    if (resetLimit) visibleLimit = 250;
     const text = query.trim().toLowerCase();
-    const items = result.items.filter(item => !text || item.path.toLowerCase().includes(text)).slice(0, 250);
-    $("#liveDocList").innerHTML = items.map(item => `<article class="live-row">
+    const matches = result.items.filter(item => !text || item.path.toLowerCase().includes(text));
+    const items = matches.slice(0, visibleLimit);
+    $("#liveDocCatalogStatus", container).innerHTML = `Showing <strong>${items.length}</strong> of <strong>${matches.length}</strong> loaded matches${text ? ` for <code>${escapeHtml(query)}</code>` : ""}.${result.truncated ? ` The server catalog is capped at the newest ${serverLimit} Markdown files${repositoryMatches > result.items.length ? ` out of ${repositoryMatches}` : ""}; older documents were not searched.` : " The complete documentation catalog is loaded."}`;
+    $("#liveDocList", container).innerHTML = items.map(item => `<article class="live-row">
       <span><strong>${escapeHtml(item.name)}</strong><small>${escapeHtml(item.path)}</small></span>
       <span class="chip-row"><span class="chip">Markdown</span></span>
       <span><strong>${formatBytes(item.size)}</strong><small>${escapeHtml(item.modified)}</small></span>
       <span class="live-actions"><button class="button small primary" data-open-doc="${escapeHtml(item.path)}">Read</button></span>
-    </article>`).join("") || `<div class="live-empty">No documents match this filter.</div>`;
+    </article>`).join("") || `<div class="live-empty">No loaded documents match this filter.${result.truncated ? " Older documents outside the server catalog limit were not searched." : ""}</div>`;
+    if (items.length < matches.length) {
+      $("#liveDocList", container).insertAdjacentHTML("beforeend", `<div class="live-toolbar"><span><small>${matches.length - items.length} more loaded documents are available.</small></span><button class="button small" id="liveDocShowMore">Show next ${Math.min(250, matches.length - items.length)}</button></div>`);
+      onStudio(container, "#liveDocShowMore", "click", () => {
+        visibleLimit += 250;
+        renderRows($("#liveDocSearch", container).value);
+      });
+    }
     $$("[data-open-doc]", container).forEach(button => button.addEventListener("click", () => openLiveDoc(container, button.dataset.openDoc)));
   };
   renderRows("");
-  on("#liveDocSearch", "input", event => renderRows(event.target.value));
+  onStudio(container, "#liveDocSearch", "input", event => renderRows(event.target.value, true));
 }
 
 export async function openLiveDoc(container, path) {
+  const request = beginStudioRender(container);
+  if (!request) return;
   const doc = await apiRequest(`/api/doc?path=${encodeURIComponent(path)}`);
+  if (!isCurrentStudioRender(container, request)) return;
   container.innerHTML = `<div class="live-toolbar"><strong>${escapeHtml(doc.path)}</strong><button class="button small" id="liveBackDocs">Back to documents</button></div><pre class="live-document">${escapeHtml(doc.text)}</pre>`;
-  on("#liveBackDocs", "click", () => renderDocsWorkspace(container));
+  onStudio(container, "#liveBackDocs", "click", () => renderDocsWorkspace(container));
 }
 
 export async function renderSystemWorkspace(container) {
+  const request = beginStudioRender(container);
+  if (!request) return;
   const [health, llm] = await Promise.all([
     apiRequest("/api/health"),
     apiRequest("/api/llm/settings").catch(() => null)
   ]);
+  if (!isCurrentStudioRender(container, request)) return;
   container.innerHTML = `<div class="live-summary">
     <span><strong>${health.ok ? "Connected" : "Failed"}</strong><small>suite runtime</small></span>
     <span><strong>${health.healthy_models}/${health.models}</strong><small>healthy routes</small></span>
@@ -622,34 +805,43 @@ export async function renderSystemWorkspace(container) {
   <div id="auditResults"></div>
   <div class="live-toolbar"><span><strong>LLM configuration service</strong><small>Master node for "Configure via LLM" in the block config editor (LLM_API_fast, /v1/chat/completions).</small></span></div>
   <div class="config-card">
-    ${llm ? `<p class="config-help">Currently targeting <strong>${escapeHtml(llm.base_url)}</strong> as user <strong>${escapeHtml(llm.username)}</strong>${llm.configured ? "" : " (built-in default; not yet saved)"}.</p>` : `<p class="config-help">Could not read the current LLM settings.</p>`}
-    <div style="display:grid;grid-template-columns:2fr 1fr;gap:6px">
+    ${llm ? `<p class="config-help"><strong>${llm.ready ? "Ready" : llm.configured ? "Connection saved; session secret or transport approval required" : "Not configured"}</strong>${llm.base_url ? ` · ${escapeHtml(llm.base_url)}${llm.username ? ` as ${escapeHtml(llm.username)}` : ""}` : ""}.</p>` : `<p class="config-help">Could not read the current LLM settings.</p>`}
+    <p class="config-help">The password is held only in this running Studio process (or <code>AI_CAE_LLM_PASSWORD</code>) and is never written to disk. Configure via LLM sends the block's complete flat config and your instruction to this endpoint.</p>
+    <div style="display:grid;grid-template-columns:1fr 2fr 1fr;gap:6px">
+      <label class="config-help">Transport<select class="config-control" id="llmScheme"><option value="https"${llm?.scheme !== "http" ? " selected" : ""}>HTTPS</option><option value="http"${llm?.scheme === "http" ? " selected" : ""}>HTTP</option></select></label>
       <label class="config-help">Master IP<input class="config-control" id="llmMasterIp" value="${escapeHtml(llm?.master_ip || "")}" placeholder="10.228.69.135"></label>
       <label class="config-help">Port<input class="config-control" id="llmMasterPort" type="number" value="${escapeHtml(llm?.port || 10002)}"></label>
     </div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:7px">
-      <label class="config-help">Username<input class="config-control" id="llmUsername" value="${escapeHtml(llm?.username || "")}" placeholder="admin"></label>
-      <label class="config-help">Password (leave blank to keep current)<input class="config-control" id="llmPassword" type="password" placeholder="••••••••"></label>
+      <label class="config-help">Username<input class="config-control" id="llmUsername" value="${escapeHtml(llm?.username || "")}" autocomplete="username"></label>
+      <label class="config-help">Session password ${llm?.password_configured ? "(already set; blank keeps it)" : "(required)"}<input class="config-control" id="llmPassword" type="password" autocomplete="current-password" placeholder="••••••••"></label>
     </div>
-    <button class="button primary" id="saveLlmSettings" style="margin-top:8px">Save LLM settings</button>
+    <label class="check-row" style="margin-top:8px"><input id="llmAllowHttp" type="checkbox"${llm?.allow_insecure_http ? " checked" : ""}> I explicitly allow credentials and full configs over unencrypted HTTP</label>
+    <button class="button primary" id="saveLlmSettings" style="margin-top:8px">Save connection + session secret</button>
   </div>`;
-  on("#runConfigAudit", "click", () => runConfigAudit(container));
-  on("#saveLlmSettings", "click", async () => {
-    const button = $("#saveLlmSettings");
+  onStudio(container, "#runConfigAudit", "click", () => runConfigAudit(container));
+  onStudio(container, "#saveLlmSettings", "click", async () => {
+    const actionRequest = currentStudioRender(container);
+    const button = $("#saveLlmSettings", container);
+    const settings = {
+      scheme: $("#llmScheme", container).value,
+      master_ip: $("#llmMasterIp", container).value,
+      port: $("#llmMasterPort", container).value,
+      username: $("#llmUsername", container).value,
+      password: $("#llmPassword", container).value,
+      allow_insecure_http: $("#llmAllowHttp", container).checked
+    };
     button.disabled = true;
     try {
       await apiRequest("/api/llm/settings", {
         method: "POST",
-        body: {
-          master_ip: $("#llmMasterIp").value,
-          port: $("#llmMasterPort").value,
-          username: $("#llmUsername").value,
-          password: $("#llmPassword").value
-        }
+        body: settings
       });
-      toast("LLM configuration service settings saved.");
+      if (!isCurrentStudioRender(container, actionRequest)) return;
+      toast("LLM endpoint saved; the password remains session-only.");
       await renderSystemWorkspace(container);
     } catch (error) {
+      if (!isCurrentStudioRender(container, actionRequest)) return;
       toast(`Could not save LLM settings: ${error.message}`, "error");
       button.disabled = false;
     }
@@ -657,14 +849,17 @@ export async function renderSystemWorkspace(container) {
 }
 
 async function runConfigAudit(container) {
-  const button = $("#runConfigAudit");
-  const resultsEl = $("#auditResults");
-  const strict = $("#auditStrict").checked;
+  const request = currentStudioRender(container);
+  if (!request) return;
+  const button = $("#runConfigAudit", container);
+  const resultsEl = $("#auditResults", container);
+  const strict = $("#auditStrict", container).checked;
   button.disabled = true;
   button.textContent = "Auditing…";
   resultsEl.innerHTML = `<div class="live-empty">Running the real spec/parse/route checks over every checked-in config…</div>`;
   try {
     const audit = await apiRequest(`/api/audit-configs?strict=${strict ? "1" : "0"}`);
+    if (!isCurrentStudioRender(container, request)) return;
     const failing = audit.files.filter(item => item.status === "FAIL");
     resultsEl.innerHTML = `<div class="live-summary">
       <span><strong>${audit.summary.files}</strong><small>configs scanned</small></span>
@@ -679,25 +874,31 @@ async function runConfigAudit(container) {
     </article>`).join("")}</div><div id="auditDetail"></div>`;
     $$("[data-audit-detail]", resultsEl).forEach(detailButton => detailButton.addEventListener("click", () => {
       const item = audit.files.find(entry => entry.path === detailButton.dataset.auditDetail);
-      $("#auditDetail").innerHTML = `<div class="live-toolbar"><strong>${escapeHtml(item.path)}</strong></div><div class="diagnostics">${item.report.diagnostics.map(diag => `<div class="diagnostic ${diag.severity === "error" ? "error" : diag.severity === "warning" ? "warn" : ""}"><i></i><span>[${escapeHtml(diag.code)}]${diag.field ? ` ${escapeHtml(diag.field)}:` : ""} ${escapeHtml(diag.message)}${diag.hint ? ` Hint: ${escapeHtml(diag.hint)}` : ""}</span></div>`).join("") || "<div class=\"live-empty\">No diagnostics.</div>"}</div>`;
+      $("#auditDetail", container).innerHTML = `<div class="live-toolbar"><strong>${escapeHtml(item.path)}</strong></div><div class="diagnostics">${item.report.diagnostics.map(diag => `<div class="diagnostic ${diag.severity === "error" ? "error" : diag.severity === "warning" ? "warn" : ""}"><i></i><span>[${escapeHtml(diag.code)}]${diag.field ? ` ${escapeHtml(diag.field)}:` : ""} ${escapeHtml(diag.message)}${diag.hint ? ` Hint: ${escapeHtml(diag.hint)}` : ""}</span></div>`).join("") || "<div class=\"live-empty\">No diagnostics.</div>"}</div>`;
     }));
     toast(`Audited ${audit.summary.files} configs: ${failing.length} failing, ${audit.summary.warnings} warnings.`, failing.length ? "error" : "");
   } catch (error) {
+    if (!isCurrentStudioRender(container, request)) return;
     liveError(resultsEl, error);
     toast(`Config audit failed: ${error.message}`, "error");
   } finally {
-    button.disabled = false;
-    button.textContent = "Run audit";
+    if (isCurrentStudioRender(container, request)) {
+      button.disabled = false;
+      button.textContent = "Run audit";
+    }
   }
 }
 
 export async function renderBenchmarksWorkspace(container) {
+  const request = beginStudioRender(container);
+  if (!request) return;
   const configs = await apiRequest("/api/configs");
   const byPath = new Map(configs.items.map(item => [item.path, item]));
   // Prefer the campaign roster. Filtering configs by a "benchmarks/" path
   // finds nothing, because the arms live under each method's own config tree
   // and only the roster knows which of them form the benchmark set.
   const roster = await apiRequest("/api/benchmarks").catch(() => ({ items: [] }));
+  if (!isCurrentStudioRender(container, request)) return;
   const items = roster.items?.length
     ? roster.items.map(entry => ({
       ...(byPath.get(entry.path) || {}),
@@ -717,28 +918,34 @@ export async function renderBenchmarksWorkspace(container) {
   </article>`).join("")}</div>`;
   $$("[data-benchmark-config]", container).forEach(button => button.addEventListener("click", () => loadConfigExample(button.dataset.benchmarkModel, button.dataset.benchmarkConfig)));
   $$("[data-benchmark-preflight]", container).forEach(button => button.addEventListener("click", async () => {
+    const actionRequest = currentStudioRender(container);
     const path = button.dataset.benchmarkPreflight;
     const resultEl = $$("[data-benchmark-result]", container).find(item => item.dataset.benchmarkResult === path);
     button.disabled = true;
     button.textContent = "Checking…";
     try {
       const config = await apiRequest(`/api/config?path=${encodeURIComponent(path)}`);
+      if (!isCurrentStudioRender(container, actionRequest)) return;
       const result = await apiRequest("/api/preflight", {
         method: "POST",
         allowError: true,
         body: { config: config.text, label: path, strict: false }
       });
+      if (!isCurrentStudioRender(container, actionRequest)) return;
       const summary = result.report?.summary || { errors: 1, warnings: 0 };
       resultEl.className = `benchmark-preflight-result ${result.ok ? "pass" : "fail"}`;
       resultEl.textContent = result.ok
         ? `PASS · ${summary.warnings} warning${summary.warnings === 1 ? "" : "s"}`
         : `FAIL · ${summary.errors} error${summary.errors === 1 ? "" : "s"}`;
     } catch (error) {
+      if (!isCurrentStudioRender(container, actionRequest)) return;
       resultEl.className = "benchmark-preflight-result fail";
       resultEl.textContent = `ERROR · ${error.message}`;
     } finally {
-      button.disabled = false;
-      button.textContent = "Preflight";
+      if (isCurrentStudioRender(container, actionRequest)) {
+        button.disabled = false;
+        button.textContent = "Preflight";
+      }
     }
   }));
 }
@@ -773,11 +980,15 @@ function unsupportedDeployFamily(path) {
 }
 
 export async function renderDeployWorkspace(container, nodeId = null) {
+  const request = beginStudioRender(container);
+  if (!request) return;
   const [deploy, checkpoints, datasets] = await Promise.all([
     apiRequest("/api/deploy"),
     apiRequest("/api/files?kind=checkpoint"),
     apiRequest("/api/files?kind=dataset")
   ]);
+  if (!isCurrentStudioRender(container, request)) return;
+  const q = selector => $(selector, container);
   const requestedNode = state.nodes.find(item => item.id === nodeId);
   const checkpointSource = requestedNode?.type === "source.checkpoint" ? requestedNode : null;
   const node = state.nodes.find(item => item.id === nodeId && item.type === "deploy.api")
@@ -819,30 +1030,30 @@ export async function renderDeployWorkspace(container, nodeId = null) {
   const persistDeploy = () => {
     if (!node) return;
     const next = {
-      checkpoint_path: $("#deployCheckpoint").value,
-      input_path: $("#deployInput").value,
-      output_name: $("#deployOutput").value,
-      timesteps: $("#deployTimesteps").value,
-      num_samples: $("#deploySamples").value,
-      ode_steps: $("#deployOdeSteps").value,
-      cond_values: $("#deployConditions").value
+      checkpoint_path: q("#deployCheckpoint").value,
+      input_path: q("#deployInput").value,
+      output_name: q("#deployOutput").value,
+      timesteps: q("#deployTimesteps").value,
+      num_samples: q("#deploySamples").value,
+      ode_steps: q("#deployOdeSteps").value,
+      cond_values: q("#deployConditions").value
     };
     if (Object.entries(next).every(([key, value]) => String(node.config[key] || "") === String(value))) return;
     snapshot();
     assignManualConfig(node, next);
   };
   const renderCheckpointWarning = () => {
-    const family = unsupportedDeployFamily($("#deployCheckpoint").value);
-    $("#deployCheckpointWarning").innerHTML = family
+    const family = unsupportedDeployFamily(q("#deployCheckpoint").value);
+    q("#deployCheckpointWarning").innerHTML = family
       ? `<p class="config-help" style="color:var(--red,#b3261e)">This looks like a ${escapeHtml(family)} checkpoint. The portable bundle only classifies the ${deploy.families.length} families above (point_deeponet/deeponet/fno/gino, transolver, meshgraphnets(-v), sdfflow) — running it here will fail with "Could not classify checkpoint". ${family === "mlp" ? "Use the model's own inference/evaluation blocks instead." : "Use the SimulGen-VAE reconstruct mode instead."}</p>`
       : "";
   };
   renderCheckpointWarning();
   ["deployCheckpoint", "deployInput", "deployOutput", "deployTimesteps", "deploySamples", "deployOdeSteps", "deployConditions"]
-    .forEach(id => on("#" + id, "change", persistDeploy));
-  on("#deployCheckpoint", "change", renderCheckpointWarning);
-  on("#runPortableInference", "click", async () => {
-    const checkpoint = $("#deployCheckpoint").value;
+    .forEach(id => onStudio(container, "#" + id, "change", persistDeploy));
+  onStudio(container, "#deployCheckpoint", "change", renderCheckpointWarning);
+  onStudio(container, "#runPortableInference", "click", async () => {
+    const checkpoint = q("#deployCheckpoint").value;
     if (!checkpoint) {
       toast("Select a real checkpoint first.", "error");
       return;
@@ -852,17 +1063,23 @@ export async function renderDeployWorkspace(container, nodeId = null) {
       if (!window.confirm(`This checkpoint looks like ${unsupportedFamily}, which the portable bundle cannot classify and will reject. Run it anyway to see the real error?`)) return;
     } else if (!window.confirm("Run the portable CPU inference bundle with the selected repository files?")) return;
     persistDeploy();
+    const input = q("#deployInput").value;
+    const outputName = q("#deployOutput").value;
+    const timesteps = q("#deployTimesteps").value;
+    const numSamples = q("#deploySamples").value;
+    const odeSteps = q("#deployOdeSteps").value;
+    const condValues = q("#deployConditions").value;
     try {
       const job = await apiRequest("/api/inference/run", {
         method: "POST",
         body: {
           checkpoint,
-          input: $("#deployInput").value,
-          output_name: $("#deployOutput").value,
-          timesteps: $("#deployTimesteps").value,
-          num_samples: $("#deploySamples").value,
-          ode_steps: $("#deployOdeSteps").value,
-          cond_values: $("#deployConditions").value
+          input,
+          output_name: outputName,
+          timesteps,
+          num_samples: numSamples,
+          ode_steps: odeSteps,
+          cond_values: condValues
         }
       });
       if (node) {
@@ -874,7 +1091,7 @@ export async function renderDeployWorkspace(container, nodeId = null) {
       toast(error.message, "error");
     }
   });
-  on("#buildPortableExe", "click", async () => {
+  onStudio(container, "#buildPortableExe", "click", async () => {
     if (!window.confirm("Build the real PyInstaller bundle? This can take several minutes and writes only under frontend/runtime/deploy.")) return;
     try {
       const job = await apiRequest("/api/build/exe", { method: "POST", body: {} });
@@ -901,7 +1118,11 @@ function connectedOptimizationCsv(nodeId) {
 }
 
 export async function renderOptimizationWorkspace(container, nodeId = null) {
+  const request = beginStudioRender(container);
+  if (!request) return;
   const artifacts = await apiRequest("/api/files?kind=artifact");
+  if (!isCurrentStudioRender(container, request)) return;
+  const q = selector => $(selector, container);
   const csvFiles = artifacts.items.filter(item => item.extension === ".csv");
   const node = state.nodes.find(item => item.id === nodeId && item.type === "optimize.design")
     || state.nodes.find(item => item.type === "optimize.design");
@@ -926,46 +1147,46 @@ export async function renderOptimizationWorkspace(container, nodeId = null) {
     return control?.value === "max" ? "max" : "min";
   });
   const syncRunState = () => {
-    $("#runOptimization").disabled = !$("#optimizationCsv").value || selectedObjectives().length === 0;
+    q("#runOptimization").disabled = !q("#optimizationCsv").value || selectedObjectives().length === 0;
   };
   const persistControls = () => {
     if (!node) return;
     const next = {
-      csv_path: $("#optimizationCsv").value,
+      csv_path: q("#optimizationCsv").value,
       objectives: selectedObjectives().join(","),
       directions: collectDirections().join(","),
-      constraints: $("#optimizationConstraints").value,
-      top_k: $("#optimizationTopK").value
+      constraints: q("#optimizationConstraints").value,
+      top_k: q("#optimizationTopK").value
     };
     if (Object.entries(next).every(([key, value]) => String(node.config[key] || "") === String(value))) return;
     snapshot();
     assignManualConfig(node, next);
   };
   const inspectCsv = async () => {
-    const csvPath = $("#optimizationCsv").value;
+    const csvPath = q("#optimizationCsv").value;
     const revision = ++schemaRevision;
-    $("#runOptimization").disabled = true;
+    q("#runOptimization").disabled = true;
     if (!csvPath) {
-      $("#optimizationSchema").innerHTML = '<div class="live-empty">Select a CSV to inspect its real columns.</div>';
+      q("#optimizationSchema").innerHTML = '<div class="live-empty">Select a CSV to inspect its real columns.</div>';
       persistControls();
       return;
     }
-    $("#optimizationSchema").innerHTML = '<div class="live-empty">Inspecting CSV columns…</div>';
+    q("#optimizationSchema").innerHTML = '<div class="live-empty">Inspecting CSV columns…</div>';
     try {
       const schema = await apiRequest("/api/optimization/schema", {
         method: "POST",
         body: { csv_path: csvPath }
       });
-      if (revision !== schemaRevision) return;
+      if (revision !== schemaRevision || !isCurrentStudioRender(container, request)) return;
       const saved = objectiveDirections();
-      $("#optimizationSchema").innerHTML = `<header><strong>Objectives</strong><small>${schema.rows_sampled} rows sampled · ${schema.numeric_columns.length} numeric columns. Choose explicitly; identifiers are excluded from suggestions.</small></header>
+      q("#optimizationSchema").innerHTML = `<header><strong>Objectives</strong><small>${schema.rows_sampled} rows sampled · ${schema.numeric_columns.length} numeric columns. Choose explicitly; identifiers are excluded from suggestions.</small></header>
         <div class="optimization-objectives">${schema.objective_columns.length ? schema.objective_columns.map(name => `<label class="optimization-objective">
           <input type="checkbox" data-optimization-objective value="${escapeHtml(name)}"${saved.has(name) ? " checked" : ""}>
           <span><strong>${escapeHtml(name)}</strong><small>${schema.numeric_counts[name]} numeric values</small></span>
           <select class="config-control" data-objective-direction="${escapeHtml(name)}" aria-label="${escapeHtml(name)} direction"><option value="min"${saved.get(name) !== "max" ? " selected" : ""}>Minimize</option><option value="max"${saved.get(name) === "max" ? " selected" : ""}>Maximize</option></select>
         </label>`).join("") : '<div class="live-empty">No usable numeric objective columns were found.</div>'}</div>
         ${schema.identifier_columns.length ? `<small class="schema-note">Identifier columns: ${schema.identifier_columns.map(escapeHtml).join(", ")}</small>` : ""}`;
-      $("#optimizationConstraintExamples").innerHTML = schema.numeric_columns
+      q("#optimizationConstraintExamples").innerHTML = schema.numeric_columns
         .map(name => `<option value="${escapeHtml(name)} <= "></option>`)
         .join("");
       $$("[data-optimization-objective], [data-objective-direction]", container).forEach(control => control.addEventListener("change", () => {
@@ -975,30 +1196,34 @@ export async function renderOptimizationWorkspace(container, nodeId = null) {
       persistControls();
       syncRunState();
     } catch (error) {
-      if (revision !== schemaRevision) return;
-      $("#optimizationSchema").innerHTML = `<div class="live-empty"><strong>Schema inspection failed</strong><br><br>${escapeHtml(error.message)}</div>`;
+      if (revision !== schemaRevision || !isCurrentStudioRender(container, request)) return;
+      q("#optimizationSchema").innerHTML = `<div class="live-empty"><strong>Schema inspection failed</strong><br><br>${escapeHtml(error.message)}</div>`;
     }
   };
-  on("#optimizationCsv", "change", inspectCsv);
-  on("#optimizationConstraints", "change", persistControls);
-  on("#optimizationTopK", "change", persistControls);
-  on("#runOptimization", "click", async () => {
-    const csvPath = $("#optimizationCsv").value;
+  onStudio(container, "#optimizationCsv", "change", inspectCsv);
+  onStudio(container, "#optimizationConstraints", "change", persistControls);
+  onStudio(container, "#optimizationTopK", "change", persistControls);
+  onStudio(container, "#runOptimization", "click", async () => {
+    const actionRequest = currentStudioRender(container);
+    const csvPath = q("#optimizationCsv").value;
     const objectives = selectedObjectives();
     if (!csvPath || !objectives.length) {
       toast("Select a CSV and at least one detected objective.", "error");
       return;
     }
     persistControls();
+    const directions = collectDirections().join(",");
+    const constraints = q("#optimizationConstraints").value;
+    const topK = Number(q("#optimizationTopK").value);
     try {
       const report = await apiRequest("/api/optimization/run", {
         method: "POST",
         body: {
           csv_path: csvPath,
           objectives: objectives.join(","),
-          directions: collectDirections().join(","),
-          constraints: $("#optimizationConstraints").value,
-          top_k: Number($("#optimizationTopK").value)
+          directions,
+          constraints,
+          top_k: topK
         }
       });
       if (node) {
@@ -1006,7 +1231,8 @@ export async function renderOptimizationWorkspace(container, nodeId = null) {
         node.config.report_path = report.report_path;
         node.optimizationReport = report.report_path;
       }
-      $("#optimizationResults").innerHTML = `<div class="live-summary">
+      if (!isCurrentStudioRender(container, actionRequest)) return;
+      q("#optimizationResults").innerHTML = `<div class="live-summary">
         <span><strong>${report.rows}</strong><small>CSV rows</small></span>
         <span><strong>${report.numeric_candidates}</strong><small>numeric candidates</small></span>
         <span><strong>${report.feasible}</strong><small>feasible</small></span>
@@ -1018,6 +1244,7 @@ export async function renderOptimizationWorkspace(container, nodeId = null) {
       </article>`).join("")}</div>`;
       toast(`Optimization complete: ${report.pareto} Pareto candidates, ${report.selected.length} selected.`);
     } catch (error) {
+      if (!isCurrentStudioRender(container, actionRequest)) return;
       toast(`Optimization failed: ${error.message}`, "error");
     }
   });
@@ -1025,10 +1252,14 @@ export async function renderOptimizationWorkspace(container, nodeId = null) {
 }
 
 export async function renderFieldEvaluationWorkspace(container, nodeId = null) {
+  const request = beginStudioRender(container);
+  if (!request) return;
   const [artifacts, datasets] = await Promise.all([
     apiRequest("/api/files?kind=artifact"),
     apiRequest("/api/files?kind=dataset")
   ]);
+  if (!isCurrentStudioRender(container, request)) return;
+  const q = selector => $(selector, container);
   const predictions = artifacts.items.filter(item => [".h5", ".hdf5"].includes(item.extension));
   const truthFiles = datasets.items.filter(item => [".h5", ".hdf5"].includes(item.extension));
   const evaluationNode = state.nodes.find(node => node.id === nodeId && node.type === "evaluate.predictions")
@@ -1053,76 +1284,264 @@ export async function renderFieldEvaluationWorkspace(container, nodeId = null) {
   if (selectedTruth && !truthFiles.some(item => item.path === selectedTruth)) {
     truthFiles.unshift({ path: selectedTruth });
   }
-  container.innerHTML = `<div class="live-toolbar"><span><strong>Actual HDF5 field comparison</strong><small>Arrays are matched by sample ID; incompatible node counts are reported, never resampled silently.</small></span></div>
+  container.innerHTML = `<div class="live-toolbar"><span><strong>Schema-aware prediction evaluation</strong><small>Mesh fields, MLP tables, operator arrays, and native prediction/target pairs are inspected before any metric is computed.</small></span><button class="button small" id="refreshEvaluationSchema">Refresh contract</button></div>
     <div class="config-card">
-      <label class="config-help">Prediction / reconstruction HDF5</label><select class="config-control" id="evaluationPrediction"><option value="">Select a real HDF5 output…</option>${predictions.map(item => `<option value="${escapeHtml(item.path)}"${item.path === selectedPrediction ? " selected" : ""}>${escapeHtml(item.path)}</option>`).join("")}</select>
-      <label class="config-help">Ground-truth HDF5</label><select class="config-control" id="evaluationTruth"><option value="">Select a real dataset…</option>${truthFiles.map(item => `<option value="${escapeHtml(item.path)}"${item.path === selectedTruth ? " selected" : ""}>${escapeHtml(item.path)}</option>`).join("")}</select>
-      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:7px">
-        <label class="config-help">Prediction field row<input class="config-control" id="evaluationPredictionStart" type="number" min="0" value="${escapeHtml(evaluationNode?.config.prediction_start ?? 3)}"></label>
-        <label class="config-help">Truth field row<input class="config-control" id="evaluationTruthStart" type="number" min="0" value="${escapeHtml(evaluationNode?.config.truth_start ?? 3)}"></label>
-        <label class="config-help">Number of fields<input class="config-control" id="evaluationFields" type="number" min="1" value="${escapeHtml(evaluationNode?.config.num_fields ?? 1)}"></label>
-      </div>
-      <button class="button primary" id="runFieldEvaluation" style="margin-top:8px">Compute real field metrics</button>
+      <label class="config-help">Prediction / reconstruction HDF5<select class="config-control" id="evaluationPrediction"><option value="">Select a real HDF5 output…</option>${predictions.map(item => `<option value="${escapeHtml(item.path)}"${item.path === selectedPrediction ? " selected" : ""}>${escapeHtml(item.path)}</option>`).join("")}</select></label>
+      <label class="config-help">Ground-truth HDF5<select class="config-control" id="evaluationTruth"><option value="">Select a real dataset…</option>${truthFiles.map(item => `<option value="${escapeHtml(item.path)}"${item.path === selectedTruth ? " selected" : ""}>${escapeHtml(item.path)}</option>`).join("")}</select></label>
+      <section id="evaluationSchema" class="evaluation-schema" aria-live="polite"><div class="live-empty">Select both HDF5 sources to inspect their contracts.</div></section>
+      <details class="evaluation-legacy"><summary>Legacy contiguous mesh-row mapping</summary>
+        <p class="config-help">Use only for an older mesh file whose physical rows are known but not named. This is an explicit override; the Studio will not infer condition rows as targets.</p>
+        <label class="check-row"><input id="evaluationUseLegacy" type="checkbox"${evaluationNode?.config.mapping_mode === "legacy" ? " checked" : ""}> Use an explicit contiguous row range</label>
+        <div class="evaluation-legacy-grid">
+          <label class="config-help">Prediction start row<input class="config-control" id="evaluationPredictionStart" type="number" min="0" value="${escapeHtml(evaluationNode?.config.prediction_start ?? 3)}"></label>
+          <label class="config-help">Truth start row<input class="config-control" id="evaluationTruthStart" type="number" min="0" value="${escapeHtml(evaluationNode?.config.truth_start ?? 3)}"></label>
+          <label class="config-help">Number of fields<input class="config-control" id="evaluationFields" type="number" min="1" value="${escapeHtml(evaluationNode?.config.num_fields ?? 1)}"></label>
+        </div>
+      </details>
+      <button class="button primary" id="runFieldEvaluation" style="margin-top:8px" disabled>Compute verified metrics</button>
     </div><div id="evaluationResults"></div>`;
-  const persistEvaluation = () => {
+
+  let activeSchema = null;
+  let schemaRevision = 0;
+  const parseSavedPairs = () => {
+    try {
+      const parsed = JSON.parse(evaluationNode?.config.field_pairs || "[]");
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  };
+  const structuralErrors = schema => (schema?.errors || []).filter(
+    message => !String(message).startsWith("No safe field mapping was found.")
+  );
+  const collectFieldPairs = () => {
+    if (!activeSchema || q("#evaluationUseLegacy").checked) return [];
+    return $$("[data-evaluation-field]:checked", container).map(control => {
+      const predictionIndex = Number(control.dataset.evaluationField);
+      const truthControl = $(`[data-evaluation-truth="${predictionIndex}"]`, container);
+      const truthIndex = Number(truthControl?.value);
+      const predictionName = activeSchema.prediction.field_names[predictionIndex] || `field ${predictionIndex}`;
+      const truthNames = activeSchema.recommended_mapping.mode === "embedded"
+        ? activeSchema.prediction.field_names
+        : activeSchema.truth.field_names;
+      const truthName = truthNames[truthIndex] || `field ${truthIndex}`;
+      return {
+        name: truthName || predictionName,
+        prediction_index: predictionIndex,
+        truth_index: truthIndex,
+        prediction_name: predictionName,
+        truth_name: truthName
+      };
+    });
+  };
+  const duplicateTruthFields = pairs => new Set(pairs.map(pair => pair.truth_index)).size !== pairs.length;
+  const syncEvaluationRunState = () => {
+    const runButton = q("#runFieldEvaluation");
+    if (!activeSchema || !q("#evaluationPrediction").value || !q("#evaluationTruth").value) {
+      runButton.disabled = true;
+      return;
+    }
+    const legacy = q("#evaluationUseLegacy").checked;
+    const pairs = collectFieldPairs();
+    const confirmation = q("#evaluationConfirmMapping");
+    const requiresConfirmation = !legacy && activeSchema.recommended_mapping.confidence === "confirm";
+    const legacyValid = Number(q("#evaluationPredictionStart").value) >= 0
+      && Number(q("#evaluationTruthStart").value) >= 0
+      && Number(q("#evaluationFields").value) >= 1;
+    runButton.disabled = Boolean(
+      structuralErrors(activeSchema).length
+      || (legacy ? !legacyValid : !pairs.length || duplicateTruthFields(pairs))
+      || (requiresConfirmation && !confirmation?.checked)
+    );
+  };
+  const persistEvaluation = (includeMapping = true) => {
     if (!evaluationNode) return;
     const next = {
-      prediction_path: $("#evaluationPrediction").value,
-      truth_path: $("#evaluationTruth").value,
-      prediction_start: $("#evaluationPredictionStart").value,
-      truth_start: $("#evaluationTruthStart").value,
-      num_fields: $("#evaluationFields").value
+      prediction_path: q("#evaluationPrediction").value,
+      truth_path: q("#evaluationTruth").value
     };
+    if (includeMapping) Object.assign(next, {
+      mapping_mode: q("#evaluationUseLegacy").checked ? "legacy" : "schema",
+      field_pairs: JSON.stringify(collectFieldPairs()),
+      mapping_confirmed: q("#evaluationConfirmMapping")?.checked ? "True" : "False",
+      prediction_start: q("#evaluationPredictionStart").value,
+      truth_start: q("#evaluationTruthStart").value,
+      num_fields: q("#evaluationFields").value
+    });
     if (Object.entries(next).every(([key, value]) => String(evaluationNode.config[key] || "") === String(value))) return;
     snapshot();
     assignManualConfig(evaluationNode, next);
   };
-  ["evaluationPrediction", "evaluationTruth", "evaluationPredictionStart", "evaluationTruthStart", "evaluationFields"]
-    .forEach(id => $("#" + id).addEventListener("change", persistEvaluation));
-  on("#runFieldEvaluation", "click", async () => {
-    if (!$("#evaluationPrediction").value || !$("#evaluationTruth").value) {
+
+  const renderEvaluationSchema = schema => {
+    const mapping = schema.recommended_mapping;
+    const savedPairs = parseSavedPairs().filter(pair =>
+      Number.isInteger(Number(pair.prediction_index))
+      && Number(pair.prediction_index) >= 0
+      && Number(pair.prediction_index) < schema.prediction.field_count
+    );
+    const sourcePairs = savedPairs.length ? savedPairs : mapping.field_pairs;
+    const pairByPrediction = new Map(sourcePairs.map(pair => [Number(pair.prediction_index), pair]));
+    const predictionCandidates = (schema.prediction.target_indices?.length
+      ? schema.prediction.target_indices
+      : Array.from({ length: schema.prediction.field_count }, (unused, index) => index)).slice(0, 512);
+    const truthNames = mapping.mode === "embedded" ? schema.prediction.field_names : schema.truth.field_names;
+    const truthCandidates = (mapping.mode === "embedded"
+      ? predictionCandidates
+      : schema.truth.target_indices?.length
+        ? schema.truth.target_indices
+        : Array.from({ length: schema.truth.field_count }, (unused, index) => index)).slice(0, 512);
+    const diagnostics = [
+      ...schema.errors.map(message => ["error", message]),
+      ...schema.warnings.map(message => ["warn", message])
+    ];
+    const mappingRows = predictionCandidates.map(predictionIndex => {
+      const pair = pairByPrediction.get(predictionIndex);
+      const checked = Boolean(pair);
+      const selectedTruthIndex = Number(pair?.truth_index ?? truthCandidates[0] ?? 0);
+      const predictionName = schema.prediction.field_names[predictionIndex] || `field ${predictionIndex}`;
+      return `<label class="evaluation-field-row">
+        <input type="checkbox" data-evaluation-field="${predictionIndex}"${checked ? " checked" : ""}>
+        <span><strong>${escapeHtml(predictionName)}</strong><small>prediction row ${predictionIndex}</small></span>
+        <span class="evaluation-map-arrow">→</span>
+        <select class="config-control" data-evaluation-truth="${predictionIndex}" aria-label="Truth field paired with ${escapeHtml(predictionName)}"${mapping.mode === "embedded" ? " disabled" : ""}>${truthCandidates.map(truthIndex => `<option value="${truthIndex}"${truthIndex === selectedTruthIndex ? " selected" : ""}>${truthIndex} · ${escapeHtml(truthNames[truthIndex] || `field ${truthIndex}`)}</option>`).join("")}</select>
+      </label>`;
+    }).join("");
+    const match = schema.sample_matching;
+    q("#evaluationSchema").innerHTML = `<div class="live-summary evaluation-contract-summary">
+      <span><strong>${escapeHtml(schema.prediction.contract)}</strong><small>prediction contract</small></span>
+      <span><strong>${escapeHtml(schema.truth.contract)}</strong><small>truth contract</small></span>
+      <span><strong>${match.overlap_count}</strong><small>${escapeHtml(match.strategy)}-matched samples</small></span>
+      <span><strong>${mapping.field_pairs.length}</strong><small>recommended field pairs</small></span>
+    </div>
+    <div class="evaluation-array-contract"><span><strong>Prediction array</strong><code>${escapeHtml(mapping.prediction_array || "not detected")}</code></span><span><strong>Truth array</strong><code>${escapeHtml(mapping.truth_array || "not detected")}</code></span><span><strong>Mapping basis</strong><small>${escapeHtml(mapping.basis || "manual mapping required")}</small></span></div>
+    ${diagnostics.length ? `<div class="diagnostics">${diagnostics.map(([level, message]) => `<div class="diagnostic ${level}"><i></i><span>${escapeHtml(message)}</span></div>`).join("")}</div>` : ""}
+    <section class="evaluation-field-mapping"><header><span><strong>Fields to score</strong><small>Every checked prediction field must map to one unique truth field.</small></span><span class="chip ${mapping.confidence === "exact" ? "" : "warn"}">${escapeHtml(mapping.confidence)} mapping</span></header>
+      ${mappingRows || '<div class="live-empty">No numeric fields are available for mapping.</div>'}
+      ${predictionCandidates.length < schema.prediction.field_count ? `<p class="config-help">Showing the first ${predictionCandidates.length} of ${schema.prediction.field_count} prediction fields.</p>` : ""}
+      ${mapping.confidence === "confirm" ? `<label class="check-row evaluation-confirm"><input id="evaluationConfirmMapping" type="checkbox"${evaluationNode?.config.mapping_confirmed === "True" && savedPairs.length ? " checked" : ""}> I inspected and confirm this field mapping; positional alignment is not treated as metadata.</label>` : ""}
+    </section>`;
+    $$("[data-evaluation-field], [data-evaluation-truth]", container).forEach(control => control.addEventListener("change", event => {
+      if (event.target.matches("[data-evaluation-field], [data-evaluation-truth]")) {
+        const confirmation = q("#evaluationConfirmMapping");
+        if (confirmation) confirmation.checked = false;
+      }
+      persistEvaluation();
+      syncEvaluationRunState();
+    }));
+    onStudio(container, "#evaluationConfirmMapping", "change", () => {
+      persistEvaluation();
+      syncEvaluationRunState();
+    });
+    syncEvaluationRunState();
+  };
+
+  const inspectEvaluationContract = async () => {
+    const predictionPath = q("#evaluationPrediction").value;
+    const truthPath = q("#evaluationTruth").value;
+    const revision = ++schemaRevision;
+    activeSchema = null;
+    q("#runFieldEvaluation").disabled = true;
+    if (!predictionPath || !truthPath) {
+      q("#evaluationSchema").innerHTML = '<div class="live-empty">Select both HDF5 sources to inspect their contracts.</div>';
+      return;
+    }
+    q("#evaluationSchema").innerHTML = '<div class="live-empty">Inspecting sample IDs, arrays, shapes, and field names…</div>';
+    try {
+      const schema = await apiRequest("/api/evaluation/schema", {
+        method: "POST",
+        body: { prediction_path: predictionPath, truth_path: truthPath }
+      });
+      if (revision !== schemaRevision || !isCurrentStudioRender(container, request)) return;
+      activeSchema = schema;
+      renderEvaluationSchema(schema);
+    } catch (error) {
+      if (revision !== schemaRevision || !isCurrentStudioRender(container, request)) return;
+      q("#evaluationSchema").innerHTML = `<div class="live-empty"><strong>Contract inspection failed</strong><br><br>${escapeHtml(error.message)}</div>`;
+    }
+  };
+
+  ["evaluationPrediction", "evaluationTruth"].forEach(id => onStudio(container, `#${id}`, "change", () => {
+    if (evaluationNode) {
+      snapshot();
+      assignManualConfig(evaluationNode, {
+        prediction_path: q("#evaluationPrediction").value,
+        truth_path: q("#evaluationTruth").value,
+        field_pairs: "",
+        mapping_confirmed: "False"
+      });
+    }
+    inspectEvaluationContract();
+  }));
+  ["evaluationUseLegacy", "evaluationPredictionStart", "evaluationTruthStart", "evaluationFields"]
+    .forEach(id => onStudio(container, `#${id}`, "change", () => {
+      persistEvaluation();
+      syncEvaluationRunState();
+    }));
+  onStudio(container, "#refreshEvaluationSchema", "click", inspectEvaluationContract);
+  onStudio(container, "#runFieldEvaluation", "click", async () => {
+    const actionRequest = currentStudioRender(container);
+    const predictionPath = q("#evaluationPrediction").value;
+    const truthPath = q("#evaluationTruth").value;
+    if (!predictionPath || !truthPath || !activeSchema) {
       toast("Select both prediction and ground-truth HDF5 files.", "error");
       return;
     }
+    const legacy = q("#evaluationUseLegacy").checked;
+    const fieldPairs = collectFieldPairs();
+    if (!legacy && duplicateTruthFields(fieldPairs)) {
+      toast("Each truth field can be used only once in a field mapping.", "error");
+      return;
+    }
     persistEvaluation();
+    const body = legacy ? {
+      prediction_path: predictionPath,
+      truth_path: truthPath,
+      prediction_start: Number(q("#evaluationPredictionStart").value),
+      truth_start: Number(q("#evaluationTruthStart").value),
+      num_fields: Number(q("#evaluationFields").value)
+    } : {
+      prediction_path: predictionPath,
+      truth_path: truthPath,
+      field_pairs: fieldPairs,
+      confirm_mapping: q("#evaluationConfirmMapping")?.checked || activeSchema.recommended_mapping.confidence === "exact"
+    };
     try {
       const report = await apiRequest("/api/evaluation/run", {
         method: "POST",
-        body: {
-          prediction_path: $("#evaluationPrediction").value,
-          truth_path: $("#evaluationTruth").value,
-          prediction_start: Number($("#evaluationPredictionStart").value),
-          truth_start: Number($("#evaluationTruthStart").value),
-          num_fields: Number($("#evaluationFields").value)
-        }
+        body
       });
       if (evaluationNode) {
         snapshot();
         Object.assign(evaluationNode.config, {
-          prediction_path: $("#evaluationPrediction").value,
-          truth_path: $("#evaluationTruth").value,
-          prediction_start: $("#evaluationPredictionStart").value,
-          truth_start: $("#evaluationTruthStart").value,
-          num_fields: $("#evaluationFields").value,
+          prediction_path: predictionPath,
+          truth_path: truthPath,
+          field_pairs: JSON.stringify(report.field_pairs || fieldPairs),
+          mapping_mode: legacy ? "legacy" : "schema",
           metrics_csv: report.per_sample_csv,
           report_path: report.report_path
         });
+        savePipelineState();
       }
+      if (!isCurrentStudioRender(container, actionRequest)) return;
       const relativeL2 = report.aggregate.relative_l2 || {};
       const mae = report.aggregate.mae || {};
       const rmse = report.aggregate.rmse || {};
-      $("#evaluationResults").innerHTML = `<div class="live-summary">
+      const metricText = metric => Number.isFinite(Number(metric?.mean)) ? Number(metric.mean).toExponential(4) : "n/a";
+      q("#evaluationResults").innerHTML = `<div class="live-summary">
         <span><strong>${report.evaluated_samples}</strong><small>evaluated samples</small></span>
-        <span><strong>${Number(relativeL2.mean).toExponential(4)}</strong><small>mean relative L2</small></span>
-        <span><strong>${Number(mae.mean).toExponential(4)}</strong><small>mean MAE</small></span>
-        <span><strong>${Number(rmse.mean).toExponential(4)}</strong><small>mean RMSE</small></span>
-      </div><div class="live-toolbar"><span><strong>Evidence saved</strong><small>${escapeHtml(report.per_sample_csv)} · ${escapeHtml(report.report_path)}${report.skipped.length ? ` · ${report.skipped.length} skipped` : ""}</small></span><button class="button small" id="exportEvaluation">Open Export</button></div>`;
-      on("#exportEvaluation", "click", () => openStudio("export"));
+        <span><strong>${metricText(relativeL2)}</strong><small>mean relative L2</small></span>
+        <span><strong>${metricText(mae)}</strong><small>mean MAE</small></span>
+        <span><strong>${metricText(rmse)}</strong><small>mean RMSE</small></span>
+      </div><div class="live-toolbar"><span><strong>Evidence saved · ${escapeHtml(report.contract)}</strong><small>${escapeHtml(report.per_sample_csv)} · ${escapeHtml(report.report_path)} · truth ${escapeHtml(report.truth_source)}${report.skipped.length ? ` · ${report.skipped.length} skipped` : ""}</small></span><button class="button small" id="exportEvaluation">Open Export</button></div>`;
+      onStudio(container, "#exportEvaluation", "click", () => openStudio("export"));
       toast(`Evaluated ${report.evaluated_samples} actual field samples.`);
     } catch (error) {
+      if (!isCurrentStudioRender(container, actionRequest)) return;
       toast(`Evaluation failed: ${error.message}`, "error");
     }
   });
+  await inspectEvaluationContract();
 }
 
 let comparisonRunNextId = 1;
@@ -1134,16 +1553,16 @@ function comparisonRunRow(index, csvFiles, selected = "") {
   </div>`;
 }
 
-function renderComparisonRuns(csvFiles, selectedPaths = []) {
+function renderComparisonRuns(container, csvFiles, selectedPaths = []) {
   const initial = selectedPaths.length ? selectedPaths : [""];
   comparisonRunNextId = initial.length;
-  $("#comparisonRunList").innerHTML = initial.map((selected, index) => comparisonRunRow(index, csvFiles, selected)).join("");
-  $$("[data-remove-run]").forEach(button => button.addEventListener("click", () => {
-    if ($$("[data-run-row]").length <= 1) {
+  $("#comparisonRunList", container).innerHTML = initial.map((selected, index) => comparisonRunRow(index, csvFiles, selected)).join("");
+  $$("[data-remove-run]", container).forEach(button => button.addEventListener("click", () => {
+    if ($$("[data-run-row]", container).length <= 1) {
       toast("Keep at least one run selected.", "warn");
       return;
     }
-    $(`[data-run-row="${button.dataset.removeRun}"]`).remove();
+    $(`[data-run-row="${button.dataset.removeRun}"]`, container).remove();
   }));
 }
 
@@ -1290,10 +1709,14 @@ function renderConnectedRunComparison(container, compareNode, resolved) {
 
 /** Connects multiple model runs' output CSVs into one ranked comparison, not just one CSV's rows. */
 export async function renderComparisonWorkspace(container, nodeId = null) {
+  const request = beginStudioRender(container);
+  if (!request) return;
   const [artifacts, metricCatalog] = await Promise.all([
     apiRequest("/api/files?kind=artifact"),
     apiRequest("/api/training-metrics")
   ]);
+  if (!isCurrentStudioRender(container, request)) return;
+  const q = selector => $(selector, container);
   const csvFiles = artifacts.items.filter(item => item.extension === ".csv");
   const compareNode = state.nodes.find(node => node.id === nodeId && node.type === "evaluate.compare") || null;
   const connectedRuns = connectedComparisonSources(nodeId, metricCatalog.items);
@@ -1324,16 +1747,16 @@ export async function renderComparisonWorkspace(container, nodeId = null) {
       <button class="button primary" id="runComparison" style="margin-top:8px" disabled>Rank actual rows</button>
     </div><div id="comparisonResults"></div>`;
   renderConnectedRunComparison(container, compareNode, connectedRuns);
-  renderComparisonRuns(csvFiles, initialCsvPaths);
+  renderComparisonRuns(container, csvFiles, initialCsvPaths);
   let schemaRevision = 0;
-  const selectedCsvPaths = () => $$("[data-run-select]").map(select => select.value).filter(Boolean);
+  const selectedCsvPaths = () => $$("[data-run-select]", container).map(select => select.value).filter(Boolean);
   const persistCsvComparison = () => {
     if (!compareNode) return;
     const next = {
       csv_paths: JSON.stringify(selectedCsvPaths()),
-      group_column: $("#comparisonGroup").value,
-      csv_metric: $("#comparisonMetric").value,
-      csv_direction: $("#comparisonDirection").value
+      group_column: q("#comparisonGroup").value,
+      csv_metric: q("#comparisonMetric").value,
+      csv_direction: q("#comparisonDirection").value
     };
     if (Object.entries(next).every(([key, value]) => String(compareNode.config[key] || "") === String(value))) return;
     snapshot();
@@ -1342,20 +1765,20 @@ export async function renderComparisonWorkspace(container, nodeId = null) {
   const refreshComparisonSchema = async () => {
     const revision = ++schemaRevision;
     const csvPaths = selectedCsvPaths();
-    const metricSelect = $("#comparisonMetric");
-    const runButton = $("#runComparison");
+    const metricSelect = q("#comparisonMetric");
+    const runButton = q("#runComparison");
     if (!csvPaths.length) {
       metricSelect.innerHTML = '<option value="">Select CSV runs first</option>';
       runButton.disabled = true;
-      $("#comparisonSchemaStatus").textContent = "The common CSV schema will be detected automatically.";
+      q("#comparisonSchemaStatus").textContent = "The common CSV schema will be detected automatically.";
       persistCsvComparison();
       return;
     }
     runButton.disabled = true;
-    $("#comparisonSchemaStatus").textContent = `Inspecting ${csvPaths.length} selected CSV run${csvPaths.length === 1 ? "" : "s"}…`;
+    q("#comparisonSchemaStatus").textContent = `Inspecting ${csvPaths.length} selected CSV run${csvPaths.length === 1 ? "" : "s"}…`;
     try {
       const schema = await apiRequest("/api/comparison/schema", { method: "POST", body: { csv_paths: csvPaths } });
-      if (revision !== schemaRevision) return;
+      if (revision !== schemaRevision || !isCurrentStudioRender(container, request)) return;
       const previousMetric = metricSelect.value || compareNode?.config.csv_metric || "";
       const preferredMetric = schema.numeric_columns.find(column => column === previousMetric)
         || schema.numeric_columns.find(column => /^(mean_)?relative_l2$/i.test(column))
@@ -1365,46 +1788,46 @@ export async function renderComparisonWorkspace(container, nodeId = null) {
       metricSelect.innerHTML = schema.numeric_columns.length
         ? schema.numeric_columns.map(column => `<option value="${escapeHtml(column)}"${column === preferredMetric ? " selected" : ""}>${escapeHtml(column)}</option>`).join("")
         : '<option value="">No common numeric column</option>';
-      const groupInput = $("#comparisonGroup");
+      const groupInput = q("#comparisonGroup");
       const preferredGroup = schema.group_columns.find(column => column === groupInput.value)
         || schema.group_columns.find(column => /model|run|name|file|case|sample|id/i.test(column))
         || "";
       groupInput.value = preferredGroup;
       groupInput.setAttribute("list", "comparisonGroupColumns");
-      let groupList = $("#comparisonGroupColumns");
+      let groupList = q("#comparisonGroupColumns");
       if (!groupList) {
         groupInput.insertAdjacentHTML("afterend", '<datalist id="comparisonGroupColumns"></datalist>');
-        groupList = $("#comparisonGroupColumns");
+        groupList = q("#comparisonGroupColumns");
       }
       groupList.innerHTML = schema.group_columns.map(column => `<option value="${escapeHtml(column)}"></option>`).join("");
       runButton.disabled = !preferredMetric;
-      $("#comparisonSchemaStatus").textContent = preferredMetric
+      q("#comparisonSchemaStatus").textContent = preferredMetric
         ? `${schema.common_columns.length} common columns · ${schema.numeric_columns.length} numeric metric${schema.numeric_columns.length === 1 ? "" : "s"} · ${schema.sources.reduce((sum, source) => sum + source.rows_sampled, 0)} rows sampled`
         : "These CSV runs have no common numeric metric column. Choose comparable evaluation outputs.";
       persistCsvComparison();
     } catch (error) {
-      if (revision !== schemaRevision) return;
+      if (revision !== schemaRevision || !isCurrentStudioRender(container, request)) return;
       metricSelect.innerHTML = '<option value="">Schema unavailable</option>';
       runButton.disabled = true;
-      $("#comparisonSchemaStatus").textContent = `Schema inspection failed: ${error.message}`;
+      q("#comparisonSchemaStatus").textContent = `Schema inspection failed: ${error.message}`;
     }
   };
-  $$("[data-run-select]").forEach(select => select.addEventListener("change", refreshComparisonSchema));
-  $$("[data-remove-run]").forEach(button => button.addEventListener("click", refreshComparisonSchema));
-  on("#comparisonGroup", "change", persistCsvComparison);
-  on("#comparisonMetric", "change", persistCsvComparison);
-  on("#comparisonDirection", "change", persistCsvComparison);
-  on("#comparisonAddRun", "click", () => {
-    if ($$("[data-run-row]").length >= 12) {
+  $$("[data-run-select]", container).forEach(select => select.addEventListener("change", refreshComparisonSchema));
+  $$("[data-remove-run]", container).forEach(button => button.addEventListener("click", refreshComparisonSchema));
+  onStudio(container, "#comparisonGroup", "change", persistCsvComparison);
+  onStudio(container, "#comparisonMetric", "change", persistCsvComparison);
+  onStudio(container, "#comparisonDirection", "change", persistCsvComparison);
+  onStudio(container, "#comparisonAddRun", "click", () => {
+    if ($$("[data-run-row]", container).length >= 12) {
       toast("Compare at most 12 runs at once.", "warn");
       return;
     }
     const index = comparisonRunNextId++;
-    $("#comparisonRunList").insertAdjacentHTML("beforeend", comparisonRunRow(index, csvFiles));
-    const button = $(`[data-remove-run="${index}"]`);
-    $(`[data-run-select="${index}"]`).addEventListener("change", refreshComparisonSchema);
+    q("#comparisonRunList").insertAdjacentHTML("beforeend", comparisonRunRow(index, csvFiles));
+    const button = $(`[data-remove-run="${index}"]`, container);
+    $(`[data-run-select="${index}"]`, container).addEventListener("change", refreshComparisonSchema);
     button.addEventListener("click", () => {
-      if ($$("[data-run-row]").length <= 1) {
+      if ($$("[data-run-row]", container).length <= 1) {
         toast("Keep at least one run selected.", "warn");
         return;
       }
@@ -1413,33 +1836,38 @@ export async function renderComparisonWorkspace(container, nodeId = null) {
     });
   });
   await refreshComparisonSchema();
-  on("#runComparison", "click", async () => {
+  onStudio(container, "#runComparison", "click", async () => {
+    const actionRequest = currentStudioRender(container);
     const csvPaths = selectedCsvPaths();
     if (!csvPaths.length) {
       toast("Select at least one real comparison CSV.", "error");
       return;
     }
+    const groupColumn = q("#comparisonGroup").value;
+    const metric = q("#comparisonMetric").value;
+    const direction = q("#comparisonDirection").value;
     try {
       const report = await apiRequest("/api/comparison/run", {
         method: "POST",
         body: {
           csv_paths: csvPaths,
-          group_column: $("#comparisonGroup").value,
-          metric: $("#comparisonMetric").value,
-          direction: $("#comparisonDirection").value
+          group_column: groupColumn,
+          metric,
+          direction
         }
       });
       if (compareNode) {
         snapshot();
         Object.assign(compareNode.config, {
           csv_paths: JSON.stringify(csvPaths),
-          group_column: $("#comparisonGroup").value,
-          csv_metric: $("#comparisonMetric").value,
-          csv_direction: $("#comparisonDirection").value,
+          group_column: groupColumn,
+          csv_metric: metric,
+          csv_direction: direction,
           report_path: report.report_path
         });
       }
-      $("#comparisonResults").innerHTML = `<div class="live-summary">
+      if (!isCurrentStudioRender(container, actionRequest)) return;
+      q("#comparisonResults").innerHTML = `<div class="live-summary">
         <span><strong>${report.numeric_rows}</strong><small>numeric rows</small></span>
         <span><strong>${report.runs}</strong><small>connected run${report.runs === 1 ? "" : "s"}</small></span>
         <span><strong>${escapeHtml(report.best.name)}</strong><small>best model / group</small></span>
@@ -1453,17 +1881,22 @@ export async function renderComparisonWorkspace(container, nodeId = null) {
       </article>`).join("")}</div>`;
       toast(`Ranked ${report.numeric_rows} actual model-result rows across ${report.runs} run${report.runs === 1 ? "" : "s"}.`);
     } catch (error) {
+      if (!isCurrentStudioRender(container, actionRequest)) return;
       toast(`Comparison failed: ${error.message}`, "error");
     }
   });
 }
 
 export async function renderExportWorkspace(container, nodeId = null) {
+  const request = beginStudioRender(container);
+  if (!request) return;
   const [artifacts, datasets, checkpoints] = await Promise.all([
     apiRequest("/api/files?kind=artifact"),
     apiRequest("/api/files?kind=dataset"),
     apiRequest("/api/files?kind=checkpoint")
   ]);
+  if (!isCurrentStudioRender(container, request)) return;
+  const q = selector => $(selector, container);
   const items = [...artifacts.items, ...datasets.items, ...checkpoints.items]
     .filter((item, index, all) => all.findIndex(candidate => candidate.path === item.path) === index)
     .slice(0, 1200);
@@ -1483,44 +1916,52 @@ export async function renderExportWorkspace(container, nodeId = null) {
     </div><div id="exportResults"></div>`;
   const persistExport = () => {
     if (!node) return;
-    const next = { source_path: $("#exportPath").value, export_label: $("#exportLabel").value };
+    const next = { source_path: q("#exportPath").value, export_label: q("#exportLabel").value };
     if (Object.entries(next).every(([key, value]) => String(node.config[key] || "") === String(value))) return;
     snapshot();
     assignManualConfig(node, next);
   };
-  on("#exportPath", "change", persistExport);
-  on("#exportLabel", "change", persistExport);
-  on("#runExport", "click", async () => {
-    if (!$("#exportPath").value) {
+  onStudio(container, "#exportPath", "change", persistExport);
+  onStudio(container, "#exportLabel", "change", persistExport);
+  onStudio(container, "#runExport", "click", async () => {
+    const actionRequest = currentStudioRender(container);
+    if (!q("#exportPath").value) {
       toast("Select or enter an existing repository artifact path.", "error");
       return;
     }
     persistExport();
+    const sourcePath = q("#exportPath").value;
+    const exportLabel = q("#exportLabel").value;
     try {
       const result = await apiRequest("/api/export", {
         method: "POST",
-        body: { path: $("#exportPath").value, label: $("#exportLabel").value }
+        body: { path: sourcePath, label: exportLabel }
       });
       if (node) {
         snapshot();
         Object.assign(node.config, {
-          source_path: $("#exportPath").value,
-          export_label: $("#exportLabel").value,
+          source_path: sourcePath,
+          export_label: exportLabel,
           export_path: result.path
         });
       }
-      $("#exportResults").innerHTML = `<div class="live-toolbar"><span><strong>${escapeHtml(result.path)}</strong><small>${formatBytes(result.size)} · source ${escapeHtml(result.source)}</small></span><a class="button primary" href="${escapeHtml(result.browser_path)}" download>Download</a></div>`;
+      if (!isCurrentStudioRender(container, actionRequest)) return;
+      q("#exportResults").innerHTML = `<div class="live-toolbar"><span><strong>${escapeHtml(result.path)}</strong><small>${formatBytes(result.size)} · source ${escapeHtml(result.source)}</small></span><a class="button primary" href="${escapeHtml(result.browser_path)}" download>Download</a></div>`;
       toast("Export created from the real artifact.");
     } catch (error) {
+      if (!isCurrentStudioRender(container, actionRequest)) return;
       toast(`Export failed: ${error.message}`, "error");
     }
   });
 }
 
-export async function renderLiveWorkspace(sectionId) {
+export async function renderLiveWorkspace(sectionId, request = activeStudioWorkspace) {
   if (!state.api.connected || !["models", "data", "experiments", "artifacts", "docs", "system", "benchmarks", "deploy", "optimization", "evaluation", "comparison", "export"].includes(sectionId)) return;
+  if (!isActiveStudioRequest(request)) return;
   const section = STUDIO_SECTIONS[sectionId];
-  const container = liveShell(section.title, section.description);
+  const container = liveShell(section.title, section.description, request);
+  if (!container) return;
+  const nodeId = request.nodeId;
   try {
     if (sectionId === "models") await renderModelsWorkspace(container);
     if (sectionId === "data") await renderFilesWorkspace(container, "dataset");
@@ -1529,11 +1970,11 @@ export async function renderLiveWorkspace(sectionId) {
     if (sectionId === "docs") await renderDocsWorkspace(container);
     if (sectionId === "system") await renderSystemWorkspace(container);
     if (sectionId === "benchmarks") await renderBenchmarksWorkspace(container);
-    if (sectionId === "deploy") await renderDeployWorkspace(container, state.studioNode);
-    if (sectionId === "optimization") await renderOptimizationWorkspace(container, state.studioNode);
-    if (sectionId === "evaluation") await renderFieldEvaluationWorkspace(container, state.studioNode);
-    if (sectionId === "comparison") await renderComparisonWorkspace(container, state.studioNode);
-    if (sectionId === "export") await renderExportWorkspace(container, state.studioNode);
+    if (sectionId === "deploy") await renderDeployWorkspace(container, nodeId);
+    if (sectionId === "optimization") await renderOptimizationWorkspace(container, nodeId);
+    if (sectionId === "evaluation") await renderFieldEvaluationWorkspace(container, nodeId);
+    if (sectionId === "comparison") await renderComparisonWorkspace(container, nodeId);
+    if (sectionId === "export") await renderExportWorkspace(container, nodeId);
   } catch (error) {
     liveError(container, error);
   }

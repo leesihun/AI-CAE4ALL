@@ -4,12 +4,13 @@ from torch_geometric.data import Data
 from torch_geometric.utils import scatter
 
 from general_modules.edge_features import EDGE_FEATURE_DIM
+from model.blocks import AdaLNZero, apply_adaln
 from model.checkpointing import process_with_checkpointing
 from model.coarsening import pool_features
 from model.conditional_prior import build_conditional_prior
 from model.encoder_decoder import Decoder, Encoder, GnBlock
 from model.mlp import build_mlp, init_weights
-from model.vae import GNNVariationalEncoder
+from model.vae import GNNVariationalEncoder, gather_across_ranks
 
 
 class MeshGraphNets(nn.Module):
@@ -20,6 +21,10 @@ class MeshGraphNets(nn.Module):
 
         self.model = EncoderProcessorDecoder(config).to(device)
         self.model.apply(init_weights)
+        # init_weights kaiming-fills every nn.Linear, including the AdaLN-Zero
+        # modulation heads whose whole point is to start at the identity.
+        # Restore them afterwards (no-op when z_conditioning is 'concat').
+        self.model.reset_z_conditioning()
 
         # Scale decoder's last layer for better initial predictions.
         # T>1 (delta prediction): scale to ~0 ("predict no change" prior)
@@ -238,6 +243,16 @@ class EncoderProcessorDecoder(nn.Module):
         vae_mp_layers = int(config.get('vae_mp_layers', 5))
         self.vae_graph_aware = bool(config.get('vae_graph_aware', False))
         self.vae_posterior_min_std = float(config.get('posterior_min_std', 0))
+        # How z reaches the processor. 'concat' is the legacy fuser
+        # Linear([x, z]) (kept for checkpoint compatibility); 'adaln' is
+        # AdaLN-Zero modulation, identity at init. See model/blocks.py.
+        self.z_conditioning = str(config.get('z_conditioning', 'concat')).lower().strip()
+        if self.z_conditioning not in ('concat', 'adaln'):
+            raise ValueError(
+                f"z_conditioning must be 'concat' or 'adaln', got '{self.z_conditioning}'")
+        # MMD is a two-sample statistic whose effective sample count is the
+        # number of z rows it sees -- without gathering, the PER-RANK batch.
+        self.mmd_gather_ranks = bool(config.get('mmd_gather_ranks', True))
         # Per-level z: one z per V-cycle level (L coarse-arm + 1 coarsest) for multiscale,
         # else one global z. Allows level-specific stochastic modulation.
         if self.use_multiscale:
@@ -256,32 +271,20 @@ class EncoderProcessorDecoder(nn.Module):
         if self.vae_graph_aware:
             print(f"  VAE encoder: graph-aware (x [N,{self.node_input_size}] fused with y [N,{self.node_output_size}])")
         print(f"  VAE posterior σ floor: {self.vae_posterior_min_std}")
+        print(f"  VAE z conditioning: {self.z_conditioning}")
 
         if not self.use_multiscale:
-            self.z_fusers = nn.ModuleList([
-                nn.Linear(self.latent_dim + self.vae_latent_dim, self.latent_dim)
-                for _ in range(self.message_passing_num)
-            ])
+            self.z_fusers = self._build_z_conditioners(self.message_passing_num)
         else:
             L = self.multiscale_levels
             self.ms_z_fusers_pre = nn.ModuleList()
             self.ms_z_fusers_post = nn.ModuleList()
             for i in range(L):
-                pre_count = self.mp_per_level[i]
-                post_count = self.mp_per_level[2 * L - i]
-                self.ms_z_fusers_pre.append(nn.ModuleList([
-                    nn.Linear(self.latent_dim + self.vae_latent_dim, self.latent_dim)
-                    for _ in range(pre_count)
-                ]))
-                self.ms_z_fusers_post.append(nn.ModuleList([
-                    nn.Linear(self.latent_dim + self.vae_latent_dim, self.latent_dim)
-                    for _ in range(post_count)
-                ]))
-            coarsest_count = self.mp_per_level[L]
-            self.ms_z_fusers_coarsest = nn.ModuleList([
-                nn.Linear(self.latent_dim + self.vae_latent_dim, self.latent_dim)
-                for _ in range(coarsest_count)
-            ])
+                self.ms_z_fusers_pre.append(
+                    self._build_z_conditioners(self.mp_per_level[i]))
+                self.ms_z_fusers_post.append(
+                    self._build_z_conditioners(self.mp_per_level[2 * L - i]))
+            self.ms_z_fusers_coarsest = self._build_z_conditioners(self.mp_per_level[L])
 
         self.aux_decoder = build_mlp(
             self.vae_latent_dim, self.latent_dim,
@@ -291,6 +294,29 @@ class EncoderProcessorDecoder(nn.Module):
         print(f"  VAE: ENABLED (z_dim={self.vae_latent_dim}, vae_mp_layers={vae_mp_layers})")
 
     # ── VAE helpers ──────────────────────────────────────────────────────────
+
+    def _build_z_conditioners(self, count):
+        """One z-conditioning module per processor block.
+
+        Both kinds live under the same attribute names, so a checkpoint saved
+        with the other kind fails with a clean missing/unexpected-key error
+        rather than a silent shape mismatch (their parameter paths differ:
+        `...0.weight` for concat vs `...0.net.1.weight` for adaln).
+        """
+        if self.z_conditioning == 'adaln':
+            return nn.ModuleList([
+                AdaLNZero(self.latent_dim, self.vae_latent_dim) for _ in range(count)
+            ])
+        return nn.ModuleList([
+            nn.Linear(self.latent_dim + self.vae_latent_dim, self.latent_dim)
+            for _ in range(count)
+        ])
+
+    def reset_z_conditioning(self):
+        """Restore every AdaLN-Zero head to the identity. No-op for 'concat'."""
+        for m in self.modules():
+            if isinstance(m, AdaLNZero):
+                m.reset_identity()
 
     def _fuse_z(self, x, z_per_node, fuse_layer):
         return fuse_layer(torch.cat([x, z_per_node], dim=-1))
@@ -314,7 +340,10 @@ class EncoderProcessorDecoder(nn.Module):
                 original_y, original_edge_index, original_edge_attr, batch,
                 x=(original_x if self.vae_graph_aware else None),
             )
-            mmd = GNNVariationalEncoder.mmd_loss(z.float(), bandwidth=self.mmd_bandwidth)
+            z_mmd = z.float()
+            if self.mmd_gather_ranks:
+                z_mmd = gather_across_ranks(z_mmd)
+            mmd = GNNVariationalEncoder.mmd_loss(z_mmd, bandwidth=self.mmd_bandwidth)
             return z, {'mmd': mmd, 'mu': mu, 'logvar': logvar}
         B = int(original_batch.max().item()) + 1 if original_batch is not None else 1
         z = torch.randn(B, self.num_z, self.vae_latent_dim, device=device, dtype=dtype)
@@ -386,13 +415,14 @@ class EncoderProcessorDecoder(nn.Module):
             graph = process_with_checkpointing(
                 self.processer_list, graph,
                 z_fusers=self.z_fusers if self.use_vae else None,
-                z_per_node=z_per_node
+                z_per_node=z_per_node,
+                adaln=(self.use_vae and self.z_conditioning == 'adaln'),
             )
         else:
-            for i, block in enumerate(self.processer_list):
-                if self.use_vae and z_per_node is not None:
-                    graph.x = self._fuse_z(graph.x, z_per_node, self.z_fusers[i])
-                graph = block(graph)
+            graph = self._run_blocks_eager(
+                self.processer_list, graph,
+                self.z_fusers if self.use_vae else None, z_per_node,
+            )
 
         return self.decoder(graph), vae_losses, aux_loss
 
@@ -525,9 +555,21 @@ class EncoderProcessorDecoder(nn.Module):
     def _run_processor_blocks(self, blocks, graph, z_fusers, z_per_node):
         """Run a list of GnBlocks with optional per-block z injection."""
         if self.use_checkpointing and self.training:
-            return process_with_checkpointing(blocks, graph, z_fusers=z_fusers, z_per_node=z_per_node)
+            return process_with_checkpointing(
+                blocks, graph, z_fusers=z_fusers, z_per_node=z_per_node,
+                adaln=(self.use_vae and self.z_conditioning == 'adaln'),
+            )
+        return self._run_blocks_eager(blocks, graph, z_fusers, z_per_node)
+
+    def _run_blocks_eager(self, blocks, graph, z_fusers, z_per_node):
+        """Non-checkpointed block loop, shared by both processor paths."""
+        conditioned = z_fusers is not None and z_per_node is not None
+        adaln = conditioned and self.z_conditioning == 'adaln'
         for j, block in enumerate(blocks):
-            if z_fusers is not None and z_per_node is not None:
+            if adaln:
+                graph = apply_adaln(block, graph, z_fusers[j], z_per_node)
+                continue
+            if conditioned:
                 graph.x = self._fuse_z(graph.x, z_per_node, z_fusers[j])
             graph = block(graph)
         return graph

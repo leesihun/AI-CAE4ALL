@@ -10,6 +10,28 @@ function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
 
+async function replaceTemplate(page, name) {
+  const option = page.locator(`#templateSelect option[value="${name}"]`);
+  const expectedLabel = (await option.textContent())?.trim();
+  const dialogPromise = page.waitForEvent("dialog");
+  const selectionPromise = page.locator("#templateSelect").selectOption(name);
+  const dialog = await dialogPromise;
+  const message = dialog.message();
+  try {
+    assert(dialog.type() === "confirm", `Template replacement opened an unexpected ${dialog.type()} dialog`);
+    assert(
+      expectedLabel && message.includes(`"${expectedLabel}"`) && message.includes("Undo step"),
+      `Unexpected template replacement confirmation: ${message}`
+    );
+  } catch (error) {
+    await dialog.dismiss();
+    await selectionPromise.catch(() => {});
+    throw error;
+  }
+  await dialog.accept();
+  await selectionPromise;
+}
+
 (async () => {
   const browser = await chromium.launch({ channel: "chrome", headless: true });
   const page = await browser.newPage({ viewport: { width: 1600, height: 960 } });
@@ -31,7 +53,13 @@ function assert(condition, message) {
     await page.goto(studioUrl);
     if (liveRuntime) {
       await page.waitForFunction(() => document.querySelector(".route-health")?.textContent.includes("routes live"));
-      assert((await page.locator(".route-health").innerText()).toLowerCase().includes("11/11 routes live"), "Live registry did not connect");
+      const routeHealth = await page.evaluate(() => ({
+        text: document.querySelector(".route-health")?.textContent || "",
+        healthy: window.__AI_CAE_FRONTEND__.state.api.models.filter(model => model.healthy).length,
+        total: window.__AI_CAE_FRONTEND__.state.api.models.length
+      }));
+      assert(routeHealth.total > 0 && routeHealth.healthy === routeHealth.total, `Live registry is not fully healthy: ${JSON.stringify(routeHealth)}`);
+      assert(routeHealth.text.includes(`${routeHealth.healthy}/${routeHealth.total}`), "Route badge disagrees with the live registry");
     }
 
     // Key and required-key counts come from the live MethodSpec rather than
@@ -40,20 +68,32 @@ function assert(condition, message) {
     // numbers the launcher does -- which is the property that actually matters.
     const contract = await page.evaluate(() => {
       const model = window.__AI_CAE_FRONTEND__.MODEL_CATALOG.simulgenvae;
+      const backend = window.__AI_CAE_FRONTEND__.state.api.models.find(item => item.model === "simulgenvae");
+      const trainable = window.__AI_CAE_FRONTEND__.state.api.models.filter(item => item.spec_id !== "geometry_ingest");
+      const chi = window.__AI_CAE_FRONTEND__.MODEL_CATALOG["chi-mgnflow"];
       return {
         models: Object.keys(window.__AI_CAE_FRONTEND__.MODEL_CATALOG).length,
+        liveTrainable: trainable.length,
+        missingBlocks: trainable.filter(item => !window.__AI_CAE_FRONTEND__.BLOCK_SPECS[`model.${item.model}`]).map(item => item.model),
         simulgenKeys: model.keys.length,
+        backendSimulgenKeys: backend?.known_keys.length,
         simulgenModes: model.modes.length,
+        backendSimulgenModes: backend?.modes.length,
         requiredTrain: (model.required?.train || []).length,
-        requiredReconstruct: (model.required?.reconstruct || []).length
+        requiredReconstruct: (model.required?.reconstruct || []).length,
+        chiKeys: chi?.keys.length,
+        backendChiKeys: trainable.find(item => item.model === "chi-mgnflow")?.known_keys.length,
+        chiModes: chi?.modes,
+        chiFlowSolver: chi?.defaults.flow_solver
       };
     });
-    // Ten *trainable* models -- one fewer than the 11 live routes above, which
-    // also count geometry_ingest (a data-prep utility with its own block, not a
-    // model). The key count tracks the live MethodSpec and moves when it does.
-    assert(contract.models === 10, "Expected all ten live trainable model routes");
-    assert(contract.simulgenKeys === 68, "Expected all 68 SimulGen keys");
-    assert(contract.simulgenModes === 4, "Expected all four SimulGen modes");
+    assert(contract.missingBlocks.length === 0, `Live trainable routes without GUI blocks: ${contract.missingBlocks.join(", ")}`);
+    assert(contract.models === contract.liveTrainable, "GUI model catalog does not match the live trainable registry");
+    assert(contract.simulgenKeys === contract.backendSimulgenKeys, "SimulGen GUI keys disagree with its live MethodSpec");
+    assert(contract.simulgenModes === contract.backendSimulgenModes, "SimulGen GUI modes disagree with its live MethodSpec");
+    assert(contract.chiKeys === contract.backendChiKeys, "cHI-MGNflow GUI keys disagree with its live MethodSpec");
+    assert(JSON.stringify(contract.chiModes) === JSON.stringify(["train", "inference"]), "cHI-MGNflow modes are missing");
+    assert(contract.chiFlowSolver === "heun", "cHI-MGNflow live defaults were not merged into the block");
 
     // This whole section is about the SimulGen pipeline's shape (it asserts the
     // simulgen block, its condition wiring, and its link count), so load it
@@ -262,9 +302,44 @@ function assert(condition, message) {
       await page.locator('[data-section="models"]').click();
       await page.waitForFunction(() => document.querySelector("#studioMain")?.textContent.includes("registered routes"));
       assert((await page.locator("#studioMain").innerText()).includes("simulgenvae"), "Live Models workspace is missing SimulGen");
-      await page.locator('[data-close="studioOverlay"]').click();
+      assert((await page.locator("#studioMain").innerText()).includes("chi-mgnflow"), "Live Models workspace is missing cHI-MGNflow");
+      await page.locator('[data-live-model="chi-mgnflow"]').click();
+      await page.waitForSelector("#configOverlay.open");
+      assert((await page.locator("#configTitle").innerText()).includes("cHI-MGNflow"), "cHI-MGNflow did not open its real config sheet");
+      assert((await page.locator("#configBadges").innerText()).includes(`${contract.chiKeys} accepted`), "cHI-MGNflow accepted-key count is wrong");
+      await page.locator("#configSearch").fill("flow_solver");
+      const flowSolver = page.locator('.full-config-control[data-key="flow_solver"]');
+      await flowSolver.waitFor();
+      assert(await flowSolver.evaluate(element => element.tagName === "SELECT"), "cHI-MGNflow solver is not a closed-choice control");
+      const solverChoices = await flowSolver.locator("option").allTextContents();
+      assert(solverChoices[0].toLowerCase().includes("not set") && JSON.stringify(solverChoices.slice(1)) === JSON.stringify(["heun", "euler"]), "cHI-MGNflow solver choices drifted from preflight");
+      await page.locator('[data-close="configOverlay"]').click();
 
-      await page.locator("#templateSelect").selectOption("blank");
+      await replaceTemplate(page, "generative");
+      const generativePlan = await page.evaluate(async () => {
+        const { executableSteps } = await import("./src/validate.js");
+        return {
+          errors: window.__AI_CAE_FRONTEND__.validateGraph(false),
+          steps: executableSteps().map(step => ({ nodeId: step.nodeId, config: step.config || "" }))
+        };
+      });
+      assert(generativePlan.errors.length === 0, `Generative template validation failed: ${generativePlan.errors.join("; ")}`);
+      assert(
+        JSON.stringify(generativePlan.steps.map(step => step.nodeId)) === JSON.stringify(["generator", "optimization", "export"]),
+        `Generative execution duplicated or dropped a block: ${JSON.stringify(generativePlan.steps.map(step => step.nodeId))}`
+      );
+      const generatorConfig = generativePlan.steps.find(step => step.nodeId === "generator")?.config || "";
+      for (const [key, value] of [["mode", "sample"], ["num_samples", "24"], ["cfg_scale", "2.5"], ["ode_steps", "50"], ["mc_resolution", "128"]]) {
+        assert(
+          generatorConfig.split("\n").some(line => line.trim().split(/\s+/).join(" ") === `${key} ${value}`),
+          `CAD Generator did not serialize native control: ${key} ${value}`
+        );
+      }
+      await page.locator('[data-node-id="generator"] .node-head').click();
+      assert(await page.locator('.inspector-config[data-key="num_samples"]').inputValue() === "24", "CAD Generator candidate count is not editable");
+      assert(await page.locator('.inspector-config[data-key="cfg_scale"]').inputValue() === "2.5", "CAD Generator guidance is not editable");
+
+      await replaceTemplate(page, "blank");
       await page.locator('.palette-item[data-block-type="source.hdf5"]').click();
       await page.locator('.palette-item[data-block-type="model.mlp"]').click();
       const added = await page.evaluate(() => Object.fromEntries(
@@ -304,10 +379,16 @@ function assert(condition, message) {
 
     if (liveRuntime) {
       await page.locator('[data-close="studioOverlay"]').click();
-      await page.locator("#templateSelect").selectOption("geometry");
+      await replaceTemplate(page, "geometry");
       if (await page.locator("#artifactOverlay").evaluate(element => element.classList.contains("open"))) {
         await page.locator('[data-close="artifactOverlay"]').click({ force: true });
       }
+      await page.locator('[data-node-id="cad"] .node-head').click();
+      await page.locator("#createGeometrySample").click();
+      await page.waitForFunction(() =>
+        window.__AI_CAE_FRONTEND__.state.nodes
+          .find(node => node.id === "cad")?.config.path.includes("frontend/runtime/geometry-smoke/sample_cad")
+      );
       await page.locator('[data-node-id="ingest"] .node-head').click();
       const geometryErrors = await page.evaluate(() => window.__AI_CAE_FRONTEND__.validateGraph(false));
       assert(geometryErrors.length === 0, `Geometry template validation failed: ${geometryErrors.join("; ")}`);
@@ -316,18 +397,20 @@ function assert(condition, message) {
       await page.waitForFunction(
         () => document.querySelector("#runtimeJobMeta")?.textContent.includes("completed"),
         null,
-        { timeout: 30000 }
+        { timeout: 60000 }
       );
       assert((await page.locator("#runtimeLog").innerText()).includes("[studio] Pipeline completed"), "Geometry ingest did not execute through the real launcher");
       const lineage = await page.evaluate(() => ({
         target: window.__AI_CAE_FRONTEND__.state.api.activeJob?.target_node_id,
         nodeId: window.__AI_CAE_FRONTEND__.state.api.activeJob?.steps?.[0]?.node_id,
-        nodeType: window.__AI_CAE_FRONTEND__.state.api.activeJob?.steps?.[0]?.node_type
+        nodeType: window.__AI_CAE_FRONTEND__.state.api.activeJob?.steps?.[0]?.node_type,
+        launchGate: window.__AI_CAE_FRONTEND__.state.api.activeJob?.steps?.[0]?.launch_preflight
       }));
       assert(lineage.target === "ingest" && lineage.nodeId === "ingest" && lineage.nodeType === "prep.geometry", `Job lost exact pipeline-node lineage: ${JSON.stringify(lineage)}`);
+      assert(lineage.launchGate?.ok && lineage.launchGate?.checked_at, `Job did not retain its exact-config launch preflight: ${JSON.stringify(lineage.launchGate)}`);
 
       await page.evaluate(() => window.__AI_CAE_FRONTEND__.openStudio("evaluation"));
-      assert((await page.locator("#studioMain").innerText()).includes("Actual HDF5 field comparison"), "Evaluation workspace is not live");
+      assert((await page.locator("#studioMain").innerText()).includes("Schema-aware prediction evaluation"), "Evaluation workspace is not live");
       await page.evaluate(() => window.__AI_CAE_FRONTEND__.openStudio("comparison"));
       assert((await page.locator("#studioMain").innerText()).includes("Connected run comparison"), "Comparison workspace is not live");
       await page.evaluate(() => window.__AI_CAE_FRONTEND__.openStudio("export"));

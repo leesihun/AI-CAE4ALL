@@ -52,28 +52,151 @@ export function formatBytes(value) {
  * the behaviour depend on markup position: adding an overlay to the end of the
  * file silently stole Escape from every overlay above it. Track the real open
  * order instead, and stack the paint order to match so the newest modal is also
- * the visible one. The ceiling of 89 keeps every overlay under the topbar (90),
- * which deliberately stays clickable while a modal is open.
+ * the visible one. Modals start above the runtime drawer and topbar; toast
+ * notices retain their separate, higher layer.
  */
 const overlayOrder = [];
+const overlayFocusOrigins = new Map();
+const OVERLAY_Z_INDEX = 130;
+const FOCUSABLE_SELECTOR = [
+  "a[href]",
+  "area[href]",
+  "button:not([disabled])",
+  "input:not([disabled]):not([type='hidden'])",
+  "select:not([disabled])",
+  "textarea:not([disabled])",
+  "iframe",
+  "[contenteditable]:not([contenteditable='false'])",
+  "[tabindex]:not([tabindex='-1'])"
+].join(",");
+
+let overlayObserver = null;
+let overlayKeyboardBound = false;
+
+function canReceiveFocus(element) {
+  if (!(element instanceof HTMLElement) || !element.isConnected || element.tabIndex < 0) return false;
+  if (element.closest("[inert], [hidden], [aria-hidden='true']")) return false;
+  const style = window.getComputedStyle(element);
+  return style.display !== "none" && style.visibility !== "hidden" && element.getClientRects().length > 0;
+}
+
+function focusableElements(overlay) {
+  return $$(FOCUSABLE_SELECTOR, overlay).filter(canReceiveFocus);
+}
+
+function focusElement(element) {
+  if (!canReceiveFocus(element)) return false;
+  element.focus({ preventScroll: true });
+  return document.activeElement === element;
+}
+
+function focusInsideOverlay(overlay, fromEnd = false) {
+  if (!overlay) return false;
+  const focusable = focusableElements(overlay);
+  const target = focusable[fromEnd ? focusable.length - 1 : 0];
+  if (target) return focusElement(target);
+  if (!overlay.hasAttribute("tabindex")) overlay.setAttribute("tabindex", "-1");
+  overlay.focus({ preventScroll: true });
+  return document.activeElement === overlay;
+}
+
+function applyOverlayState() {
+  const topId = topOverlayId();
+  const modalOpen = Boolean(topId);
+
+  $$(".app, #runtimeDrawer").forEach(element => element.toggleAttribute("inert", modalOpen));
+  $$(".overlay").forEach(overlay => {
+    const open = overlay.classList.contains("open");
+    const top = open && overlay.id === topId;
+    overlay.toggleAttribute("inert", open && !top);
+    if (open && !top) overlay.setAttribute("aria-hidden", "true");
+    else overlay.removeAttribute("aria-hidden");
+    overlay.style.zIndex = open
+      ? String(OVERLAY_Z_INDEX + overlayOrder.indexOf(overlay.id))
+      : "";
+  });
+}
+
+function trapOverlayFocus(event) {
+  if (event.key !== "Tab" || event.altKey || event.ctrlKey || event.metaKey) return;
+  const overlay = $(`#${topOverlayId()}`);
+  if (!overlay) return;
+
+  const focusable = focusableElements(overlay);
+  if (!focusable.length) {
+    event.preventDefault();
+    focusInsideOverlay(overlay);
+    return;
+  }
+
+  const activeIndex = focusable.indexOf(document.activeElement);
+  const atStart = activeIndex <= 0;
+  const atEnd = activeIndex === focusable.length - 1;
+  if (activeIndex === -1 || (event.shiftKey && atStart) || (!event.shiftKey && atEnd)) {
+    event.preventDefault();
+    focusElement(focusable[event.shiftKey ? focusable.length - 1 : 0]);
+  }
+}
 
 export function watchOverlayOrder() {
-  $$(".overlay").forEach(overlay => {
-    const sync = () => {
+  if (overlayObserver) return;
+  const overlays = $$(".overlay");
+
+  overlays.forEach(overlay => {
+    if (overlay.classList.contains("open")) overlayOrder.push(overlay.id);
+  });
+  applyOverlayState();
+  focusInsideOverlay($(`#${topOverlayId()}`));
+
+  overlayObserver = new MutationObserver(records => {
+    const previousTopId = topOverlayId();
+    const opened = [];
+    const closed = [];
+
+    records.forEach(record => {
+      const overlay = record.target;
       const at = overlayOrder.indexOf(overlay.id);
       const open = overlay.classList.contains("open");
-      if (open && at === -1) overlayOrder.push(overlay.id);
-      else if (!open && at !== -1) overlayOrder.splice(at, 1);
-      else return;
-      overlayOrder.forEach((id, index) => {
-        const element = $(`#${id}`);
-        if (element) element.style.zIndex = String(Math.min(89, 80 + index));
-      });
-      if (!open) overlay.style.zIndex = "";
-    };
-    new MutationObserver(sync).observe(overlay, { attributes: true, attributeFilter: ["class"] });
-    sync();
+      if (open && at === -1) {
+        const active = document.activeElement;
+        overlayFocusOrigins.set(
+          overlay,
+          active instanceof HTMLElement && !overlay.contains(active) ? active : null
+        );
+        overlayOrder.push(overlay.id);
+        opened.push({ overlay, alreadyFocused: overlay.contains(active) });
+      } else if (!open && at !== -1) {
+        overlayOrder.splice(at, 1);
+        closed.push(overlay);
+      }
+    });
+
+    applyOverlayState();
+    const nextTopId = topOverlayId();
+    if (nextTopId !== previousTopId) {
+      const nextTop = $(`#${nextTopId}`);
+      const newlyOpenedTop = opened.find(item => item.overlay.id === nextTopId);
+      if (newlyOpenedTop) {
+        if (!newlyOpenedTop.alreadyFocused || !canReceiveFocus(document.activeElement)) {
+          focusInsideOverlay(nextTop);
+        }
+      } else {
+        const closedTop = closed.find(overlay => overlay.id === previousTopId);
+        const origin = closedTop && overlayFocusOrigins.get(closedTop);
+        if (!focusElement(origin)) focusInsideOverlay(nextTop);
+      }
+    }
+    closed.forEach(overlay => overlayFocusOrigins.delete(overlay));
   });
+
+  overlays.forEach(overlay => overlayObserver.observe(overlay, {
+    attributes: true,
+    attributeFilter: ["class"]
+  }));
+  if (!overlayKeyboardBound) {
+    document.addEventListener("keydown", trapOverlayFocus, true);
+    overlayKeyboardBound = true;
+  }
 }
 
 export function topOverlayId() {

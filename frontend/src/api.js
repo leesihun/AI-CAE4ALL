@@ -1,7 +1,7 @@
 import { $ } from "./dom.js";
 import { toast } from "./dom.js";
 import { state } from "./state.js";
-import { MODEL_CATALOG } from "./constants.js";
+import { registerLiveModel } from "./constants.js";
 
 export async function apiRequest(path, options = {}) {
   const response = await fetch(path, {
@@ -56,17 +56,10 @@ export async function connectRuntime(onConnected) {
     state.api.connected = Boolean(health.ok);
     state.api.health = health;
     state.api.models = models.items || [];
-    state.api.models.forEach(model => {
-      const local = MODEL_CATALOG[model.model];
-      if (!local) return;
-      local.keys = model.known_keys;
-      // The live MethodSpec is authoritative for which fields the launcher will
-      // actually reject a run for; the constants.js map is only an offline fallback.
-      local.required = model.required;
-      local.modes = model.modes;
-      local.dataset = model.dataset_kind || local.dataset;
-      local.backend = model;
-    });
+    // The live MethodSpec is authoritative. It also installs a generic model
+    // block for a newly added trainable route, so registry growth cannot leave
+    // a healthy backend route invisible until the next frontend release.
+    state.api.models.forEach(registerLiveModel);
     const healthy = state.api.models.filter(model => model.healthy).length;
     badge.classList.remove("offline");
     badge.innerHTML = `<i></i> ${healthy}/${state.api.models.length} routes live`;

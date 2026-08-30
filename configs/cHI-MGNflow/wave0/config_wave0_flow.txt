@@ -1,0 +1,71 @@
+%   ============================================================
+%   Wave 0 - arm FLOW : cHI-MGNflow, same backbone, same data, same budget.
+%
+%   Compare the epoch at which each arm's loss flattens. The RATIO is the
+%   multiple that sizes training_epochs for the Wave B sweep. Do not read the
+%   two loss VALUES against each other -- they are different objectives
+%   (velocity regression vs field regression) and are not on the same scale.
+%   What is comparable is the SHAPE of each curve over epochs.
+%   ============================================================
+model	chi-mgnflow
+mode	train
+gpu_ids	0
+parallel_mode	ddp
+log_file_dir	../../output/wave0/flow.log
+modelpath	../output/wave0/flow.pth
+%   Architecture and data are IDENTICAL between the two arms. The only thing
+%   that differs is the objective, so the comparison is clean.
+dataset_dir	../dataset/ex1.h5
+infer_dataset	../dataset/ex1_infer.h5
+infer_timesteps	1
+split_seed	42
+
+input_var	4
+output_var	4
+cond_var	0
+feature_loss_weights	1.0, 1.0, 1.0, 1.0
+edge_var	8
+positional_features	4
+
+message_passing_num	15
+Training_epochs	24
+Batch_size	1
+LearningR	0.0003
+Latent_dim	64
+num_workers	0
+std_noise	0.0
+augment_geometry	True
+grad_accum_steps	1
+
+use_checkpointing	True
+use_amp	True
+use_ema	True
+ema_decay	0.99
+test_interval	1000
+val_interval	2
+
+use_node_types	True
+use_world_edges	False
+
+test_batch_idx	0, 1
+plot_feature_idx	-1
+display_testset	False
+display_trainset	False
+
+use_multiscale	True
+coarsening_type	voronoi_seedmean
+voronoi_clusters	1000, 100
+multiscale_levels	2
+mp_per_level	3, 4, 6, 4, 3
+hierarchy_variants	1
+hierarchy_seed	1234
+
+%   Flow matching
+flow_steps	20
+flow_solver	heun
+flow_time_freqs	16
+flow_t_sampling	uniform
+val_flow_steps	8
+val_num_samples	4
+best_by	crps
+time_integration	ar_ot

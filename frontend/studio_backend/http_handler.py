@@ -20,6 +20,7 @@ from studio_backend.prediction_preview import prediction_runs
 from studio_backend.audit import audit_configs, explain_config
 from studio_backend.analysis import (
     comparison_schema,
+    evaluation_schema,
     export_artifact,
     optimization_schema,
     run_field_evaluation,
@@ -64,9 +65,67 @@ class StudioRequestHandler(SimpleHTTPRequestHandler):
     def end_headers(self) -> None:
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Cross-Origin-Resource-Policy", "same-origin")
+        self.send_header("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+        self.send_header(
+            "Content-Security-Policy",
+            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data: blob:; connect-src 'self'; font-src 'self'; "
+            "object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
+        )
         if self.path.startswith("/api/") or self.path.endswith((".js", ".css", ".html")):
             self.send_header("Cache-Control", "no-store")
         super().end_headers()
+
+    @staticmethod
+    def _allowed_static_path(raw_path: str) -> str | None:
+        """Return a canonical public path, never a repository/source path."""
+
+        decoded = unquote(urlparse(raw_path).path)
+        if not decoded.startswith("/") or "\\" in decoded or "\x00" in decoded:
+            return None
+        parts = decoded.split("/")
+        if any(part in {".", ".."} for part in parts):
+            return None
+        canonical = "/" + "/".join(part for part in parts if part)
+        if canonical == "/":
+            canonical = "/index.html"
+        if canonical in {"/index.html", "/styles.css"}:
+            candidate = FRONTEND_ROOT / canonical.lstrip("/")
+            return canonical if candidate.is_file() else None
+        if canonical.startswith("/src/") and canonical.endswith(".js"):
+            candidate = (FRONTEND_ROOT / canonical.lstrip("/")).resolve()
+            try:
+                candidate.relative_to((FRONTEND_ROOT / "src").resolve())
+            except ValueError:
+                return None
+            return canonical if candidate.is_file() else None
+        if canonical.startswith("/runtime/exports/"):
+            candidate = (FRONTEND_ROOT / canonical.lstrip("/")).resolve()
+            try:
+                candidate.relative_to((RUNTIME_ROOT / "exports").resolve())
+            except ValueError:
+                return None
+            # Downloads are files only. Denying directories also prevents the
+            # SimpleHTTPRequestHandler directory index from listing exports.
+            return canonical if candidate.is_file() else None
+        return None
+
+    def _serve_static(self, *, head_only: bool = False) -> None:
+        canonical = self._allowed_static_path(self.path)
+        if canonical is None:
+            self.send_error(HTTPStatus.NOT_FOUND, "Static resource is not public.")
+            return
+        original_path = self.path
+        self.path = canonical
+        try:
+            if head_only:
+                super().do_HEAD()
+            else:
+                super().do_GET()
+        finally:
+            self.path = original_path
 
     def send_json(self, payload: Any, status: int = 200) -> None:
         body = json.dumps(json_safe(payload), ensure_ascii=False).encode("utf-8")
@@ -152,7 +211,8 @@ class StudioRequestHandler(SimpleHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         if not parsed.path.startswith("/api/"):
-            return super().do_GET()
+            self._serve_static()
+            return
         query = parse_qs(parsed.query)
         try:
             if parsed.path == "/api/health":
@@ -253,6 +313,13 @@ class StudioRequestHandler(SimpleHTTPRequestHandler):
                 HTTPStatus.INTERNAL_SERVER_ERROR,
             )
 
+    def do_HEAD(self) -> None:  # noqa: N802
+        parsed = urlparse(self.path)
+        if parsed.path.startswith("/api/"):
+            self.send_error(HTTPStatus.METHOD_NOT_ALLOWED, "HEAD is not available for API routes.")
+            return
+        self._serve_static(head_only=True)
+
     def do_POST(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         try:
@@ -314,6 +381,8 @@ class StudioRequestHandler(SimpleHTTPRequestHandler):
                 self.send_json(optimization_schema(payload))
             elif parsed.path == "/api/evaluation/run":
                 self.send_json(run_field_evaluation(payload), HTTPStatus.CREATED)
+            elif parsed.path == "/api/evaluation/schema":
+                self.send_json(evaluation_schema(payload))
             elif parsed.path == "/api/comparison/run":
                 self.send_json(run_model_comparison(payload), HTTPStatus.CREATED)
             elif parsed.path == "/api/comparison/schema":

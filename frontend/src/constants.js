@@ -31,12 +31,21 @@ export const TYPE_META = {
 export const KEY_CATALOGS = {
   mlp: keys(`activation batch_size checkpoint_interval dataset_dir dropout ema_decay gpu_ids hidden_layers infer_dataset inference_output_dir input_normalization input_var learningr log_file_dir loss max_grad_norm mode model modelpath norm num_workers output_activation output_normalization output_var prefetch_factor split_seed training_epochs use_amp use_compile use_ema val_interval warmup_epochs weight_decay`),
   meshgraphnets: keys(`alpha_recon augment_geometry batch_size beta_aux coarse_cache_per_worker coarse_world_edges coarsening_type cond_var dataset_dir display_testset display_trainset edge_var ema_decay eval_dataset feature_loss_weights fit_latent_gmm free_bits gmm_components gmm_covariance_type gmm_reg_covar gpu_ids grad_accum_steps hierarchy_cache_build_workers hierarchy_cache_dir hierarchy_cache_keep hierarchy_cache_wait_timeout histogram_bins histogram_clip_quantile infer_dataset infer_timesteps inference_output_dir init_modelpath input_var lambda_det lambda_kl lambda_mmd latent_dim learned_interpolation learningr log_file_dir make_histogram message_passing_num mmd_bandwidth mode model modelpath mp_per_level multiscale_levels noise_gamma noise_std_ratio num_vae_samples num_workers num_z output_var parallel_mode pin_memory pipeline_microbatches plot_feature_idx pool_heads pool_type positional_features posterior_min_std prefetch_factor prior_batch_size prior_cov_rank prior_diagnose_interval prior_epochs prior_family prior_fm_steps prior_hidden_dim prior_kl_reg_weight prior_learningr prior_loss_type prior_mc_samples prior_min_std prior_mixture_components prior_mp_layers prior_nll_weight prior_num_workers prior_temperature prior_type prior_val_interval profile_batches recon_loss resume_prior show_histogram split_seed static_cache_per_worker std_noise test_batch_idx test_interval test_max_batches time_integration train_conditional_prior train_eval_subset_size training_epochs unpool_type use_amp use_checkpointing use_compile use_conditional_prior use_ema use_multiscale use_node_types use_parallel_stats use_vae use_world_edges vae_batch_size vae_batch_size_max vae_batch_size_min vae_batch_vram_fraction vae_graph_aware vae_latent_dim vae_mp_layers vae_valid_prior_samples val_interval voronoi_branches voronoi_clusters warmup_epochs weight_decay world_edge_backend world_max_num_neighbors world_radius_multiplier`),
-  meshgraphnetsV: keys(`alpha_prior_max alpha_recon augment_geometry batch_size beta_aux bipartite_unpool coarse_world_edges coarsening_type cond_var dataset_dir display_testset display_trainset edge_var ema_decay eval_dataset feature_loss_weights fit_latent_gmm free_bits gmm_components gmm_covariance_type gmm_reg_covar gpu_ids grad_accum_steps hierarchy_cache_build_workers hierarchy_cache_dir hierarchy_cache_keep hierarchy_cache_wait_timeout hierarchy_seed hierarchy_variants histogram_bins histogram_clip_quantile infer_dataset infer_timesteps inference_output_dir input_var lambda_det lambda_kl lambda_mmd latent_dim learningr log_file_dir make_histogram message_passing_num mmd_bandwidth mode model modelpath mp_per_level multiscale_levels noise_gamma noise_std_ratio num_vae_samples num_workers num_z output_var parallel_mode pipeline_microbatches plot_feature_idx positional_encoding positional_features posterior_min_std prefetch_factor prior_cov_rank prior_family prior_fm_steps prior_hidden_dim prior_kl_reg_weight prior_min_std prior_mixture_components prior_mp_layers prior_nll_weight prior_temperature prior_type recon_loss residual_scale show_histogram split_seed static_cache_per_worker std_noise test_batch_idx test_interval test_max_batches time_integration training_epochs use_amp use_checkpointing use_compile use_conditional_prior use_ema use_multiscale use_node_types use_parallel_stats use_vae use_world_edges vae_batch_size vae_batch_size_max vae_batch_size_min vae_batch_vram_fraction vae_graph_aware vae_latent_dim vae_mp_layers vae_valid_prior_samples val_interval voronoi_clusters warmup_epochs weight_decay world_edge_backend world_max_num_neighbors world_radius_multiplier`),
+  meshgraphnetsV: keys(`alpha_prior_max alpha_recon augment_geometry batch_size best_by beta_aux bipartite_unpool coarse_world_edges coarsening_type cond_var dataset_dir display_testset display_trainset edge_var ema_decay eval_dataset feature_loss_weights fit_latent_gmm free_bits gmm_components gmm_covariance_type gmm_reg_covar gpu_ids grad_accum_steps hierarchy_cache_build_workers hierarchy_cache_dir hierarchy_cache_keep hierarchy_cache_wait_timeout hierarchy_seed hierarchy_variants histogram_bins histogram_clip_quantile infer_dataset infer_timesteps inference_output_dir input_var lambda_det lambda_kl lambda_mmd latent_dim learningr log_file_dir make_histogram message_passing_num mmd_bandwidth mmd_gather_ranks mode model modelpath mp_per_level multiscale_levels noise_gamma noise_std_ratio num_vae_samples num_workers num_z output_var parallel_mode pipeline_microbatches plot_feature_idx positional_encoding positional_features posterior_min_std prefetch_factor prior_cov_rank prior_family prior_fm_solver prior_fm_steps prior_grad_to_encoder prior_hidden_dim prior_kl_reg_weight prior_min_std prior_mixture_components prior_mp_layers prior_nll_weight prior_temperature prior_type recon_loss residual_scale save_rollouts show_histogram split_seed static_cache_per_worker std_noise test_batch_idx test_interval test_max_batches time_integration training_epochs use_amp use_checkpointing use_compile use_conditional_prior use_ema use_multiscale use_node_types use_parallel_stats use_vae use_world_edges vae_batch_size vae_batch_size_max vae_batch_size_min vae_batch_vram_fraction vae_graph_aware vae_latent_dim vae_mp_layers vae_valid_prior_samples val_interval voronoi_clusters warmup_epochs weight_decay world_edge_backend world_max_num_neighbors world_radius_multiplier z_conditioning`),
   operator: keys(`_ddp_port _pin_memory augment_geometry batch_size checkpoint_interval coarse_cache_per_worker coarse_world_edges coarsening_type cond_var coordinate_normalization dataset_dir deeponet_activation deeponet_basis_dim deeponet_branch_depth deeponet_branch_source deeponet_hidden_channels deeponet_max_branch_params deeponet_multi_output deeponet_sensor_resolution deeponet_trunk_depth dimension_tolerance display_testset display_trainset edge_var ema_decay feature_loss_weights fno_grid_resolution fno_hidden_channels fno_layers fno_modes fno_norm fno_use_channel_mlp fno_variant free_bits gino_cache_neighbors gino_channel_mlp_expansion gino_coord_embed_dim gino_fno_hidden_channels gino_fno_layers gino_fno_modes gino_grid_resolution gino_group_shared_geometry gino_in_radius gino_include_grid_coordinates gino_kernel_hidden gino_kernel_widths gino_lifting_hidden gino_max_empty_input_fraction gino_max_num_neighbors gino_out_radius gino_pos_embedding_type gino_projection_widths gino_query_chunk_size gino_tucker_rank gino_use_torch_cluster gino_variant global_condition_features gpu_ids grad_accum_steps grid_padding infer_dataset infer_query_chunk_size infer_timesteps inference_output_dir input_var integration_weight_source lambda_det lambda_kl lambda_mmd latent_dim learningr log_dir log_file_dir max_grad_norm message_passing_num mode model modelpath mp_per_level multiscale_levels noise_gamma noise_std_ratio num_node_types num_timesteps num_workers operator_dim out_of_bounds_policy output_var parallel_mode pipeline_microbatches plot_feature_idx point_branch_merge point_condition_depth point_feature_dim point_hidden_channels point_output_activation point_refiner_depth point_resample_each_epoch point_sampling point_sensor_count point_siren_omega0 point_trunk_depth point_variant pointnet_activation pointnet_depth pointnet_norm positional_features posterior_min_std prefetch_factor profile_batches sdf_sidecar sdf_source split_seed std_noise test_batch_idx test_interval test_max_batches time_integration train_query_chunk_size training_epochs use_amp use_checkpointing use_compile use_ema use_multiscale use_node_types use_vae use_world_edges vae_graph_aware vae_latent_dim vae_mp_layers val_interval voronoi_clusters warmup_epochs weight_decay world_edge_backend world_max_num_neighbors world_radius_multiplier write_preprocessing`),
   transolver: keys(`amortized_cache_nodes amortized_query_nodes amortized_training attention_kernel augment_geometry batch_size chunk_size coarse_world_edges coarsening_type cond_var coordinate_normalization dataset_dir display_trainset dropout edge_var ema_decay feature_loss_weights gpu_ids grad_accum_steps infer_chunk_size infer_dataset infer_mode infer_timesteps inference_output_dir input_var latent_dim learningr log_file_dir max_grad_norm max_train_batches max_val_batches message_passing_num mlp_ratio mode model modelpath mp_per_level multiscale_levels noise_gamma num_heads num_layers num_workers output_var parallel_mode positional_features prefetch_factor slice_num small_output_init split_seed std_noise temperature_init temperature_max temperature_min test_interval test_max_batches time_integration training_epochs use_amp use_checkpointing use_compile use_ema use_multiscale use_node_types use_parallel_stats use_world_edges val_interval voronoi_clusters warmup_epochs weight_decay world_edge_backend world_max_num_neighbors world_radius_multiplier write_preprocessing write_test_predictions`),
   sdfflow: keys(`alpha batch_size candidate_multiplier cfg_scale clamp_dist cond_dropout cond_values condition_clip condition_names condition_ood_policy dataset_dir decoder_heads decoder_hidden decoder_layers decoder_type deterministic_warmup_epochs eikonal_weight ema_decay encode_batch_size encoder_blocks encoder_dim encoder_heads encoder_self_attention fm_arch fm_batch_size fm_blocks fm_cond_hidden fm_ema_decay fm_heads fm_hidden fm_learningr fm_log_file_dir fm_mc_resolution_test fm_modelpath fm_num_test_shapes fm_num_workers fm_test_interval fm_time_logit_mean fm_time_logit_std fm_time_sampling fm_training_epochs fm_use_amp fm_use_ema fm_val_interval fm_warmup_epochs fm_weight_decay fourier_bands fsdp_min_params gpu_ids hybrid_grad_points init_vae_modelpath input_mesh kl_warmup_epochs kl_weight latent_clip latent_dim latent_tokens learningr log_file_dir max_condition_z mc_resolution mc_resolution_test min_condition_std mode model normal_weight num_encoder_points num_query_points num_samples num_test_shapes num_workers ode_steps output_dir overfit_all_shapes overfit_num_shapes parallel_mode pipeline_log_file plot_dpi plot_max_faces posterior_noise_max_scale posterior_noise_warmup_epochs sample_index_a sample_index_b seed skip_completed_stages source_num_samples split_seed surface_weight test_interval training_epochs use_amp use_conditions use_ema vae_batch_size vae_ema_decay vae_learningr vae_log_file_dir vae_mc_resolution_test vae_modelpath vae_num_test_shapes vae_num_workers vae_test_interval vae_training_epochs vae_use_amp vae_use_ema vae_val_interval vae_warmup_epochs vae_weight_decay val_interval warmup_epochs weight_decay`),
   simulgenvae: keys(`alpha batch_size beta_target cond_var dataset_dir ema_decay field_start_row gpu_ids init_beta_divisor init_vae_modelpath kl_warmup_epochs kl_warmup_start_frac latent_dim latent_dim_end lc_batch_size lc_data_type lc_dropout lc_ema_decay lc_filter lc_learningr lc_log_file_dir lc_modelpath lc_num_workers lc_training_epochs lc_use_amp lc_use_ema lc_warmup_epochs lc_weight_decay learningr load_all log_file_dir loss_type mode model network_size node_end node_start num_filter_enc num_var num_workers output_dir parallel_mode param_data_type param_dir pipeline_log_file plot_mode recon_iter skip_completed_stages split_seed timesteps_reduced training_epochs use_amp use_ema use_spatial_attention vae_batch_size vae_ema_decay vae_learningr vae_log_file_dir vae_modelpath vae_num_workers vae_training_epochs vae_use_amp vae_use_ema vae_warmup_epochs vae_weight_decay val_interval warmup_epochs weight_decay`)
 };
+
+// cHI-MGNflow deliberately shares the complete MeshGraphNets-V diagnostic
+// surface. The backend keeps stale latent/prior keys in `known_keys` so strict
+// preflight can explain that they are rejected instead of calling them unknown;
+// the flow controls are the only model-specific additions.
+KEY_CATALOGS.chiMgnflow = [...new Set([
+  ...KEY_CATALOGS.meshgraphnetsV,
+  ...keys(`flow_steps flow_solver flow_time_freqs flow_t_sampling flow_t_logit_scale flow_loss_weighting flow_det_prob flow_predict val_flow_steps val_num_samples gamma_es es_samples es_steps es_noise_source es_start_epoch`)
+])].sort();
 
 export const MODEL_CATALOG = {
   simulgenvae: {
@@ -79,6 +88,19 @@ export const MODEL_CATALOG = {
     label: "MeshGraphNets-V", short: "MGN-V", accent: "#407d69", modes: ["train", "inference"], keys: KEY_CATALOGS.meshgraphnetsV,
     description: "Variational mesh simulator with conditional priors and stochastic trajectories.", dataset: "mesh HDF5",
     defaults: { model: "meshgraphnets-v", mode: "train", gpu_ids: "0", modelpath: "../output/meshgraphnets_v/studio/meshgraphnets_v.pth", latent_dim: "128", edge_var: "8", vae_latent_dim: "256", num_vae_samples: "32", training_epochs: "500", batch_size: "4", learningr: "0.0001" }
+  },
+  "chi-mgnflow": {
+    label: "cHI-MGNflow", short: "cHI-FM", accent: "#286d7a", modes: ["train", "inference"], keys: KEY_CATALOGS.chiMgnflow,
+    description: "Conditional hierarchical MeshGraphNet with flow-matching field generation and deterministic or ensemble readout.", dataset: "mesh HDF5",
+    defaults: {
+      model: "chi-mgnflow", mode: "train", gpu_ids: "0", parallel_mode: "ddp",
+      modelpath: "../output/chi_mgnflow/studio/chi_mgnflow.pth",
+      latent_dim: "128", edge_var: "8", use_multiscale: "True",
+      flow_steps: "30", flow_solver: "heun", flow_time_freqs: "16",
+      flow_t_sampling: "uniform", flow_loss_weighting: "uniform", flow_det_prob: "0",
+      flow_predict: "sample", val_flow_steps: "10", val_num_samples: "8", best_by: "crps",
+      training_epochs: "500", batch_size: "4", learningr: "0.0001"
+    }
   },
   point_deeponet: {
     label: "Point-DeepONet", short: "P-DON", accent: "#3d718d", modes: ["train", "inference"], keys: KEY_CATALOGS.operator,
@@ -148,6 +170,10 @@ export const REQUIRED = {
     train: keys(`model mode gpu_ids dataset_dir modelpath input_var output_var edge_var latent_dim training_epochs batch_size learningr`),
     inference: keys(`model mode gpu_ids modelpath infer_dataset input_var output_var edge_var`)
   },
+  "chi-mgnflow": {
+    train: keys(`model mode gpu_ids dataset_dir modelpath input_var output_var edge_var latent_dim training_epochs batch_size learningr`),
+    inference: keys(`model mode gpu_ids modelpath infer_dataset input_var output_var edge_var`)
+  },
   point_deeponet: {
     train: keys(`model mode gpu_ids dataset_dir modelpath input_var output_var coordinate_normalization training_epochs batch_size learningr point_sensor_count point_hidden_channels point_feature_dim pointnet_depth point_trunk_depth`),
     inference: keys(`model mode gpu_ids modelpath infer_dataset input_var output_var`)
@@ -205,12 +231,18 @@ export const CHOICES = {
   fm_time_sampling: ["uniform", "logit_normal"],
   point_sampling: ["random", "fps"],
   out_of_bounds_policy: ["error", "clamp", "zero"],
-  sdf_source: ["none", "sidecar"]
+  sdf_source: ["none", "sidecar"],
+  flow_solver: ["heun", "euler"],
+  flow_t_sampling: ["uniform", "logitnormal"],
+  flow_loss_weighting: ["uniform", "x0"],
+  flow_predict: ["sample", "mean", "ensemble_mean"],
+  best_by: ["recon", "crps", "det"]
 };
 
 export const BOOLEAN_KEYS = new Set(keys(`augment_geometry bipartite_unpool coarse_world_edges display_testset display_trainset encoder_self_attention fit_latent_gmm fm_use_amp fm_use_ema gino_cache_neighbors gino_group_shared_geometry gino_include_grid_coordinates gino_use_torch_cluster load_all make_histogram overfit_all_shapes point_resample_each_epoch resume_prior show_histogram skip_completed_stages small_output_init train_conditional_prior use_amp use_checkpointing use_compile use_conditional_prior use_ema use_multiscale use_node_types use_parallel_stats use_vae use_world_edges vae_graph_aware vae_use_amp vae_use_ema lc_use_amp lc_use_ema write_preprocessing write_test_predictions`));
 export const OPERATOR_REMOVED = new Set(keys(`message_passing_num latent_dim edge_var world_radius_multiplier world_max_num_neighbors world_edge_backend coarse_world_edges multiscale_levels mp_per_level coarsening_type voronoi_clusters coarse_cache_per_worker use_vae vae_latent_dim vae_mp_layers vae_graph_aware free_bits posterior_min_std lambda_mmd lambda_kl lambda_det`));
 export const TRANSOLVER_REJECTED = new Set(keys(`edge_var message_passing_num mp_per_level coarsening_type voronoi_clusters multiscale_levels world_radius_multiplier world_max_num_neighbors world_edge_backend coarse_world_edges`));
+export const CHI_FLOW_REMOVED = new Set(keys(`use_vae vae_latent_dim vae_mp_layers vae_graph_aware posterior_min_std num_z z_conditioning mmd_bandwidth mmd_gather_ranks lambda_mmd beta_aux alpha_recon recon_loss prior_type use_conditional_prior prior_family prior_nll_weight prior_fm_steps prior_fm_solver prior_mp_layers prior_hidden_dim prior_temperature prior_kl_reg_weight prior_cov_rank prior_min_std prior_mixture_components prior_grad_to_encoder vae_valid_prior_samples gamma_es es_samples es_steps es_noise_source es_start_epoch`));
 
 export const BLOCK_SPECS = {
   "source.cad": {
@@ -278,7 +310,11 @@ export const BLOCK_SPECS = {
     description: "Conditionally generate, reconstruct, or blend CAD candidates with SDFFlow.",
     inputs: [{ id: "parameters", type: "parameters", label: "design parameters" }, { id: "model", type: "checkpoint", label: "SDFFlow model", required: true }],
     outputs: [{ id: "candidates", type: "candidates", label: "CAD candidates" }],
-    defaults: { mode: "conditional generation", candidates: "24", guidance: "2.5", geometry_checks: "connected + watertight + bounds" }, sampleLabel: "24 CAD candidates", executable: true
+    defaults: {
+      mode: "sample", num_samples: "24", cfg_scale: "2.5", ode_steps: "50",
+      mc_resolution: "128", seed: "42", cond_values: "",
+      geometry_checks: "automatic: connected + watertight + bounds"
+    }, sampleLabel: "24 CAD candidates", executable: true
   },
   "optimize.design": {
     label: "Optimization", category: "Optimization", icon: "optimize", accent: "#8a613b", visual: "pareto", maturity: "adapter",
@@ -289,7 +325,11 @@ export const BLOCK_SPECS = {
       { id: "parameters", type: "parameters", label: "search variables", required: false }
     ],
     outputs: [{ id: "selected", type: "candidates", label: "Pareto designs" }, { id: "metrics", type: "metrics", label: "objective table" }, { id: "report", type: "report", label: "optimization report" }],
-    defaults: { mode: "evaluate CSV candidate batch", csv_path: "", objectives: "", directions: "", constraints: "", selection: "feasible Pareto + diverse top-k", top_k: "6" }, sampleLabel: "No report yet", workspace: "optimization"
+    defaults: {
+      mode: "evaluate CSV candidate batch", csv_path: "",
+      objectives: "volume,bbox_z", directions: "min,max",
+      constraints: "watertight >= 1", selection: "feasible Pareto + diverse top-k", top_k: "6"
+    }, sampleLabel: "No report yet", workspace: "optimization"
   },
   "evaluate.predictions": {
     label: "Evaluate Predictions", category: "Evaluation", icon: "evaluate", accent: "#1f7c66", visual: "parity", maturity: "adapter",
@@ -298,11 +338,7 @@ export const BLOCK_SPECS = {
     outputs: [{ id: "metrics", type: "metrics", label: "metrics" }, { id: "report", type: "report", label: "evaluation report" }],
     defaults: {
       metrics: "relative L2, MAE, RMSE", aggregate: "mean + median + p95", error_view: "absolute + relative",
-      // Explicit, never inferred: the first physical field row and how many to
-      // score. Deriving these from the feature count is wrong for any dataset
-      // with cond_var rows, which is exactly how a run ends up reporting great
-      // metrics on constant channels.
-      prediction_start: "3", truth_start: "3", num_fields: "2"
+      mapping_mode: "schema", field_pairs: "", mapping_confirmed: "False"
     }, sampleLabel: "100 sample metrics", workspace: "evaluation"
   },
   "evaluate.training_metrics": {
@@ -332,11 +368,14 @@ export const BLOCK_SPECS = {
     description: "Run the validated portable inference API or build the Windows inference executable.",
     inputs: [{ id: "model", type: "checkpoint", label: "saved model", required: true }, { id: "data", type: "dataset", label: "sample data", required: false }],
     outputs: [{ id: "endpoint", type: "endpoint", label: "endpoint" }],
-    defaults: { target: "local / server", device: "CPU / GPU", auth: "token", openapi: "enabled" }, sampleLabel: "3 revisions", workspace: "deploy"
+    defaults: {
+      checkpoint_path: "", input_path: "", output_name: "studio-inference",
+      timesteps: "", num_samples: "", ode_steps: "", cond_values: ""
+    }, sampleLabel: "No deployment job yet", workspace: "deploy"
   }
 };
 
-Object.entries(MODEL_CATALOG).forEach(([modelId, model]) => {
+function installModelBlock(modelId, model) {
   BLOCK_SPECS[`model.${modelId}`] = {
     label: model.label,
     category: "Models",
@@ -356,7 +395,45 @@ Object.entries(MODEL_CATALOG).forEach(([modelId, model]) => {
     modelId, executable: true,
     isModel: true
   };
-});
+}
+
+Object.entries(MODEL_CATALOG).forEach(([modelId, model]) => installModelBlock(modelId, model));
+
+/**
+ * Keep a newly registered trainable route usable even before constants.js is
+ * updated. Curated entries retain their richer copy/defaults; the live
+ * MethodSpec always owns keys, modes, required fields, and published defaults.
+ */
+export function registerLiveModel(model) {
+  if (!model?.model || model.spec_id === "geometry_ingest") return false;
+  const modelId = String(model.model);
+  const stringifyDefault = value => typeof value === "boolean"
+    ? (value ? "True" : "False")
+    : String(value ?? "");
+  const liveDefaults = Object.fromEntries(
+    Object.entries(model.defaults || {}).map(([key, value]) => [key, stringifyDefault(value)])
+  );
+  const existing = MODEL_CATALOG[modelId];
+  const local = existing || {
+    label: model.method || modelId,
+    short: modelId.slice(0, 7).toUpperCase(),
+    accent: "#486f78",
+    description: `Live ${model.method || modelId} route published by the backend registry.`,
+    defaults: { model: modelId, mode: model.modes?.[0] || "train", gpu_ids: "0" }
+  };
+  Object.assign(local, {
+    keys: [...(model.known_keys || [])],
+    modes: [...(model.modes || [])],
+    required: model.required || {},
+    dataset: model.dataset_kind || local.dataset || "backend-defined dataset",
+    backend: model,
+    defaults: { ...(local.defaults || {}), ...liveDefaults }
+  });
+  MODEL_CATALOG[modelId] = local;
+  if (!BLOCK_SPECS[`model.${modelId}`]) installModelBlock(modelId, local);
+  else BLOCK_SPECS[`model.${modelId}`].defaults = { ...local.defaults };
+  return !existing;
+}
 
 /**
  * Every mesh surrogate is wired the same way, so the shipped per-model pipelines
@@ -517,20 +594,17 @@ export const TEMPLATES = {
     name: "Generative design optimization",
     nodes: [
       ["parameters", "source.parameters", 35, 300],
-      ["generator_model", "model.sdfflow", 35, 55],
-      ["train_metrics", "evaluate.training_metrics", 330, 540],
+      ["generator_model", "model.sdfflow", 35, 55, { mode: "sample" }],
       ["generator", "run.cad_generator", 330, 125],
-      ["physics_model", "source.checkpoint", 330, 390, { path: "checkpoints/physics_surrogate.pth" }],
-      ["optimization", "optimize.design", 625, 125],
+      ["optimization", "optimize.design", 625, 125, {
+        objectives: "volume,bbox_z", directions: "min,max", constraints: "watertight >= 1"
+      }],
       ["export", "output.export", 920, 125]
     ],
     edges: [
       ["parameters", "parameters", "generator", "parameters"],
-      ["generator_model", "metrics", "train_metrics", "metrics"],
       ["generator_model", "model", "generator", "model"],
       ["generator", "candidates", "optimization", "candidates"],
-      ["physics_model", "model", "optimization", "models"],
-      ["parameters", "parameters", "optimization", "parameters"],
       ["optimization", "selected", "export", "input"]
     ]
   },
@@ -541,7 +615,6 @@ export const STUDIO_SECTIONS = {
   data: {
     label: "Data", icon: "data", color: "#3c7193", note: "Geometry, datasets, conditions",
     title: "Data workspace", description: "Curate every object entering a pipeline, inspect individual samples, preserve split provenance, and expose exact HDF5 contracts.",
-    stats: [["2,138", "DeepJEB shapes"], ["3", "dataset contracts"]],
     cards: [
       ["HDF5 dataset catalog", "data", "native", "Samples, geometry, topology, fields, timesteps, splits, statistics, and parameter bindings.", ["mesh HDF5", "table HDF5", "SDF HDF5"], "source.hdf5"],
       ["SimulGen fixed-geometry gate", "data", "native", "Verify uniform node count N and timestep count T before SimulGen-VAE training or reconstruction.", ["fixed N", "fixed T", "field rows"], "model.simulgenvae"],
@@ -554,7 +627,6 @@ export const STUDIO_SECTIONS = {
   experiments: {
     label: "Experiments", icon: "evaluate", color: "#1f7c66", note: "Training, sweeps, sessions",
     title: "Experiment workspace", description: "Training is durable work. Track sessions, GPU resources, checkpoints, stage reuse, comparisons, and restartable lineage.",
-    stats: [["2", "active sessions"], ["44", "checkpoints"]],
     cards: [
       ["Train Metrics", "evaluate", "native", "Plot every metric discovered in actual model-run logs, then include or exclude individual series.", ["all by default", "per-metric toggle", "actual logs"], "evaluate.training_metrics"],
       ["SimulGen staged training", "model", "native", "Train the merged VAE → latent-conditioner pipeline or execute either stage independently.", ["train", "train_vae", "train_lc"], "model.simulgenvae"],
@@ -567,7 +639,6 @@ export const STUDIO_SECTIONS = {
   optimization: {
     label: "Optimization", icon: "optimize", color: "#8a613b", note: "Objectives, constraints, Pareto",
     title: "Generated-design evaluation and optimization", description: "Turn candidate galleries into engineering decisions while keeping geometry evidence, physics predictions, constraints, uncertainty, Pareto trade-offs, and verification separate.",
-    stats: [["1", "real Pareto engine"], ["2", "future search layers"]],
     cards: [
       ["Geometry feasibility", "prepare", "adapter", "Consume explicit geometry-check columns from the selected candidate CSV as hard constraints.", ["CSV gate", "condition column", "traceable"], "optimize.design"],
       ["Surrogate evaluation", "model", "adapter", "Consume actual outputs from linked inference or benchmark runs; the optimizer does not invent physics scores.", ["actual CSV", "multi-model", "lineage"], "optimize.design"],
@@ -580,7 +651,6 @@ export const STUDIO_SECTIONS = {
   evaluation: {
     label: "Evaluation", icon: "evaluate", color: "#1f7c66", note: "Field metrics and errors",
     title: "Prediction evaluation", description: "Compare real rollout or reconstructed HDF5 fields against a real ground-truth HDF5 file and persist per-sample evidence.",
-    stats: [["5", "field metrics"], ["1", "per-sample CSV"]],
     cards: [
       ["Relative L2", "evaluate", "native", "Global per-sample field norm error with a finite-value mask and explicit field-row selection.", ["relative L2", "per sample", "actual arrays"], "evaluate.predictions"],
       ["Absolute errors", "evaluate", "native", "MAE, RMSE, and maximum absolute error over matched feature, timestep, and node dimensions.", ["MAE", "RMSE", "max error"], "evaluate.predictions"],
@@ -590,7 +660,6 @@ export const STUDIO_SECTIONS = {
   comparison: {
     label: "Compare", icon: "evaluate", color: "#5e6f90", note: "Rank actual model results",
     title: "Cross-model comparison", description: "Resolve graph-connected run histories by persisted node lineage, and separately rank qualified benchmark or evaluation CSV rows.",
-    stats: [["12", "connected runs"], ["200", "ranked rows"]],
     cards: [
       ["Qualified metric ranking", "evaluate", "native", "Choose the model column, metric column, and min/max direction from an actual output CSV.", ["CSV", "rank", "source row"], "evaluate.compare"],
       ["Benchmark handoff", "evaluate", "native", "Use checked comparison.csv artifacts from benchmark campaigns without copying values into the UI.", ["benchmark", "evidence", "JSON"], "evaluate.compare"]
@@ -599,7 +668,6 @@ export const STUDIO_SECTIONS = {
   export: {
     label: "Export", icon: "output", color: "#596560", note: "Copy or archive artifacts",
     title: "Artifact export", description: "Copy a selected real file or ZIP a selected artifact directory into the isolated frontend runtime and download it.",
-    stats: [["1", "click download"], ["0", "backend rewrites"]],
     cards: [
       ["Export file", "output", "native", "Copy a real HDF5, CSV, JSON, checkpoint, or report while preserving the source artifact.", ["copy", "provenance", "download"], "output.export"],
       ["Export directory", "output", "native", "Create a ZIP archive under frontend/runtime/exports for multi-file inference and geometry outputs.", ["ZIP", "folder", "download"], "output.export"]
@@ -608,13 +676,11 @@ export const STUDIO_SECTIONS = {
   models: {
     label: "Models", icon: "model", color: "#76568e", note: "10 live model IDs",
     title: "Model and checkpoint workspace", description: "Browse every installed route, its real mode and configuration contract, checkpoint compatibility, dataset requirements, and intended engineering use.",
-    stats: [["10", "trainable IDs"], ["28", "route modes"]],
     modelCards: true
   },
   benchmarks: {
     label: "Benchmarks", icon: "evaluate", color: "#8a613b", note: "Locked protocols and reports",
     title: "Benchmark workspace", description: "Run named, qualified protocols. Smoke, full, and paper-equivalent evidence remain visibly distinct.",
-    stats: [["6", "benchmark families"], ["3", "qualification levels"]],
     cards: [
       ["Elasticity accuracy", "evaluate", "adapter", "Prepare, preflight, train, infer, evaluate relative L2, and compare supported models.", ["smoke", "full", "paper"]],
       ["Transient plasticity", "evaluate", "adapter", "Seeded split, exact test HDF5, model scheduling, rollout evaluation, and resource probes.", ["campaign", "rollout", "7 models"]],
@@ -627,7 +693,6 @@ export const STUDIO_SECTIONS = {
   artifacts: {
     label: "Artifacts", icon: "artifact", color: "#68736e", note: "Fields, geometry, models",
     title: "Artifact workspace", description: "Search typed outputs across pipelines, inspect individual samples, compare versions, and follow provenance to the producing block and run.",
-    stats: [["837", "HDF5 artifacts"], ["44", "saved models"]],
     cards: [
       ["SimulGen model bundles", "model", "native", "VAE and latent-conditioner checkpoints with stage, architecture, scaling, and config metadata.", ["vae.pth", "lc.pth", "compatibility"], "source.checkpoint"],
       ["Reconstructed fields", "artifact", "native", "Per-sample field reconstruction, ground truth, MSE, timestep player, and HDF5 export.", ["field", "truth", "MSE"], "run.inference"],
@@ -640,7 +705,6 @@ export const STUDIO_SECTIONS = {
   deploy: {
     label: "Deploy", icon: "output", color: "#4d6874", note: "Executable and API handoff",
     title: "Deployment workspace", description: "Package validated saved models for portable inference or publish them behind governed, versioned APIs.",
-    stats: [["8", "bundle families"], ["1", "local API contract"]],
     cards: [
       ["Inference bundle", "output", "native", "CPU-oriented, family-detecting standalone inference with parity and limitations reports.", ["portable", "family detect", "parity"]],
       ["Build .exe", "output", "native", "PyInstaller one-folder executable for a no-Python Windows target.", ["Windows", "CPU", "smoke test"]],
@@ -653,9 +717,8 @@ export const STUDIO_SECTIONS = {
   system: {
     label: "System", icon: "system", color: "#5a746b", note: "Environments, GPUs, diagnostics",
     title: "System workspace", description: "Understand interpreters, environments, dependencies, CUDA devices, resources, and diagnostic health before running expensive work.",
-    stats: [["11", "healthy routes"], ["6", "CUDA devices"]],
     cards: [
-      ["Installation health", "system", "native", "Registry, repository, entrypoint, imports, config examples, and native probe status.", ["11 OK", "entrypoints", "imports"]],
+      ["Installation health", "system", "native", "Registry, repository, entrypoint, imports, config examples, and native probe status.", ["live registry", "entrypoints", "imports"]],
       ["Environment routing", "system", "native", "Suite interpreter plus repository-root-relative backend interpreters.", ["Windows", "Ubuntu", "venv"]],
       ["GPU inventory", "system", "adapter", "Device model, VRAM, CUDA capability, allocated/reserved memory, and owning processes.", ["CUDA", "VRAM", "process"]],
       ["SimulGen parallel modes", "model", "native", "Single GPU, in-process DDP, and FSDP selection with GPU-count warnings.", ["single", "ddp", "fsdp"], "model.simulgenvae"],
@@ -666,7 +729,6 @@ export const STUDIO_SECTIONS = {
   docs: {
     label: "Docs", icon: "docs", color: "#377264", note: "Methods, configs, datasets",
     title: "Documentation workspace", description: "Open contextual method, configuration, dataset, inference, benchmark, and implementation documentation without leaving Studio.",
-    stats: [["12", "method guides"], ["67", "SimulGen keys"]],
     cards: [
       ["SimulGen-VAE README", "docs", "native", "Overview, architecture, training concepts, data conditioning, performance, and troubleshooting.", ["SimulGenVAE/README.md", "method"], "model.simulgenvae"],
       ["SimulGen technical documentation", "docs", "native", "Hierarchical latent design, VAE/LC components, training pipeline, losses, and implementation notes.", ["TECHNICAL_DOCUMENTATION.md", "architecture"], "model.simulgenvae"],
@@ -704,7 +766,18 @@ export const HELP = {
   use_checkpointing: "Activation checkpointing trades additional compute for a lower training memory peak.",
   coordinate_normalization: "Coordinate transform recorded with the checkpoint and restored for inference.",
   _ddp_port: "Runtime-injected internal key, visible for completeness but normally not user-authored.",
-  _pin_memory: "Runtime-injected internal key, visible for completeness but normally not user-authored."
+  _pin_memory: "Runtime-injected internal key, visible for completeness but normally not user-authored.",
+  flow_steps: "Inference ODE integration steps. This changes sampling cost and accuracy, not checkpoint architecture.",
+  flow_solver: "Heun uses two velocity evaluations per step; Euler uses one.",
+  flow_time_freqs: "Fourier time-embedding width. This is checkpoint architecture and must match training.",
+  flow_t_sampling: "Training-time path sampling: uniform or middle-focused logitnormal.",
+  flow_t_logit_scale: "Positive scale of the logit-normal training-time sampler.",
+  flow_loss_weighting: "uniform predicts velocity uniformly; x0 emphasizes the deterministic path endpoint.",
+  flow_det_prob: "Fraction of training graphs pinned to t=0. Must be in [0, 1).",
+  flow_predict: "sample integrates one trajectory; mean is the deterministic t=0 readout; ensemble_mean averages generated draws.",
+  val_flow_steps: "Cheaper ODE step count used during validation.",
+  val_num_samples: "Number of validation ensemble members used for sampling metrics.",
+  best_by: "Checkpoint selection metric: reconstruction, CRPS, or deterministic validation error."
 };
 
 export const INPUT_SOURCE_META = {

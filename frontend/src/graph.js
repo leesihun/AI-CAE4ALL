@@ -52,7 +52,16 @@ export function paletteRender(query = "") {
 
 export function loadTemplate(name, saveHistory = true) {
   const template = TEMPLATES[name] || TEMPLATES.himgn;
-  if (saveHistory && state.nodes.length) snapshot();
+  if (saveHistory) {
+    // The untouched startup template is disposable. Once the user has made a
+    // graph/config change (and therefore has history), replacement becomes a
+    // destructive choice and must be confirmed.
+    const needsConfirmation = state.nodes.length > 0 && state.history.length > 0;
+    const confirmed = !needsConfirmation || typeof window === "undefined" || typeof window.confirm !== "function"
+      || window.confirm(`Replace the current pipeline with "${template.name}"?\n\nYour current pipeline will be kept as one Undo step.`);
+    if (!confirmed) return false;
+    snapshot();
+  }
   state.nodes = template.nodes.map(([id, type, x, y, config]) => ({
     id, type, x, y, config: { ...BLOCK_SPECS[type].defaults, ...(config || {}) },
     status: "idle", progress: 0
@@ -69,6 +78,7 @@ export function loadTemplate(name, saveHistory = true) {
   $("#pipelineName").value = template.name;
   render();
   schedulePipelineSave();
+  return true;
 }
 
 export function addBlock(type, position) {
@@ -102,16 +112,115 @@ export function addBlock(type, position) {
   toast(`${spec.label} added. Click either socket first, then choose a highlighted compatible socket.`);
 }
 
+const DUPLICATE_EVIDENCE_KEYS = new Set([
+  "job_id", "run_id", "result_id", "results_id", "evidence_id", "artifact_id",
+  "results_path", "results_samples", "report_path", "evaluated_samples",
+  "export_path", "metrics_csv", "output_path", "output_csv", "candidate_csv"
+]);
+
+const FILE_OUTPUT_KEYS = new Set(["output_dataset", "pipeline_log_file"]);
+
+function isDuplicateEvidenceKey(key) {
+  return DUPLICATE_EVIDENCE_KEYS.has(key)
+    || /^(?:job|run|results?|report|export|evidence|artifact)_id$/i.test(key)
+    || /^(?:results?|report|export|evidence)_path$/i.test(key);
+}
+
+function isOutputDestination(type, key) {
+  return key === "output_dir"
+    || key === "inference_output_dir"
+    || key === "output_dataset"
+    || key === "log_dir"
+    || key === "log_file_dir"
+    || key.endsWith("_log_file_dir")
+    || key === "pipeline_log_file"
+    || (type === "output.export" && key === "path");
+}
+
+function resetDuplicateConfigValue(config, defaults, key) {
+  if (Object.hasOwn(defaults, key)) config[key] = defaults[key];
+  else delete config[key];
+}
+
+function suffixedOutputPath(value, suffix, fileOutput) {
+  const path = String(value ?? "").trim().replace(/[\\/]+$/, "");
+  if (!path) return value;
+  if (fileOutput) {
+    const extension = path.match(/(\.[^./\\]+)$/)?.[1] || "";
+    if (extension) return `${path.slice(0, -extension.length)}-${suffix}${extension}`;
+  }
+  return `${path}-${suffix}`;
+}
+
+function uniqueDuplicateOutputPath(value, key, suffix, existingNodes) {
+  const used = new Set(existingNodes.flatMap(node => Object.entries(node.config || {})
+    .filter(([candidateKey]) => isOutputDestination(node.type, candidateKey))
+    .map(([, candidateValue]) => String(candidateValue ?? "").trim().toLowerCase())
+    .filter(Boolean)));
+  let attempt = 1;
+  let candidate = suffixedOutputPath(value, suffix, FILE_OUTPUT_KEYS.has(key));
+  while (used.has(String(candidate).toLowerCase())) {
+    attempt += 1;
+    candidate = suffixedOutputPath(value, `${suffix}-${attempt}`, FILE_OUTPUT_KEYS.has(key));
+  }
+  return candidate;
+}
+
+/**
+ * Clone editable inputs, but never make the clone claim the original block's
+ * run or evidence. Graph-derived inputs are also removed because the clone has
+ * no copied edges; manually chosen datasets/checkpoints remain valid inputs.
+ */
+export function duplicateNodeRecord(source, copyId, existingNodes = state.nodes) {
+  const copy = JSON.parse(JSON.stringify(source));
+  const defaults = BLOCK_SPECS[source.type]?.defaults || {};
+  copy.id = copyId;
+  copy.config = copy.config && typeof copy.config === "object" ? copy.config : {};
+
+  Object.entries(copy.autoFill || {}).forEach(([key, meta]) => {
+    if (String(copy.config[key] ?? "").trim() === String(meta?.value ?? "").trim()) {
+      resetDuplicateConfigValue(copy.config, defaults, key);
+    }
+  });
+  copy.autoFill = {};
+
+  Object.keys(copy.config).forEach(key => {
+    if (isDuplicateEvidenceKey(key)) resetDuplicateConfigValue(copy.config, defaults, key);
+  });
+
+  const suffix = copyId.match(/_copy_(\d+)$/)?.[1];
+  const outputSuffix = suffix ? `copy-${suffix}` : "copy";
+  Object.keys(copy.config).forEach(key => {
+    if (!isOutputDestination(source.type, key) || !String(copy.config[key] ?? "").trim()) return;
+    copy.config[key] = uniqueDuplicateOutputPath(copy.config[key], key, outputSuffix, existingNodes);
+  });
+
+  copy.manualConfigKeys = Array.isArray(copy.manualConfigKeys)
+    ? copy.manualConfigKeys.filter(key => Object.hasOwn(copy.config, key) && !isDuplicateEvidenceKey(key))
+    : [];
+  delete copy.savedConfigPath;
+  delete copy.optimizationReport;
+  delete copy.jobId;
+  delete copy.resultId;
+  delete copy.resultsPath;
+  delete copy.reportPath;
+  delete copy.exportPath;
+  copy.status = "idle";
+  copy.progress = 0;
+  return copy;
+}
+
 export function duplicateNode(id) {
   const source = state.nodes.find(node => node.id === id);
   if (!source) return;
   snapshot();
-  const copy = JSON.parse(JSON.stringify(source));
-  copy.id = `${source.id}_copy_${state.nodeCounter++}`;
+  let copyId;
+  do {
+    copyId = `${source.id}_copy_${state.nodeCounter++}`;
+  } while (state.nodes.some(node => node.id === copyId));
+  const copy = duplicateNodeRecord(source, copyId);
   copy.x += 35;
   copy.y += 35;
-  copy.status = "idle";
-  copy.progress = 0;
   state.nodes.push(copy);
   state.selectedNode = copy.id;
   state.selectedEdge = null;

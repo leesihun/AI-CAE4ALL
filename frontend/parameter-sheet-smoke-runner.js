@@ -27,7 +27,7 @@ function assert(condition, message) {
   try {
     await page.goto(studioUrl);
     await page.waitForFunction(() => window.__AI_CAE_FRONTEND__?.state?.nodes?.length);
-    await page.evaluate(() => window.__AI_CAE_FRONTEND__.loadTemplate("parametric"));
+    await page.evaluate(() => window.__AI_CAE_FRONTEND__.loadTemplate("parametric", false));
     const mlpParametersId = await page.evaluate(() =>
       window.__AI_CAE_FRONTEND__.state.nodes.find(node => node.type === "source.parameters")?.id
     );
@@ -37,7 +37,8 @@ function assert(condition, message) {
     await page.locator(".parameter-sheet").waitFor({ state: "visible" });
     assert((await page.locator("#artifactTitle").innerText()).includes("MLP paired dataset"), "MLP mapping profile is missing");
     assert(await page.locator("#parameterSheetRows tr").count() === 512, "MLP sheet must have one row for every HDF5 sample");
-    assert(await page.locator('.parameter-column-kind.input').count() === 3, "Expected three HDF5 input columns");
+    const initialInputColumns = await page.locator('.parameter-column-kind.input').count();
+    assert(initialInputColumns === 3, `Expected three HDF5 input columns, found ${initialInputColumns}`);
     assert(await page.locator('.parameter-column-kind.output').count() === 2, "Expected two HDF5 output columns");
     assert(await page.locator('[data-add-parameter-column="input"]').count() === 1, "Add Input column is missing");
     assert(await page.locator('[data-add-parameter-column="output"]').count() === 1, "Add Output column is missing for MLP");
@@ -99,7 +100,7 @@ function assert(condition, message) {
       fullPage: false
     });
 
-    await page.evaluate(() => window.__AI_CAE_FRONTEND__.loadTemplate("simulgen"));
+    await page.evaluate(() => window.__AI_CAE_FRONTEND__.loadTemplate("simulgen", false));
     const conditionParametersId = await page.evaluate(() =>
       window.__AI_CAE_FRONTEND__.state.nodes.find(node => node.type === "source.parameters")?.id
     );
@@ -107,9 +108,46 @@ function assert(condition, message) {
     await page.locator(".parameter-sheet").waitFor({ state: "visible" });
     assert((await page.locator("#artifactTitle").innerText()).includes("SimulGen-VAE conditions"), "Non-MLP condition profile is missing");
     assert(await page.locator('[data-add-parameter-column="output"]').count() === 0, "Non-MLP parameters must not force MLP Output columns");
+
+    await page.evaluate(() => window.__AI_CAE_FRONTEND__.loadTemplate("generative", false));
+    await page.evaluate(() => window.__AI_CAE_FRONTEND__.openArtifact("parameters"));
+    await page.locator(".parameter-sheet.generative").waitFor({ state: "visible" });
+    assert(await page.locator('[data-select-parameter-row]').count() === 14, "Generative parameter rows do not expose an explicit candidate selector");
+    const beforeSelection = await page.evaluate(() => window.__AI_CAE_FRONTEND__.validateGraph(false));
+    assert(beforeSelection.some(message => message.includes("choose one Design Parameters spreadsheet row")), "Conditional generation accepted an unselected spreadsheet");
+    await page.locator('[data-column-heading="input_1"] .parameter-column-name').fill("bbox_x");
+    await page.locator('.parameter-sheet-value[data-row="0"][data-column-id="input_1"]').fill("1.25");
+    await page.locator('[data-select-parameter-row="0"]').check();
+    const selected = await page.evaluate(async () => {
+      const frontend = window.__AI_CAE_FRONTEND__;
+      const { executableSteps } = await import("./src/validate.js");
+      const generator = frontend.state.nodes.find(node => node.id === "generator");
+      const parameters = frontend.state.nodes.find(node => node.id === "parameters");
+      return {
+        generator: generator.config,
+        table: JSON.parse(parameters.config.parameter_table),
+        errors: frontend.validateGraph(false),
+        config: executableSteps().find(step => step.nodeId === "generator")?.config || ""
+      };
+    });
+    assert(selected.table.selected_sample_id === "pending:0", "Selected generation row was not persisted");
+    assert(selected.generator.cond_values === "1.25", "Selected numeric Input value did not materialize as cond_values");
+    assert(selected.generator.condition_sample.includes("pending:0"), "Generator does not identify the source spreadsheet row");
+    assert(selected.errors.length === 0, `Selected generation row did not validate: ${selected.errors.join("; ")}`);
+    assert(selected.config.split("\n").some(line => line.trim().split(/\s+/).join(" ") === "cond_values 1.25"), "Native SDFFlow config omitted the selected condition value");
+
+    await page.locator('.parameter-sheet-value[data-row="0"][data-column-id="input_1"]').fill("not-a-number");
+    const invalid = await page.evaluate(() => ({
+      errors: window.__AI_CAE_FRONTEND__.validateGraph(false),
+      value: window.__AI_CAE_FRONTEND__.state.nodes.find(node => node.id === "generator").config.cond_values || ""
+    }));
+    assert(invalid.errors.some(message => message.includes("missing or non-numeric")), "Invalid selected condition did not block execution");
+    assert(invalid.value === "", "Invalid spreadsheet edit left stale cond_values on the generator");
+    await page.locator('.parameter-sheet-value[data-row="0"][data-column-id="input_1"]').fill("1.5");
+    assert(await page.evaluate(() => window.__AI_CAE_FRONTEND__.state.nodes.find(node => node.id === "generator").config.cond_values) === "1.5", "Editing the selected row did not refresh cond_values");
     assert(browserErrors.length === 0, `Browser errors: ${browserErrors.join(" | ")}`);
 
-    console.log("PASS: MLP rows match all 512 HDF5 samples, X/Y values load, columns grow, and non-MLP parameters remain condition-only.");
+    console.log("PASS: parameter sheets preserve MLP pairs and explicitly materialize one validated SDFFlow generation row.");
   } finally {
     await browser.close();
   }

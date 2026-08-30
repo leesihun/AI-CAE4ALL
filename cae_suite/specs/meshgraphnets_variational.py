@@ -33,21 +33,31 @@ VAR_KEYS = frozenset(
         "test_batch_idx", "plot_feature_idx",
         "use_multiscale", "coarsening_type", "voronoi_clusters", "multiscale_levels",
         "mp_per_level", "pipeline_microbatches", "make_histogram", "show_histogram",
+        # inference: write one HDF5 per (scene, VAE sample), or only the
+        # spread histogram + spread_values.npz. False makes a many-draw
+        # distribution study affordable on disk.
+        "save_rollouts",
         "histogram_bins", "histogram_clip_quantile",
         # VAE / conditional-prior branch
         "use_vae", "vae_latent_dim", "vae_mp_layers", "vae_graph_aware",
+        # How z reaches the processor: 'concat' (legacy Linear([x, z]) fuser) or
+        # 'adaln' (AdaLN-Zero modulation, identity at init). It changes the
+        # parameter names, so a checkpoint is tied to the value it trained with.
+        "z_conditioning",
+        # All-gather z across DDP ranks before MMD so the two-sample estimator
+        # sees the GLOBAL batch instead of the per-rank one (default True).
+        "mmd_gather_ranks",
         "vae_batch_size", "vae_batch_size_max", "vae_batch_size_min",
         "vae_batch_vram_fraction", "vae_valid_prior_samples", "recon_loss",
         "alpha_recon", "beta_aux", "lambda_mmd", "mmd_bandwidth",
         "posterior_min_std", "num_z", "num_vae_samples", "prior_type",
         "use_conditional_prior", "prior_family", "prior_nll_weight",
-        "prior_fm_steps", "prior_mp_layers", "prior_hidden_dim",
+        "prior_fm_steps", "prior_fm_solver", "prior_mp_layers", "prior_hidden_dim",
         "prior_temperature", "prior_kl_reg_weight", "prior_cov_rank",
+        # Weight on the flow-matching gradient that reaches the ENCODER
+        # (0 = legacy detached one-way coupling, 1 = full CVAE rate term).
+        "prior_grad_to_encoder",
         "prior_min_std", "prior_mixture_components",
-        # Energy-score generative term (scores decodes of prior/noise-sampled z
-        # against the target field; gamma_es 0 = off). es_noise_source:
-        # 'prior' (learned p(z|g)) or 'normal' (N(0,I), no conditional prior).
-        "gamma_es", "es_samples", "es_steps", "es_noise_source", "es_start_epoch",
         # Checkpoint-selection metric: 'recon' (posterior validation loss,
         # default) or 'crps' (inference-mirroring learned-prior CRPS).
         "best_by",
@@ -62,6 +72,8 @@ VAR_REMOVED_KEYS = frozenset(
         "free_bits", "fit_latent_gmm", "gmm_components", "gmm_covariance_type",
         "gmm_reg_covar", "lambda_kl", "lambda_det", "alpha_prior_max",
         "residual_scale", "bipartite_unpool", "positional_encoding",
+        # Energy-score generative term, removed from the objective.
+        "gamma_es", "es_samples", "es_steps", "es_noise_source", "es_start_epoch",
     }
 )
 
@@ -110,24 +122,51 @@ def validate_variational(ctx: SpecValidationContext) -> None:
                     promote_in_strict=True,
                 )
 
-        es_noise = values.get("es_noise_source")
-        if es_noise is not None and str(es_noise).lower() not in {"prior", "normal"}:
+            solver = str(values.get("prior_fm_solver", "heun")).lower()
+            if solver not in {"heun", "euler"}:
+                ctx.add(
+                    "MGNV-FM-SOLVER",
+                    Severity.ERROR,
+                    "prior_fm_solver must be 'heun' (2nd-order, default) or 'euler'.",
+                    field_name="prior_fm_solver",
+                )
+
+        try:
+            grad_enc = float(values.get("prior_grad_to_encoder", 0) or 0)
+        except (TypeError, ValueError):
+            grad_enc = 0.0
             ctx.add(
-                "MGNV-ES-NOISE",
+                "MGNV-PRIOR-GRAD",
                 Severity.ERROR,
-                "es_noise_source must be 'prior' or 'normal' (the native code silently "
-                "treats anything else as 'prior').",
-                field_name="es_noise_source",
+                "prior_grad_to_encoder must be a number in [0, 1].",
+                field_name="prior_grad_to_encoder",
             )
-        if str(es_noise).lower() == "normal" and values.get("use_conditional_prior", False) is True:
+        if grad_enc > 0.0:
+            try:
+                beta_aux = float(values.get("beta_aux", 1.0) or 0)
+            except (TypeError, ValueError):
+                beta_aux = 0.0
+            if beta_aux <= 0.0:
+                ctx.add(
+                    "MGNV-PRIOR-GRAD-AUX",
+                    Severity.WARNING,
+                    "prior_grad_to_encoder > 0 pressures the posterior to be "
+                    "predictable from the graph alone. MMD does not guard against "
+                    "that (a deterministic z = h(g) matches N(0,I) perfectly); "
+                    "beta_aux is the I(z;y) floor that does, and it is 0 here.",
+                    field_name="beta_aux",
+                    hint="Keep beta_aux > 0 (1.0 is the native default) while the "
+                         "encoder-side coupling is open.",
+                    promote_in_strict=True,
+                )
+
+        z_cond = values.get("z_conditioning")
+        if z_cond is not None and str(z_cond).lower() not in {"concat", "adaln"}:
             ctx.add(
-                "MGNV-ES-NOISE-PRIOR",
-                Severity.WARNING,
-                "es_noise_source=normal trains the decoder against N(0,I) draws, but "
-                "use_conditional_prior=True makes inference sample the learned prior "
-                "instead — the scored path and the inference path disagree.",
-                field_name="es_noise_source",
-                promote_in_strict=True,
+                "MGNV-ZCOND",
+                Severity.ERROR,
+                "z_conditioning must be 'concat' (legacy fuser) or 'adaln' (AdaLN-Zero).",
+                field_name="z_conditioning",
             )
 
     if ctx.mode == "inference" and values.get("use_vae", False) is True:

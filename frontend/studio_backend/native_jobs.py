@@ -116,6 +116,48 @@ def create_simulgen_smoke_fixture() -> dict[str, Any]:
     }
 
 
+def create_viewer_smoke_fixture() -> dict[str, Any]:
+    """Create a bounded operator-grid file for repeatable viewer checks.
+
+    Public benchmark datasets are intentionally optional and may not be staged
+    on a fresh checkout. This fixture exercises the real HDF5 adapter without
+    presenting generated values as benchmark or scientific evidence.
+    """
+
+    try:
+        import h5py
+        import numpy as np
+    except ImportError as exc:
+        raise RuntimeError("h5py and numpy are required for the viewer smoke fixture.") from exc
+    root = RUNTIME_ROOT / "viewer-smoke"
+    root.mkdir(parents=True, exist_ok=True)
+    path = root / "operator_grid.h5"
+    axis = np.linspace(0.0, 1.0, 15, dtype=np.float32)
+    xx, yy = np.meshgrid(axis, axis, indexing="xy")
+    query = np.stack([xx.reshape(-1), yy.reshape(-1)], axis=1)
+    targets = np.stack(
+        [
+            np.stack([np.sin(np.pi * query[:, 0]), np.cos(np.pi * query[:, 1])]),
+            np.stack([query[:, 0] * query[:, 1], query[:, 0] - query[:, 1]]),
+        ]
+    ).astype(np.float32)
+    with h5py.File(path, "w") as handle:
+        handle.attrs["studio_fixture"] = True
+        handle.attrs["scientific_use"] = False
+        common = handle.create_group("common")
+        common.create_dataset("query_xy", data=query)
+        common.create_dataset("alpha", data=np.asarray([0.5, 1.0], dtype=np.float32))
+        arrays = handle.create_group("arrays")
+        arrays.create_dataset("targets", data=targets)
+    return {
+        "operator_grid": relative(path),
+        "samples": 2,
+        "points": int(query.shape[0]),
+        "scientific_use": False,
+        "note": "Deterministic viewer fixture only; not benchmark evidence.",
+    }
+
+
 _CUBE_FACES = [
     # (normal, (v0, v1, v2, v3)) — each quad face split into two triangles.
     ((-1, 0, 0), ((0, 0, 0), (0, 1, 0), (0, 1, 1), (0, 0, 1))),

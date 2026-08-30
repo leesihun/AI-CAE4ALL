@@ -620,6 +620,12 @@ def run_rollout(config, config_filename='config.txt'):
     # Inline z_disp spread-histogram (generated vs ground-truth eval dataset).
     # Enabled when an `eval_dataset` is given in the config (no GT -> no compare).
     output_dir = config.get('inference_output_dir', 'outputs/rollout')
+    # One HDF5 is written per (scene, VAE sample). A distribution study wants
+    # hundreds of draws per scene, which is hundreds of files per scene and tens
+    # of thousands across a sweep -- so `save_rollouts False` keeps the sampling
+    # and the histogram but writes no trajectory files. The spread values are
+    # still collected, printed, and dumped to spread_values.npz.
+    save_rollouts = bool(config.get('save_rollouts', True))
     eval_dataset = config.get('eval_dataset')
     make_histogram = bool(config.get('make_histogram', use_vae and eval_dataset is not None))
     histogram_bins = int(config.get('histogram_bins', 60))
@@ -754,6 +760,9 @@ def run_rollout(config, config_filename='config.txt'):
                         _spread_max_minus_min(all_states[b, -1, :, z_gen_idx])
                     )
 
+                if not save_rollouts:
+                    continue
+
                 if num_vae_samples > 1:
                     filename = f"rollout_sample{sample_id}_vaesample{vae_idx}_steps{steps}.h5"
                 else:
@@ -878,6 +887,18 @@ def run_rollout(config, config_filename='config.txt'):
                 gen = np.asarray(generated_spreads, dtype=np.float64)
                 print(f"  GT spread values  (1 per eval sample): {gt.size:,}")
                 print(f"  Gen spread values (1 per rollout):     {gen.size:,}")
+                # Machine-readable lines so a sweep report can tabulate these
+                # without re-reading the plot; prefixed so a log grep is exact.
+                for tag, col in (("GT", gt), ("GEN", gen)):
+                    print(f"  [SPREAD] {tag} mean={col.mean():.6e} std={col.std():.6e} "
+                          f"min={col.min():.6e} max={col.max():.6e} n={col.size}")
+                # Raw values too: with save_rollouts False this is the ONLY
+                # surviving record, and it lets a report overlay every arm on one
+                # axis instead of leaving 16 separate PNGs to eyeball.
+                npz_path = os.path.join(output_dir, 'spread_values.npz')
+                os.makedirs(os.path.dirname(os.path.abspath(npz_path)), exist_ok=True)
+                np.savez_compressed(npz_path, gt=gt, gen=gen)
+                print(f"  [SPREAD] values -> {npz_path}")
                 hist_path = os.path.join(output_dir, 'histogram_compare.png')
                 _plot_spread_histogram(
                     gt, gen, hist_path,

@@ -3,7 +3,7 @@ import { keys } from "./text.js";
 import { state, snapshot } from "./state.js";
 import {
   ICONS, BLOCK_SPECS, MODEL_CATALOG, REQUIRED, CHOICES, BOOLEAN_KEYS,
-  OPERATOR_REMOVED, TRANSOLVER_REJECTED, CONFIG_SECTIONS, HELP
+  OPERATOR_REMOVED, TRANSOLVER_REJECTED, CHI_FLOW_REMOVED, CONFIG_SECTIONS, HELP
 } from "./constants.js";
 import { apiRequest, requireRuntime } from "./api.js";
 import { addBlock, selectNode } from "./graph.js";
@@ -43,6 +43,7 @@ export function keyDisposition(modelId, key, config = null) {
   // paths leave message_passing_num in the config, which makes it worse.
   if (key === "message_passing_num" && config && isTruthyConfigValue(config.use_multiscale)) return "inactive";
   if (modelId === "transolver" && TRANSOLVER_REJECTED.has(key)) return "removed";
+  if (modelId === "chi-mgnflow" && CHI_FLOW_REMOVED.has(key)) return "removed";
   if (["point_deeponet", "deeponet", "fno", "gino"].includes(modelId)) {
     if (OPERATOR_REMOVED.has(key)) return "removed";
     const owner = key.startsWith("point") ? "point_deeponet" : key.startsWith("deeponet_") ? "deeponet" : key.startsWith("fno_") ? "fno" : key.startsWith("gino_") ? "gino" : "";
@@ -72,7 +73,7 @@ function isTruthyConfigValue(value) {
  */
 function conditionallyMissing(modelId, config) {
   const notes = [];
-  const isMesh = modelId === "meshgraphnets" || modelId === "meshgraphnets-v";
+  const isMesh = ["meshgraphnets", "meshgraphnets-v", "chi-mgnflow"].includes(modelId);
   if (isMesh && isTruthyConfigValue(config.use_multiscale)) {
     const needed = ["coarsening_type", "multiscale_levels", "voronoi_clusters", "mp_per_level"]
       .filter(key => String(config[key] ?? "").trim() === "");
@@ -98,10 +99,10 @@ export function sectionFor(modelId, key, required, config = null) {
   if (keyDisposition(modelId, key, config) !== "active") return "Inactive / rejected";
   if (required.has(key)) return "Required";
   if (/dataset|modelpath|output_dir|log_file|pipeline_log|param_dir|input_mesh|sidecar|split_seed/.test(key)) return "Data & output";
-  if (/^(point_|pointnet_|deeponet_|fno_|gino_|encoder_|decoder_|fm_arch|fm_blocks|fm_hidden|fm_cond_hidden|latent_|latent_dim|message_passing|slice_num|num_layers|num_heads|attention_kernel|mlp_ratio|coarsening|multiscale|mp_per_level|positional|fourier|operator_dim|global_condition|num_filter|lc_filter|network_size)/.test(key)) return "Architecture";
-  if (/training_epochs|learningr|weight_decay|warmup|batch_size|loss|dropout|grad_|noise|ema|kl_|beta|eikonal|surface_weight|normal_weight|alpha|lambda_|free_bits|mmd|recon_loss|recon_iter/.test(key)) return "Training";
+  if (/^(point_|pointnet_|deeponet_|fno_|gino_|encoder_|decoder_|fm_arch|fm_blocks|fm_hidden|fm_cond_hidden|flow_time_freqs|latent_|latent_dim|message_passing|slice_num|num_layers|num_heads|attention_kernel|mlp_ratio|coarsening|multiscale|mp_per_level|positional|fourier|operator_dim|global_condition|num_filter|lc_filter|network_size)/.test(key)) return "Architecture";
+  if (/training_epochs|learningr|weight_decay|warmup|batch_size|loss|dropout|grad_|noise|ema|kl_|beta|eikonal|surface_weight|normal_weight|alpha|lambda_|free_bits|mmd|recon_loss|recon_iter|flow_t_|flow_loss_weighting|flow_det_prob/.test(key)) return "Training";
   if (/gpu|parallel|worker|prefetch|amp|compile|checkpointing|cache|profile|fsdp|pipeline_microbatches|chunk_size|load_all/.test(key)) return "Resources & runtime";
-  if (/^infer|^test|^val_|display|plot|histogram|num_samples|candidate_multiplier|cfg_scale|condition_|cond_|ode_steps|mc_resolution|sample_index|source_num_samples|posterior_noise|timesteps_reduced/.test(key)) return "Inference & evaluation";
+  if (/^infer|^test|^val_|display|plot|histogram|num_samples|candidate_multiplier|cfg_scale|condition_|cond_|ode_steps|flow_steps|flow_solver|flow_predict|best_by|mc_resolution|sample_index|source_num_samples|posterior_noise|timesteps_reduced/.test(key)) return "Inference & evaluation";
   return "Advanced";
 }
 
@@ -117,7 +118,7 @@ export function choicesFor(modelId, key) {
     // so deeponet/point_deeponet are ddp-only; the mesh methods take ddp|model_split.
     if (["simulgenvae", "sdfflow"].includes(modelId)) return ["single", "ddp", "fsdp"];
     if (modelId === "transolver") return ["ddp", "node_shard"];
-    if (["fno", "gino", "meshgraphnets", "meshgraphnets-v"].includes(modelId)) return ["ddp", "model_split"];
+    if (["fno", "gino", "meshgraphnets", "meshgraphnets-v", "chi-mgnflow"].includes(modelId)) return ["ddp", "model_split"];
     return ["ddp"];
   }
   return CHOICES[key] || null;
@@ -480,6 +481,10 @@ export async function configureViaLlm() {
   if (!instruction || !instruction.trim()) return;
   const modelId = BLOCK_SPECS[node.type].modelId;
   const text = `${rawConfig(node.config, MODEL_CATALOG[modelId].keys)}\n`;
+  if (!window.confirm(
+    `Send this block's complete ${text.split("\n").filter(Boolean).length}-line configuration and your instruction to the LLM endpoint configured under System?\n\n` +
+    "Paths, dataset names, checkpoint locations, and every configured value in this block are included."
+  )) return;
   const button = $("#llmConfigure");
   const original = button.textContent;
   button.disabled = true;

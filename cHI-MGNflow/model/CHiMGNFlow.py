@@ -1,0 +1,377 @@
+"""cHI-MGNflow — the HI-MGN V-cycle re-read as a velocity field.
+
+Structurally this is the MeshGraphNets multiscale backbone with exactly two
+changes against the variational tree it was forked from:
+
+    1. the node features carry the current ODE state `y_t` (output_var extra
+       channels, appended after the physical state block), and
+    2. the AdaLN-Zero heads are driven by a time embedding instead of a latent
+       vector sampled from a posterior.
+
+Everything else — Encoder, the 28 GnBlocks, pool / unpool / skip merge, the
+Decoder, the cached coarsening hierarchy — is unchanged. What is GONE is the
+whole latent apparatus: no posterior encoder, no conditional prior, no MMD, no
+auxiliary latent loss. z is not a learned object here; the randomness is the
+noise field the ODE starts from, and it has the same shape as the output, so
+the model can express local variation that a pooled latent structurally cannot.
+
+Node feature layout (unchanged order, one block appended):
+
+    [ state | y_t | conditions | positional | node-type one-hot ]
+      ^^^^^   ^^^
+      |       the ODE state, output_var wide (NEW)
+      previous physical state; identically zero when num_timesteps == 1
+"""
+import torch
+import torch.nn as nn
+from torch_geometric.data import Data
+from torch_geometric.utils import scatter
+
+from general_modules.edge_features import EDGE_FEATURE_DIM
+from model.blocks import AdaLNZero, UnpoolBlock, apply_adaln
+from model.checkpointing import process_with_checkpointing
+from model.coarsening import pool_features
+from model.encoder_decoder import Decoder, Encoder, GnBlock
+from model.flow import TimeEmbedding, resolve_flow_config
+from model.mlp import build_mlp, init_weights
+
+
+class CHiMGNFlow(nn.Module):
+    """Velocity network v(y_t, t, graph) -> [N, output_var]."""
+
+    def __init__(self, config, device: str):
+        super().__init__()
+        self.config = config
+        self.device = device
+
+        self.model = EncoderProcessorDecoder(config).to(device)
+        self.model.apply(init_weights)
+        # init_weights kaiming-fills every nn.Linear, the AdaLN-Zero modulation
+        # heads included -- and their whole point is to start at the identity.
+        # Restoring them AFTER the global init is what makes "-Zero" true.
+        self.model.reset_time_conditioning()
+
+        print('cHI-MGNflow model created successfully')
+
+    def set_checkpointing(self, enabled: bool):
+        self.model.set_checkpointing(enabled)
+
+    def forward(self, graph, y_t, t):
+        """
+        Args:
+            graph: PyG Data with normalized `x`, `edge_attr` and the cached
+                   coarsening attributes. `graph.x` must NOT already contain
+                   y_t -- this method splices it in.
+            y_t:   [N, output_var] current ODE state (normalized field space).
+            t:     [B, 1] flow time per graph, in [0, 1].
+
+        Returns:
+            v: [N, output_var] predicted velocity.
+        """
+        return self.model(graph, y_t, t)
+
+
+class EncoderProcessorDecoder(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+
+        self.message_passing_num = config['message_passing_num']
+        self.edge_input_size = int(config['edge_var'])
+        if self.edge_input_size != EDGE_FEATURE_DIM:
+            raise ValueError(f"edge_var must be {EDGE_FEATURE_DIM}, got {self.edge_input_size}")
+        self.latent_dim = config['latent_dim']
+        self.use_checkpointing = config.get('use_checkpointing', False)
+        self.use_world_edges = config.get('use_world_edges', False)
+        self.use_multiscale = config.get('use_multiscale', False)
+        self.use_coarse_world_edges = (
+            bool(config.get('coarse_world_edges', False))
+            and self.use_world_edges
+            and self.use_multiscale
+        )
+
+        self.node_output_size = int(config['output_var'])
+
+        # graph.x layout: [state | y_t | conditions | positional | node-type one-hot]
+        num_cond = int(config.get('cond_var', 0) or 0)
+        num_pos_features = int(config.get('positional_features', 0))
+        base_input_size = (int(config['input_var']) + self.node_output_size
+                           + num_cond + num_pos_features)
+        use_node_types = config.get('use_node_types', False)
+        num_node_types = int(config.get('num_node_types', 0) or 0)
+        if use_node_types and num_node_types > 0:
+            self.node_input_size = base_input_size + num_node_types
+        else:
+            self.node_input_size = base_input_size
+        print(f"  Model input: {config['input_var']} state + {self.node_output_size} flow(y_t) "
+              f"+ {num_cond} conditions + {num_pos_features} positional"
+              + (f" + {num_node_types} node types" if self.node_input_size != base_input_size else "")
+              + f" = {self.node_input_size}")
+
+        self.encoder = Encoder(
+            self.edge_input_size, self.node_input_size, self.latent_dim,
+            use_world_edges=self.use_world_edges,
+        )
+
+        if not self.use_multiscale:
+            self.processer_list = nn.ModuleList([
+                GnBlock(self.latent_dim, use_world_edges=self.use_world_edges)
+                for _ in range(self.message_passing_num)
+            ])
+        else:
+            self._build_multiscale_processor(config)
+
+        self.decoder = Decoder(self.latent_dim, self.node_output_size)
+
+        # ── flow-time conditioning ───────────────────────────────────────────
+        flow_cfg = resolve_flow_config(config)
+        self.time_embed = TimeEmbedding(flow_cfg['time_freqs'])
+        self.t_dim = self.time_embed.dim
+        print(f"  Flow time conditioning: Fourier({flow_cfg['time_freqs']}) -> "
+              f"[{self.t_dim}] -> AdaLN-Zero")
+
+        if not self.use_multiscale:
+            self.t_mod = self._build_time_conditioners(self.message_passing_num)
+        else:
+            L = self.multiscale_levels
+            self.ms_t_mod_pre = nn.ModuleList()
+            self.ms_t_mod_post = nn.ModuleList()
+            for i in range(L):
+                self.ms_t_mod_pre.append(self._build_time_conditioners(self.mp_per_level[i]))
+                self.ms_t_mod_post.append(self._build_time_conditioners(self.mp_per_level[2 * L - i]))
+            self.ms_t_mod_coarsest = self._build_time_conditioners(self.mp_per_level[L])
+
+        # The decoder's last layer starts near zero so the initial velocity is
+        # ~0 everywhere: the untrained flow leaves the noise field alone instead
+        # of throwing it out of range on step one.
+        with torch.no_grad():
+            self.decoder.decode_module[-1].weight.mul_(0.01)
+
+    # ── construction helpers ────────────────────────────────────────────────
+
+    def _build_multiscale_processor(self, config):
+        L = int(config.get('multiscale_levels', 1))
+        self.multiscale_levels = L
+
+        mp_per_level = config.get('mp_per_level', None)
+        if mp_per_level is None:
+            raise ValueError(
+                "use_multiscale=True requires mp_per_level "
+                "(2 * multiscale_levels + 1 entries, e.g. '4, 6, 8, 6, 4' for 2 levels)"
+            )
+        mp_per_level = ([int(mp_per_level)] if not isinstance(mp_per_level, list)
+                        else [int(x) for x in mp_per_level])
+        self.mp_per_level = mp_per_level
+
+        expected_len = 2 * L + 1
+        if len(mp_per_level) != expected_len:
+            raise ValueError(
+                f"mp_per_level must have {expected_len} entries for {L} levels, "
+                f"got {len(mp_per_level)}: {mp_per_level}"
+            )
+
+        parts = [f"pre[{i}]={mp_per_level[i]}" for i in range(L)]
+        parts.append(f"coarsest={mp_per_level[L]}")
+        parts += [f"post[{i}]={mp_per_level[2 * L - i]}" for i in range(L - 1, -1, -1)]
+        print(f"  Multiscale V-cycle ({L} levels): {', '.join(parts)}")
+
+        self.pre_blocks = nn.ModuleList()
+        self.post_blocks = nn.ModuleList()
+        self.coarse_eb_encoders = nn.ModuleList()
+        self.skip_projs = nn.ModuleList()
+
+        for i in range(L):
+            use_we = self.use_world_edges if (i == 0 or self.use_coarse_world_edges) else False
+            self.pre_blocks.append(nn.ModuleList([
+                GnBlock(self.latent_dim, use_world_edges=use_we)
+                for _ in range(mp_per_level[i])
+            ]))
+            self.post_blocks.append(nn.ModuleList([
+                GnBlock(self.latent_dim, use_world_edges=use_we)
+                for _ in range(mp_per_level[2 * L - i])
+            ]))
+            self.coarse_eb_encoders.append(
+                build_mlp(self.edge_input_size, self.latent_dim, self.latent_dim))
+            self.skip_projs.append(nn.Linear(2 * self.latent_dim, self.latent_dim))
+
+        self.unpool_blocks = nn.ModuleList([
+            UnpoolBlock(self.latent_dim, build_mlp) for _ in range(L)
+        ])
+        self.coarsest_blocks = nn.ModuleList([
+            GnBlock(self.latent_dim, use_world_edges=self.use_coarse_world_edges)
+            for _ in range(mp_per_level[L])
+        ])
+
+    def _build_time_conditioners(self, count):
+        return nn.ModuleList([
+            AdaLNZero(self.latent_dim, self.t_dim) for _ in range(count)
+        ])
+
+    def reset_time_conditioning(self):
+        """Restore every AdaLN-Zero head to the identity.
+
+        Must run AFTER any global apply(init_weights), which would otherwise
+        kaiming-fill these and destroy the identity-at-init property.
+        """
+        for m in self.modules():
+            if isinstance(m, AdaLNZero):
+                m.reset_identity()
+
+    def set_checkpointing(self, enabled: bool):
+        self.use_checkpointing = enabled
+
+    # ── forward ─────────────────────────────────────────────────────────────
+
+    def forward(self, graph, y_t, t):
+        n_nodes = graph.x.shape[0]
+        batch = getattr(graph, 'batch', None)
+        if batch is None:
+            batch = torch.zeros(n_nodes, dtype=torch.long, device=graph.x.device)
+
+        t_emb = self.time_embed(t).to(graph.x.dtype)     # [B, t_dim]
+        t_per_node = t_emb[batch]                        # [N, t_dim]
+
+        # Splice the ODE state into the node features. `input_var` leading
+        # channels are the previous physical state (all zeros for static data);
+        # y_t occupies the next output_var channels.
+        s0 = int(self.config['input_var'])
+        x_in = torch.cat([
+            graph.x[:, :s0],
+            y_t.to(graph.x.dtype),
+            graph.x[:, s0:],
+        ], dim=-1)
+
+        work = Data(x=x_in, edge_attr=graph.edge_attr, edge_index=graph.edge_index)
+        if self.use_world_edges:
+            work.world_edge_attr = getattr(graph, 'world_edge_attr', None)
+            work.world_edge_index = getattr(graph, 'world_edge_index', None)
+
+        if not self.use_multiscale:
+            return self._forward_flat(work, t_per_node)
+        return self._forward_multiscale(graph, work, batch, t_per_node)
+
+    def _forward_flat(self, work, t_per_node):
+        g = self.encoder(work)
+        g = self._run_blocks(self.processer_list, g, self.t_mod, t_per_node)
+        return self.decoder(g)
+
+    def _forward_multiscale(self, graph, work, batch, t_per_node):
+        L = self.multiscale_levels
+        level_data = self._extract_level_data(graph, L)
+        actual_levels = len(level_data)
+
+        g = self.encoder(work)
+
+        current_batch = batch
+        current_t = t_per_node
+        skip_states = []
+        current_graph = g
+
+        # Descending arm (fine -> coarse)
+        for i in range(actual_levels):
+            current_graph = self._run_blocks(
+                self.pre_blocks[i], current_graph, self.ms_t_mod_pre[i], current_t)
+
+            use_we_here = self.use_world_edges and (i == 0 or self.use_coarse_world_edges)
+            skip_states.append({
+                'x': current_graph.x,
+                'edge_attr': current_graph.edge_attr,
+                'edge_index': current_graph.edge_index,
+                'w_attr': getattr(current_graph, 'world_edge_attr', None) if use_we_here else None,
+                'w_idx': getattr(current_graph, 'world_edge_index', None) if use_we_here else None,
+                't': current_t,
+            })
+
+            ld = level_data[i]
+            if 'seeds' in ld:
+                h_coarse = current_graph.x[ld['seeds']]
+            else:
+                h_coarse = pool_features(current_graph.x, ld['ftc'], ld['n_c'])
+            e_coarse = self.coarse_eb_encoders[i](ld['c_ea'])
+            current_graph = Data(x=h_coarse, edge_attr=e_coarse, edge_index=ld['c_ei'])
+            if self.use_coarse_world_edges and ld['c_we_idx'] is not None and ld['c_we_idx'].shape[1] > 0:
+                current_graph.world_edge_attr = ld['c_we_attr']
+                current_graph.world_edge_index = ld['c_we_idx']
+
+            current_batch = scatter(current_batch, ld['ftc'], dim=0,
+                                    dim_size=ld['n_c'], reduce='min')
+            # t is a per-GRAPH quantity, so coarsening it is a plain re-gather.
+            current_t = self._t_at(t_per_node, batch, current_batch)
+
+        # Coarsest level
+        current_graph = self._run_blocks(
+            self.coarsest_blocks, current_graph, self.ms_t_mod_coarsest, current_t)
+
+        # Ascending arm (coarse -> fine)
+        for i in range(actual_levels - 1, -1, -1):
+            ld = level_data[i]
+            src, dst = ld['up_ei']
+            rel_pos = ld['fine_pos'][dst] - ld['coarse_centroid'][src]
+            h_up = self.unpool_blocks[i](
+                h_coarse=current_graph.x,
+                h_fine_skip=skip_states[i]['x'],
+                unpool_edge_index=ld['up_ei'],
+                rel_pos=rel_pos,
+            )
+            skip = skip_states[i]
+            h_merged = self.skip_projs[i](torch.cat([skip['x'], h_up], dim=-1))
+            current_graph = Data(x=h_merged, edge_attr=skip['edge_attr'],
+                                 edge_index=skip['edge_index'])
+            use_we_here = self.use_world_edges and (i == 0 or self.use_coarse_world_edges)
+            if use_we_here and skip['w_attr'] is not None:
+                current_graph.world_edge_attr = skip['w_attr']
+                current_graph.world_edge_index = skip['w_idx']
+
+            current_graph = self._run_blocks(
+                self.post_blocks[i], current_graph, self.ms_t_mod_post[i], skip['t'])
+
+        return self.decoder(current_graph)
+
+    @staticmethod
+    def _t_at(t_per_node, fine_batch, coarse_batch):
+        """Re-gather the per-graph time embedding onto a coarser node set.
+
+        t is constant within a graph, so a lookup table built from the first
+        node of each graph is exact and avoids carrying [N, t_dim] downward.
+        """
+        num_graphs = int(coarse_batch.max().item()) + 1 if coarse_batch.numel() else 1
+        table = torch.zeros(num_graphs, t_per_node.shape[1],
+                            device=t_per_node.device, dtype=t_per_node.dtype)
+        table.index_copy_(0, fine_batch, t_per_node)
+        return table[coarse_batch]
+
+    def _extract_level_data(self, graph, L):
+        """Per-level coarsening topology, read before the encoder drops custom attrs."""
+        level_data = {}
+        for i in range(L):
+            ftc_key = f'fine_to_coarse_{i}'
+            if not hasattr(graph, ftc_key):
+                break
+            centroid = graph[f'coarse_centroid_{i}']
+            ld = {
+                'ftc': graph[ftc_key],
+                'c_ei': graph[f'coarse_edge_index_{i}'],
+                'c_ea': graph[f'coarse_edge_attr_{i}'],
+                # Read the coarse node count off a shape, not off the GPU: an
+                # int(sum()) here forces a CPU<->GPU sync per level per forward,
+                # which under K-step integration is paid K times.
+                'n_c': centroid.shape[0],
+                'c_we_idx': getattr(graph, f'coarse_world_edge_index_{i}', None),
+                'c_we_attr': getattr(graph, f'coarse_world_edge_attr_{i}', None),
+                'up_ei': graph[f'unpool_edge_index_{i}'],
+                'coarse_centroid': centroid,
+                'fine_pos': graph.pos if i == 0 else graph[f'coarse_centroid_{i - 1}'],
+            }
+            seed_key = f'coarse_seed_idx_{i}'
+            if hasattr(graph, seed_key) and graph[seed_key] is not None:
+                ld['seeds'] = graph[seed_key]
+            level_data[i] = ld
+        return level_data
+
+    def _run_blocks(self, blocks, graph, modulations, t_per_node):
+        if self.use_checkpointing and self.training:
+            return process_with_checkpointing(
+                blocks, graph, z_fusers=modulations, z_per_node=t_per_node, adaln=True)
+        for j, block in enumerate(blocks):
+            graph = apply_adaln(block, graph, modulations[j], t_per_node)
+        return graph

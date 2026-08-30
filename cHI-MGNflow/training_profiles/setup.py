@@ -1,0 +1,367 @@
+"""
+Shared setup helpers for training launchers.
+
+Both `single_training.py` and `distributed_training.py` use these builders to
+avoid maintaining duplicate dataset/model/optimizer/checkpoint logic.
+"""
+
+import os
+import time
+
+import numpy as np
+import torch
+
+from general_modules.data_loader import load_data
+from model.CHiMGNFlow import CHiMGNFlow
+from training_profiles.amp import describe_amp, resolve_amp_dtype
+from training_profiles.training_loop import build_ema_model
+
+
+# ---------------------------------------------------------------------------
+# Dataset
+# ---------------------------------------------------------------------------
+
+def build_dataset_splits(config, split_seed: int):
+    """
+    Load dataset, split 80/10/10, inject metadata into config, and return the
+    three split datasets.  Writing normalization stats to HDF5 and barrier
+    synchronization (for DDP) are left to the caller.
+    """
+    dataset = load_data(config)
+
+    train_dataset, val_dataset, test_dataset = dataset.split(0.8, 0.1, 0.1, seed=split_seed)
+
+    # Inject dataset-derived metadata so the model can be constructed correctly
+    config['num_timesteps'] = train_dataset.num_timesteps
+    if config.get('use_node_types', False) and train_dataset.num_node_types is not None:
+        config['num_node_types'] = train_dataset.num_node_types
+
+    # Noise target-correction ratio (node_std / delta_std) — used in forward pass
+    if train_dataset.node_std is not None and train_dataset.delta_std is not None:
+        output_var = config['output_var']
+        config['noise_std_ratio'] = (
+            train_dataset.node_std[:output_var] / np.maximum(train_dataset.delta_std, 1e-8)
+        ).tolist()
+
+    # AR-RT rebuilds normalized features on-device at every unrolled step, so
+    # the training loop needs the same stats the dataset normalizes with.
+    config['_norm_stats'] = build_normalization_dict(train_dataset)
+    config['_norm_stats']['world_edge_radius'] = train_dataset.world_edge_radius
+
+    return train_dataset, val_dataset, test_dataset
+
+
+# ---------------------------------------------------------------------------
+# Model
+# ---------------------------------------------------------------------------
+
+def build_model_and_ema(config, device):
+    """
+    Instantiate CHiMGNFlow, wrap with EMA if configured, and optionally
+    compile with torch.compile.  Returns (model, ema_model); ema_model is None
+    when `use_ema` is not set.
+    """
+    model = CHiMGNFlow(config, str(device)).to(device)
+
+    ema_model = build_ema_model(model, config)
+    if ema_model is not None:
+        ema_model = ema_model.to(device)
+
+    if config.get('use_compile', False):
+        model = torch.compile(model, dynamic=True)
+
+    return model, ema_model
+
+
+def log_model_summary(model, config, ema_model=None):
+    """Print a one-time summary of enabled model features and parameter counts."""
+    print('\n' * 2)
+    print("Model initialized successfully")
+    if config.get('use_checkpointing', False):
+        print("Gradient checkpointing: ENABLED")
+    if config.get('use_amp', True):
+        print(f"Mixed precision (AMP): ENABLED ({describe_amp(resolve_amp_dtype())})")
+    if config.get('use_compile', False):
+        print("torch.compile: ENABLED (dynamic=True)")
+    if ema_model is not None:
+        print(f"EMA: ENABLED (decay={config.get('ema_decay', 0.999)})")
+    print(f"Flow matching: {config.get('flow_steps', 30)} inference steps, "
+          f"{str(config.get('flow_solver', 'heun')).lower().strip()} solver")
+    total_params = sum(p.numel() for p in model.parameters())
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"Total parameters: {total_params:,}")
+    print(f"Trainable parameters: {trainable_params:,}")
+
+
+# ---------------------------------------------------------------------------
+# Optimizer / Scheduler
+# ---------------------------------------------------------------------------
+
+def build_optimizer_scheduler(config, params, total_epochs: int):
+    """
+    Build fused Adam and a SequentialLR: linear warmup then cosine warm restarts.
+
+    Scheduler hyper-parameters:
+        warmup_epochs  (config key, default 3)
+        cosine_T0 = total_epochs - warmup_epochs  (one full cycle over remaining epochs)
+        cosine_T_mult = 1
+        eta_min = 1e-8
+    """
+    learning_rate = config.get('learningr')
+    use_fused = torch.cuda.is_available()
+    optimizer = torch.optim.Adam(params, lr=learning_rate, fused=use_fused)
+
+    warmup_epochs = int(config.get('warmup_epochs', 3))
+    remaining_epochs = max(total_epochs - warmup_epochs, 1)
+    cosine_T0 = remaining_epochs
+
+    warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
+        optimizer, start_factor=0.01, total_iters=warmup_epochs
+    )
+    cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+        optimizer, T_0=cosine_T0, T_mult=1, eta_min=1e-8
+    )
+    scheduler = torch.optim.lr_scheduler.SequentialLR(
+        optimizer, schedulers=[warmup_scheduler, cosine_scheduler], milestones=[warmup_epochs]
+    )
+    return optimizer, scheduler, warmup_epochs, cosine_T0
+
+
+# ---------------------------------------------------------------------------
+# Checkpoint
+# ---------------------------------------------------------------------------
+
+def build_normalization_dict(train_dataset) -> dict:
+    """Collect normalization stats and optional extras into a serialisable dict."""
+    norm = {
+        'node_mean': train_dataset.node_mean,
+        'node_std':  train_dataset.node_std,
+        'edge_mean': train_dataset.edge_mean,
+        'edge_std':  train_dataset.edge_std,
+        'delta_mean': train_dataset.delta_mean,
+        'delta_std':  train_dataset.delta_std,
+    }
+    if train_dataset.use_node_types and train_dataset.node_type_to_idx is not None:
+        norm['node_type_to_idx'] = train_dataset.node_type_to_idx
+        norm['num_node_types']   = train_dataset.num_node_types
+    if train_dataset.use_world_edges and train_dataset.world_edge_radius is not None:
+        norm['world_edge_radius'] = train_dataset.world_edge_radius
+    if train_dataset.use_multiscale and len(train_dataset.coarse_edge_means) > 0:
+        norm['coarse_edge_means'] = train_dataset.coarse_edge_means
+        norm['coarse_edge_stds']  = train_dataset.coarse_edge_stds
+    return norm
+
+
+def build_model_config(config) -> dict:
+    """Collect architecture hyper-parameters into a serialisable dict."""
+    return {
+        'input_var':         config.get('input_var'),
+        'output_var':        config.get('output_var'),
+        'cond_var':          config.get('cond_var', 0),
+        'edge_var':          config.get('edge_var'),
+        'latent_dim':        config.get('latent_dim'),
+        'message_passing_num': config.get('message_passing_num'),
+        'use_node_types':    config.get('use_node_types', False),
+        'num_node_types':    config.get('num_node_types', 0),
+        'positional_features': config.get('positional_features', 0),
+        # Records whether the model was fit on static (T=1, direct-field) or
+        # temporal (T>1, delta) targets, so inference can reproduce the training
+        # input contract instead of guessing from the inference file.
+        'num_timesteps':     config.get('num_timesteps'),
+        'use_world_edges':   config.get('use_world_edges', False),
+        'use_checkpointing': config.get('use_checkpointing', False),
+        'use_multiscale':    config.get('use_multiscale', False),
+        'multiscale_levels': config.get('multiscale_levels', 1),
+        'mp_per_level':      config.get('mp_per_level', None),
+        'coarsening_type':   config.get('coarsening_type', 'bfs'),
+        'voronoi_clusters':  config.get('voronoi_clusters', None),
+        # Provenance, not architecture: records how many coarsening partitions
+        # this checkpoint was trained to be invariant to. 1 = fit to a single
+        # fixed partition, so its inference output is sensitive to whichever
+        # partition the rollout happens to build.
+        'hierarchy_variants': config.get('hierarchy_variants', 1),
+        # Flow matching. `flow_time_freqs` is architecture-defining: it sets the
+        # width of the AdaLN input, so a checkpoint only loads under the value it
+        # trained with. `flow_steps`/`flow_solver` are sampling-time choices
+        # persisted for provenance -- either can be changed at inference without
+        # retraining, which is the whole point of learning a continuous velocity
+        # field rather than a fixed K-step chain.
+        'flow_time_freqs':   config.get('flow_time_freqs', 16),
+        'flow_steps':        config.get('flow_steps', 30),
+        'flow_solver':       str(config.get('flow_solver', 'heun')).lower().strip(),
+        # Training-time only; recorded so a run can be reproduced.
+        'flow_t_sampling':   str(config.get('flow_t_sampling', 'uniform')).lower().strip(),
+        'flow_t_logit_scale': config.get('flow_t_logit_scale', 1.0),
+    }
+
+
+def save_checkpoint(
+    epoch: int,
+    bare_model,          # unwrapped model (no DDP wrapper)
+    ema_model,
+    optimizer,
+    scheduler,
+    train_loss: float,
+    valid_loss: float,
+    config,
+    train_dataset,
+    modelpath: str,
+) -> None:
+    """Build and write a checkpoint dict to `modelpath`."""
+    save_dict = {
+        'epoch':               epoch,
+        'model_state_dict':    bare_model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'scheduler_state_dict': scheduler.state_dict(),
+        'train_loss':          train_loss,
+        'valid_loss':          valid_loss,
+        'normalization':       build_normalization_dict(train_dataset),
+        'model_config':        build_model_config(config),
+    }
+    if ema_model is not None:
+        save_dict['ema_state_dict'] = ema_model.state_dict()
+    torch.save(save_dict, modelpath)
+
+
+# ---------------------------------------------------------------------------
+# Post-training helpers
+# ---------------------------------------------------------------------------
+
+def cleanup_dataloaders(*loaders) -> None:
+    """Explicitly shut down DataLoader persistent workers before process exit.
+
+    Without this, `persistent_workers=True` keeps worker processes alive until the
+    Python interpreter tears down, at which point `multiprocessing.resource_tracker`
+    reports "There appear to be N leaked semaphore objects to clean up at shutdown"
+    (one semaphore per worker × loader).
+
+    Call this at the end of every training worker function (single, DDP, model_split).
+    """
+    import gc
+    for loader in loaders:
+        if loader is None:
+            continue
+        it = getattr(loader, '_iterator', None)
+        if it is not None and hasattr(it, '_shutdown_workers'):
+            try:
+                it._shutdown_workers()
+            except Exception:
+                pass
+        try:
+            loader._iterator = None
+        except Exception:
+            pass
+    gc.collect()
+
+
+def release_hierarchy_cache(config, *datasets, delete: bool = True) -> None:
+    """Close this process's hierarchy-cache readers and delete the cache file.
+
+    The multiscale hierarchy cache is rebuilt at the start of every run (its
+    signature pins the source HDF5's size+mtime, which `write_preprocessing_
+    to_hdf5` changes), so keeping it only leaves one multi-GB file behind per
+    run. `multiscale_cache.release_cache` skips the delete when another job
+    still has the file open; `hierarchy_cache_keep true` disables it entirely.
+
+    Call *after* `cleanup_dataloaders` — worker processes must be gone first,
+    or Windows refuses the delete as in-use. Under DDP every rank calls it with
+    `delete=False` first, then rank 0 deletes past a barrier, so no rank is
+    still holding a handle when the file goes away.
+    """
+    cache_path = None
+    for dataset in datasets:
+        if dataset is None:
+            continue
+        reader = getattr(dataset, '_ms_reader', None)
+        if reader is not None:
+            try:
+                reader.close()
+            except Exception:
+                pass
+            dataset._ms_reader = None
+        cache_path = cache_path or getattr(dataset, '_ms_cache_path', None)
+
+    if cache_path is None or not delete:
+        return
+    from general_modules.multiscale_cache import release_cache
+    release_cache(cache_path, config)
+
+
+def _artifact_dir(config) -> str:
+    """Where a run's files belong: the log's directory, else the legacy 'outputs'."""
+    return (config or {}).get('log_dir', 'outputs')
+
+
+def start_memory_history(rank: int = 0) -> bool:
+    """Opt-in CUDA allocation recording, enabled by env `MGN_MEM_SNAPSHOT=1`.
+
+    When VRAM in nvidia-smi keeps climbing but `memory_allocated` stays flat, the
+    epoch peak/reserved numbers say *that* the pool grew but not *what* grew.
+    This records every allocation with its Python stack, so `dump_memory_snapshot`
+    produces a file that pytorch.org/memory_viz renders as "which call site owns
+    the blocks that are still live". It is the only thing that settles the
+    question without guessing.
+
+    Rank 0 only: it is the rank that also runs validation and the periodic test,
+    and recording on four ranks multiplies the overhead for no extra information.
+    Costs memory proportional to the number of recorded events, so this is
+    deliberately off unless asked for.
+    """
+    if rank != 0 or os.environ.get('MGN_MEM_SNAPSHOT', '') in ('', '0', 'false'):
+        return False
+    if not torch.cuda.is_available():
+        return False
+    torch.cuda.memory._record_memory_history(max_entries=200_000)
+    print("[mem] MGN_MEM_SNAPSHOT=1: recording CUDA allocation history on rank 0.")
+    print(f"[mem] snapshots every {int(os.environ.get('MGN_MEM_SNAPSHOT_EVERY', 10))} "
+          f"epochs -> <log_dir>/mem_snapshot_ep*.pickle (view at pytorch.org/memory_viz)")
+    return True
+
+
+def dump_memory_snapshot(epoch: int, enabled: bool, config=None) -> None:
+    """Write the allocation snapshot at the configured epoch cadence."""
+    if not enabled:
+        return
+    every = max(1, int(os.environ.get('MGN_MEM_SNAPSHOT_EVERY', 10)))
+    if epoch % every:
+        return
+    out_dir = _artifact_dir(config)
+    path = os.path.join(out_dir, f'mem_snapshot_ep{epoch}.pickle')
+    os.makedirs(out_dir, exist_ok=True)
+    try:
+        torch.cuda.memory._dump_snapshot(path)
+        print(f"[mem] snapshot written: {path}")
+    except Exception as exc:
+        print(f"[mem] snapshot failed: {exc}")
+
+
+def init_log_file(config, config_filename: str):
+    """Create the epoch log file (with the config embedded) and return its path, or None.
+
+    Also records `config['log_dir']` -- the directory the log lives in, which is
+    where `modelpath` normally points too. The periodic train/test visualization
+    dumps and the memory snapshots are written there instead of a bare
+    cwd-relative 'outputs/', so every artifact of a run lands together.
+
+    normpath collapses the leading 'outputs/' against the '../..' that configs
+    use to escape it; without that, makedirs materializes a stray empty
+    'outputs/' in the repo on the way to the real destination.
+    """
+    log_file_dir = config.get('log_file_dir')
+    if not log_file_dir:
+        return None
+
+    log_file = os.path.normpath('outputs/' + log_file_dir)
+    config['log_dir'] = os.path.dirname(log_file)
+    os.makedirs(os.path.dirname(log_file), exist_ok=True)
+
+    # Explicit utf-8 both ways: load_config() already reads the config as utf-8,
+    # and a config carrying non-ASCII comments would otherwise raise
+    # UnicodeDecodeError here on a non-utf-8 default locale (e.g. Windows cp949).
+    with open(log_file, 'w', encoding='utf-8') as f:
+        f.write("Training epoch log file\n")
+        f.write(f"Time: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write(f"Log file absolute path: {os.path.abspath(log_file)}\n")
+        with open(config_filename, 'r', encoding='utf-8') as fc:
+            f.write(fc.read())
+    return log_file

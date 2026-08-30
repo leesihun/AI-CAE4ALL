@@ -13,6 +13,18 @@ On Windows, double-click:
 START_STUDIO.bat
 ```
 
+The full data viewer and evaluation workspaces require NumPy and h5py. Install
+the Studio's small bridge dependency set into the Python environment you intend
+to use:
+
+```powershell
+python -m pip install -r frontend\requirements.txt
+```
+
+`START_STUDIO.bat` prefers the active virtual environment, then a working
+`python`/`py` installation. Set `AI_CAE_STUDIO_PYTHON` to an exact interpreter
+path when several environments are installed.
+
 The launcher opens the Studio in the default browser at
 `http://127.0.0.1:8080/index.html` and keeps a local server running in its
 console window. It uses `start_studio.py` to open the browser only after the
@@ -36,12 +48,13 @@ provide model execution, preflight, repository browsing, or artifact APIs.
 
 If a terminal still prints `Serving HTTP on 127.0.0.1 port 8080`, that is the
 wrong static server. Stop it with `Ctrl+C`, then run `START_STUDIO.bat`.
-The correct console starts with `AI-CAE4ALL Studio is ready` and the top-right
-badge in the browser reads `11/11 routes live`.
+The correct console starts with `AI-CAE4ALL Studio is ready`. The top-right
+badge reports the registry dynamically (for example, `12/12 routes live`);
+both numbers must match the current `GET /api/models` response.
 
 Useful review URLs:
 
-- `index.html` — the linked SimulGen-VAE field-reconstruction pipeline
+- `index.html` — the default HI-MGN multiscale pipeline
 - `index.html?review=config` — the large SimulGen-VAE configuration workspace
 - `index.html?review=optimization` — conditional CAD generation and optimization
 
@@ -72,10 +85,15 @@ Useful review URLs:
   changes. Editing one creates a persistent manual override; clearing it resumes
   graph following, and disconnecting removes only values still owned by the
   removed connection
-- All eleven live AI-CAE4ALL routes, including the geometry-ingest tool
+- Every current live AI-CAE4ALL route, including `chi-mgnflow` and the
+  geometry-ingest tool; newly registered trainable routes receive a usable
+  generic model block until richer frontend metadata is added
+- cHI-MGNflow as a first-class block with flow solver, time embedding,
+  training sampler/weighting, deterministic-readout, validation ensemble, and
+  checkpoint-selection controls; stale VAE/prior keys are visibly rejected
 - SimulGen-VAE as a first-class block with `train`, `train_vae`, `train_lc`,
   and `reconstruct` modes
-- All 67 live SimulGen-VAE configuration keys, mode-specific required fields,
+- All 68 live SimulGen-VAE configuration keys, mode-specific required fields,
   obvious presets, manual values, and synchronized flat `.txt` input/output
 - Case-insensitive config keys and closed values, matching the authoritative
   suite parser (`MODEL`, `Model`, and `model` resolve to one canonical key),
@@ -121,7 +139,11 @@ Useful review URLs:
   named channel picker and the sample-parameter table in the right rail, and
   **Use in pipeline** writes them onto the source block and every block
   downstream of it (`feature_names`, `condition_names`) for parametric work.
-- Real HDF5 field evaluation (relative L2, MAE, RMSE, maximum error, and R²),
+- Schema-aware HDF5 field evaluation (relative L2, MAE, RMSE, maximum error,
+  and R²) across mesh fields, MLP tables, operator arrays, and native
+  prediction/target files. Sample IDs and shapes are checked first; named
+  fields map exactly, positional mappings require confirmation, and legacy
+  contiguous mesh rows are an explicit opt-in override,
   graph-connected multi-run training-metric overlays, real CSV cross-model
   ranking, Pareto/crowding optimization, and downloadable file or ZIP exports
 - Schema-driven optimization objective selection: the server inspects finite
@@ -150,7 +172,8 @@ The browser uses the following real local endpoints:
 - `GET /api/training-metrics` with optional `job_id`, `node_id`, or `model_id`
   filters and persisted node/run lineage
 - `POST /api/inference/run`, `/api/build/exe`
-- `POST /api/evaluation/run`, `/api/comparison/schema`, `/api/comparison/run`,
+- `POST /api/evaluation/schema`, `/api/evaluation/run`,
+  `/api/comparison/schema`, `/api/comparison/run`,
   `/api/optimization/schema`, `/api/optimization/run` — schema inspection
   exposes actual finite numeric columns before ranking or Pareto selection, so
   the UI does not guess CSV field names

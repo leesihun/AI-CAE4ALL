@@ -224,6 +224,14 @@ def hdf5_summary(path: Path) -> dict[str, Any]:
             record: dict[str, Any] = {"path": name or "/", "type": "group"}
             if isinstance(obj, h5py.Dataset):
                 record.update(type="dataset", shape=list(obj.shape), dtype=str(obj.dtype))
+                # Names and split/provenance labels are commonly stored as tiny
+                # string datasets. Shape + dtype alone hides the actual data
+                # contract, so expose only these bounded values while continuing
+                # to avoid materializing numeric training arrays.
+                if obj.size <= 128 and h5py.check_string_dtype(obj.dtype) is not None:
+                    raw = obj.asstr()[()]
+                    values = raw.tolist() if hasattr(raw, "tolist") else raw
+                    record["values"] = values if isinstance(values, list) else [values]
             if obj.attrs:
                 record["attrs"] = {str(key): value for key, value in obj.attrs.items()}
             items.append(record)

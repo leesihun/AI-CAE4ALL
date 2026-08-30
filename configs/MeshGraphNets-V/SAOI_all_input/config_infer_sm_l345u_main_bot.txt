@@ -20,8 +20,8 @@ modelpath	../output/meshgraphnets-v/saoi_all/saoi_bot.pth
 inference_output_dir	../output/meshgraphnets-v/saoi_all/infer_sm_l345u_main_bot
 
 %   Datasets
-dataset_dir	../dataset/SAOI/saoi_train_bot.h5  # training set; unused in inference mode
-infer_dataset	../dataset/SAOI/test_SM-L345U-MAIN_infer_bot.h5
+dataset_dir	../dataset/saoi/saoi_train_bot.h5  # training set; unused in inference mode
+infer_dataset	../dataset/saoi/test_SM-L345U-MAIN_infer_bot.h5
 infer_timesteps	1  # Inference timesteps
 num_vae_samples	5000  # Number of probabilistic generation
 
@@ -76,7 +76,7 @@ hierarchy_seed	0, 1, 2, 3  # Coarsening partitions to build and rotate across z-
 
 %   VAE (MMD-InfoVAE) - MUST match training
 use_vae	True  # Enable posterior encoder + stochastic latent path (variational losses)
-vae_latent_dim	128  # Posterior/global latent width (must match checkpoint)
+vae_latent_dim	16  # Posterior/global latent width (must match checkpoint)
 vae_mp_layers	5  # Posterior graph-encoder message-passing depth
 recon_loss	mse  # huber or mse reconstruction objective
 vae_graph_aware	True  # Include graph/input context when encoding the posterior
@@ -85,7 +85,11 @@ vae_graph_aware	True  # Include graph/input context when encoding the posterior
 prior_type	gnn_e2e  # gnn_e2e enables the jointly trained graph-conditional prior
 use_conditional_prior	True  # Use learned conditional prior instead of N(0,I)
 prior_family	fm  # fm (flow matching) or gmm
-prior_fm_steps	40  # Euler integration steps for FM-prior sampling/validation
+prior_fm_steps	30  # Integration steps for FM-prior sampling/validation
+prior_fm_solver	heun  # 2nd-order trapezoid predictor-corrector. Euler's O(dt^2)
+%   local error overshoots into the z tails exactly where the velocity is most
+%   curved (t -> 1) -- the Gen_max spike that had forced steps 20 -> 100.
+%   Heun at 30 steps is more accurate than Euler at 100 and ~40% cheaper.
 prior_mp_layers	5  # Prior message-passing depth
 prior_hidden_dim	256  # Conditional-prior hidden width
 prior_temperature	1.0  # Sampling spread control (inference only)

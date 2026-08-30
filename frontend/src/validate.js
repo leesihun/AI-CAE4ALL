@@ -1,9 +1,9 @@
 import { toast } from "./dom.js";
 import { state } from "./state.js";
-import { BLOCK_SPECS, MODEL_CATALOG, TYPE_META } from "./constants.js";
+import { BLOCK_SPECS, INPUT_SOURCE_META, MODEL_CATALOG, TYPE_META } from "./constants.js";
 import { apiRequest, checkpointMetaNow, requireRuntime } from "./api.js";
 import { normalizeConfigValues, rawConfig, requiredFor } from "./config.js";
-import { applyGraphAutofill, toGeometryPath, toMethodPath } from "./autofill.js";
+import { applyGraphAutofill, selectedParameterCandidate, toGeometryPath, toMethodPath } from "./autofill.js";
 
 export function typeColor(type) {
   return (TYPE_META[type] || TYPE_META.artifact).color;
@@ -181,6 +181,16 @@ export function executableSteps(targetId = null) {
   const target = targetId ? state.nodes.find(node => node.id === targetId) : null;
   const available = topologicalNodes(targetId);
   const modelNodes = available.filter(node => BLOCK_SPECS[node.type]?.isModel);
+  // A model configured for a runtime-only mode (for example SDFFlow `sample`)
+  // is the configuration provider for its connected run block, not a second
+  // independent execution. Training modes remain separate steps so a full
+  // train -> inference pipeline still trains before it predicts.
+  const runtimeProviderIds = new Set(state.edges
+    .filter(edge => edge.toPort === "model"
+      && ["run.inference", "run.cad_generator"].includes(
+        state.nodes.find(node => node.id === edge.toNode)?.type
+      ))
+    .map(edge => edge.fromNode));
   if (target && BLOCK_SPECS[target.type]?.isModel) {
     return [{
       label: `${BLOCK_SPECS[target.type].label} · ${target.config.mode || "train"}`,
@@ -210,6 +220,9 @@ export function executableSteps(targetId = null) {
       return;
     }
     if (spec?.isModel) {
+      const mode = String(node.config?.mode || "train").toLowerCase();
+      const trainingMode = ["train", "train_vae", "train_fm", "train_lc"].includes(mode);
+      if (node.id !== target?.id && runtimeProviderIds.has(node.id) && !trainingMode) return;
       steps.push({
         label: `${spec.label} · ${node.config.mode || "train"}`,
         nodeId: node.id,
@@ -265,6 +278,23 @@ export function executableSteps(targetId = null) {
     // be sitting in inference mode with those keys manually set.
     const overrides = { mode };
     const catalogKeys = MODEL_CATALOG[modelId].keys;
+    if (node.type === "run.cad_generator") {
+      // Serialize the controls shown on the CAD Generator block into the native
+      // SDFFlow configuration. The aliases keep previously saved Studio graphs
+      // (`candidates`, `guidance`) runnable after the UI adopted native names.
+      const generatorValues = {
+        num_samples: node.config.num_samples || node.config.candidates,
+        cfg_scale: node.config.cfg_scale || node.config.guidance,
+        ode_steps: node.config.ode_steps,
+        mc_resolution: node.config.mc_resolution,
+        seed: node.config.seed,
+        cond_values: node.config.cond_values,
+        candidate_multiplier: node.config.candidate_multiplier
+      };
+      Object.entries(generatorValues).forEach(([key, value]) => {
+        if (catalogKeys.includes(key) && String(value ?? "").trim()) overrides[key] = value;
+      });
+    }
     if (catalogKeys.includes("infer_dataset") && node.config.dataset_path) {
       // The graph is authoritative -- except when what it says is "run
       // inference on the training set". That happens whenever the same HDF5
@@ -339,18 +369,34 @@ export function analysisStep(node, steps) {
     const prediction = analysisInput(upstreamOf(node, "prediction"), steps);
     const truth = node.config.truth_path || upstreamOf(node, "truth")?.config?.path || "";
     if (!prediction || !truth) return null;
+    let fieldPairs = [];
+    try {
+      const parsed = JSON.parse(node.config.field_pairs || "[]");
+      if (Array.isArray(parsed)) fieldPairs = parsed;
+    } catch {
+      // The evaluation workspace will surface malformed saved mappings; do not
+      // silently fall back to positional rows in a graph run.
+    }
+    const payload = {
+      prediction_path: prediction,
+      truth_path: truth
+    };
+    if (node.config.mapping_mode === "legacy") {
+      Object.assign(payload, {
+        prediction_start: Number(node.config.prediction_start ?? 3),
+        truth_start: Number(node.config.truth_start ?? 3),
+        num_fields: Number(node.config.num_fields ?? 1)
+      });
+    } else if (fieldPairs.length) {
+      payload.field_pairs = fieldPairs;
+      payload.confirm_mapping = String(node.config.mapping_confirmed || "").toLowerCase() === "true";
+    }
     return {
       kind: "analysis",
       action: "evaluation",
       label: `${BLOCK_SPECS[node.type].label} · score`,
       nodeId: node.id,
-      payload: {
-        prediction_path: prediction,
-        truth_path: truth,
-        prediction_start: Number(node.config.prediction_start ?? 3),
-        truth_start: Number(node.config.truth_start ?? 3),
-        num_fields: Number(node.config.num_fields ?? 2)
-      }
+      payload
     };
   }
   if (node.type === "output.export") {
@@ -450,12 +496,30 @@ function portRequiredInMode(node, port) {
 }
 
 export function validateGraph(showToast = true) {
+  // Validation must inspect the same graph-derived values that execution will
+  // serialize, including a selected Design Parameters spreadsheet row.
+  applyGraphAutofill();
   const errors = [];
   state.nodes.forEach(node => {
     const spec = BLOCK_SPECS[node.type];
     spec.inputs.filter(port => portRequiredInMode(node, port)).forEach(port => {
-      const linked = state.edges.some(edge => edge.toNode === node.id && edge.toPort === port.id);
-      if (!linked) errors.push(`${spec.label}: missing ${port.label}`);
+      const edge = state.edges.find(candidate => candidate.toNode === node.id && candidate.toPort === port.id);
+      if (!edge) {
+        errors.push(`${spec.label}: missing ${port.label}`);
+        return;
+      }
+      const source = state.nodes.find(candidate => candidate.id === edge.fromNode);
+      const sourceMeta = source && INPUT_SOURCE_META[source.type];
+      // A wire is only topology. CAD, HDF5, and checkpoint source blocks still
+      // need a concrete artifact before the downstream block can run. Catch the
+      // empty-source case here so Validate and Run give an immediate instruction
+      // instead of reporting a clean graph and failing later in server preflight.
+      // Design Parameters is different: its spreadsheet can be stored directly
+      // on the block without an external CSV/JSON binding.
+      if (sourceMeta && source.type !== "source.parameters"
+          && !String(source.config?.[sourceMeta.key] || "").trim()) {
+        errors.push(`${spec.label}: ${port.label} is connected, but ${sourceMeta.label} is not selected.`);
+      }
     });
   });
   state.edges.forEach(edge => {
@@ -486,6 +550,47 @@ export function validateGraph(showToast = true) {
       errors.push(`${label}: ${MODEL_CATALOG[resolved.modelId]?.label || resolved.modelId} needs its model block on the canvas — its checkpoint does not record every key that mode requires.`);
     } else if (!node.config.dataset_path) {
       errors.push(`${label}: connect the dataset to infer on.`);
+    }
+  });
+  state.nodes.filter(node => node.type === "run.cad_generator").forEach(node => {
+    const label = BLOCK_SPECS[node.type].label;
+    const rawConditions = String(node.config.cond_values || "").split(",").map(item => item.trim()).filter(Boolean);
+    if (rawConditions.some(value => !Number.isFinite(Number(value)))) {
+      errors.push(`${label}: condition values must all be finite numbers.`);
+      return;
+    }
+    const parameterEdge = state.edges.find(edge => edge.toNode === node.id && edge.toPort === "parameters");
+    const source = parameterEdge && state.nodes.find(candidate => candidate.id === parameterEdge.fromNode);
+    if (!source || source.type !== "source.parameters") return;
+    const selected = selectedParameterCandidate(source);
+    if (!selected.table) return; // The connected block is intentionally unused for unconditional sampling.
+    const manualConditions = (node.manualConfigKeys || []).includes("cond_values") && rawConditions.length > 0;
+    if (manualConditions) {
+      if (selected.inputs.length && rawConditions.length !== selected.inputs.length) {
+        errors.push(`${label}: manual condition values must match the spreadsheet's ${selected.inputs.length} Input columns.`);
+      }
+      return;
+    }
+    if (!selected.selectedSampleId) {
+      errors.push(`${label}: choose one Design Parameters spreadsheet row for generation.`);
+    } else if (!selected.row) {
+      errors.push(`${label}: the selected generation row no longer exists in the bound dataset.`);
+    } else if (selected.missingNames.length) {
+      errors.push(`${label}: every generation Input column needs a name.`);
+    } else if (selected.duplicateNames.length) {
+      errors.push(`${label}: generation Input column names must be unique (${selected.duplicateNames.join(", ")}).`);
+    } else if (selected.invalidInputs.length) {
+      errors.push(`${label}: selected row has missing or non-numeric values for ${selected.invalidInputs.map(item => item.name || item.id).join(", ")}.`);
+    }
+  });
+  state.nodes.filter(node => node.type === "optimize.design").forEach(node => {
+    const label = BLOCK_SPECS[node.type].label;
+    const objectives = String(node.config.objectives || "").split(",").map(item => item.trim()).filter(Boolean);
+    const directions = String(node.config.directions || "").split(",").map(item => item.trim().toLowerCase()).filter(Boolean);
+    if (!objectives.length) {
+      errors.push(`${label}: add at least one objective column.`);
+    } else if (directions.length !== objectives.length || directions.some(item => !["min", "max"].includes(item))) {
+      errors.push(`${label}: directions must contain one min or max entry for every objective.`);
     }
   });
   try {

@@ -7,6 +7,7 @@ from pathlib import Path
 from .diagnostics import DiagnosticReport, Severity
 from .specs import (
     MethodSpec,
+    build_chi_mgnflow_spec,
     build_geometry_ingest_spec,
     build_meshgraphnets_spec,
     build_mlp_spec,
@@ -32,6 +33,7 @@ class MethodRegistry:
         self.specs = specs or (
             build_meshgraphnets_spec(),
             build_variational_spec(),
+            build_chi_mgnflow_spec(),
             build_neural_operator_spec(),
             build_transolver_spec(),
             build_sdfflow_spec(),

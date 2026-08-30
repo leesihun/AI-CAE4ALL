@@ -9,6 +9,7 @@ repository is imported or vendored here.
 from __future__ import annotations
 
 import json
+import os
 import time
 import urllib.error
 import urllib.request
@@ -18,18 +19,20 @@ from studio_backend.paths import RUNTIME_ROOT
 
 SETTINGS_PATH = RUNTIME_ROOT / "llm_client.local.json"
 
-# Defaults match this deployment's LLM_API_fast master node
-# (LLM_API_fast/cluster_config.py: MASTER_NODE_IP, LLM_API_PORT,
-# LLM_API_ADMIN_USERNAME/PASSWORD). Override via the System workspace or by
-# editing the git-ignored settings file directly.
+# A Studio checkout must never ship working administrator credentials. The
+# endpoint is opt-in, HTTPS is the default, and the password lives only in this
+# process (or AI_CAE_LLM_PASSWORD) rather than in the settings file.
 _DEFAULT_SETTINGS = {
-    "master_ip": "10.228.69.135",
+    "master_ip": "",
     "port": 10002,
-    "username": "admin",
-    "password": "administrator",
+    "username": "",
+    "scheme": "https",
+    "allow_insecure_http": False,
 }
 
 _token_cache: dict[str, Any] = {"token": None, "expires_at": 0.0}
+_secret_cache: dict[str, str] = {"password": os.environ.get("AI_CAE_LLM_PASSWORD", "")}
+_PERSISTED_KEYS = frozenset(_DEFAULT_SETTINGS)
 
 
 def _load_settings() -> dict[str, Any]:
@@ -37,36 +40,87 @@ def _load_settings() -> dict[str, Any]:
         try:
             data = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
             if isinstance(data, dict):
-                return {**_DEFAULT_SETTINGS, **data}
+                # Migrate old Studio files that wrote the password in plaintext:
+                # retain it for this process, then immediately rewrite only the
+                # non-secret connection metadata.
+                legacy_password = data.get("password")
+                if isinstance(legacy_password, str) and legacy_password and not _secret_cache["password"]:
+                    _secret_cache["password"] = legacy_password
+                clean = {key: data[key] for key in _PERSISTED_KEYS if key in data}
+                if "password" in data:
+                    try:
+                        SETTINGS_PATH.write_text(json.dumps(clean, indent=2), encoding="utf-8")
+                    except OSError:
+                        pass
+                return {**_DEFAULT_SETTINGS, **clean}
         except (ValueError, OSError):
             pass
     return dict(_DEFAULT_SETTINGS)
 
 
+def _base_url(settings: dict[str, Any], *, require_safe: bool = False) -> str:
+    host = str(settings.get("master_ip") or "").strip()
+    if not host:
+        return ""
+    scheme = str(settings.get("scheme") or "https").lower()
+    if scheme not in {"https", "http"}:
+        raise ValueError("LLM transport must be https or http.")
+    if require_safe and scheme == "http" and not settings.get("allow_insecure_http"):
+        raise ValueError(
+            "Refusing to send credentials or configuration over plain HTTP. "
+            "Use HTTPS, or explicitly allow insecure HTTP in System settings."
+        )
+    return f"{scheme}://{host}:{settings['port']}"
+
+
 def public_settings(settings: dict[str, Any] | None = None) -> dict[str, Any]:
     settings = settings or _load_settings()
+    password_configured = bool(_secret_cache["password"])
     return {
         "master_ip": settings["master_ip"],
         "port": settings["port"],
         "username": settings["username"],
-        "base_url": f"http://{settings['master_ip']}:{settings['port']}",
-        "configured": SETTINGS_PATH.is_file(),
+        "scheme": settings["scheme"],
+        "allow_insecure_http": bool(settings["allow_insecure_http"]),
+        "base_url": _base_url(settings),
+        "configured": bool(settings["master_ip"] and settings["username"]),
+        "password_configured": password_configured,
+        "ready": bool(
+            settings["master_ip"] and settings["username"] and password_configured
+            and (settings["scheme"] == "https" or settings["allow_insecure_http"])
+        ),
     }
 
 
 def save_settings(update: dict[str, Any]) -> dict[str, Any]:
     current = _load_settings()
-    for key in ("master_ip", "username", "password"):
-        value = update.get(key)
-        if isinstance(value, str) and value.strip():
-            current[key] = value.strip()
+    for key in ("master_ip", "username"):
+        if key in update and isinstance(update[key], str):
+            current[key] = update[key].strip()
+    if "scheme" in update:
+        scheme = str(update["scheme"]).strip().lower()
+        if scheme not in {"https", "http"}:
+            raise ValueError("scheme must be https or http.")
+        current["scheme"] = scheme
+    if "allow_insecure_http" in update:
+        value = update["allow_insecure_http"]
+        current["allow_insecure_http"] = value is True or (
+            isinstance(value, str) and value.strip().lower() in {"1", "true", "yes", "on"}
+        )
     if update.get("port") not in (None, ""):
         try:
             current["port"] = int(update["port"])
         except (TypeError, ValueError) as exc:
             raise ValueError("port must be a number.") from exc
+        if not 1 <= current["port"] <= 65535:
+            raise ValueError("port must be between 1 and 65535.")
+    if update.get("clear_password"):
+        _secret_cache["password"] = ""
+    elif isinstance(update.get("password"), str) and update["password"]:
+        _secret_cache["password"] = update["password"]
     RUNTIME_ROOT.mkdir(parents=True, exist_ok=True)
-    SETTINGS_PATH.write_text(json.dumps(current, indent=2), encoding="utf-8")
+    persisted = {key: current[key] for key in _PERSISTED_KEYS}
+    SETTINGS_PATH.write_text(json.dumps(persisted, indent=2), encoding="utf-8")
     _token_cache["token"] = None
     return public_settings(current)
 
@@ -98,10 +152,20 @@ def _login(settings: dict[str, Any]) -> str:
     now = time.time()
     if _token_cache["token"] and _token_cache["expires_at"] > now:
         return _token_cache["token"]
-    base = f"http://{settings['master_ip']}:{settings['port']}"
+    if not str(settings.get("username") or "").strip():
+        raise ValueError("Configure an LLM username in System settings first.")
+    if not str(settings.get("master_ip") or "").strip():
+        raise ValueError("Configure an LLM master host in System settings first.")
+    password = _secret_cache["password"]
+    if not password:
+        raise ValueError(
+            "Enter the LLM password in System settings for this Studio session, "
+            "or set AI_CAE_LLM_PASSWORD before starting Studio."
+        )
+    base = _base_url(settings, require_safe=True)
     result = _call(
         f"{base}/api/auth/login",
-        {"username": settings["username"], "password": settings["password"]},
+        {"username": settings["username"], "password": password},
         {},
         15.0,
     )
@@ -133,7 +197,7 @@ def configure_via_llm(config_text: str, instruction: str) -> dict[str, Any]:
     if not config_text.strip():
         raise ValueError("There is no configuration text to send to the LLM.")
     settings = _load_settings()
-    base = f"http://{settings['master_ip']}:{settings['port']}"
+    base = _base_url(settings, require_safe=True)
     token = _login(settings)
     payload = {
         "model": "default",
