@@ -158,6 +158,14 @@ const schemaFor = predictionPath => ({
     }, nodeId);
     assert(saved.mapping_mode === "schema", "Schema mapping mode was not persisted");
     assert(saved.report_path.endsWith("report.json"), "Evaluation evidence path was not persisted");
+    const pipelineEvaluation = await page.evaluate(async id => {
+      const module = await import("./src/validate.js");
+      const node = window.__AI_CAE_FRONTEND__.state.nodes.find(item => item.id === id);
+      return module.analysisStep(node, module.executableSteps());
+    }, nodeId);
+    assert(pipelineEvaluation.payload.field_pairs.length === 2, "Pipeline execution dropped the saved field mapping");
+    assert(pipelineEvaluation.payload.confirm_mapping === true, "Pipeline execution dropped mapping confirmation");
+    assert(!Object.hasOwn(pipelineEvaluation.payload, "prediction_start"), "Schema-mode pipeline silently fell back to legacy rows");
 
     // Start a slow schema request, leave the workspace, and prove its eventual
     // completion cannot replace or mutate the new Docs workspace.

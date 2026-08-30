@@ -100,6 +100,12 @@ export function sectionFor(modelId, key, required, config = null) {
   if (required.has(key)) return "Required";
   if (/dataset|modelpath|output_dir|log_file|pipeline_log|param_dir|input_mesh|sidecar|split_seed/.test(key)) return "Data & output";
   if (/^(point_|pointnet_|deeponet_|fno_|gino_|encoder_|decoder_|fm_arch|fm_blocks|fm_hidden|fm_cond_hidden|flow_time_freqs|latent_|latent_dim|message_passing|slice_num|num_layers|num_heads|attention_kernel|mlp_ratio|coarsening|multiscale|mp_per_level|positional|fourier|operator_dim|global_condition|num_filter|lc_filter|network_size)/.test(key)) return "Architecture";
+  // Network-shape keys the prefix-anchored test above misses. Without these,
+  // MLP showed an "Architecture / 0" tab while hidden_layers, activation,
+  // output_activation, and norm sat in "Advanced", and every mesh route filed
+  // its auxiliary encoder/prior sizes there too. Each name is matched exactly
+  // so the later Training / Resources / Inference tests keep the keys they own.
+  if (/^(hidden_layers|activation|output_activation|norm|pool_type|unpool_type|pool_heads|bipartite_unpool|residual_scale|use_spatial_attention|fm_heads|vae_latent_dim|vae_mp_layers|prior_hidden_dim|prior_mp_layers)$/.test(key)) return "Architecture";
   if (/training_epochs|learningr|weight_decay|warmup|batch_size|loss|dropout|grad_|noise|ema|kl_|beta|eikonal|surface_weight|normal_weight|alpha|lambda_|free_bits|mmd|recon_loss|recon_iter|flow_t_|flow_loss_weighting|flow_det_prob/.test(key)) return "Training";
   if (/gpu|parallel|worker|prefetch|amp|compile|checkpointing|cache|profile|fsdp|pipeline_microbatches|chunk_size|load_all/.test(key)) return "Resources & runtime";
   if (/^infer|^test|^val_|display|plot|histogram|num_samples|candidate_multiplier|cfg_scale|condition_|cond_|ode_steps|flow_steps|flow_solver|flow_predict|best_by|mc_resolution|sample_index|source_num_samples|posterior_noise|timesteps_reduced/.test(key)) return "Inference & evaluation";
@@ -261,9 +267,13 @@ export function renderConfig() {
       if (search && !key.toLowerCase().includes(search)) return;
       groups["Inactive / rejected"].push(key);
     });
-  if (!groups[state.configSection]?.length && search) state.configSection = CONFIG_SECTIONS.find(section => groups[section].length) || "Required";
+  // Only offer sections that actually hold a key. An empty tab is still a tab:
+  // clicking "Architecture / 0" on MLP or "Inactive / rejected / 0" on the mesh
+  // routes opened a blank panel reading "0 visible keys" with nothing to say why.
+  const populated = CONFIG_SECTIONS.filter(section => groups[section].length);
+  if (!groups[state.configSection]?.length) state.configSection = populated[0] || "Required";
 
-  $("#configSectionList").innerHTML = CONFIG_SECTIONS.map(section => `<button class="config-section-button${state.configSection === section ? " active" : ""}" data-config-section="${section}"><span>${section}</span><small>${groups[section].length}</small></button>`).join("");
+  $("#configSectionList").innerHTML = populated.map(section => `<button class="config-section-button${state.configSection === section ? " active" : ""}" data-config-section="${section}"><span>${section}</span><small>${groups[section].length}</small></button>`).join("");
   $$("[data-config-section]").forEach(button => button.addEventListener("click", () => {
     state.configSection = button.dataset.configSection;
     renderConfig();

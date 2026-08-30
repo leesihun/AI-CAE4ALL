@@ -41,6 +41,14 @@ HDF5 (`dataset_kind=table_hdf5`, `native_probe=False`), not the shared mesh
 contract, and needs no GPU. See [MLP/CLAUDE.md](MLP/CLAUDE.md) and
 CONFIGURATION_REFERENCE.md section 9.10.
 
+**SDFFlow additionally carries the suite's only closed-loop mode.** Alongside
+its train/sample/reconstruct/interpolate modes, `mode optimize` chains
+generation, gmsh tetrahedral meshing, a linear-static structural solve, and a
+CMA-ES search into one config-driven run over the trained DeepJEB generator --
+the one place where a method repo *evaluates* geometry rather than only
+producing or predicting it. It trains nothing and needs `gmsh`, `pyamg`, and
+`cma`. See [Geometry_generation/CLAUDE.md](Geometry_generation/CLAUDE.md).
+
 **`geometry_ingest` is a non-ML data-prep utility** routed through the same
 launcher: it meshes CAD/geometry (STEP/IGES/STL) into the shared mesh HDF5
 contract (graph for MeshGraphNets, point cloud for the operators/Transolver). Its

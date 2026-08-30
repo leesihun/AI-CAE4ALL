@@ -24,7 +24,7 @@ Outputs (into --out-dir, default outputs/saoi_sweep3):
 
 Usage:
     python configs/MeshGraphNets-V/SAOI_sweep3/score_sweep.py
-    python .../score_sweep.py --arms sweep_ad_g1_z16_c1_r100 --k 20
+    python .../score_sweep.py --arms ad_g1_z16_c1_r100 --k 20
 """
 import argparse
 import itertools
@@ -62,7 +62,7 @@ def _half_fraction():
     for i in range(16):
         free = [(i >> (3 - k)) & 1 for k in range(4)]
         bits = free + [free[0] ^ free[1] ^ free[2] ^ free[3]]
-        out.append("sweep_" + "_".join(AXES[k][1][b] for k, b in enumerate(bits)))
+        out.append("_".join(AXES[k][1][b] for k, b in enumerate(bits)))
     return out
 
 
@@ -70,8 +70,8 @@ DEFAULT_ARMS = _half_fraction()
 
 
 def arm_tags(arm):
-    """'sweep_ad_g1_z64_c1_r100' -> ['ad', 'g1', 'z64', 'c1', 'r100']."""
-    return arm[len("sweep_"):].split("_")
+    """'ad_g1_z64_c1_r100' -> ['ad', 'g1', 'z64', 'c1', 'r100']."""
+    return arm.split("_")
 
 # Eval sets each arm is inferred on (gen_sweep_configs.INFER_SOURCES).
 INFER_TAGS = ["s26fe_main", "s26fe_sec", "sm_l345u"]
@@ -369,7 +369,7 @@ def main():
 
     rows = []
     for arm in args.arms:
-        cfg_path = HERE / f"config_{arm}.txt"
+        cfg_path = HERE / f"config_train_{arm}.txt"
         row = {"arm": arm, "config": str(cfg_path)}
         if not cfg_path.exists():
             row["error"] = "config not found"
@@ -532,7 +532,7 @@ def load_spreads(cfg_dir, arm, tag):
     Reads inference_output_dir out of the generated inference config rather than
     rebuilding the path, so a change in the generator cannot silently desync.
     """
-    cfg_path = cfg_dir / f"config_inf_{arm}_{tag}.txt"
+    cfg_path = cfg_dir / f"config_infer_{arm}_{tag}.txt"
     if not cfg_path.exists():
         return None
     out_dir = parse_config(cfg_path).get("inference_output_dir")

@@ -11,14 +11,19 @@ Anything not implemented must remain visibly marked `adapter` or `roadmap`.
 
 ## 2. Scope boundary
 
-The user-authorized change boundary is `frontend/`.
+The primary implementation boundary is `frontend/`.
 
 - Browser, local server, launchers, runtime state, reports, and exports live
   under `frontend/`.
-- Existing suite and method code is imported or invoked, not rewritten.
-- Generated files are isolated under ignored `frontend/runtime/`.
+- Existing training algorithms and model implementations are invoked rather
+  than redesigned. Narrow integration fixes are allowed where the Studio
+  exposes their public contracts: cHI-MGNflow checkpoints now record their
+  model family, and the portable inference classifier explicitly refuses
+  unsupported cHI-MGNflow and SimulGen-VAE checkpoints instead of routing them
+  to a similar-looking driver.
+- Generated Studio files are isolated under ignored `frontend/runtime/`.
 - A remote, multi-user deployment would require authentication, isolation,
-  quotas, durable storage, and backend changes outside this boundary.
+  quotas, durable storage, and a separate production-service scope.
 
 ## 3. Runtime architecture
 
@@ -71,7 +76,8 @@ before opening `http://127.0.0.1:8080/index.html`.
 Native graph steps:
 
 - Geometry → HDF5: `geometry_ingest` `inspect` or `ingest`
-- All ten trainable model IDs and every registered mode
+- All eleven current trainable model IDs and every registered mode; the live
+  registry also creates a generic GUI block for a future trainable route
 - Inference Run via the linked model’s native inference/reconstruction mode
 - CAD Generator via SDFFlow `sample`
 
@@ -135,8 +141,11 @@ download, and reach metrics directly from a model or job row.
 
 ### Evaluation
 
-Match prediction and truth sample IDs, enforce node compatibility, select field
-rows, compare overlapping timesteps, and write:
+Inspect both HDF5 contracts before scoring. Match declared sample IDs, enforce
+shape/node compatibility, map named output fields exactly, require explicit
+confirmation when only positional alignment is available, support embedded
+native truth arrays, and keep contiguous mesh-row selection as a deliberate
+legacy override. Then compare compatible values and write:
 
 - relative L2;
 - MAE;
@@ -171,11 +180,15 @@ learning remain roadmap work.
 
 ### Deployment
 
-Run the existing family-detecting CPU inference bundle, track it as a job, and
-build the Windows PyInstaller bundle under `frontend/runtime/deploy`.
+Run the family-detecting CPU inference bundle for its eight supported model
+types through five driver families, track it as a job, and build the Windows
+PyInstaller bundle under `frontend/runtime/deploy`. Checkpoint metadata gates
+the action before launch. cHI-MGNflow, MLP, and SimulGen-VAE checkpoints are
+sent to their native inference/reconstruction paths rather than misclassified
+as portable models.
 
 The local `POST /api/inference/run` route is functional. Production remote API
-hosting remains outside the frontend-only boundary.
+hosting remains outside this local Studio scope.
 
 ### Export
 
@@ -188,34 +201,34 @@ artifacts remain unchanged.
 Read actual Markdown files, show interpreter and route health, and query the
 visible NVIDIA inventory through `nvidia-smi`.
 
-## 7. Verification gates
+## 7. Verification record
 
-Before handoff:
+The handoff is based on checks actually run against the live checkout:
 
-1. Parse both Python entrypoints with `ast`.
-2. Run `node --check` for browser and smoke-test JavaScript.
-3. Confirm `/api/health` and all 11 registered routes.
-4. Preflight the generated fixed-geometry SimulGen fixture.
-5. Execute a one-epoch SimulGen VAE smoke run.
-6. Execute latent-conditioner training and reconstruction.
-7. Execute Geometry → HDF5 inspection from the graph.
-8. Execute portable checkpoint inference.
-9. Evaluate real prediction/truth HDF5 arrays.
-10. Rank a real comparison CSV.
-11. Run real Pareto selection.
-12. Export a real generated report.
-13. Drive the browser through config, HDF5, geometry-ingest, evaluation,
-    comparison, optimization, and export workspaces.
-14. Verify mouse-wheel zoom, alphabetical model ordering, input-first and
-    output-first block linking, and source-file selection/upload.
-15. Assert that Mesh and Field modes render real `mesh_edge` lines and that
-    Points mode renders nodes without topology.
-16. Audit Git status and confirm implementation changes stay in `frontend/`.
-17. Save/reload a graph and Design Parameter cell edits; reject invalid imported
-    graph JSON without mutating the current pipeline.
-18. Select/delete an edge, keyboard-operate a block menu, bind a repository
-    file into the graph, inspect optimization schema, and preflight a checked-in
-    benchmark config.
+1. All frontend JavaScript sources and runners pass `node --check`; 26 backend
+   tests pass.
+2. `/api/health` reports 12/12 healthy routes, including all 11 trainable model
+   routes represented by GUI blocks.
+3. The live System audit checks 330 current configs and accurately exposes one
+   unrelated failure in the untracked Geometry optimization draft
+   (`mode optimize` is not a registered SDFFlow mode); the strict cHI-MGNflow
+   ex9 config check still passes.
+4. Fourteen Chrome runners exercise graph editing, repository file selection,
+    configuration/autofill, history, accessibility, responsive layout, HDF5 and
+    geometry viewing, evaluation, comparison, optimization, export, deployment,
+    System audit, stale-response races, and process-state behavior. The dedicated
+    control-surface runner also clicks every previously uncovered action family;
+    the only ID-bearing controls not named directly are the three hidden file
+    inputs exercised through their visible Import/Load/Upload buttons.
+5. The checkpoint-only cHI-MGNflow runner clicks the real repository picker,
+   connects the real checkpoint and held-out HDF5, sets CPU/one-step/mean
+   controls in the Inspector, accepts the launch confirmation, passes the exact
+   saved-config launch gate, and completes native inference with one real HDF5
+   result under `frontend/runtime/`.
+6. The focused cHI-MGNflow flow smoke test and history-safety VM test pass.
+7. Scoped whitespace validation passes for the Studio, inference bridge, and
+   cHI checkpoint-metadata changes; unrelated user worktree changes remain
+   untouched.
 
 ## 8. Remaining roadmap
 
@@ -228,5 +241,5 @@ These are intentionally not represented as completed:
 - cross-run GPU peak instrumentation when a method does not publish it;
 - remote artifact storage and multi-user collaboration.
 
-Implementing the first two items would require widening the authorized change
-scope beyond `frontend/`.
+Implementing the first two items would require a separate production and
+security design rather than another local-UI patch.

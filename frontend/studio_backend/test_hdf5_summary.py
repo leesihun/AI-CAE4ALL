@@ -4,10 +4,25 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from studio_backend.hdf5_preview import hdf5_summary
+from studio_backend.hdf5_preview import hdf5_sample, hdf5_samples, hdf5_summary
+from studio_backend.native_jobs import create_viewer_smoke_fixture
+from studio_backend.paths import SUITE_ROOT
 
 
 class Hdf5SummaryContractTests(unittest.TestCase):
+    def test_viewer_fixture_exercises_the_real_operator_grid_contract(self) -> None:
+        try:
+            fixture = create_viewer_smoke_fixture()
+        except RuntimeError as exc:  # pragma: no cover - feature dependency
+            self.skipTest(str(exc))
+        path = SUITE_ROOT / fixture["operator_grid"]
+        catalog = hdf5_samples(path)
+        sample = hdf5_sample(path, "0", 0, 0)
+        self.assertEqual(catalog["contract"], "operator_grid")
+        self.assertEqual(catalog["total_samples"], 2)
+        self.assertEqual(sample["returned_points"], 225)
+        self.assertFalse(fixture["scientific_use"])
+
     def test_small_string_contract_is_visible_without_loading_numeric_arrays(self) -> None:
         try:
             import h5py

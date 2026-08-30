@@ -104,7 +104,16 @@ function applyOverlayState() {
   const topId = topOverlayId();
   const modalOpen = Boolean(topId);
 
-  $$(".app, #runtimeDrawer").forEach(element => element.toggleAttribute("inert", modalOpen));
+  // The Studio workspace overlay is opened *by* the top nav and mirrors that nav
+  // in its own sidebar, so it is a workspace, not a dialog. Inerting the whole
+  // .app for it buried the nav under the scrim: every item stayed visible and
+  // painted "active" while doing nothing, and switching workspaces silently
+  // required closing the modal first. Keep the topbar live for that one overlay
+  // and inert only the canvas shell behind it; real dialogs still take the lot.
+  const workspaceOverlay = topId === "studioOverlay";
+  $$("#runtimeDrawer").forEach(element => element.toggleAttribute("inert", modalOpen));
+  $$(".app").forEach(element => element.toggleAttribute("inert", modalOpen && !workspaceOverlay));
+  $$(".shell").forEach(element => element.toggleAttribute("inert", modalOpen && workspaceOverlay));
   $$(".overlay").forEach(overlay => {
     const open = overlay.classList.contains("open");
     const top = open && overlay.id === topId;
@@ -115,6 +124,12 @@ function applyOverlayState() {
       ? String(OVERLAY_Z_INDEX + overlayOrder.indexOf(overlay.id))
       : "";
   });
+  // The Studio workspace overlay is opened *by* the top nav and mirrors it in
+  // its own sidebar, so it is a workspace, not a dialog. Letting its scrim
+  // cover the topbar left every nav item visible, still painted "active", and
+  // completely dead: moving from Models to Data meant closing the modal first
+  // with no hint that was required. Keep the topbar above this one overlay.
+  document.body.classList.toggle("workspace-overlay", workspaceOverlay);
 }
 
 function trapOverlayFocus(event) {
@@ -183,7 +198,20 @@ export function watchOverlayOrder() {
       } else {
         const closedTop = closed.find(overlay => overlay.id === previousTopId);
         const origin = closedTop && overlayFocusOrigins.get(closedTop);
-        if (!focusElement(origin)) focusInsideOverlay(nextTop);
+        // Some closing actions intentionally move focus somewhere more useful
+        // before the MutationObserver runs (Studio's "Open block library" sends
+        // it straight to block search). Do not overwrite that explicit choice
+        // with the generic return-to-trigger behaviour. A normal close button
+        // still has focus inside the now-closed overlay, so it continues to
+        // return to its origin as before.
+        const active = document.activeElement;
+        const explicitlyFocusedOutside = Boolean(
+          closedTop
+          && active instanceof HTMLElement
+          && !closedTop.contains(active)
+          && canReceiveFocus(active)
+        );
+        if (!explicitlyFocusedOutside && !focusElement(origin)) focusInsideOverlay(nextTop);
       }
     }
     closed.forEach(overlay => overlayFocusOrigins.delete(overlay));

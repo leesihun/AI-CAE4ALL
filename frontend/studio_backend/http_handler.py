@@ -35,6 +35,7 @@ from studio_backend.native_jobs import (
     create_geometry_smoke_fixture,
     create_inference_job,
     create_simulgen_smoke_fixture,
+    create_viewer_smoke_fixture,
 )
 from studio_backend.paths import (
     CONFIG_RUNTIME,
@@ -129,11 +130,18 @@ class StudioRequestHandler(SimpleHTTPRequestHandler):
 
     def send_json(self, payload: Any, status: int = 200) -> None:
         body = json.dumps(json_safe(payload), ensure_ascii=False).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except ConnectionError:
+            # Browser navigation and request-generation cancellation
+            # intentionally abandon stale fetches. The response is already
+            # irrelevant; treating that disconnect as an API 500 only produces
+            # a second write failure and a misleading server traceback.
+            self.close_connection = True
 
     def read_json(self) -> dict[str, Any]:
         try:
@@ -308,10 +316,11 @@ class StudioRequestHandler(SimpleHTTPRequestHandler):
         except (ValueError, FileNotFoundError) as exc:
             self.send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
         except Exception as exc:
-            self.send_json(
-                {"error": f"{type(exc).__name__}: {exc}", "trace": traceback.format_exc(limit=4)},
-                HTTPStatus.INTERNAL_SERVER_ERROR,
-            )
+            # Keep the traceback in the local server console where it is useful
+            # to the operator; returning it to a browser exposes filesystem and
+            # implementation details to any page able to reach localhost.
+            traceback.print_exc(limit=4)
+            self.send_json({"error": f"{type(exc).__name__}: {exc}"}, HTTPStatus.INTERNAL_SERVER_ERROR)
 
     def do_HEAD(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
@@ -399,6 +408,8 @@ class StudioRequestHandler(SimpleHTTPRequestHandler):
                 self.send_json(create_simulgen_smoke_fixture(), HTTPStatus.CREATED)
             elif parsed.path == "/api/geometry/smoke-fixture":
                 self.send_json(create_geometry_smoke_fixture(), HTTPStatus.CREATED)
+            elif parsed.path == "/api/viewer/smoke-fixture":
+                self.send_json(create_viewer_smoke_fixture(), HTTPStatus.CREATED)
             elif parsed.path.startswith("/api/jobs/") and parsed.path.endswith("/cancel"):
                 job_id = parsed.path.split("/")[-2]
                 self.send_json(STATE.cancel_job(job_id))
@@ -411,10 +422,8 @@ class StudioRequestHandler(SimpleHTTPRequestHandler):
         except (ValueError, json.JSONDecodeError) as exc:
             self.send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
         except Exception as exc:
-            self.send_json(
-                {"error": f"{type(exc).__name__}: {exc}", "trace": traceback.format_exc(limit=5)},
-                HTTPStatus.INTERNAL_SERVER_ERROR,
-            )
+            traceback.print_exc(limit=5)
+            self.send_json({"error": f"{type(exc).__name__}: {exc}"}, HTTPStatus.INTERNAL_SERVER_ERROR)
 
     def log_message(self, fmt: str, *args: Any) -> None:
         print(f"[studio-http] {self.address_string()} - {fmt % args}", flush=True)

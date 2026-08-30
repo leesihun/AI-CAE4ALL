@@ -49,6 +49,15 @@ SDFFLOW_KEYS = frozenset(
         "fm_num_workers", "fm_use_amp", "fm_use_ema", "fm_ema_decay",
         "fm_val_interval", "fm_test_interval", "fm_num_test_shapes",
         "fm_mc_resolution_test",
+        # mode `optimize`: closed-loop generate -> mesh -> FEA -> search
+        "opt_subspace_dim", "opt_subspace_seed", "opt_condition_dims",
+        "opt_latent_range", "opt_shell_scale",
+        "opt_budget", "opt_popsize", "opt_sigma0", "opt_seed", "opt_baseline_size",
+        "opt_load_cases", "opt_length_scale", "opt_stress_percentile",
+        "opt_mesh_size_max", "opt_target_faces",
+        "opt_material_e", "opt_material_nu", "opt_material_rho", "opt_yield_stress",
+        "opt_stress_margin", "opt_disp_margin", "opt_stress_weight", "opt_disp_weight",
+        "opt_verify_resolution", "opt_verify_target_faces", "opt_verify_mesh_size_max",
     }
 )
 
@@ -188,6 +197,48 @@ def validate_sdfflow(ctx: SpecValidationContext) -> None:
         if max_faces is not None and max_faces < 0:
             ctx.add("SDF-INTERP-005", Severity.ERROR, "plot_max_faces must be nonnegative.", field_name="plot_max_faces")
 
+    if ctx.mode == "optimize":
+        validate_positive_fields(
+            ctx,
+            ("opt_subspace_dim", "opt_budget", "opt_popsize", "opt_baseline_size",
+             "opt_sigma0", "opt_target_faces", "opt_mesh_size_max", "opt_length_scale",
+             "opt_material_e", "opt_material_rho", "opt_yield_stress",
+             "opt_verify_resolution", "opt_verify_target_faces",
+             "opt_latent_range", "opt_shell_scale"),
+            "SDF-OPT-POSITIVE-001",
+        )
+        known_cases = {"vertical", "horizontal", "diagonal", "torsion"}
+        cases = {str(c).strip().lower() for c in as_list(values.get("opt_load_cases", []))}
+        unknown = cases - known_cases
+        if unknown:
+            ctx.add("SDF-OPT-LOAD-001", Severity.ERROR,
+                    f"opt_load_cases contains unknown case(s) {sorted(unknown)}; "
+                    f"available: {sorted(known_cases)}.", field_name="opt_load_cases")
+        known_dims = {"bbox_x", "bbox_y", "bbox_z", "volume", "area"}
+        dims = {str(d).strip().lower() for d in as_list(values.get("opt_condition_dims", []))}
+        if dims - known_dims:
+            ctx.add("SDF-OPT-COND-001", Severity.ERROR,
+                    f"opt_condition_dims contains unknown descriptor(s) "
+                    f"{sorted(dims - known_dims)}; available: {sorted(known_dims)}.",
+                    field_name="opt_condition_dims")
+        if "bbox_y" in dims:
+            ctx.add("SDF-OPT-COND-002", Severity.WARNING,
+                    "bbox_y has zero train-split standard deviation in DeepJEB; "
+                    "searching over it moves nothing.",
+                    field_name="opt_condition_dims", promote_in_strict=True)
+        popsize = integer(values.get("opt_popsize"))
+        budget = integer(values.get("opt_budget"))
+        if popsize and budget and budget < 2 * popsize:
+            ctx.add("SDF-OPT-BUDGET-001", Severity.WARNING,
+                    f"opt_budget={budget} allows fewer than two CMA-ES generations at "
+                    f"opt_popsize={popsize}; the search cannot adapt.",
+                    field_name="opt_budget", promote_in_strict=True)
+        nu = numeric(values.get("opt_material_nu"))
+        if nu is not None and not -1.0 < nu < 0.5:
+            ctx.add("SDF-OPT-NU-001", Severity.ERROR,
+                    "opt_material_nu must lie in (-1, 0.5) for an isotropic solid.",
+                    field_name="opt_material_nu")
+
     if ctx.mode == "reconstruct" and "input_mesh" in values:
         suffix = str(values["input_mesh"]).lower().rsplit(".", 1)[-1]
         if suffix not in {"stl", "obj", "ply", "off", "glb", "gltf"}:
@@ -202,7 +253,7 @@ def build_sdfflow_spec() -> MethodSpec:
         model_ids=("sdfflow",),
         repository="Geometry_generation",
         entrypoint="SDFFlow_main.py",
-        valid_modes=("train", "train_vae", "train_fm", "sample", "reconstruct", "interpolate"),
+        valid_modes=("train", "train_vae", "train_fm", "sample", "reconstruct", "interpolate", "optimize"),
         known_keys=SDFFLOW_KEYS,
         required_by_mode={
             "train": frozenset({
@@ -218,12 +269,18 @@ def build_sdfflow_spec() -> MethodSpec:
             "sample": frozenset({"vae_modelpath", "fm_modelpath", "output_dir", "num_samples", "seed", "ode_steps", "mc_resolution"}),
             "reconstruct": frozenset({"vae_modelpath", "input_mesh", "output_dir", "mc_resolution"}),
             "interpolate": frozenset({"vae_modelpath", "fm_modelpath", "output_dir", "seed", "source_num_samples", "sample_index_a", "sample_index_b", "alpha", "ode_steps", "mc_resolution"}),
+            "optimize": frozenset({"vae_modelpath", "fm_modelpath", "output_dir", "seed",
+                                   "ode_steps", "mc_resolution", "opt_subspace_dim",
+                                   "opt_budget", "opt_popsize", "opt_baseline_size",
+                                   "opt_load_cases"}),
         },
         recommended_by_mode={
             "train": frozenset({"split_seed", "use_conditions", "skip_completed_stages"}),
             "train_vae": frozenset({"split_seed", "use_ema", "use_amp"}),
             "train_fm": frozenset({"split_seed", "use_conditions", "use_ema", "use_amp"}),
             "sample": frozenset({"cfg_scale"}),
+            "optimize": frozenset({"opt_length_scale", "opt_material_e", "opt_yield_stress",
+                                   "opt_target_faces", "opt_mesh_size_max"}),
         },
         defaults={},
         defaults_by_mode={
@@ -233,14 +290,27 @@ def build_sdfflow_spec() -> MethodSpec:
             "sample": {"cfg_scale": 2.0, "ode_steps": 50, "mc_resolution": 128},
             "reconstruct": {"mc_resolution": 128},
             "interpolate": {"alpha": 0.5, "ode_steps": 50, "mc_resolution": 128, "plot_dpi": 180, "plot_max_faces": 0},
+            "optimize": {
+                "ode_steps": 50, "mc_resolution": 128, "opt_subspace_dim": 12,
+                "opt_condition_dims": "volume,area", "opt_budget": 120, "opt_popsize": 8,
+                "opt_sigma0": 1.0, "opt_baseline_size": 12, "opt_load_cases": "vertical,diagonal",
+                "opt_length_scale": 0.19 / 1.8, "opt_stress_percentile": 99.5,
+                "opt_mesh_size_max": 0.05, "opt_target_faces": 12000,
+                "opt_material_e": 113.8e9, "opt_material_nu": 0.342,
+                "opt_material_rho": 4430.0, "opt_yield_stress": 903e6,
+                "opt_stress_margin": 1.0, "opt_disp_margin": 1.0,
+                "opt_stress_weight": 6.0, "opt_disp_weight": 3.0,
+                "opt_verify_resolution": 160, "opt_verify_target_faces": 30000,
+                "opt_verify_mesh_size_max": 0.035,
+            },
         },
         path_rules=(
             PathRule("dataset_dir", PathKind.INPUT_FILE, frozenset({"train", "train_vae", "train_fm"})),
             PathRule("init_vae_modelpath", PathKind.INPUT_FILE, frozenset({"train", "train_vae"})),
             PathRule("vae_modelpath", PathKind.OUTPUT_FILE, frozenset({"train", "train_vae"})),
-            PathRule("vae_modelpath", PathKind.INPUT_FILE, frozenset({"train_fm", "sample", "reconstruct", "interpolate"})),
+            PathRule("vae_modelpath", PathKind.INPUT_FILE, frozenset({"train_fm", "sample", "reconstruct", "interpolate", "optimize"})),
             PathRule("fm_modelpath", PathKind.OUTPUT_FILE, frozenset({"train", "train_fm"})),
-            PathRule("fm_modelpath", PathKind.INPUT_FILE, frozenset({"sample", "interpolate"})),
+            PathRule("fm_modelpath", PathKind.INPUT_FILE, frozenset({"sample", "interpolate", "optimize"})),
             PathRule("input_mesh", PathKind.INPUT_FILE, frozenset({"reconstruct"})),
             PathRule("output_dir", PathKind.OUTPUT_DIR),
         ),

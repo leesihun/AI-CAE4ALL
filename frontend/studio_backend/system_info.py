@@ -9,6 +9,18 @@ from typing import Any
 from studio_backend.paths import RUNTIME_ROOT, SUITE_ROOT, file_record, relative
 
 
+# Public model IDs accepted by inference/run_inference.py.  Keep this separate
+# from the five implementation families: the neural-operator driver serves four
+# distinct model IDs, while each of the other drivers serves one.
+PORTABLE_INFERENCE_MODELS = (
+    "point_deeponet", "deeponet", "fno", "gino", "transolver",
+    "meshgraphnets", "meshgraphnets-v", "sdfflow",
+)
+PORTABLE_DRIVER_FAMILIES = (
+    "neural_operator", "transolver", "meshgraphnets", "meshgraphnets_v", "geometry",
+)
+
+
 def gpu_inventory() -> list[dict[str, Any]]:
     command = [
         "nvidia-smi",
@@ -49,8 +61,9 @@ def deployment_status() -> dict[str, Any]:
         "bundle_cli": relative(SUITE_ROOT / "inference" / "run_inference.py"),
         "existing_exe": file_record(selected, "executable") if selected.is_file() else None,
         "api_endpoint": "/api/inference/run",
-        "families": [
-            "point_deeponet", "deeponet", "fno", "gino", "transolver",
-            "meshgraphnets", "meshgraphnets-v", "sdfflow",
-        ],
+        # `families` is retained for saved/custom clients from the first Studio
+        # release, where this field actually contained model IDs.
+        "families": list(PORTABLE_INFERENCE_MODELS),
+        "models": list(PORTABLE_INFERENCE_MODELS),
+        "driver_families": list(PORTABLE_DRIVER_FAMILIES),
     }

@@ -9,6 +9,12 @@ Supported checkpoints: `point_deeponet`, `deeponet`, `fno`, `gino`
 geometry generator `sdfflow`. You don't need to say which one — the
 checkpoint file tells the tool.
 
+`cHI-MGNflow`, MLP, and SimulGen-VAE are intentionally not in this portable
+bundle. Use their native AI-CAE4ALL inference/reconstruction routes. In
+particular, cHI shares the MeshGraphNets backbone but has a different
+flow-matching velocity network; current detection rejects it explicitly rather
+than routing those weights into the deterministic MGN driver.
+
 ## Quick start
 
 ```bash
@@ -39,10 +45,15 @@ picks the right forward pass. No filename convention, no `--model` flag:
 | Checkpoint shape | Family | Architectures |
 | --- | --- | --- |
 | `schema_version == 'deeponet_repo_v1'` | `neural_operator` | point_deeponet, deeponet, fno, gino (`checkpoint['selected_model']` picks which) |
-| `schema_version == 'sdfflow_infer_v1'` or `stage in {'vae','fm'}` | `geometry` | SDFFlow (VAE + flow-matching) |
+| `schema_version == 'sdfflow_infer_v1'`, or an SDFFlow-identified legacy `stage in {'vae','fm'}` checkpoint | `geometry` | SDFFlow (VAE + flow-matching) |
 | `checkpoint_version` present | `transolver` | Transolver |
 | `model_config` has `use_vae` | `meshgraphnets_v` | MeshGraphNets (variational) |
 | `model_config` has `message_passing_num`, no `use_vae` | `meshgraphnets` | MeshGraphNets |
+
+`stage='vae'` alone is not enough: SimulGen-VAE uses the same stage label and
+must not be mistaken for SDFFlow. Likewise, cHI flow keys are detected before
+the shared MeshGraphNets keys and produce an actionable unsupported-family
+error.
 
 ## CLI flags
 

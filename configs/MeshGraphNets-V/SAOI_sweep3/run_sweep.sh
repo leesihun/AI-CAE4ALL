@@ -13,7 +13,8 @@
 #   E  regularizer scale      r001 (lambda_mmd 1, prior_nll_weight 1) |
 #                             r100 (lambda_mmd 100, prior_nll_weight 100)
 #
-# Arm names encode the cell: sweep_<cc|ad>_<g0|g1>_<z16|z64>_<c0|c1>_<r001|r100>.
+# Arm names encode the cell: <cc|ad>_<g0|g1>_<z16|z64>_<c0|c1>_<r001|r100>, and
+# the files are config_train_<arm>.txt / config_infer_<arm>_<tag>.txt.
 # Regenerate the configs with gen_sweep_configs.py; do not hand-edit them.
 #
 # 16 arms, TWO per GPU across GPUs 0-7, paired by complementing the four FREE
@@ -38,7 +39,7 @@
 # THIS IS A MULTI-DAY RUN. Start it detached:
 #   nohup bash configs/MeshGraphNets-V/SAOI_sweep3/run_sweep.sh > sweep.out 2>&1 &
 #   tail -f sweep.out
-#   tail -f outputs/saoi_sweep3/run_logs/sweep_ad_g1_z16_c1_r100.log   # watch one arm
+#   tail -f outputs/saoi_sweep3/run_logs/ad_g1_z16_c1_r100.log   # watch one arm
 #
 # Multiscale cache: all 16 arms hash to ONE cache file (none of the swept keys
 # are part of the coarsening signature). An
@@ -71,7 +72,7 @@
 #
 # Usage:
 #   bash configs/MeshGraphNets-V/SAOI_sweep3/run_sweep.sh
-#   ARMS="sweep_ad_g1_z16_c1_r100 sweep_cc_g0_z16_c0_r001" bash .../run_sweep.sh  # subset
+#   ARMS="ad_g1_z16_c1_r100 cc_g0_z16_c0_r001" bash .../run_sweep.sh  # subset
 #   PREFLIGHT=0 bash .../run_sweep.sh                       # skip validation
 
 # NOT `set -e`: per-arm failures are collected so one bad arm cannot kill the batch.
@@ -99,20 +100,20 @@ CACHE_GLOB="dataset/saoi/saoi_train_bot.mscache.*.h5"
 # Kept in the generator's emission order (bit order A P Z M); gen_sweep_configs.py
 # prints this exact line so the two can never drift.
 DEFAULT_ARMS="\
-sweep_cc_g0_z16_c0_r001 sweep_cc_g0_z16_c1_r100 \
-sweep_cc_g0_z64_c0_r100 sweep_cc_g0_z64_c1_r001 \
-sweep_cc_g1_z16_c0_r100 sweep_cc_g1_z16_c1_r001 \
-sweep_cc_g1_z64_c0_r001 sweep_cc_g1_z64_c1_r100 \
-sweep_ad_g0_z16_c0_r100 sweep_ad_g0_z16_c1_r001 \
-sweep_ad_g0_z64_c0_r001 sweep_ad_g0_z64_c1_r100 \
-sweep_ad_g1_z16_c0_r001 sweep_ad_g1_z16_c1_r100 \
-sweep_ad_g1_z64_c0_r100 sweep_ad_g1_z64_c1_r001"
+cc_g0_z16_c0_r001 cc_g0_z16_c1_r100 \
+cc_g0_z64_c0_r100 cc_g0_z64_c1_r001 \
+cc_g1_z16_c0_r100 cc_g1_z16_c1_r001 \
+cc_g1_z64_c0_r001 cc_g1_z64_c1_r100 \
+ad_g0_z16_c0_r100 ad_g0_z16_c1_r001 \
+ad_g0_z64_c0_r001 ad_g0_z64_c1_r100 \
+ad_g1_z16_c0_r001 ad_g1_z16_c1_r100 \
+ad_g1_z64_c0_r100 ad_g1_z64_c1_r001"
 ARMS="${ARMS:-$DEFAULT_ARMS}"
 
 mkdir -p "$LOG_ROOT"
 
-cfg_for()  { echo "$CFG_DIR/config_${1}.txt"; }
-inf_cfg_for() { echo "$CFG_DIR/config_inf_${1}_${2}.txt"; }
+cfg_for()  { echo "$CFG_DIR/config_train_${1}.txt"; }
+inf_cfg_for() { echo "$CFG_DIR/config_infer_${1}_${2}.txt"; }
 log_for()  { echo "$LOG_ROOT/${1}.log"; }
 cache_ready() { compgen -G "$CACHE_GLOB" > /dev/null 2>&1; }
 

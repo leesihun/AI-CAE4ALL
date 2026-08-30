@@ -174,11 +174,18 @@ def validate_variational(ctx: SpecValidationContext) -> None:
             ctx.add("MGNV-SAMPLES-DEFAULT", Severity.NOTICE, "num_vae_samples is absent; the native default of 1 will be used.", field_name="num_vae_samples")
         elif integer(values["num_vae_samples"]) is None or integer(values["num_vae_samples"]) <= 0:
             ctx.add("MGNV-SAMPLES-VALUE", Severity.ERROR, "num_vae_samples must be a positive integer.", field_name="num_vae_samples")
-        elif integer(values["num_vae_samples"]) and integer(values["num_vae_samples"]) > 1000:
+        elif (integer(values["num_vae_samples"]) and integer(values["num_vae_samples"]) > 1000
+                and values.get("save_rollouts", True) is not False):
+            # The warning is about FILES, one per (scene, draw). With
+            # save_rollouts False none are written, so a large draw count is
+            # only compute and this would be a false alarm on every config of a
+            # distribution study.
             ctx.add(
                 "MGNV-SAMPLES-WORKLOAD",
                 Severity.WARNING,
-                f"num_vae_samples={values['num_vae_samples']} can produce a large number of rollout artifacts.",
+                f"num_vae_samples={values['num_vae_samples']} writes that many rollout "
+                f"HDF5s per scene. Set save_rollouts False if only the spread "
+                f"histogram is wanted.",
                 field_name="num_vae_samples",
             )
         if "prior_temperature" in values and (numeric(values["prior_temperature"]) is None or numeric(values["prior_temperature"]) <= 0):

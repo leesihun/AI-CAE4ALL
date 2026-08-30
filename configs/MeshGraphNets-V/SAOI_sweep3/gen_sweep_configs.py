@@ -74,7 +74,8 @@ HERE = pathlib.Path(__file__).resolve().parent
 # config stays the single source of truth for everything not swept.
 PROD = HERE.parent / 'SAOI_all_input'
 BASE = PROD / 'config_train_bot.txt'
-OUT_PREFIX = 'config_'   # arm names already start with 'sweep_' (run_sweep.sh: config_${arm}.txt)
+TRAIN_PREFIX = 'config_train_'   # run_sweep.sh: config_train_${arm}.txt
+INFER_PREFIX = 'config_infer_'   # run_sweep.sh: config_infer_${arm}_${tag}.txt
 
 # ── factors, in the order the arm name encodes them: (label, [(tag, {k: v})*2])
 # A level may set several keys; `capacity` and `regularizer scale` are composite
@@ -168,7 +169,7 @@ def arms():
             tag, kv = levels[b]
             tags.append(tag)
             values.update(kv)
-        out.append((i, 'sweep_' + '_'.join(tags), values, tags))
+        out.append((i, '_'.join(tags), values, tags))
     return out
 
 
@@ -202,11 +203,13 @@ INFER_SOURCES = {
     's26fe_sec':   'config_infer_s26fe_sec_bot.txt',
     'sm_l345u':    'config_infer_sm_l345u_main_bot.txt',
 }
-# Draws per scene for the spread histogram. Production uses 5000; a distribution
-# comparison converges long before that, and this multiplies out over
-# 16 arms x 3 datasets. No trajectory files are written (save_rollouts False),
-# so this is pure compute -- raise it if the histograms look ragged.
-INFER_SAMPLES = '300'
+# Draws per scene for the spread histogram (production uses 5000).
+# THIS IS THE SWEEP'S DOMINANT COST: total forwards = arms x eval sets x scenes
+# x INFER_SAMPLES. No trajectory files are written (save_rollouts False), so it
+# costs compute and nothing else -- but 16 x 3 x scenes x 2000 is a lot of it.
+# Lower it first if the inference stage overruns; the histogram only needs
+# enough draws to be smooth, and its sample count is scenes x this.
+INFER_SAMPLES = '2000'
 
 INFER_OVERRIDES = {
     'num_vae_samples': (INFER_SAMPLES, 'sweep draws per scene (production uses 5000)'),
@@ -216,6 +219,12 @@ INFER_OVERRIDES = {
     'make_histogram':  ('True',  'GT vs generated z_disp spread (max - min) per realization'),
     'show_histogram':  ('False', 'headless node: save the PNG, do not try to open a viewer'),
     'histogram_bins':  ('60',    'bins in the overlaid GT/generated histogram'),
+    # TWO ARMS SHARE EACH GPU during the inference stage too, and the automatic
+    # VAE batch sizer targets a fraction of *free* VRAM measured at startup. Two
+    # jobs reading the same free figure would each claim 0.70 and together ask
+    # for 140%. The OOM ladder would recover, but at the cost of a wasted probe
+    # per arm -- half the default is the deterministic fix.
+    'vae_batch_vram_fraction': ('0.35', 'two arms share the GPU; 2 x 0.35 = the usual 0.70'),
 }
 
 
@@ -367,14 +376,14 @@ def main():
                 axis_lines.append(f"%     {'':<28}{k} {v}")
         header = HEADER.format(arm=arm, gpu=gpu, mate=mate,
                                axis_lines='\n'.join(axis_lines))
-        (HERE / f'{OUT_PREFIX}{arm}.txt').write_text(
+        (HERE / f'{TRAIN_PREFIX}{arm}.txt').write_text(
             header + render(base_lines, values, arm, gpu, mate), encoding='utf-8')
         n_inf = 0
         for tag, src in INFER_SOURCES.items():
             src_lines = (PROD / src).read_text(encoding='utf-8').split('\n')
             while src_lines and src_lines[0].startswith('%'):
                 src_lines.pop(0)
-            (HERE / f'config_inf_{arm}_{tag}.txt').write_text(
+            (HERE / f'{INFER_PREFIX}{arm}_{tag}.txt').write_text(
                 INFER_HEADER.format(arm=arm, tag=tag, gpu=gpu)
                 + render_infer(src_lines, arm, tag, gpu, values),
                 encoding='utf-8')

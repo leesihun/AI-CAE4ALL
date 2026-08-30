@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 import threading
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
@@ -61,6 +63,17 @@ class StaticAllowlistTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertEqual(self.status(path)[0], 404)
                 self.assertEqual(self.status(path, "HEAD")[0], 404)
+
+    def test_internal_api_errors_do_not_return_server_tracebacks(self) -> None:
+        with patch("studio_backend.http_handler.deployment_status", side_effect=RuntimeError("probe failed")), patch(
+            "studio_backend.http_handler.traceback.print_exc"
+        ):
+            with self.assertRaises(HTTPError) as caught:
+                urlopen(self.base + "/api/deploy", timeout=3)
+            body = json.loads(caught.exception.read().decode("utf-8"))
+        self.assertEqual(caught.exception.code, 500)
+        self.assertEqual(body["error"], "RuntimeError: probe failed")
+        self.assertNotIn("trace", body)
 
 
 if __name__ == "__main__":

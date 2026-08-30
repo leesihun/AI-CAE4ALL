@@ -87,7 +87,10 @@ async function assertViewportPainted(page, message) {
     context.drawImage(canvas, 0, 0);
     const { data } = context.getImageData(0, 0, probe.width, probe.height);
     const seen = new Set();
-    for (let index = 0; index < data.length; index += 4 * 97) {
+    // Sparse point contracts may occupy well under 1% of a large viewport.
+    // A 97-pixel stride can alias a regular 15x15 grid and miss every point;
+    // seven is still bounded while sampling enough pixels to prove paint.
+    for (let index = 0; index < data.length; index += 4 * 7) {
       seen.add(`${data[index]},${data[index + 1]},${data[index + 2]}`);
       if (seen.size > 3) return true;
     }
@@ -116,6 +119,17 @@ async function assertViewportPainted(page, message) {
   try {
     await page.goto(studioUrl);
     await page.waitForFunction(() => document.querySelector(".route-health")?.textContent.includes("routes live"));
+    const viewerFixture = await page.evaluate(async () => {
+      const response = await fetch("/api/viewer/smoke-fixture", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}"
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+      return payload;
+    });
+    assert(viewerFixture.points === 225 && viewerFixture.scientific_use === false, "Viewer fixture contract is not explicit");
 
     await page.locator("#templateSelect").selectOption("geometry");
     await page.locator('[data-node-id="cad"] .node-head').click();
@@ -244,11 +258,11 @@ async function assertViewportPainted(page, message) {
     );
     await page.screenshot({ path: path.join(__dirname, "runtime", "viewer-hdf5-sdf-fixed.png"), fullPage: false });
 
-    await page.evaluate(() => {
+    await page.evaluate(path => {
       const node = window.__AI_CAE_FRONTEND__.state.nodes.find(item => item.id === "dataset");
-      node.config.path = "dataset/benchmarks/deeponet_fractional2d/fractional2d_released.h5";
-    });
-    await openNodeCatalog(page, "dataset", "fractional2d_released.h5");
+      node.config.path = path;
+    }, viewerFixture.operator_grid);
+    await openNodeCatalog(page, "dataset", "operator_grid.h5");
     await selectSample(page);
     assert(
       await page.evaluate(() => window.__AI_CAE_FRONTEND__.state.realArtifact.currentSample.returned_points) === 225,

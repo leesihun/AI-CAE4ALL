@@ -307,6 +307,14 @@ async function replaceTemplate(page, name) {
       await page.waitForSelector("#configOverlay.open");
       assert((await page.locator("#configTitle").innerText()).includes("cHI-MGNflow"), "cHI-MGNflow did not open its real config sheet");
       assert((await page.locator("#configBadges").innerText()).includes(`${contract.chiKeys} accepted`), "cHI-MGNflow accepted-key count is wrong");
+      const chiRaw = await page.locator("#configRaw").inputValue();
+      const chiCanonicalLines = chiRaw.split(/\r?\n/).map(line => line.trim().replace(/\s+/, " "));
+      for (const requiredDefault of [
+        "modelpath ../output/chi-mgnflow/studio/chi_mgnflow.pth",
+        "coarsening_type voronoi_seedmean", "multiscale_levels 2", "mp_per_level 3,4,6,4,3"
+      ]) {
+        assert(chiCanonicalLines.includes(requiredDefault), `Fresh cHI-MGNflow block is missing usable multiscale default: ${requiredDefault}`);
+      }
       await page.locator("#configSearch").fill("flow_solver");
       const flowSolver = page.locator('.full-config-control[data-key="flow_solver"]');
       await flowSolver.waitFor();
@@ -314,6 +322,22 @@ async function replaceTemplate(page, name) {
       const solverChoices = await flowSolver.locator("option").allTextContents();
       assert(solverChoices[0].toLowerCase().includes("not set") && JSON.stringify(solverChoices.slice(1)) === JSON.stringify(["heun", "euler"]), "cHI-MGNflow solver choices drifted from preflight");
       await page.locator('[data-close="configOverlay"]').click();
+
+      await page.locator('.palette-item[data-block-type="run.inference"]').click();
+      await page.waitForSelector('.inspector-config[data-key="flow_steps"]');
+      const inferenceKeys = await page.locator(".inspector-config").evaluateAll(controls => controls.map(control => control.dataset.key));
+      for (const key of ["gpu_ids", "infer_timesteps", "inference_output_dir", "batch_size", "num_vae_samples", "vae_batch_size", "flow_steps", "flow_solver", "flow_predict", "infer_chunk_size", "infer_query_chunk_size"]) {
+        assert(inferenceKeys.includes(key), `Inference Inspector is missing live run-time control ${key}`);
+      }
+      await page.locator('.inspector-config[data-key="flow_steps"]').fill("3");
+      await page.locator('.inspector-config[data-key="flow_steps"]').dispatchEvent("change");
+      await page.locator('.inspector-config[data-key="flow_solver"]').selectOption("euler");
+      await page.locator('.inspector-config[data-key="flow_predict"]').selectOption("mean");
+      const inferenceChoiceState = await page.evaluate(() => {
+        const node = window.__AI_CAE_FRONTEND__.state.nodes.find(item => item.id === window.__AI_CAE_FRONTEND__.state.selectedNode);
+        return { type: node?.type, flow_steps: node?.config.flow_steps, flow_solver: node?.config.flow_solver, flow_predict: node?.config.flow_predict };
+      });
+      assert(JSON.stringify(inferenceChoiceState) === JSON.stringify({ type: "run.inference", flow_steps: "3", flow_solver: "euler", flow_predict: "mean" }), "Inference run-time controls did not persist to the clicked block");
 
       await replaceTemplate(page, "generative");
       const generativePlan = await page.evaluate(async () => {

@@ -14,6 +14,7 @@ python AI_CAE4ALL_main.py --config configs/Geometry_generation/config_train.txt
 python AI_CAE4ALL_main.py --config configs/Geometry_generation/config_sample.txt
 python AI_CAE4ALL_main.py --config configs/Geometry_generation/config_sample_extrapolation.txt
 python AI_CAE4ALL_main.py --config configs/Geometry_generation/config_interpolate.txt
+python AI_CAE4ALL_main.py --config configs/Geometry_generation/config_optimize.txt
 ```
 
 From `Geometry_generation`:
@@ -31,9 +32,10 @@ values, and treats `%` lines as comments. Path-valued keys (`dataset_dir`,
 lowercasing and keep the case you wrote. Relative native paths resolve from
 the `Geometry_generation` repository even when the suite launcher is used.
 
-Valid modes are `train`, `train_vae`, `train_fm`, `sample`, `reconstruct`, and
-`interpolate`. Production training uses `train`; the two split training modes
-are retained for targeted debugging and have no checked-in split configs.
+Valid modes are `train`, `train_vae`, `train_fm`, `sample`, `reconstruct`,
+`interpolate`, and `optimize`. Production training uses `train`; the two split
+training modes are retained for targeted debugging and have no checked-in split
+configs.
 
 ## Multi-GPU (`parallel_mode`)
 
@@ -130,6 +132,85 @@ interpolation is intentionally rejected for now.
 The mode writes three STLs, a triptych PNG, and JSON metadata. A missing zero
 crossing is a hard failure because all three comparison meshes are required.
 
+## Closed-loop optimization (`optimize`)
+
+`inference_profiles/optimize.py` drives `design_loop/` around the frozen
+VAE + FM pair: **generate -> mesh -> analyze -> score -> search**. It trains
+nothing; it searches the geometry the generator already knows.
+
+**The design vector is FM noise, not a latent and not a condition.** It is a
+`opt_subspace_dim`-dimensional orthonormal slice of the 256-d flow-matching
+noise space (`opt_subspace_seed` fixes the basis, `seed` the out-of-subspace
+remainder), optionally extended by `opt_condition_dims` descriptor conditions.
+Every point therefore integrates through the ODE to an on-manifold shape, which
+is what makes a derivative-free search viable. The composed noise is projected
+back onto the Gaussian shell, so the search cannot walk off the prior. Do not
+substitute a raw latent parameterization: latents off the FM prior decode to
+shapes the VAE never trained on.
+
+`bbox_y` has exactly zero train-split standard deviation in DeepJEB and
+`bbox_x` a 0.45% coefficient of variation, so `opt_condition_dims` defaults to
+`volume,area` -- the roughly 1.5 descriptor degrees of freedom that actually
+move (`SDFFlow_ENCODER` findings in
+`GEOMETRY_UPGRADE_MESHING_SEMANTIC_2026-08.md`). The launcher warns on
+`bbox_y`.
+
+Keep `opt_latent_range` equal to `opt_shell_scale` (both default 1.25). That
+inscribes the search box's corner exactly on the shell for any
+`opt_subspace_dim`. A wider box is mostly *degenerate*, not merely generous: the
+composed noise is rescaled back onto the shell, which keeps direction and
+discards magnitude, so every point on a ray beyond the radius decodes to the
+identical shape. `output/geometry_generation/ex1/optimization_widebox/` is a
+kept 200-evaluation run at `latent_range 3.0` against the same 4.33 shell --
+its typical draw had norm about 6.0 and was always clipped, and it spent its
+whole budget repairing constraints instead of shedding mass. Compare it with
+`optimization/` before widening the box again.
+
+`bounds()` takes no arguments on purpose. It is called from both the baseline
+sampler and the CMA-ES setup, and an earlier version that accepted a
+`latent_range` argument and cached it on the instance let the second, no-argument
+call silently reset the configured range. `tests/test_design_loop.py` pins that
+down.
+
+**Boundary conditions come from a geometric rule, because DeepJEB carries no
+per-shape semantic labels.** The dataset is rigidly aligned -- y is the long
+axis at extent 1.8 for every sample -- and a 600-sample occupancy study shows
+the mounting plate is the low-z slab with pads at both y ends and the loaded
+interface is the lug rising in +z near y = 0. `design_loop/problem.py` fixes
+the bottom face of the two end pads and applies the GE bracket-challenge loads
+to the lug crown. The thresholds are module constants (`MOUNT_ABS_Y`,
+`LUG_ABS_Y`, ...); a shape missing either interface raises and is scored as a
+failed design rather than silently analyzed as a cantilever.
+
+**Allowables are calibrated, not assumed.** A random population of
+`opt_baseline_size` designs is analyzed first and the stress/deflection limits
+are set to its medians. Absolute limits taken from the material would leave the
+constraints inactive -- the baseline sits near 7% of Ti-6Al-4V yield -- and the
+objective would collapse to unconstrained mass minimization. The comparison
+baseline reported at the end is the *best-scoring* population member, not the
+median.
+
+**The solver is 4-node tetrahedra, and tet4 is stiff.** `tests/test_design_loop.py`
+pins it down: the constant-strain patch test is exact to 1e-9, rigid-body modes
+store no energy, and load resultants match to machine precision -- but on a
+slender cantilever the predicted tip deflection reaches only 0.40 / 0.65 / 0.83 /
+0.90 of the Timoshenko value at 288 / 1.3k / 6k / 16.5k tets. Deflection and
+stress from this loop are therefore **optimistic in absolute terms**; the
+comparison between two designs at equal discretization is what the loop is for.
+`second_order=True` in `design_loop/mesher.py` produces the tet10 mesh DeepJEB's
+own FEA uses, but `fea.py` assembles tet4 only -- wiring a tet10 element is the
+change to make before quoting absolute stresses.
+
+**The search mesh is a ranking device.** `opt_target_faces` / `opt_mesh_size_max`
+size the per-evaluation mesh; the winner and the baseline are then re-analyzed
+together on the finer `opt_verify_*` mesh. `summary.json` records the
+same-design shift between the two meshes under `mesh_sensitivity`; treat the
+search-phase feasibility flag as relative only.
+
+Artifacts in `output_dir`: `optimized.stl`, `baseline.stl`, `summary.json`,
+`history.json` (every evaluation, including failures and timings),
+`convergence.png`, `report.md`.
+
 ## Architecture and checkpoint facts
 
 - SDF sign is negative inside and positive outside. Shapes occupy roughly
@@ -163,6 +244,12 @@ crossing is a hard failure because all three comparison meshes are required.
 | `training_profiles/setup.py` | Device, optimizer/scheduler, EMA, logging, checkpoints |
 | `inference_profiles/sample.py` | Sampling, OOD guard, candidate ranking, reconstruction |
 | `inference_profiles/interpolate.py` | Reproducible latent interpolation and triptych output |
+| `inference_profiles/optimize.py` | `optimize` mode: config to loop, calibration, verification, reporting |
+| `design_loop/generator.py` | Design vector to FM noise to latent to SDF grid to surface mesh |
+| `design_loop/mesher.py` | gmsh tetrahedralization (reparametrization-free; see its docstring) |
+| `design_loop/fea.py` | Tet4 linear elasticity, AMG solve, von Mises recovery |
+| `design_loop/problem.py` | Bracket interfaces, GE load cases, mass objective with penalties |
+| `design_loop/loop.py` | Evaluator, baseline calibration, CMA-ES driver, history |
 
 ## Validation after changes
 
@@ -170,11 +257,21 @@ At minimum, run from the suite root:
 
 ```bash
 python AI_CAE4ALL_main.py --config configs/Geometry_generation/config_train.txt --check
-python -m pytest -q tests/test_sdfflow_pipeline.py tests/test_checked_in_configs.py tests/test_required_field_matrix.py
+python AI_CAE4ALL_main.py --config configs/Geometry_generation/config_sample.txt --check
+python AI_CAE4ALL_main.py --config configs/Geometry_generation/config_interpolate.txt --check
+python AI_CAE4ALL_main.py --config configs/Geometry_generation/config_optimize.txt --check
 ```
 
+> The previously documented `pytest tests/test_sdfflow_pipeline.py
+> tests/test_checked_in_configs.py tests/test_required_field_matrix.py` does not
+> exist in this checkout (nor anywhere else in the tree) -- as with the stale
+> root `testpaths`, per-config `--check` is the live validation. Verified
+> 2026-08-30.
+
+The `optimize` mode adds `gmsh`, `pyamg`, and `cma` to the requirement set.
+
 Also run `python -m py_compile` on modified Python files. Documentation changes
-must keep the four canonical config names, the four selected DeepJEB condition
+must keep the five canonical config names, the four selected DeepJEB condition
 names, and the canonical `outputs/ex1` paths synchronized.
 
 `GEOMETRY_GENERATION_RESEARCH.md` is design context, not implementation truth.

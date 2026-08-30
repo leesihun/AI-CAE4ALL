@@ -154,9 +154,13 @@ function assert(condition, message) {
     await page.locator("[data-benchmark-preflight]").first().click();
     await page.waitForFunction(() => [...document.querySelectorAll("[data-benchmark-result]")].some(item => item.textContent.trim()), null, { timeout: 30000 });
     assert((await page.locator("[data-benchmark-result]").first().innerText()).length > 0, "Benchmark preflight produced no visible result");
+    await page.locator("[data-benchmark-config]").first().click();
+    await page.waitForFunction(() => document.querySelector("#configOverlay")?.classList.contains("open"), null, { timeout: 30000 });
+    assert((await page.locator("#configDiagnostics").innerText()).includes("Loaded checked-in configuration"), "Benchmark Load did not open its checked-in model config");
+    await page.locator('#configOverlay [data-close="configOverlay"]').click();
 
     assert(errors.length === 0, `Browser errors: ${errors.join(" | ")}`);
-    console.log("PASS: persistence, menus, edge deletion, model details, schema optimization, file binding, and benchmark preflight");
+    console.log("PASS: persistence, menus, edge deletion, model details, schema optimization, file binding, and benchmark preflight/load");
   } finally {
     await browser.close();
   }

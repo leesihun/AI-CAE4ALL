@@ -122,6 +122,69 @@ function assert(condition, message) {
     assert(first.sdfflow.config.condition_names === "bbox_x,volume", "SDFFlow condition names were not filled");
     assert(first.sdfflow.config.fm_modelpath === "../output/sdf/fm_best.pth", "SDFFlow FM checkpoint heuristic failed");
 
+    const modelDeploymentPath = await page.evaluate(() => {
+      const app = window.__AI_CAE_FRONTEND__;
+      const edge = app.state.edges.find(item => item.id === "e10");
+      edge.fromNode = "mlp";
+      edge.fromPort = "model";
+      app.applyGraphAutofill();
+      return app.state.nodes.find(node => node.id === "deploy").config.checkpoint_path;
+    });
+    assert(modelDeploymentPath === "output/mlp/best.pth", `Method-relative model checkpoint escaped the suite-root deployment contract: ${modelDeploymentPath}`);
+
+    const chiInferenceConfig = await page.evaluate(async () => {
+      const app = window.__AI_CAE_FRONTEND__;
+      const { executableSteps } = await import("./src/validate.js");
+      const previous = {
+        nodes: app.state.nodes,
+        edges: app.state.edges,
+        selectedNode: app.state.selectedNode,
+        selectedEdge: app.state.selectedEdge
+      };
+      const makeNode = (id, type, config = {}) => ({
+        id, type, x: 0, y: 0,
+        config: { ...(app.BLOCK_SPECS[type]?.defaults || {}), ...config },
+        autoFill: {}, manualConfigKeys: []
+      });
+      app.state.nodes = [
+        makeNode("chi_data", "source.hdf5", { path: "dataset/ex1_infer.h5" }),
+        makeNode("chi_model", "model.chi-mgnflow", {
+          mode: "train", dataset_dir: "../dataset/ex1.h5", infer_dataset: "../dataset/ex1_infer.h5",
+          modelpath: "../output/chi-mgnflow/ex1_smoke/ex1_smoke.pth",
+          input_var: "4", output_var: "4"
+        }),
+        makeNode("chi_infer", "run.inference", {
+          dataset_path: "dataset/ex1_infer.h5",
+          checkpoint_path: "output/chi-mgnflow/ex1_smoke/ex1_smoke.pth",
+          gpu_ids: "-1", infer_timesteps: "1", batch_size: "1",
+          inference_output_dir: "../frontend/runtime/chi-inference-control",
+          num_vae_samples: "2", vae_batch_size: "1",
+          flow_steps: "3", flow_solver: "euler", flow_predict: "mean"
+        })
+      ];
+      app.state.edges = [
+        { id: "chi-e1", fromNode: "chi_data", fromPort: "data", toNode: "chi_infer", toPort: "data" },
+        { id: "chi-e2", fromNode: "chi_model", fromPort: "model", toNode: "chi_infer", toPort: "model" }
+      ];
+      try {
+        return executableSteps("chi_infer")[0]?.config || "";
+      } finally {
+        app.state.nodes = previous.nodes;
+        app.state.edges = previous.edges;
+        app.state.selectedNode = previous.selectedNode;
+        app.state.selectedEdge = previous.selectedEdge;
+      }
+    });
+    const chiInferenceLines = chiInferenceConfig.split(/\r?\n/).map(line => line.trim().replace(/\s+/, " "));
+    for (const [key, value] of [
+      ["gpu_ids", "-1"], ["infer_timesteps", "1"], ["batch_size", "1"],
+      ["num_vae_samples", "2"], ["vae_batch_size", "1"], ["flow_steps", "3"],
+      ["flow_solver", "euler"], ["flow_predict", "mean"],
+      ["inference_output_dir", "../frontend/runtime/chi-inference-control"]
+    ]) {
+      assert(chiInferenceLines.includes(`${key} ${value}`), `Inference control ${key} was not serialized into the native cHI config`);
+    }
+
     const override = await page.evaluate(() => {
       const app = window.__AI_CAE_FRONTEND__;
       const model = app.state.nodes.find(node => node.id === "mlp");

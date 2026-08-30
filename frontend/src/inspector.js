@@ -1,5 +1,6 @@
 import { $, $$, escapeHtml, toast, formatBytes, on } from "./dom.js";
 import { state, snapshot } from "./state.js";
+import { savePipelineState } from "./persistence.js";
 import { BLOCK_SPECS, MODEL_CATALOG, TYPE_META, INPUT_SOURCE_META } from "./constants.js";
 import { apiRequest, requireRuntime } from "./api.js";
 import { previewGraphic, nodeVisualLabel } from "./graphics.js";
@@ -148,6 +149,9 @@ export async function openInputPicker(nodeId) {
       $$("[data-use-input]", container).forEach(button => button.addEventListener("click", () => {
         snapshot();
         node.config[meta.key] = button.dataset.useInput;
+        markManualConfigValue(node, meta.key, button.dataset.useInput);
+        applyGraphAutofill();
+        savePipelineState();
         $("#studioOverlay").classList.remove("open");
         render();
         toast(`${meta.label} selected: ${button.dataset.useInput}`);
@@ -176,8 +180,12 @@ export async function uploadInputFile(nodeId, file) {
     });
     const result = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
     if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+    if (!state.nodes.some(item => item.id === node.id)) return;
     snapshot();
     node.config[meta.key] = result.path;
+    markManualConfigValue(node, meta.key, result.path);
+    applyGraphAutofill();
+    savePipelineState();
     render();
     toast(`Uploaded and selected ${file.name} (${formatBytes(result.size)}).`);
   } catch (error) {
@@ -197,8 +205,12 @@ export async function createGeometrySample(nodeId) {
   button.textContent = "Creating sample geometry…";
   try {
     const fixture = await apiRequest("/api/geometry/smoke-fixture", { method: "POST", body: {} });
+    if (!state.nodes.some(item => item.id === node.id)) return;
     snapshot();
     node.config[meta.key] = fixture.path;
+    markManualConfigValue(node, meta.key, fixture.path);
+    applyGraphAutofill();
+    savePipelineState();
     render();
     toast(`Created a real sample CAD file: ${fixture.path}`);
   } catch (error) {
@@ -211,6 +223,19 @@ export async function createGeometrySample(nodeId) {
 /** Keys a run writes back onto a block: evidence, never user input. */
 const RUN_EVIDENCE_KEYS = new Set([
   "results_path", "results_samples", "report_path", "export_path", "evaluated_samples", "job_id"
+]);
+
+/**
+ * Keys whose value states what the block already does rather than configuring
+ * it: nothing in the Studio, the launcher, or any native repo reads them. They
+ * were rendered as ordinary text inputs, so "split · seeded 80/10/10" on a
+ * dataset block looked like the control that picks the split (the real one is
+ * split_seed on the model block) and editing it silently did nothing. Keep the
+ * fact — it is worth knowing — but show it as a fact.
+ */
+const FIXED_BEHAVIOUR_KEYS = new Set([
+  "split", "edit_mode", "range_policy", "version", "geometry_checks",
+  "error_view", "qualification", "selection"
 ]);
 
 export function renderInspector() {
@@ -259,8 +284,18 @@ export function renderInspector() {
     : node.type === "run.inference"
       // Only the families whose checkpoints record enough to rebuild the model
       // without their training config; the rest still need their model block.
-      ? { model_id: ["", ...STANDALONE_INFERENCE_MODEL_IDS] }
-      : {};
+      ? {
+          model_id: ["", ...STANDALONE_INFERENCE_MODEL_IDS],
+          flow_solver: ["", "heun", "euler"],
+          flow_predict: ["", "sample", "mean", "ensemble_mean"]
+        }
+      // mapping_confirmed gates whether a positional field mapping is allowed to
+      // score, and studio.js/validate.js compare it against "True" exactly. As a
+      // free-text box any typo read as False and silently blocked the run with
+      // no sign the value was the problem.
+      : node.type === "evaluate.predictions"
+        ? { mapping_confirmed: ["False", "True"], mapping_mode: ["schema", "legacy"] }
+        : {};
   const ports = [
     ...spec.inputs.map(port => ({ ...port, direction: "in" })),
     ...spec.outputs.map(port => ({ ...port, direction: "out" }))
@@ -288,6 +323,9 @@ export function renderInspector() {
           // anything real -- typing over "results samples" would relabel the
           // canvas while the results on disk stayed exactly as they were.
           return `<div class="form-row run-evidence"><label>${escapeHtml(key.replaceAll("_", " "))}<small class="inline-auto">from the last run</small></label><output class="field readonly" title="${escapeHtml(value)}">${escapeHtml(value) || "—"}</output></div>`;
+        }
+        if (FIXED_BEHAVIOUR_KEYS.has(key)) {
+          return `<div class="form-row run-evidence"><label>${escapeHtml(key.replaceAll("_", " "))}<small class="inline-auto">fixed behaviour</small></label><output class="field readonly" title="${escapeHtml(value)}">${escapeHtml(value) || "—"}</output></div>`;
         }
         const automatic = autoFillMeta(node, key);
         return `<div class="form-row${automatic ? " graph-autofilled" : ""}"><label>${escapeHtml(key.replaceAll("_", " "))}${automatic ? `<small class="inline-auto">auto · ${escapeHtml(automatic.sourceLabel)}</small>` : ""}</label><input class="field inspector-config" data-key="${key}" value="${escapeHtml(value)}"></div>`;

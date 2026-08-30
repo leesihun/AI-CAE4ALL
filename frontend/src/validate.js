@@ -87,7 +87,7 @@ export function inferenceModel(node) {
 // not record (latent_dim_end, lc_filter, num_filter_enc, ...), so their
 // non-training modes still require the model block that owns those values.
 export const STANDALONE_INFERENCE_MODEL_IDS = [
-  "meshgraphnets", "meshgraphnets-v", "transolver", "fno", "gino", "deeponet", "point_deeponet", "mlp"
+  "meshgraphnets", "meshgraphnets-v", "chi-mgnflow", "transolver", "fno", "gino", "deeponet", "point_deeponet", "mlp"
 ];
 const STANDALONE_INFERENCE_MODELS = new Set(STANDALONE_INFERENCE_MODEL_IDS);
 
@@ -137,6 +137,15 @@ export function standaloneInferenceConfig(node, modelId, facts) {
   Object.entries(architecture).forEach(([key, value]) => {
     if (accepted.has(key) && key !== "model" && key !== "mode") values[key] = value;
   });
+  // The Inference block owns run-time choices. Apply every field the resolved
+  // model actually accepts, while keeping identity and graph-linked artifact
+  // paths authoritative below. This makes cHI ODE controls, MGN-V ensemble
+  // size, Transolver chunks, and operator query chunks real rather than inert
+  // Inspector fields.
+  const reserved = new Set(["model", "mode", "modelpath", "dataset_dir", "infer_dataset"]);
+  Object.entries(node.config).forEach(([key, value]) => {
+    if (accepted.has(key) && !reserved.has(key) && String(value ?? "").trim()) values[key] = value;
+  });
   values.gpu_ids = String(node.config.gpu_ids || "0");
   values.modelpath = toMethodPath(node.config.checkpoint_path);
   values.infer_dataset = toMethodPath(node.config.dataset_path);
@@ -148,10 +157,6 @@ export function standaloneInferenceConfig(node, modelId, facts) {
   if (accepted.has("infer_timesteps")) {
     values.infer_timesteps = requested || (trained > 1 ? String(trained - 1) : "");
   }
-  ["inference_output_dir", "input_var", "output_var", "cond_var", "edge_var", "batch_size", "num_workers"].forEach(key => {
-    const override = String(node.config[key] ?? "").trim();
-    if (override && accepted.has(key)) values[key] = override;
-  });
   return `${rawConfig(values, model.keys)}\n`;
 }
 
@@ -278,6 +283,12 @@ export function executableSteps(targetId = null) {
     // be sitting in inference mode with those keys manually set.
     const overrides = { mode };
     const catalogKeys = MODEL_CATALOG[modelId].keys;
+    const reservedRunKeys = new Set(["model", "mode", "modelpath", "dataset_dir", "infer_dataset"]);
+    Object.entries(node.config).forEach(([key, value]) => {
+      if (catalogKeys.includes(key) && !reservedRunKeys.has(key) && String(value ?? "").trim()) {
+        overrides[key] = value;
+      }
+    });
     if (node.type === "run.cad_generator") {
       // Serialize the controls shown on the CAD Generator block into the native
       // SDFFlow configuration. The aliases keep previously saved Studio graphs

@@ -2,7 +2,7 @@ import { $, $$, on, escapeHtml, toast, formatBytes, closeOverlay } from "./dom.j
 import { applyPipelineDocument, savePipelineState } from "./persistence.js";
 import { state, snapshot } from "./state.js";
 import { ICONS, MODEL_CATALOG, BLOCK_SPECS, STUDIO_SECTIONS } from "./constants.js";
-import { apiRequest } from "./api.js";
+import { apiRequest, checkpointMetadata } from "./api.js";
 import { addBlock, render, selectNode } from "./graph.js";
 import { configureViaLlm, loadConfigExample, openConfig } from "./config.js";
 import { beginCommandJob, renderRuntimeJob } from "./run.js";
@@ -119,16 +119,31 @@ export function studioCards(section) {
   return section.cards || [];
 }
 
+/**
+ * The models entry is the one sidebar row whose numbers come from the live
+ * registry rather than the static card list: its panel lists every registered
+ * route (geometry_ingest included), while MODEL_CATALOG only holds the
+ * trainable ones. Reading the badge off the card list made the sidebar say
+ * "10 live model IDs · 11" next to a panel headed "12 registered routes".
+ */
+function sidebarCounts(item) {
+  if (item.modelCards && state.api.models.length) {
+    const routes = state.api.models.length;
+    return { badge: routes, note: `${routes} live model routes` };
+  }
+  return { badge: studioCards(item).length, note: item.note };
+}
+
 export function renderStudio() {
   const section = STUDIO_SECTIONS[state.studioSection];
   $("#studioIcon").textContent = ICONS[section.icon] || ICONS.docs;
   $("#studioIcon").style.color = section.color;
   $("#studioTitle").textContent = section.title;
   $("#studioSubtitle").textContent = section.description;
-  $("#studioSidebar").innerHTML = `<div class="studio-nav-label">Studio workspaces</div>${Object.entries(STUDIO_SECTIONS).map(([id, item]) => `<button class="studio-nav-button${id === state.studioSection ? " active" : ""}" data-studio-id="${id}" style="--section-color:${item.color}"><span class="studio-nav-icon">${ICONS[item.icon]}</span><span class="studio-nav-copy"><strong>${item.label}</strong><small>${item.note}</small></span><small>${studioCards(item).length}</small></button>`).join("")}`;
+  $("#studioSidebar").innerHTML = `<div class="studio-nav-label">Studio workspaces</div>${Object.entries(STUDIO_SECTIONS).map(([id, item]) => `<button class="studio-nav-button${id === state.studioSection ? " active" : ""}" data-studio-id="${id}" style="--section-color:${item.color}"><span class="studio-nav-icon">${ICONS[item.icon]}</span><span class="studio-nav-copy"><strong>${item.label}</strong><small>${sidebarCounts(item).note}</small></span><small>${sidebarCounts(item).badge}</small></button>`).join("")}`;
   $$("[data-studio-id]").forEach(button => button.addEventListener("click", () => openStudio(button.dataset.studioId, null)));
   const cards = studioCards(section);
-  const actionable = cards.filter(([, , , , , block]) => block && BLOCK_SPECS[block]).length;
+  const actionable = cards.filter(([, , maturity, , , block]) => maturity !== "roadmap" && block && BLOCK_SPECS[block]).length;
   const roadmap = cards.filter(([, , maturity]) => maturity === "roadmap").length;
   const stats = [
     [String(cards.length), "declared capabilities"],
@@ -138,7 +153,10 @@ export function renderStudio() {
   ];
   $("#studioMain").innerHTML = `<section class="studio-hero"><span><span class="studio-kicker">AI-CAE4All Studio</span><h3>${escapeHtml(section.title)}</h3><p>${escapeHtml(section.description)}</p></span><span class="studio-stats">${stats.map(([value, label]) => `<span class="studio-stat"><strong>${escapeHtml(value)}</strong><small>${escapeHtml(label)}</small></span>`).join("")}</span></section>
     <section class="capability-grid">${cards.map(([title, iconName, maturity, description, chips, block]) => {
-      const available = Boolean(block && BLOCK_SPECS[block]);
+      // A roadmap card may name the block it would eventually extend, but
+      // opening today's narrower block makes the future capability look live.
+      // Only implemented cards are actionable; roadmap stays honest and inert.
+      const available = maturity !== "roadmap" && Boolean(block && BLOCK_SPECS[block]);
       const actionLabel = available ? "Open in pipeline →" : maturity === "roadmap" ? "Not implemented" : "No live action";
       return `<article class="capability-card${available ? "" : " unavailable"}" style="--card-color:${section.color}"><header class="capability-head"><span class="capability-title"><span class="capability-icon">${ICONS[iconName] || ICONS.docs}</span>${escapeHtml(title)}</span><span class="maturity ${maturity}">${maturity}</span></header><p>${escapeHtml(description)}</p><div class="chip-row">${chips.map(chip => `<span class="chip">${escapeHtml(chip)}</span>`).join("")}</div><button class="capability-link" data-capability-block="${available ? block : ""}"${available ? "" : " disabled"}>${actionLabel}</button></article>`;
     }).join("")}</section>`;
@@ -204,11 +222,11 @@ export async function renderModelsWorkspace(container) {
     <span><strong>${models.filter(model => model.healthy).length}</strong><small>healthy installations</small></span>
     <span><strong>${models.reduce((sum, model) => sum + model.modes.length, 0)}</strong><small>actual route modes</small></span>
     <span><strong>${models.reduce((sum, model) => sum + model.known_keys.length, 0)}</strong><small>accepted-key entries</small></span>
-  </div><div class="config-help catalog-status" role="status">Showing all ${models.length} registered model routes. The model registry is not truncated in this view.</div><div class="live-list">${models.map(model => `<article class="live-row live-row-clickable" data-model-row="${escapeHtml(model.model)}">
+  </div><div class="config-help catalog-status" role="status">Showing all ${models.length} registered model routes. The model registry is not truncated in this view.</div><div class="live-list">${models.map(model => `<article class="live-row" data-model-row="${escapeHtml(model.model)}">
     <span><strong>${escapeHtml(model.model)} · ${escapeHtml(model.method)}</strong><small>${escapeHtml(model.repository)} → ${escapeHtml(model.entrypoint)}</small></span>
     <span class="chip-row">${model.modes.map(mode => `<span class="chip">${escapeHtml(mode)}</span>`).join("")}</span>
     <span><strong>${model.known_keys.length} keys</strong><small>${escapeHtml(model.dataset_kind || "no dataset contract")} · ${model.healthy ? "healthy" : "broken"}</small></span>
-    <span class="live-actions"><button class="button small" data-live-configs="${escapeHtml(model.model)}">Examples</button>${BLOCK_SPECS[`model.${model.model}`] ? `<button class="button small primary" data-live-model="${escapeHtml(model.model)}">Open block</button>` : ""}</span>
+    <span class="live-actions"><button class="button small" data-model-details="${escapeHtml(model.model)}">Details</button><button class="button small" data-live-configs="${escapeHtml(model.model)}">Examples</button>${BLOCK_SPECS[`model.${model.model}`] ? `<button class="button small primary" data-live-model="${escapeHtml(model.model)}">Open block</button>` : ""}</span>
   </article>`).join("")}</div>`;
   $$("[data-live-model]", container).forEach(button => button.addEventListener("click", event => {
     event.stopPropagation();
@@ -218,8 +236,8 @@ export async function renderModelsWorkspace(container) {
     event.stopPropagation();
     renderModelConfigs(container, button.dataset.liveConfigs);
   }));
-  $$("[data-model-row]", container).forEach(row => row.addEventListener("click", () => {
-    renderModelDetail(container, models.find(item => item.model === row.dataset.modelRow));
+  $$("[data-model-details]", container).forEach(button => button.addEventListener("click", () => {
+    renderModelDetail(container, models.find(item => item.model === button.dataset.modelDetails));
   }));
 }
 
@@ -363,6 +381,19 @@ function formatMetricValue(value) {
   const magnitude = Math.abs(numeric);
   if (magnitude >= 10000 || magnitude < .001) return numeric.toExponential(3);
   return numeric.toLocaleString(undefined, { maximumSignificantDigits: 5 });
+}
+
+/**
+ * Short local timestamp for list rows. Job labels repeat constantly -- 24 of the
+ * 46 persisted runs shared an identical "label · N metrics · status" string --
+ * so the run picker needs the one field that is actually unique per run.
+ */
+function shortTimestamp(value) {
+  if (!value) return "";
+  const when = new Date(value);
+  if (Number.isNaN(when.getTime())) return String(value).slice(0, 16).replace("T", " ");
+  const pad = number => String(number).padStart(2, "0");
+  return `${when.getFullYear()}-${pad(when.getMonth() + 1)}-${pad(when.getDate())} ${pad(when.getHours())}:${pad(when.getMinutes())}`;
 }
 
 function sampledMetricPoints(points, limit = 700) {
@@ -512,7 +543,7 @@ async function renderTrainingMetricsWorkspace(container, nodeId = "", preferredJ
       </div>
       <div class="training-job-select">
         <label for="trainingJob">Model run</label>
-        <select id="trainingJob">${jobs.map(job => `<option value="${escapeHtml(job.job_id)}"${job.job_id === selected.job_id ? " selected" : ""}>${escapeHtml(job.label)} · ${job.metric_count} metrics · ${escapeHtml(job.status)}</option>`).join("")}</select>
+        <select id="trainingJob">${jobs.map(job => `<option value="${escapeHtml(job.job_id)}"${job.job_id === selected.job_id ? " selected" : ""}>${escapeHtml(job.label)} · ${job.metric_count} metrics · ${escapeHtml(job.status)}${job.created_at ? ` · ${escapeHtml(shortTimestamp(job.created_at))}` : ""} · ${escapeHtml(String(job.job_id).slice(0, 8))}</option>`).join("")}</select>
         <button class="button small" id="metricsOpenLog">Open log</button>
       </div>
       <div class="live-summary training-metrics-summary">
@@ -866,16 +897,51 @@ async function runConfigAudit(container) {
       <span><strong>${audit.summary.files - failing.length}</strong><small>passing</small></span>
       <span><strong>${failing.length}</strong><small>failing</small></span>
       <span><strong>${audit.summary.warnings}</strong><small>total warnings</small></span>
-    </div><div class="live-list" id="auditFileList">${audit.files.map(item => `<article class="live-row">
-      <span><strong>${item.status === "PASS" ? "✓" : "✕"} ${escapeHtml(item.path)}</strong><small>${escapeHtml(item.model || "unresolved model")} · ${escapeHtml(item.mode || "unresolved mode")}</small></span>
-      <span class="chip-row"><span class="chip ${item.status === "FAIL" ? "warn" : ""}">${item.errors} errors</span><span class="chip">${item.warnings} warnings</span></span>
-      <span><strong class="${item.status === "FAIL" ? "graph-warning" : ""}">${item.status}</strong><small></small></span>
-      <span class="live-actions">${item.report.diagnostics.length ? `<button class="button small" data-audit-detail="${escapeHtml(item.path)}">Diagnostics</button>` : ""}</span>
-    </article>`).join("")}</div><div id="auditDetail"></div>`;
-    $$("[data-audit-detail]", resultsEl).forEach(detailButton => detailButton.addEventListener("click", () => {
-      const item = audit.files.find(entry => entry.path === detailButton.dataset.auditDetail);
-      $("#auditDetail", container).innerHTML = `<div class="live-toolbar"><strong>${escapeHtml(item.path)}</strong></div><div class="diagnostics">${item.report.diagnostics.map(diag => `<div class="diagnostic ${diag.severity === "error" ? "error" : diag.severity === "warning" ? "warn" : ""}"><i></i><span>[${escapeHtml(diag.code)}]${diag.field ? ` ${escapeHtml(diag.field)}:` : ""} ${escapeHtml(diag.message)}${diag.hint ? ` Hint: ${escapeHtml(diag.hint)}` : ""}</span></div>`).join("") || "<div class=\"live-empty\">No diagnostics.</div>"}</div>`;
-    }));
+    </div><div class="live-toolbar audit-toolbar"><label class="search"><span>⌕</span><input id="auditSearch" type="search" placeholder="Filter path, model, or mode"></label><label class="check-row"><input id="auditFailuresOnly" type="checkbox"> Failures only</label></div>
+    <div class="config-help catalog-status" id="auditCatalogStatus" role="status" aria-live="polite"></div>
+    <div class="live-list" id="auditFileList"></div><div id="auditDetail"></div>`;
+    let visibleLimit = 200;
+    const renderAuditRows = (resetLimit = false) => {
+      if (!isCurrentStudioRender(container, request)) return;
+      if (resetLimit) visibleLimit = 200;
+      const query = $("#auditSearch", container).value.trim().toLowerCase();
+      const failuresOnly = $("#auditFailuresOnly", container).checked;
+      const matches = audit.files.filter(item => {
+        if (failuresOnly && item.status !== "FAIL") return false;
+        return !query || `${item.path} ${item.model || ""} ${item.mode || ""} ${item.status}`.toLowerCase().includes(query);
+      });
+      const visible = matches.slice(0, visibleLimit);
+      $("#auditCatalogStatus", container).innerHTML = `Showing <strong>${visible.length}</strong> of <strong>${matches.length}</strong> matching configs; <strong>${audit.files.length}</strong> were audited in total.`;
+      $("#auditFileList", container).innerHTML = visible.map(item => {
+        const index = audit.files.indexOf(item);
+        return `<article class="live-row">
+          <span><strong>${item.status === "PASS" ? "✓" : "✕"} ${escapeHtml(item.path)}</strong><small>${escapeHtml(item.model || "unresolved model")} · ${escapeHtml(item.mode || "unresolved mode")}</small></span>
+          <span class="chip-row"><span class="chip ${item.status === "FAIL" ? "warn" : ""}">${item.errors} errors</span><span class="chip">${item.warnings} warnings</span></span>
+          <span><strong class="${item.status === "FAIL" ? "graph-warning" : ""}">${item.status}</strong><small></small></span>
+          <span class="live-actions">${item.report.diagnostics.length ? `<button class="button small" data-audit-detail="${index}">Diagnostics</button>` : ""}</span>
+        </article>`;
+      }).join("") || `<div class="live-empty">No audited configurations match this filter.</div>`;
+      if (visible.length < matches.length) {
+        $("#auditFileList", container).insertAdjacentHTML("beforeend", `<div class="live-toolbar"><span><small>${matches.length - visible.length} more matching configs.</small></span><button class="button small" id="auditShowMore">Show next ${Math.min(200, matches.length - visible.length)}</button></div>`);
+        onStudio(container, "#auditShowMore", "click", () => {
+          visibleLimit += 200;
+          renderAuditRows();
+        });
+      }
+      $$("[data-audit-detail]", resultsEl).forEach(detailButton => detailButton.addEventListener("click", () => {
+        const item = audit.files[Number(detailButton.dataset.auditDetail)];
+        $("#auditDetail", container).innerHTML = `<div class="live-toolbar"><strong>${escapeHtml(item.path)}</strong></div><div class="diagnostics">${item.report.diagnostics.map(diag => `<div class="diagnostic ${diag.severity === "error" ? "error" : diag.severity === "warning" ? "warn" : ""}"><i></i><span>[${escapeHtml(diag.code)}]${diag.field ? ` ${escapeHtml(diag.field)}:` : ""} ${escapeHtml(diag.message)}${diag.hint ? ` Hint: ${escapeHtml(diag.hint)}` : ""}</span></div>`).join("") || "<div class=\"live-empty\">No diagnostics.</div>"}</div>`;
+      }));
+    };
+    onStudio(container, "#auditSearch", "input", () => {
+      $("#auditDetail", container).innerHTML = "";
+      renderAuditRows(true);
+    });
+    onStudio(container, "#auditFailuresOnly", "change", () => {
+      $("#auditDetail", container).innerHTML = "";
+      renderAuditRows(true);
+    });
+    renderAuditRows();
     toast(`Audited ${audit.summary.files} configs: ${failing.length} failing, ${audit.summary.warnings} warnings.`, failing.length ? "error" : "");
   } catch (error) {
     if (!isCurrentStudioRender(container, request)) return;
@@ -966,17 +1032,11 @@ function connectedNodeValue(nodeId, targetPort, keys, suffixes = []) {
   }) || "";
 }
 
-/** inference/cae_infer classifies checkpoints into 5 families covering 8
- * model IDs (point_deeponet/deeponet/fno/gino -> neural_operator,
- * meshgraphnets(-v), transolver, sdfflow -> geometry). mlp and simulgenvae
- * checkpoints raise a real "Could not classify checkpoint" error there — the
- * repository-wide output/<model>/... path convention lets the Deploy
- * workspace warn about that before submitting a job that is certain to fail. */
-function unsupportedDeployFamily(path) {
-  const segments = String(path || "").toLowerCase().split(/[\\/]+/);
-  if (segments.includes("mlp")) return "mlp";
-  if (segments.includes("simulgenvae")) return "simulgenvae";
-  return null;
+function portableInferenceAlternative(modelId) {
+  if (modelId === "chi-mgnflow") return "Use a cHI-MGNflow model connected to the native Inference block.";
+  if (modelId === "simulgenvae") return "Use the SimulGen-VAE reconstruct workflow.";
+  if (modelId === "mlp") return "Use the MLP model's native inference and evaluation workflow.";
+  return "Use that method's native inference or reconstruction workflow.";
 }
 
 export async function renderDeployWorkspace(container, nodeId = null) {
@@ -1003,16 +1063,18 @@ export async function renderDeployWorkspace(container, nodeId = null) {
   const selectedCheckpoint = checkpointSource?.config.path || node?.config.checkpoint_path || connectedCheckpoint || "";
   const selectedInput = node?.config.input_path || "";
   const checkpointOptions = checkpoints.items.slice(0, 300);
+  const portableModels = deploy.models || deploy.families || [];
+  const portableDrivers = deploy.driver_families || [];
   if (selectedCheckpoint && !checkpointOptions.some(item => item.path === selectedCheckpoint)) {
     checkpointOptions.unshift({ path: selectedCheckpoint });
   }
   container.innerHTML = `<div class="live-summary">
     <span><strong>${deploy.existing_exe ? "Available" : "Not built"}</strong><small>portable .exe</small></span>
     <span><strong>${deploy.pyinstaller_available ? "Installed" : "Missing"}</strong><small>PyInstaller</small></span>
-    <span><strong>${deploy.families.length}</strong><small>portable inference families</small></span>
+    <span><strong>${portableModels.length}</strong><small>portable model types</small></span>
     <span><strong>POST</strong><small>${escapeHtml(deploy.api_endpoint)}</small></span>
   </div>
-  <div class="live-toolbar"><span><strong>Portable CPU inference</strong><small>Runs inference/run_inference.py and auto-detects the checkpoint family.</small></span></div>
+  <div class="live-toolbar"><span><strong>Portable CPU inference</strong><small>Runs inference/run_inference.py · ${portableDrivers.length || 5} implementation drivers · ${escapeHtml(portableModels.join(", "))}</small></span></div>
   <div class="config-card">
     <label class="config-help">Checkpoint${connectedCheckpoint ? " · graph-connected" : ""}</label><select class="config-control" id="deployCheckpoint"><option value="">Select a real checkpoint…</option>${checkpointOptions.map(item => `<option value="${escapeHtml(item.path)}"${item.path === selectedCheckpoint ? " selected" : ""}>${escapeHtml(item.path)}</option>`).join("")}</select>
     <div id="deployCheckpointWarning"></div>
@@ -1024,7 +1086,7 @@ export async function renderDeployWorkspace(container, nodeId = null) {
       <input class="config-control" id="deployOdeSteps" value="${escapeHtml(node?.config.ode_steps || "")}" placeholder="ODE steps">
       <input class="config-control" id="deployConditions" value="${escapeHtml(node?.config.cond_values || "")}" placeholder="condition values">
     </div>
-    <button class="button primary" id="runPortableInference" style="margin-top:8px">Run real portable inference</button>
+    <button class="button primary" id="runPortableInference" style="margin-top:8px" disabled>Verify checkpoint to run</button>
   </div>
   <div class="live-toolbar"><span><strong>Windows executable</strong><small>${deploy.existing_exe ? escapeHtml(deploy.existing_exe.path) : "Build output stays under frontend/runtime/deploy."}</small></span><button class="button" id="buildPortableExe"${deploy.pyinstaller_available ? "" : " disabled"}>Build .exe with PyInstaller</button></div>`;
   const persistDeploy = () => {
@@ -1042,26 +1104,64 @@ export async function renderDeployWorkspace(container, nodeId = null) {
     snapshot();
     assignManualConfig(node, next);
   };
-  const renderCheckpointWarning = () => {
-    const family = unsupportedDeployFamily(q("#deployCheckpoint").value);
-    q("#deployCheckpointWarning").innerHTML = family
-      ? `<p class="config-help" style="color:var(--red,#b3261e)">This looks like a ${escapeHtml(family)} checkpoint. The portable bundle only classifies the ${deploy.families.length} families above (point_deeponet/deeponet/fno/gino, transolver, meshgraphnets(-v), sdfflow) — running it here will fail with "Could not classify checkpoint". ${family === "mlp" ? "Use the model's own inference/evaluation blocks instead." : "Use the SimulGen-VAE reconstruct mode instead."}</p>`
+  let checkpointSupportRevision = 0;
+  let portableCheckpointFacts = null;
+  const renderCheckpointSupport = async () => {
+    const revision = ++checkpointSupportRevision;
+    const checkpointControl = q("#deployCheckpoint");
+    const warning = q("#deployCheckpointWarning");
+    const runButton = q("#runPortableInference");
+    if (!checkpointControl || !warning || !runButton) return null;
+    const path = checkpointControl.value;
+    portableCheckpointFacts = null;
+    runButton.disabled = true;
+    runButton.textContent = path ? "Inspecting checkpoint…" : "Verify checkpoint to run";
+    warning.innerHTML = path
+      ? `<p class="config-help">Reading the checkpoint's own model metadata…</p>`
       : "";
+    if (!path) return null;
+
+    const lookup = checkpointMetadata(path);
+    const facts = lookup && typeof lookup.then === "function" ? await lookup : lookup;
+    if (revision !== checkpointSupportRevision
+        || !isCurrentStudioRender(container, request)
+        || q("#deployCheckpoint")?.value !== path) return null;
+    portableCheckpointFacts = facts;
+    if (!facts?.ok) {
+      warning.innerHTML = `<p class="config-help" style="color:var(--red,#b3261e)">Checkpoint verification failed: ${escapeHtml(facts?.error || "unknown metadata error")}. Portable inference is blocked before launch.</p>`;
+      runButton.textContent = "Checkpoint could not be verified";
+      return facts;
+    }
+
+    const modelId = String(facts.model || "unknown model");
+    if (!facts.portable_inference) {
+      warning.innerHTML = `<p class="config-help" style="color:var(--red,#b3261e)"><strong>${escapeHtml(modelId)}</strong> is not packaged in the portable CPU bundle. ${escapeHtml(portableInferenceAlternative(modelId))}</p>`;
+      runButton.textContent = "Use native inference instead";
+      return facts;
+    }
+    warning.innerHTML = `<p class="config-help" style="color:var(--green,#1f6f43)">Verified from checkpoint metadata: <strong>${escapeHtml(modelId)}</strong> is supported by the portable bundle.</p>`;
+    runButton.disabled = false;
+    runButton.textContent = "Run real portable inference";
+    return facts;
   };
-  renderCheckpointWarning();
+  void renderCheckpointSupport();
   ["deployCheckpoint", "deployInput", "deployOutput", "deployTimesteps", "deploySamples", "deployOdeSteps", "deployConditions"]
     .forEach(id => onStudio(container, "#" + id, "change", persistDeploy));
-  onStudio(container, "#deployCheckpoint", "change", renderCheckpointWarning);
+  onStudio(container, "#deployCheckpoint", "change", () => void renderCheckpointSupport());
   onStudio(container, "#runPortableInference", "click", async () => {
     const checkpoint = q("#deployCheckpoint").value;
     if (!checkpoint) {
       toast("Select a real checkpoint first.", "error");
       return;
     }
-    const unsupportedFamily = unsupportedDeployFamily(checkpoint);
-    if (unsupportedFamily) {
-      if (!window.confirm(`This checkpoint looks like ${unsupportedFamily}, which the portable bundle cannot classify and will reject. Run it anyway to see the real error?`)) return;
-    } else if (!window.confirm("Run the portable CPU inference bundle with the selected repository files?")) return;
+    const facts = portableCheckpointFacts?.path === checkpoint
+      ? portableCheckpointFacts
+      : await renderCheckpointSupport();
+    if (!facts?.ok || !facts.portable_inference) {
+      toast("This checkpoint is not verified for the portable bundle. Follow the checkpoint guidance above.", "error");
+      return;
+    }
+    if (!window.confirm(`Run portable CPU inference for the verified ${facts.model} checkpoint?`)) return;
     persistDeploy();
     const input = q("#deployInput").value;
     const outputName = q("#deployOutput").value;

@@ -314,6 +314,48 @@ DeepJEB 자체도 생성 브래킷의 약 43%를 FEM 전에 버렸다. 게이트
 
 ---
 
+## 3-A. 추가 실측 (2026-08-30) — 재매개변수화 경로는 무인 실행에 부적합
+
+3장의 레시피(`classifySurfaces(..., forReparametrization=True)` → `createGeometry()`)를
+`optimize` 모드의 루프에 그대로 넣었더니 **행(hang)이 났다**. 3장의 11/11은 유효하지만,
+그 표본이 운이 좋았던 것이고 무인 반복 실행에는 쓸 수 없다.
+
+**증상.** `x = 0` 설계 벡터가 만든 형상(면 47,944개, watertight)에서 `classifySurfaces`가
+같은 3-삼각형 패치를 무한히 재분할한다. 관측된 최대 레벨 **557,147**, 파라메트릭 면적
+5.7e-13, 각 레벨마다 tolerance를 1.03 → 2.73까지 올렸다가 "Tolerance too large" 후 재시도.
+40° → 60° → 30° → 50° → 70° 각도 사다리는 **도움이 안 된다** — 첫 각도에서 이미 갇힌다.
+C 레벨 루프라 파이썬 타임아웃으로 끊을 수도 없다.
+
+**원인.** MC 표면에 중앙값(1.0e-4) 대비 면적 1e-8짜리 슬리버 삼각형이 61개 있다.
+그중 하나가 재매개변수화를 깨뜨린다.
+
+**틀린 수리법.** 그 슬리버를 지우면(47,944 → 47,943) `classifySurfaces`는 2.28초에 끝나지만
+표면에 구멍이 생겨 watertight가 깨지고 `generate(3)`이 **tet 0개**를 낸다.
+
+**작동하는 경로 — 재매개변수화를 아예 하지 않는다.**
+
+```text
+decimate → merge → removeDuplicateNodes
+→ classifySurfaces(angle, forReparametrization=False) → createTopology()
+→ surface loop → volume → generate(3)
+```
+
+파라메트릭 공간을 만들지 않으므로 병리적 패치가 생길 여지가 없다. 실측:
+
+| 표면 면 수 | classify+topology | generate(3) | tets | minSICN | p1 | median | neg |
+|---|---|---|---|---|---|---|---|
+| 12,000 | 0.23 s | 3.62 s | 24,855 | 0.002 | 0.127 | 0.683 | 0 |
+| 25,000 | 0.46 s | 8.99 s | 61,219 | 0.000 | 0.088 | 0.746 | 0 |
+
+**3장 트랩 1이 이 경로에서는 뒤집힌다.** "먼저 decimate 하지 마라"는 경고는
+`createGeometry`의 재매개변수화가 패치 위상을 필요로 하기 때문이었다. 재매개변수화를
+안 하면 그 제약이 사라지고, decimation은 오히려 **필요한 단계**가 된다: 슬리버를 제거하고,
+MC 표면을 복구하며(12k 면에서 다시 watertight, 부피 오차 0.1%), tet 개수를 결정하는
+유일한 손잡이가 된다. 트랩 2(`MeshSizeFromCurvature = 0`)와 트랩 3(2차 요소 옵션 순서)은
+그대로 유효하다.
+
+구현은 `design_loop/mesher.py`이고, 그 docstring이 이 절의 요약을 담고 있다.
+
 ## 4. Semantic Conditional 생성 — "내 맘대로" 만드는 방법
 
 ### 4.0 지금 왜 안 되는가

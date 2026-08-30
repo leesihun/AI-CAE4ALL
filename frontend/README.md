@@ -3,7 +3,10 @@
 This folder contains the local AI-CAE4ALL block-pipeline Studio. Its Python
 server connects the browser to the existing suite registry, preflight system,
 native launcher, repository files, HDF5 datasets, jobs, logs, documentation,
-and output artifacts without modifying backend source files.
+and output artifacts. The Studio itself remains under `frontend/`; two narrow
+compatibility fixes outside it make cHI-MGNflow checkpoints self-identifying
+and prevent the portable inference classifier from accepting unsupported
+checkpoint families.
 
 ## Open the studio
 
@@ -153,7 +156,10 @@ Useful review URLs:
   logs, plots all series by default, supports per-series exclusion and
   visual-only smoothing, and downloads the selected raw observations as CSV
 - Portable CPU inference through `POST /api/inference/run`, persistent job
-  logs, cancellation, and the existing or newly built Windows executable
+  logs, cancellation, checkpoint-metadata support gating, and the existing or
+  newly built Windows executable. The portable bundle exposes eight model
+  types through five drivers; cHI-MGNflow, MLP, and SimulGen-VAE are directed
+  to their native inference/reconstruction routes before a job is created
 - Visible maturity labels (`native`, `adapter`, or `roadmap`) so future
   integration work is not presented as already implemented
 
@@ -177,18 +183,22 @@ The browser uses the following real local endpoints:
   `/api/optimization/schema`, `/api/optimization/run` — schema inspection
   exposes actual finite numeric columns before ranking or Pareto selection, so
   the UI does not guess CSV field names
-- `POST /api/export`, `/api/simulgen/smoke-fixture`
+- `POST /api/export`, `/api/simulgen/smoke-fixture`,
+  `/api/geometry/smoke-fixture`, `/api/viewer/smoke-fixture` — deterministic
+  usability fixtures explicitly marked as non-scientific evidence
 
 This is a localhost development API, not a multi-user production deployment.
-Authentication, remote hosting, request isolation, quotas, and rollback would
-require an explicitly authorized backend change outside `frontend/`.
+Authentication, remote hosting, request isolation, quotas, and rollback require
+a separate production-service and security design.
 
 ## Integration boundary
 
 The local bridge is implemented by `studio_server.py`. Runtime configurations,
 job metadata, and logs are written only under the ignored `frontend/runtime/`
-directory. Existing method repositories and suite Python modules are imported
-or launched but are not rewritten by the Studio.
+directory. Existing model/training algorithms are imported or launched without
+redesign. The only method/portable-boundary edits are checkpoint family metadata
+for future cHI-MGNflow saves and explicit unsupported-family rejection in the
+portable classifier; native cHI-MGNflow inference remains the owning route.
 
 The implementation and verification roadmap is recorded in
 `IMPLEMENTATION_PLAN.md`.

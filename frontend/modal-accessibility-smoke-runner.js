@@ -131,9 +131,27 @@ function assert(condition, message) {
     }));
     assert(!restored.appInert && !restored.drawerInert, "Background inertness remained after the final modal closed");
     assert(restored.triggerFocused, "Focus was not restored to the original trigger");
+
+    const forcedWelcome = new URL(studioUrl);
+    forcedWelcome.searchParams.set("welcome", "1");
+    await page.goto(forcedWelcome.href);
+    await page.waitForFunction(() => document.querySelector("#welcomeOverlay")?.classList.contains("open"));
+    await page.locator("#welcomeTour").click();
+    await page.waitForFunction(() =>
+      !document.querySelector("#welcomeOverlay")?.classList.contains("open")
+      && document.querySelector("#shortcutsOverlay")?.classList.contains("open")
+    );
+    await page.locator('[data-close="shortcutsOverlay"]').click();
+    await page.goto(forcedWelcome.href);
+    await page.waitForFunction(() => document.querySelector("#welcomeOverlay")?.classList.contains("open"));
+    await page.locator("#welcomeDismiss").click();
+    await page.waitForFunction(() =>
+      !document.querySelector("#welcomeOverlay")?.classList.contains("open")
+      && !document.querySelector(".app")?.inert
+    );
     assert(errors.length === 0, `Browser errors: ${errors.join(" | ")}`);
 
-    console.log("Modal accessibility smoke test passed.");
+    console.log("Modal accessibility, welcome tour, and welcome dismissal smoke test passed.");
   } finally {
     await browser.close();
   }

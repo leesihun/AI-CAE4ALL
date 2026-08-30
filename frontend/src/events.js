@@ -132,7 +132,10 @@ export function bindEvents() {
   }));
   $("#studioPipeline").addEventListener("click", () => {
     closeOverlay("studioOverlay");
-    $("#blockSearch").focus();
+    // The canvas shell remains inert until the overlay observer processes the
+    // close mutation. Focusing synchronously therefore fails and the generic
+    // return-to-trigger rule wins. Move focus after inert has been removed.
+    window.setTimeout(() => $("#blockSearch").focus(), 0);
     toast("Search or drag any block into the pipeline.");
   });
 

@@ -14,5 +14,10 @@ scikit-image>=0.22.0        # marching cubes
 rtree>=1.0.0                # trimesh proximity queries (real-mesh SDF sampling)
 # libigl                    # optional: much faster signed distance for real meshes
 
+# Closed-loop optimization (mode `optimize`)
+gmsh>=4.11.0                # surface -> tetrahedral volume meshing
+pyamg>=5.0.0                # AMG-preconditioned CG for the elasticity solve
+cma>=3.3.0                  # CMA-ES design search
+
 # Utilities
 tqdm>=4.65.0

@@ -22,6 +22,22 @@ export function toGeometryPath(value) {
   return `../../${normalized.replace(/^\.\//, "")}`;
 }
 
+/** Convert a path stored relative to a method repository back to the suite
+ * root contract used by Studio APIs.  Most shipped model configs write shared
+ * artifacts as ../output/..., while a method-local outputs/... path needs the
+ * live registry's repository prefix. */
+export function fromMethodPath(value, modelId) {
+  const normalized = text(value).replaceAll("\\", "/");
+  if (!normalized || /^[A-Za-z]:\//.test(normalized)) return normalized;
+  if (normalized.startsWith("../") && !normalized.startsWith("../../")) {
+    return normalized.slice("../".length);
+  }
+  const live = state.api.models.find(item => item.model === modelId);
+  const repository = text(live?.repository).replaceAll("\\", "/").replace(/^\.\//, "").replace(/\/$/, "");
+  const local = normalized.replace(/^\.\//, "");
+  return repository ? `${repository}/${local}` : local;
+}
+
 /** Inverse of toGeometryPath: geometry_ingest's own output_dataset default is
  * stored method-relative (relative to dataset/geometry_ingest/, two levels
  * below the suite root). Other blocks (Export, Evaluate, HDF5 viewers) all
@@ -423,7 +439,10 @@ function genericAutofill(desired, node) {
     const data = linkedInputs(node, "data")[0];
     if (model) {
       const paths = checkpointPaths(model.node);
-      const path = paths.checkpoint_path || paths.lc_modelpath || paths.fm_modelpath || paths.vae_modelpath;
+      const rawPath = paths.checkpoint_path || paths.lc_modelpath || paths.fm_modelpath || paths.vae_modelpath;
+      const path = BLOCK_SPECS[model.node.type]?.isModel
+        ? fromMethodPath(rawPath, paths.model_id)
+        : rawPath;
       if (path) put(desired, node, "checkpoint_path", candidate(path, model.node, "deployment checkpoint from graph", model.edge.fromPort));
       if (paths.model_id) put(desired, node, "model_id", candidate(paths.model_id, model.node, "deployment model family from graph", model.edge.fromPort));
     }

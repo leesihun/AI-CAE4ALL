@@ -533,6 +533,14 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 }
 .overlay.open { display: grid; }
 .overlay.open[inert] { pointer-events: none; }
+
+/* ...except the Studio workspace overlay, which the top nav opens and whose
+   sidebar duplicates that nav. dom.js sets .workspace-overlay while it is the
+   top overlay: the topbar stays lit and clickable above it, and the overlay
+   starts below the topbar instead of dimming it. Every other overlay is a real
+   dialog and keeps owning the whole viewport. */
+body.workspace-overlay .topbar { z-index: 200; }
+body.workspace-overlay #studioOverlay.open { top: var(--topbar-height, 66px); }
 .modal-head {
   display: flex;
   align-items: center;
@@ -831,7 +839,22 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .field-row.active { color: var(--green-dark); border-color: #9fc8ba; background: var(--green-soft); }
 .field-row small { color: var(--muted); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
 
+/* A constant channel is indistinguishable from a normal one at a glance -- same
+   flat render, three matching numbers -- so the note has to carry visible weight. */
+.field-constant-note {
+  margin: 7px 0 0; padding: 7px 9px;
+  border-left: 3px solid var(--amber, #b8801f);
+  border-radius: 0 7px 7px 0;
+  background: rgba(184, 128, 31, .1);
+  color: var(--text, #26312d);
+}
+
 .toast-stack { position: fixed; z-index: 150; right: 24px; bottom: 24px; display: grid; gap: 7px; pointer-events: none; }
+/* Every modal parks its primary action in a bottom-right footer, exactly where
+   the toast stack sits: a toast fired by the same click covered the lower half
+   of "Save file & close". Toasts stay clickable-through, but lift them clear of
+   the footer for as long as a dialog owns the screen. */
+.overlay.open ~ .toast-stack { bottom: 96px; }
 .toast { min-width: 250px; max-width: 350px; padding: 10px 12px; border: 1px solid #ced2ca; border-left: 4px solid var(--green); border-radius: 9px; color: #26312d; background: rgba(255,255,255,.98); box-shadow: var(--shadow); font-size: 8px; line-height: 1.4; animation: toastIn .18s ease; }
 .toast.warn { border-left-color: var(--amber); }
 .toast.error { border-left-color: var(--red); }
@@ -957,8 +980,6 @@ body.drawer-open .zoom { bottom: calc(16px + var(--drawer-clearance, 0px)); }
   align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: #fff;
 }
 .live-row:hover { border-color: #9cb8ae; }
-.live-row-clickable { cursor: pointer; }
-.live-row-clickable:hover { background: #f6f8f2; box-shadow: 0 2px 10px rgba(18,107,87,.08); }
 .model-config-browser { display: grid; gap: 9px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
 .model-config-browser .search { max-width: 420px; }
 .model-config-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; max-height: 360px; overflow: auto; }

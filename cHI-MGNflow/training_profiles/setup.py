@@ -155,6 +155,9 @@ def build_normalization_dict(train_dataset) -> dict:
 def build_model_config(config) -> dict:
     """Collect architecture hyper-parameters into a serialisable dict."""
     return {
+        # Explicit identity prevents this shared HI-MGN backbone from being
+        # mistaken for deterministic MeshGraphNets by checkpoint-only tools.
+        'model':             'chi-mgnflow',
         'input_var':         config.get('input_var'),
         'output_var':        config.get('output_var'),
         'cond_var':          config.get('cond_var', 0),

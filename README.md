@@ -415,10 +415,17 @@ writes — and dispatches:
 | Checkpoint signature | Family |
 | --- | --- |
 | `schema_version == 'deeponet_repo_v1'` | Neural Operator (`selected_model` picks the architecture) |
-| `schema_version == 'sdfflow_infer_v1'` or `stage in {vae, fm}` | SDFFlow (generative — no `--input` needed) |
+| `schema_version == 'sdfflow_infer_v1'`, or an SDFFlow-identified legacy `stage in {vae, fm}` checkpoint | SDFFlow (generative — no `--input` needed) |
 | `checkpoint_version` present | Transolver |
 | `model_config` has `use_vae` | MeshGraphNets (variational) |
 | `model_config` has `message_passing_num`, no `use_vae` | MeshGraphNets |
+
+The portable package covers the eight model types in this table, implemented
+by five isolated drivers. cHI-MGNflow, MLP, and SimulGen-VAE stay on their
+native suite inference/reconstruction routes. cHI flow keys are rejected
+explicitly instead of being misrouted through the shared deterministic MGN
+backbone, and `stage='vae'` by itself is not treated as SDFFlow because
+SimulGen-VAE uses that stage name too.
 
 Each family folder keeps its **original internal module names**, so the vendored
 files needed zero import rewriting — the registry enforces one family per
@@ -612,9 +619,11 @@ cd SimulGenVAE          && python -m pytest -q tests/test_fom_dataset.py
 cd MLP                  && python -m pytest -q tests/                 # CPU train → infer smoke test
 ```
 
-The Studio ships its own browser smoke runners (`frontend/*-smoke-runner.js`)
-covering the viewer, autofill, parameter sheet, training metrics, and workflow
-UX, plus Python tests for the analysis and metric backends.
+The Studio ships 14 browser smoke runners (`frontend/*-smoke-runner.js`)
+covering the viewer, autofill, parameter sheet, training metrics, workflow UX,
+native cHI-MGNflow inference, races, accessibility, deployment, and the complete
+interactive control surface, plus Python tests for the analysis and metric
+backends.
 
 There is **no root-level test suite** — the `testpaths = ["tests"]` entry in
 [pyproject.toml](pyproject.toml) is stale.

@@ -33,7 +33,8 @@ function assert(condition, message) {
     );
     assert(mlpParametersId, "Parametric template Design Parameters node is missing");
 
-    await page.evaluate(id => window.__AI_CAE_FRONTEND__.openArtifact(id), mlpParametersId);
+    await page.locator(`[data-node-id="${mlpParametersId}"] .node-head`).click();
+    await page.locator("#openParameterSpreadsheet").click();
     await page.locator(".parameter-sheet").waitFor({ state: "visible" });
     assert((await page.locator("#artifactTitle").innerText()).includes("MLP paired dataset"), "MLP mapping profile is missing");
     assert(await page.locator("#parameterSheetRows tr").count() === 512, "MLP sheet must have one row for every HDF5 sample");
@@ -99,6 +100,8 @@ function assert(condition, message) {
       path: path.join(__dirname, "runtime", "design-parameters-spreadsheet.png"),
       fullPage: false
     });
+    await page.locator('[data-remove-parameter-column="input_4"]').click();
+    assert(await page.locator('[data-column-heading="input_4"]').count() === 0, "Remove column did not remove the added Input column");
 
     await page.evaluate(() => window.__AI_CAE_FRONTEND__.loadTemplate("simulgen", false));
     const conditionParametersId = await page.evaluate(() =>

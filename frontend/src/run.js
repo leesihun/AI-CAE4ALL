@@ -110,7 +110,13 @@ export function renderRuntimeJob(job, { reveal = true } = {}) {
   } else {
     logEl.textContent = job.log || "Waiting for launcher output…";
   }
-  logEl.scrollTop = logEl.scrollHeight;
+  // Tailing is right for a streaming log, where the newest line matters most.
+  // A diagnostics list is the opposite: the first error is the one to act on,
+  // and tailing it opened the drawer already scrolled past the only row that
+  // explained the failure. Bring the first error into view instead.
+  const firstError = logEl.querySelector(".diagnostic.error");
+  if (firstError) firstError.scrollIntoView({ block: "nearest" });
+  else logEl.scrollTop = logEl.scrollHeight;
   $("#runtimeCancel").disabled = !["queued", "running"].includes(job.status);
   if (job.status === "running" || job.status === "queued") {
     $("#runBanner").classList.add("show");
@@ -277,6 +283,10 @@ export function beginCommandJob(job, { focus = true } = {}) {
   refreshNavCounts();
 }
 
+/** Shown once a full submission preflight passes, in both the log and the
+ * diagnostics list, so the two renderings cannot drift apart. */
+const PREFLIGHT_PASS_NOTE = "Every native step will receive a full filesystem, dataset, environment, and native launch gate against its exact saved config immediately before it starts.";
+
 export async function validatePipeline(targetId = null) {
   const errors = validateGraph(false);
   if (errors.length) {
@@ -295,6 +305,13 @@ export async function validatePipeline(targetId = null) {
   $("#runBanner").classList.add("show");
   $("#runTitle").textContent = "Submission preflight";
   const lines = [];
+  // Validate is the button pressed *before* spending GPU hours, so its findings
+  // deserve the same treatment a real run's do. renderRuntimeJob already turns
+  // structured diagnostics into rows that name the failing block and jump
+  // straight to the offending field; this used to hand it a flat text blob
+  // instead, so a failed check said only "failed" and left the user reading a
+  // log to work out which of seven blocks to fix.
+  const diagnostics = [];
   let passed = true;
   for (let index = 0; index < steps.length; index += 1) {
     const step = steps[index];
@@ -309,6 +326,10 @@ export async function validatePipeline(targetId = null) {
         .map(([, value]) => value)
         .filter(Boolean);
       lines.push(`SKIP ${step.label}: analysis step · reads ${inputs.join(", ") || "graph output"}`);
+      diagnostics.push({
+        severity: "notice", code: "STEP-ANALYSIS", stepLabel: step.label, nodeId: step.nodeId,
+        message: `Analysis step - reads ${inputs.join(", ") || "graph output"}`
+      });
       continue;
     }
     const result = await preflightConfigText(step.config, step.label, {
@@ -317,21 +338,35 @@ export async function validatePipeline(targetId = null) {
     });
     if (!result) {
       passed = false;
+      diagnostics.push({
+        severity: "error", code: "PREFLIGHT-UNREACHABLE", stepLabel: step.label, nodeId: step.nodeId,
+        message: "The launcher preflight could not be reached for this step.",
+        hint: "Check that the Studio runtime is still running, then validate again."
+      });
       break;
     }
     const summary = result.report?.summary || { errors: 1, warnings: 0, notices: 0 };
     lines.push(`${result.ok ? "PASS" : "FAIL"} ${step.label}: ${summary.errors} errors, ${summary.warnings} warnings, ${summary.notices} notices${index > 0 ? " · dependency checks deferred until this step launches" : ""}`);
-    result.report?.diagnostics?.forEach(item => lines.push(`  [${item.code}] ${item.message}`));
+    result.report?.diagnostics?.forEach(item => {
+      lines.push(`  [${item.code}] ${item.message}`);
+      // step.nodeId is what makes the row clickable: without it the diagnostic
+      // renders, but "Fix now" has nowhere to go.
+      diagnostics.push({ ...item, stepLabel: step.label, nodeId: step.nodeId });
+    });
     if (!result.ok) passed = false;
   }
   $("#runBanner").classList.remove("show");
-  if (passed) lines.push("\nEvery native step will receive a full filesystem, dataset, environment, and native launch gate against its exact saved config immediately before it starts.");
+  if (passed) {
+    lines.push("\n" + PREFLIGHT_PASS_NOTE);
+    diagnostics.push({ severity: "notice", code: "PREFLIGHT-PASS", message: PREFLIGHT_PASS_NOTE });
+  }
   renderRuntimeJob({
     id: "preflight",
     label: `${$("#pipelineName").value} · preflight`,
     status: passed ? "completed" : "failed",
     current_step: steps.length,
     total_steps: steps.length,
+    diagnostics,
     log: lines.join("\n")
   });
   toast(passed ? "Submission checks passed; every native step will be fully rechecked at launch." : "Preflight failed. Read the real diagnostics.", passed ? "" : "error");

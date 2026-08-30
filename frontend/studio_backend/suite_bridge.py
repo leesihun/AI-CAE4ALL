@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from studio_backend.paths import CONFIG_RUNTIME, RUNTIME_ROOT, SKIP_DIRS, SUITE_ROOT, relative, safe_repo_path, walk_files
+from studio_backend.system_info import PORTABLE_INFERENCE_MODELS
 
 if str(SUITE_ROOT) not in sys.path:
     sys.path.insert(0, str(SUITE_ROOT))
@@ -47,6 +48,7 @@ __all__ = [
     "benchmark_roster",
     "checkpoint_metadata",
     "STANDALONE_INFERENCE_MODELS",
+    "PORTABLE_INFERENCE_MODELS",
 ]
 
 
@@ -156,6 +158,7 @@ def benchmark_roster() -> dict[str, Any]:
 STANDALONE_INFERENCE_MODELS = (
     "meshgraphnets",
     "meshgraphnets-v",
+    "chi-mgnflow",
     "transolver",
     "fno",
     "gino",
@@ -174,6 +177,10 @@ _REPOSITORY_MODEL_HINTS = {
     "meshgraphnets - variational": "meshgraphnets-v",
     "meshgraphnets-v": "meshgraphnets-v",
     "hi_meshgraphnets": "meshgraphnets",
+    "chi-mgnflow": "chi-mgnflow",
+    "chi_mgnflow": "chi-mgnflow",
+    "geometry_generation": "sdfflow",
+    "simulgenvae": "simulgenvae",
     "transolver": "transolver",
     "mlp": "mlp",
     "fno": "fno",
@@ -196,6 +203,11 @@ def _model_from_path(path: Path) -> str:
 def _model_from_architecture(model_config: dict[str, Any]) -> str:
     """Guess the model family from architecture keys only that family writes."""
     keys = set(model_config)
+    # cHI-MGNflow shares the whole HI-MGN backbone with MeshGraphNets, so its
+    # flow keys must be checked first or an old checkpoint that predates the
+    # explicit `model` identity is silently classified as deterministic MGN.
+    if {"flow_time_freqs", "flow_t_sampling", "flow_solver"} & keys:
+        return "chi-mgnflow"
     if {"slice_num", "attention_kernel"} & keys:
         return "transolver"
     if {"fno_modes", "fno_hidden_channels"} & keys:
@@ -270,9 +282,11 @@ def checkpoint_metadata(path: Path, registry: Any, settings: Any) -> dict[str, A
         return {"ok": False, "error": str(payload.get("error", "unknown probe error")), "path": relative(path)}
 
     model_config = payload.get("model_config") or {}
+    schema_version = str(payload.get("schema_version") or "").strip().lower()
     model_id = str(
         payload.get("selected_model")
         or payload.get("model_config_model")
+        or ("sdfflow" if schema_version == "sdfflow_infer_v1" else "")
         or _model_from_architecture(model_config)
         or hinted
         or ""
@@ -286,11 +300,14 @@ def checkpoint_metadata(path: Path, registry: Any, settings: Any) -> dict[str, A
         "model": model_id,
         "model_source": (
             "checkpoint metadata" if payload.get("selected_model") or payload.get("model_config_model")
+            else "checkpoint schema" if schema_version == "sdfflow_infer_v1"
             else "architecture keys" if _model_from_architecture(model_config)
             else "checkpoint location" if hinted
             else ""
         ),
         "standalone_inference": model_id in STANDALONE_INFERENCE_MODELS,
+        "portable_inference": model_id in PORTABLE_INFERENCE_MODELS,
+        "schema_version": payload.get("schema_version"),
         "model_config": model_config,
         "data_config": payload.get("data_config") or {},
         "epoch": payload.get("epoch"),

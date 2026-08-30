@@ -1,71 +1,71 @@
 %   ============================================================
-%   Wave 0 - arm FLOW : cHI-MGNflow, same backbone, same data, same budget.
+%   Wave 0 -- flow arm.  chi-mgnflow
 %
-%   Compare the epoch at which each arm's loss flattens. The RATIO is the
-%   multiple that sizes training_epochs for the Wave B sweep. Do not read the
-%   two loss VALUES against each other -- they are different objectives
-%   (velocity regression vs field regression) and are not on the same scale.
-%   What is comparable is the SHAPE of each curve over epochs.
+%   Measures how many more epochs flow matching needs than deterministic
+%   regression, ON SAOI, so Wave B's training_epochs can be set instead of
+%   guessed. The two loss VALUES are not comparable (one regresses the field,
+%   the other a velocity); what is comparable is the SHAPE -- the fraction of
+%   the run each arm needs to reach a given fraction of its own total
+%   improvement. misc/wave0_report.py computes that ratio.
+%
+%   IDENTICAL to the other arm in backbone, data, batch, LR and budget. Any
+%   difference other than the method invalidates the ratio.
+%
+%   Runs on the FULL training set: the multiple depends on Var(y|g), so a
+%   subset would change the very number being measured.
+%
+%   gpu 1 -- the other arm takes gpu 0. Both write into
+%   output/chi-mgnflow/wave0/ and share the c1k coarsening cache, which the
+%   Wave B c1k arms then reuse.
 %   ============================================================
 model	chi-mgnflow
 mode	train
-gpu_ids	0
-parallel_mode	ddp
-log_file_dir	../../output/wave0/flow.log
-modelpath	../output/wave0/flow.pth
-%   Architecture and data are IDENTICAL between the two arms. The only thing
-%   that differs is the objective, so the comparison is clean.
-dataset_dir	../dataset/ex1.h5
-infer_dataset	../dataset/ex1_infer.h5
+gpu_ids	1  # the det arm takes gpu 0
+parallel_mode	ddp  # inert at one GPU
+log_file_dir	../../output/chi-mgnflow/wave0/flow.log
+modelpath	../output/chi-mgnflow/wave0/flow.pth
+dataset_dir	../dataset/saoi/saoi_train_bot.h5
+infer_dataset	../dataset/saoi/saoi_train_bot.h5
 infer_timesteps	1
 split_seed	42
-
-input_var	4
-output_var	4
-cond_var	0
-feature_loss_weights	1.0, 1.0, 1.0, 1.0
+num_vae_samples	200
+input_var	3
+output_var	3
+cond_var	3
+feature_loss_weights	0.1, 0.1, 1
 edge_var	8
 positional_features	4
-
 message_passing_num	15
-Training_epochs	24
-Batch_size	1
-LearningR	0.0003
-Latent_dim	64
-num_workers	0
+training_epochs	4000  # same budget for both arms; long enough that the slower one also flattens
+batch_size	16
+learningr	0.0001
+latent_dim	128
+num_workers	4  # only two jobs on the node
 std_noise	0.0
 augment_geometry	True
 grad_accum_steps	1
-
 use_checkpointing	True
 use_amp	True
 use_ema	True
 ema_decay	0.99
-test_interval	1000
-val_interval	2
-
-use_node_types	True
+test_interval	4000  # plots once at the end; they are pure overhead here
+val_interval	20  # the whole point is WHERE the curve flattens, so it has to be resolved -- 200 points over the run
+use_node_types	False
 use_world_edges	False
-
-test_batch_idx	0, 1
-plot_feature_idx	-1
-display_testset	False
-display_trainset	False
-
+test_batch_idx	0, 1, 2, 3, 4, 5, 6, 7, 8, 9
+plot_feature_idx	2
 use_multiscale	True
 coarsening_type	voronoi_seedmean
 voronoi_clusters	1000, 100
 multiscale_levels	2
-mp_per_level	3, 4, 6, 4, 3
-hierarchy_variants	1
+mp_per_level	4, 6, 8, 6, 4
+hierarchy_variants	4
 hierarchy_seed	1234
-
-%   Flow matching
-flow_steps	20
+flow_steps	30
 flow_solver	heun
 flow_time_freqs	16
-flow_t_sampling	uniform
-val_flow_steps	8
-val_num_samples	4
-best_by	crps
+val_flow_steps	12  # cheap integration for the periodic score
+val_num_samples	8
+best_by	crps  # the sampling metric that mirrors inference
 time_integration	ar_ot
+hierarchy_cache_keep	True  # the flow arm and the Wave B c1k arms reuse this exact cache -- do not delete it

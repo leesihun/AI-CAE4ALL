@@ -19,8 +19,8 @@ python configs/MeshGraphNets-V/SAOI_sweep3/gen_sweep_configs.py
 | `gen_sweep_configs.py` | yes | Emits all 64 configs from the production ones next door |
 | `run_sweep.sh` | yes | preflight → cache warm → train → infer → score, one command |
 | `score_sweep.py` | yes | Builds `sweep_results.md` + the warpage overlay figures |
-| `config_sweep_<arm>.txt` | generated (16) | One training arm |
-| `config_inf_<arm>_<tag>.txt` | generated (48) | One arm × one eval set |
+| `config_train_<arm>.txt` | generated (16) | One training arm |
+| `config_infer_<arm>_<tag>.txt` | generated (48) | One arm × one eval set |
 
 The base is **`../SAOI_all_input/config_train_bot.txt`**, and the inference
 configs are derived from that folder's three `*_bot` infer configs. That is
@@ -45,7 +45,7 @@ half fraction gives up nothing real and buys a whole extra factor.
 | D | capacity | `c0` 128 / `4,6,8,6,4` | `c1` 192 / `6,8,12,8,6` (+VAE/prior depth) |
 | E | regularizer scale | `r001` `lambda_mmd` 1 + `prior_nll_weight` 1 | `r100` both 100 |
 
-Arm names encode the cell: `sweep_<cc|ad>_<g0|g1>_<z16|z64>_<c0|c1>_<r001|r100>`.
+Arm names encode the cell: `<cc|ad>_<g0|g1>_<z16|z64>_<c0|c1>_<r001|r100>`.
 
 **The interaction to read first is `z_conditioning × capacity`.** Under `cc`
 every extra processor block compounds the concat fuser's ~1.33x gain, so depth
@@ -133,8 +133,13 @@ is the classic under-dispersion failure.
 
 The inference configs set `save_rollouts False`, so **no trajectory HDF5s are
 written** — scene × draws would be tens of thousands of files across the grid.
-`num_vae_samples` is 300 here against production's 5000; raise `INFER_SAMPLES`
-in the generator if the histograms look ragged.
+`num_vae_samples` is **2000** draws per scene, so each histogram carries
+`scenes x 2000` generated realizations against the eval set's one-per-scene
+ground truth. **This is the sweep's dominant cost**: total forwards are
+`16 arms x 3 eval sets x scenes x 2000`. Lower `INFER_SAMPLES` in the generator
+first if the inference stage overruns. `vae_batch_vram_fraction` is 0.35 rather
+than the default 0.70 because two arms share each card during inference too, and
+both auto-size against the same *free* VRAM reading.
 
 ## Watch these in the first hour
 

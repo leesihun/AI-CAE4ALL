@@ -57,7 +57,7 @@ const metric = (key, label, values) => ({
     if (message.type() === "error") errors.push(`console: ${message.text()}`);
   });
 
-  await page.route("**/api/training-metrics", route => route.fulfill({
+  await page.route(/\/api\/training-metrics(?:\?.*)?$/, route => route.fulfill({
     status: 200,
     contentType: "application/json",
     body: JSON.stringify({
@@ -94,6 +94,55 @@ const metric = (key, label, values) => ({
         metric_count: 3,
         point_count: 9
       }]
+    })
+  }));
+  await page.route(/\/api\/jobs\/metric-smoke(?:-b)?$/, route => {
+    const id = new URL(route.request().url()).pathname.split("/").at(-1);
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        id,
+        label: id.endsWith("-b") ? "SimulGen metric smoke B" : "SimulGen metric smoke",
+        status: "completed",
+        created_at: "2026-08-31T12:00:00+09:00",
+        started_at: "2026-08-31T12:00:00+09:00",
+        finished_at: "2026-08-31T12:01:00+09:00",
+        current_step: 1,
+        total_steps: 1,
+        step_label: "training complete",
+        returncode: 0,
+        log: `${id} actual-log control`,
+        steps: [{ label: "SimulGen training", route: { model: "simulgenvae", mode: "train_vae" } }],
+        has_pipeline: true,
+        pipeline: {
+          format: "ai-cae4all-pipeline",
+          version: 1,
+          name: `${id} saved pipeline`,
+          node_counter: 2,
+          view: { x: 26, y: 54, scale: 0.78 },
+          nodes: [{ id: `${id}-data`, type: "source.hdf5", x: 40, y: 60, config: { path: "dataset/ex1_infer.h5" } }],
+          edges: []
+        }
+      })
+    });
+  });
+  await page.route(/\/api\/jobs$/, route => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify({
+      items: ["metric-smoke", "metric-smoke-b"].map(id => ({
+        id,
+        label: id.endsWith("-b") ? "SimulGen metric smoke B" : "SimulGen metric smoke",
+        status: "completed",
+        created_at: "2026-08-31T12:00:00+09:00",
+        current_step: 1,
+        total_steps: 1,
+        step_label: "training complete",
+        returncode: 0,
+        has_pipeline: true,
+        steps: [{ label: "SimulGen training", route: { model: "simulgenvae", mode: "train_vae" } }]
+      }))
     })
   }));
   await page.route(/\/api\/files\?kind=artifact$/, route => route.fulfill({
@@ -134,6 +183,13 @@ const metric = (key, label, values) => ({
     assert(await page.locator(".training-metric-option input:checked").count() === 3, "All discovered metrics must be plotted by default");
     assert(await page.locator("[data-metric-plot]").count() === 3, "All default metric plots are missing");
 
+    await page.locator("#trainingJob").selectOption("metric-smoke-b");
+    await page.waitForFunction(() => document.querySelector("#trainingJob")?.value === "metric-smoke-b");
+    assert(
+      await page.evaluate(() => window.__AI_CAE_FRONTEND__.state.nodes.find(node => node.id === "train_metrics").config.job_id) === "metric-smoke-b",
+      "Training-job selection was not persisted on the exact metrics block"
+    );
+
     await page.locator('[data-metric-toggle="kl"]').uncheck();
     assert(await page.locator("[data-metric-plot]").count() === 2, "Excluding one metric did not remove exactly one plot");
     assert(await page.locator('[data-metric-plot="kl"]').count() === 0, "Excluded KL plot is still visible");
@@ -152,9 +208,43 @@ const metric = (key, label, values) => ({
     await page.locator("#metricsSmoothing").fill("0.8");
     assert(await page.locator("#metricsSmoothing").inputValue() === "0.8", "Smoothing control did not retain its value");
     assert(await page.evaluate(() => window.__AI_CAE_FRONTEND__.state.nodes.find(node => node.id === "train_metrics").config.smoothing) === "0.8", "Smoothing setting was not persisted on the block");
+    const metricsDownload = page.waitForEvent("download");
+    await page.locator("#metricsDownload").click();
+    assert((await metricsDownload).suggestedFilename().endsWith("-metrics.csv"), "Metrics Download did not create a CSV");
+    await page.locator("#metricsOpenLog").click();
+    await page.waitForFunction(() => window.__AI_CAE_FRONTEND__.state.api.activeJob?.id === "metric-smoke-b");
+    assert((await page.locator("#runtimeLog").innerText()).includes("actual-log control"), "Open log did not populate the runtime drawer");
+    const metricsRefresh = page.waitForResponse(response => new URL(response.url()).pathname.endsWith("/api/training-metrics"));
+    await page.locator("#metricsRefresh").click();
+    await metricsRefresh;
+    await page.waitForFunction(() => document.querySelector("#trainingJob")?.value === "metric-smoke-b");
     await page.screenshot({ path: path.join(__dirname, "runtime", "training-metrics.png"), fullPage: false });
 
-    await page.locator('[data-close="studioOverlay"]').click();
+    await page.locator("#metricsBackJobs").click();
+    await page.waitForSelector("#refreshJobs");
+    const jobsRefresh = page.waitForResponse(response => new URL(response.url()).pathname.endsWith("/api/jobs"));
+    await page.locator("#refreshJobs").click();
+    await jobsRefresh;
+    await page.waitForSelector("#refreshJobs");
+    await page.locator("[data-open-job]").first().click();
+    await page.waitForFunction(() => window.__AI_CAE_FRONTEND__.state.api.activeJob?.id === "metric-smoke");
+    await page.locator("[data-job-metrics]").first().click();
+    await page.waitForSelector("#trainingJob");
+    await page.locator("#metricsBackJobs").click();
+    await page.waitForSelector("#refreshJobs");
+    await page.locator('[data-studio-id="models"]').click();
+    await page.waitForSelector('[data-model-details="simulgenvae"]');
+    await page.locator('[data-model-details="simulgenvae"]').click();
+    await page.waitForSelector("[data-model-metrics-job]");
+    await page.locator("[data-open-job]").first().click();
+    await page.locator("[data-model-metrics-job]").first().click();
+    await page.waitForSelector("#trainingJob");
+    await page.locator("#metricsBackJobs").click();
+    await page.waitForSelector("[data-load-pipeline]");
+    page.once("dialog", dialog => dialog.accept());
+    await page.locator("[data-load-pipeline]").first().click();
+    await page.waitForFunction(() => document.querySelector("#pipelineName")?.value === "metric-smoke saved pipeline");
+    await page.locator("#runtimeDismiss").click();
     await replaceTemplate(page, "blank");
     await page.locator('.palette-item[data-block-type="evaluate.training_metrics"]').click();
     await page.locator('.palette-item[data-block-type="evaluate.training_metrics"]').click();
@@ -189,6 +279,10 @@ const metric = (key, label, values) => ({
     assert(await page.locator(".connected-run-cards article").count() === 2, "Connected comparison did not resolve both graph runs");
     assert(await page.locator(".connected-run-chart polyline").count() === 2, "Connected runs were not overlaid in the comparison plot");
     assert(!(await page.locator("#artifactOverlay").evaluate(element => element.classList.contains("open"))), "Compare Models incorrectly opened the artifact viewer");
+    await page.locator("#connectedMetric").selectOption("kl");
+    await page.locator("#connectedDirection").selectOption("max");
+    const connectedConfig = await page.evaluate(id => window.__AI_CAE_FRONTEND__.state.nodes.find(node => node.id === id)?.config, nodes.compare);
+    assert(connectedConfig.metric === "kl" && connectedConfig.direction === "max", "Connected metric or direction was not retained on Compare Models");
     await page.locator("[data-run-select]").selectOption("frontend/runtime/evaluation/schema-smoke/per_sample_metrics.csv");
     await page.waitForFunction(() => document.querySelector("#comparisonMetric")?.value === "relative_l2");
     assert(await page.locator("#comparisonGroup").inputValue() === "prediction_file", "CSV schema did not suggest the real group column");
@@ -204,7 +298,7 @@ const metric = (key, label, values) => ({
     assert(await page.locator('#savedState[role="status"]').count() === 1, "Save status is not exposed as an accessible status message");
 
     assert(errors.length === 0, `Browser reported errors: ${errors.join(" | ")}`);
-    console.log("PASS: metrics selection/smoothing, cycle prevention, and graph-connected multi-run comparison");
+    console.log("PASS: metrics job selection/download/refresh/log/back, cycle prevention, and graph-connected multi-run comparison");
   } finally {
     await browser.close();
   }

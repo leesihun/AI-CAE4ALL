@@ -94,8 +94,11 @@ export const MODEL_CATALOG = {
     description: "Conditional hierarchical MeshGraphNet with flow-matching field generation and deterministic or ensemble readout.", dataset: "mesh HDF5",
     defaults: {
       model: "chi-mgnflow", mode: "train", gpu_ids: "0", parallel_mode: "ddp",
-      modelpath: "../output/chi_mgnflow/studio/chi_mgnflow.pth",
+      modelpath: "../output/chi-mgnflow/studio/chi_mgnflow.pth",
       latent_dim: "128", edge_var: "8", use_multiscale: "True",
+      message_passing_num: "15", coarsening_type: "voronoi_seedmean",
+      multiscale_levels: "2", voronoi_clusters: "500,100", mp_per_level: "3,4,6,4,3",
+      hierarchy_variants: "1", hierarchy_seed: "1234",
       flow_steps: "30", flow_solver: "heun", flow_time_freqs: "16",
       flow_t_sampling: "uniform", flow_loss_weighting: "uniform", flow_det_prob: "0",
       flow_predict: "sample", val_flow_steps: "10", val_num_samples: "8", best_by: "crps",
@@ -302,7 +305,10 @@ export const BLOCK_SPECS = {
       // the block permanently unrunnable.
       model_id: "",
       gpu_ids: "0", infer_timesteps: "", inference_output_dir: "",
-      batch_size: "16", viewer: "field + samples + distributions"
+      batch_size: "16", num_workers: "", infer_chunk_size: "", infer_query_chunk_size: "",
+      num_vae_samples: "", vae_batch_size: "",
+      flow_steps: "", flow_solver: "", flow_predict: "",
+      viewer: "field + samples + distributions"
     }, sampleLabel: "20 reconstructions", executable: true
   },
   "run.cad_generator": {
@@ -674,7 +680,7 @@ export const STUDIO_SECTIONS = {
     ]
   },
   models: {
-    label: "Models", icon: "model", color: "#76568e", note: "10 live model IDs",
+    label: "Models", icon: "model", color: "#76568e", note: "Routes, keys, checkpoints",
     title: "Model and checkpoint workspace", description: "Browse every installed route, its real mode and configuration contract, checkpoint compatibility, dataset requirements, and intended engineering use.",
     modelCards: true
   },
@@ -735,7 +741,7 @@ export const STUDIO_SECTIONS = {
       ["SimulGen checked configs", "docs", "native", "Merged train, VAE-only, LC-only, and reconstruction examples matching the live route.", ["4 modes", "flat config", "examples"], "model.simulgenvae"],
       ["Configuration reference", "docs", "native", "Suite-wide keys, modes, validation semantics, path resolution, and examples.", ["CONFIGURATION_REFERENCE.md", "spec"]],
       ["Dataset format", "docs", "native", "Shared mesh HDF5 groups, shapes, field conventions, splits, and metadata.", ["DATASET_FORMAT.md", "HDF5"]],
-      ["Frontend boundary", "docs", "native", "This application is self-contained in frontend/ and does not modify backend code.", ["frontend/", "static", "isolated"]]
+      ["Studio boundary", "docs", "native", "The Studio lives in frontend/; narrow checkpoint-family and portable-routing compatibility fixes preserve truthful native integration.", ["frontend/", "local bridge", "native routes"]]
     ]
   }
 };
@@ -775,6 +781,10 @@ export const HELP = {
   flow_loss_weighting: "uniform predicts velocity uniformly; x0 emphasizes the deterministic path endpoint.",
   flow_det_prob: "Fraction of training graphs pinned to t=0. Must be in [0, 1).",
   flow_predict: "sample integrates one trajectory; mean is the deterministic t=0 readout; ensemble_mean averages generated draws.",
+  num_vae_samples: "Number of stochastic field trajectories. Used by MeshGraphNets-V and cHI-MGNflow inference.",
+  vae_batch_size: "How many stochastic trajectories are evaluated together; lower it to reduce inference memory.",
+  infer_chunk_size: "Transolver inference chunk size. Leave blank to use the checkpoint/model configuration.",
+  infer_query_chunk_size: "Neural-operator query decode chunk size. Leave blank for the checkpoint/model default.",
   val_flow_steps: "Cheaper ODE step count used during validation.",
   val_num_samples: "Number of validation ensemble members used for sampling metrics.",
   best_by: "Checkpoint selection metric: reconstruction, CRPS, or deterministic validation error."

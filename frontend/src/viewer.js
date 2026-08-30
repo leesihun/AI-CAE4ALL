@@ -742,7 +742,13 @@ export async function renderRealArtifactSample(sampleIndex, feature = null, time
     const topology = mesh
       ? `<br>elements=${Number(mesh.returned_elements || 0).toLocaleString()} / ${Number(mesh.total_elements || 0).toLocaleString()} (${escapeHtml(mesh.element_kind || "none")})<br>edges=${Number(mesh.returned_edges || 0).toLocaleString()} / ${Number(mesh.total_edges || 0).toLocaleString()}`
       : "";
-    $("#sampleInfo").innerHTML = `<section class="info-block"><h3>Sample ${escapeHtml(sample.sample)}</h3><p>${escapeHtml(sample.path)} · ${escapeHtml(sample.dataset)}${sampleShape(sample)}</p><div class="stat-grid">
+    // A channel whose min equals its max renders as one flat colour and three
+    // identical numbers, which reads exactly like a normal field. That is how an
+    // all-zero row (ex9's uz) survived into a training run before anyone noticed
+    // half the target was constant. Say it outright.
+    const constantField = sample.supports?.field
+      && Number.isFinite(stats.min) && Number.isFinite(stats.max) && stats.min === stats.max;
+    $("#sampleInfo").innerHTML = `<section class="info-block"><h3>Sample ${escapeHtml(sample.sample)}</h3><p>${escapeHtml(sample.path)} · ${escapeHtml(sample.dataset)}${sampleShape(sample)}</p>${constantField ? `<p class="field-constant-note" role="status">Constant field: every node holds ${escapeHtml(formatStat(stats.min))} at this channel and timestep. Nothing is shaded because there is no variation to shade.</p>` : ""}<div class="stat-grid">
       <span class="stat-card"><strong>${sample.supports?.field ? formatStat(stats.min) : "—"}</strong><small>${sample.supports?.field ? "actual minimum" : "field unavailable"}</small></span>
       <span class="stat-card"><strong>${sample.supports?.field ? formatStat(stats.max) : "—"}</strong><small>${sample.supports?.field ? "actual maximum" : "field unavailable"}</small></span>
       <span class="stat-card"><strong>${sample.supports?.field ? formatStat(stats.mean) : "—"}</strong><small>${sample.supports?.field ? "actual mean" : "field unavailable"}</small></span>
@@ -794,10 +800,15 @@ function normalizeConfiguredPath(value) {
   text = text.replace(/^\.\//, "");
   while (text.startsWith("../")) text = text.slice(3);
   const roots = ["dataset/", "output/", "outputs/", "frontend/", "configs/"];
-  for (const root of roots) {
-    const index = text.indexOf(root);
-    if (index >= 0) return text.slice(index);
-  }
+  // Keep the earliest repository root in the supplied path. Checking roots in
+  // list order made an uploaded path such as
+  // `frontend/runtime/uploads/dataset/file.h5` match its *nested* `dataset/`
+  // segment first and silently redirect preview to `dataset/file.h5`.
+  const match = roots
+    .map(root => ({ root, index: text.indexOf(root) }))
+    .filter(item => item.index >= 0 && (item.index === 0 || text[item.index - 1] === "/"))
+    .sort((left, right) => left.index - right.index)[0];
+  if (match) return text.slice(match.index);
   return text;
 }
 
