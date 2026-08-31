@@ -1,0 +1,30 @@
+# Line endings.
+#
+# This repo is authored on Windows and run on Linux GPU nodes. A shell script
+# that arrives with CRLF dies there with `bad interpreter: ^M` / `bash\r: No
+# such file or directory`, and Git Bash on Windows tolerates it — so the fault
+# only ever shows up on the machine that matters. Pin the text types to LF so
+# no checkout, clone or autocrlf setting can reintroduce it.
+
+* text=auto eol=lf
+
+*.sh  text eol=lf
+*.py  text eol=lf
+*.txt text eol=lf
+*.md  text eol=lf
+*.toml text eol=lf
+*.json text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+
+# Never touch binaries.
+*.h5     binary
+*.pth    binary
+*.npz    binary
+*.png    binary
+*.jpg    binary
+*.pdf    binary
+*.stl    binary
+*.step   binary
+*.igs    binary
+*.iges   binary
