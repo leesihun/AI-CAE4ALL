@@ -34,7 +34,8 @@ def audit_configs(*, strict: bool = False) -> dict[str, Any]:
     `cae_suite/cli.py --audit-configs` walks `suite_root / spec.repository`
     (each method's own repo directory) looking for config*.txt. In this
     repository every checked-in config actually lives under the top-level
-    `configs/` tree instead (127 files there, 0 under the method repos), so
+    `configs/` tree instead (330 tracked files in the current checkout and 0
+    under the method repos), so
     that scan root finds nothing here. This mirrors the CLI's validation
     semantics exactly but scans `configs/` — the directory the rest of the
     Studio (and CLAUDE.md's own examples) already treat as the source of

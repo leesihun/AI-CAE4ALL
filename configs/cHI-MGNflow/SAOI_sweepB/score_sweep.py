@@ -48,20 +48,19 @@ METHOD_REPO = REPO_ROOT / "cHI-MGNflow"
 AXES = [
     ("batch_size",       ["b16", "b32"],  ["16", "32"]),
     ("flow_t_sampling",  ["tu", "tl"],    ["uniform", "logitnormal"]),
-    ("voronoi_clusters", ["c1k", "c2k"],  ["1000, 100", "2000, 250"]),
     ("capacity",         ["k0", "k1"],    ["128 / 4,6,8,6,4", "192 / 6,8,12,8,6"]),
     ("learningr",        ["lr1", "lr3"],  ["1e-4", "3e-4"]),
 ]
 def _half_fraction():
-    """The 16 cells of the 2^(5-1) resolution-V design: E = A xor B xor C xor D.
+    """The 8 cells of the 2^(4-1) resolution-IV design: D = A xor B xor C.
 
-    NOT the full product of the five axes -- that would be 32 runs. Mirrors
+    NOT the full product of the four axes -- that would be 16 runs. Mirrors
     gen_sweep_configs.arms(); if one changes, the other must.
     """
     out = []
-    for i in range(16):
-        free = [(i >> (3 - k)) & 1 for k in range(4)]
-        bits = free + [free[0] ^ free[1] ^ free[2] ^ free[3]]
+    for i in range(8):
+        free = [(i >> (2 - k)) & 1 for k in range(3)]
+        bits = free + [free[0] ^ free[1] ^ free[2]]      # D = A xor B xor C
         out.append("_".join(AXES[k][1][b] for k, b in enumerate(bits)))
     return out
 
@@ -716,7 +715,7 @@ def render_main_effects(rows):
 
 def render_markdown(rows, args):
     L = []
-    L.append("# cHI-MGNflow SAOI Wave B -- 2^(5-1) resolution V (16 arms, 2 per GPU)")
+    L.append("# cHI-MGNflow SAOI Wave B -- 2^(4-1) resolution IV (8 arms, 1 per GPU)")
     L.append("")
     L.append(f"split={args.split}  K={args.k}  samplers={','.join(args.samplers)}")
     L.append("")
@@ -736,9 +735,11 @@ def render_markdown(rows, args):
     L.append("r001 half is the \"regularizers effectively off\" control -- and the")
     L.append("g0/g1 contrast can only show force in the r100 half.")
     L.append("")
-    L.append("Defining relation I = ABCDE: the regularizer scale is not free,")
-    L.append("it is A xor B xor C xor D. All 5 main effects and all 10 two-factor")
-    L.append("interactions are clean; 3-factor and higher alias with them.")
+    L.append("Defining relation I = ABCD: learningr is not free, it is")
+    L.append("A xor B xor C. The 4 main effects are clean, but 2-factor effects")
+    L.append("come in CONFOUNDED PAIRS -- AB=CD, AC=BD, AD=BC -- so a large one")
+    L.append("cannot be attributed to one pair. 500 epochs at 500 s/epoch is a")
+    L.append("BUDGET-LIMITED comparison, NOT a converged one.")
     L.append("The interaction to read first is z_conditioning x capacity: under")
     L.append("cc every extra block compounds the fuser's ~1.33x gain, under ad")
     L.append("it does not -- so depth should HURT one half and HELP the other.")
@@ -758,7 +759,7 @@ def render_markdown(rows, args):
     L.append("one end heavy = biased location.")
     L.append("")
 
-    hdr = ("| arm | t sched | voronoi | z | mmd | best CRPS | valid recon | spread | "
+    hdr = ("| arm | t sched | capacity | z | mmd | best CRPS | valid recon | spread | "
            "wild0% prior | wild0% N(0,I) | wild% prior | chi2/crit | "
            "rank% (prior) | n |")
     L.append(hdr)

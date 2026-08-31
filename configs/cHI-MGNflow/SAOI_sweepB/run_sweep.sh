@@ -1,33 +1,31 @@
 #!/usr/bin/env bash
 # One-click runner for the SAOI WAVE 3 sweep: a 2^4 full factorial, 16 arms.
 #
-# A 2^(5-1) RESOLUTION-V HALF FRACTION, not a full factorial: the fifth factor
-# is E = A xor B xor C xor D (defining relation I = ABCDE). All 5 main effects
-# and all 10 two-factor interactions are clean; only 3-factor and higher alias.
+# A 2^(4-1) RESOLUTION-IV HALF FRACTION: the fourth factor is D = A xor B xor C
+# (defining relation I = ABCD). The 4 main effects are clean, but 2-factor
+# effects come in CONFOUNDED PAIRS -- AB=CD, AC=BD, AD=BC -- so a large one
+# cannot be attributed to a single pair without another run.
 #
-#   A  z_conditioning         cc  concat (legacy fuser) | ad  adaln (AdaLN-Zero)
-#   B  prior_grad_to_encoder  g0  detached (no CVAE rate term) | g1  end-to-end
-#   C  vae_latent_dim         z16 | z64
-#   D  capacity               c0  Latent_dim 128 / mp 4,6,8,6,4  |
-#                             c1  Latent_dim 192 / mp 6,8,12,8,6 (+VAE/prior depth)
-#   E  regularizer scale      r001 (lambda_mmd 1, prior_nll_weight 1) |
-#                             r100 (lambda_mmd 100, prior_nll_weight 100)
+# EIGHT arms, ONE PER GPU. At a measured 500 s/epoch, 500 epochs is ~2.9 days.
+# This is a BUDGET-LIMITED comparison, not a converged one: report it that way.
 #
-# Arm names encode the cell: <cc|ad>_<g0|g1>_<z16|z64>_<c0|c1>_<r001|r100>, and
-# the files are config_train_<arm>.txt / config_infer_<arm>_<tag>.txt.
+#   A  batch_size             b16 16 | b32 32
+#   B  flow_t_sampling        tu  uniform | tl  logit-normal
+#   C  capacity               k0  128 / mp 4,6,8,6,4 |
+#                             k1  192 / mp 6,8,12,8,6 (+VAE/prior depth)
+#   D  learningr              lr1 1e-4 | lr3 3e-4      GENERATED: D = A xor B xor C
+#
+# Arm names encode the cell: <b16|b32>_<tu|tl>_<k0|k1>_<lr1|lr3>, and the files
+# are config_train_<arm>.txt / config_infer_<arm>_<tag>.txt.
 # Regenerate the configs with gen_sweep_configs.py; do not hand-edit them.
 #
-# 16 arms, TWO per GPU across GPUs 0-7, paired by complementing the four FREE
-# factors, so every GPU carries one c0 + one c1 and VRAM stays balanced. Each arm
+# 8 arms, ONE per GPU across GPUs 0-7 -- no card sharing, which is both the 4x
+# saving over the 16-arm design and the reason OOM exposure disappears. Each arm
 # pins its GPU in its own config (gpu_ids), so this script only launches them;
 # it does not set CUDA_VISIBLE_DEVICES.
 #
-# WATCH THE `VRAM peak=` LINE OF A c1 ARM. Two arms share each GPU at the full
-# production Batch_size 16, so ONE CARD MUST HOLD BOTH, and c1 is ~1.5x the width
-# with 40 processor blocks instead of 28. If the pair does not fit, either set
-# Batch_size 8 in gen_sweep_configs.py and regenerate (the design survives, MMD's
-# sample count halves), or shrink the c1 level. Splitting into two waves of 8
-# does NOT work by name prefix -- the first 8 arms are all `cc`.
+# WATCH THE `VRAM peak=` LINE OF b32_*_k1. One arm per card, so there is real
+# headroom now, but that corner is batch 32 at the wider/deeper capacity level.
 #
 # ALSO WATCH THE FIRST EPOCHS' tqdm postfix: `mmd` AND `fm_p` against `total`.
 # alpha_recon is 1000 while both regularizers sit at ~1 in r001, so each is
@@ -101,10 +99,10 @@ cd "$REPO_ROOT" || exit 1
 CFG_DIR="$SCRIPT_DIR"
 LOG_ROOT="${LOG_ROOT:-outputs/saoi_sweepB/run_logs}"
 CACHE_GLOB="dataset/saoi/saoi_train_bot.mscache.*.h5"
-# voronoi_clusters IS part of the coarsening signature, so this grid needs TWO
-# caches (c1k and c2k), not one. cache_ready() therefore counts files instead of
-# testing existence, and the warm-up launches one arm per level.
-CACHE_COUNT_REQUIRED="${CACHE_COUNT_REQUIRED:-2}"
+# voronoi_clusters is no longer swept, so the grid is back to ONE cache. The
+# counting form is kept because it is the safe generalisation: leave this at 2
+# if a future wave puts voronoi_clusters back on an axis.
+CACHE_COUNT_REQUIRED="${CACHE_COUNT_REQUIRED:-1}"
 
 # Kept in the generator's emission order (bit order A P Z M); gen_sweep_configs.py
 # prints this exact line so the two can never drift.
@@ -147,7 +145,7 @@ run_arm() {
     return 1
 }
 
-echo "cHI-MGNflow Wave B -- 2^(5-1) res-V: batch x t-sched x voronoi x capacity x lr"
+echo "cHI-MGNflow Wave B -- 2^(4-1) res-IV, 8 arms: batch x t-sched x capacity x lr"
 echo "  REPO_ROOT = $REPO_ROOT"
 echo "  PYTHON    = $PYTHON"
 echo "  LOG_ROOT  = $LOG_ROOT"
@@ -194,8 +192,8 @@ else
 # Word-split into an array: `cut -d' ' -f2-` echoes the WHOLE line back when it
 # finds no delimiter, so a single-arm ARMS would have launched that one arm
 # twice -- two jobs writing the same checkpoint and log.
-# Warm ONE arm per voronoi level -- with two cache signatures, warming a single
-# arm would leave the other 15 to race on the second build.
+# Warm one arm per voronoi level. With voronoi_clusters off the axis no arm
+# name matches, so this falls through to arm_list[0] -- the single-cache case.
 read -r -a arm_list <<< "$ARMS"
 warm_list=()
 for _lvl in c1k c2k; do

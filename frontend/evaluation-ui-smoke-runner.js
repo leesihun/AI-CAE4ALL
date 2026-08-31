@@ -49,6 +49,7 @@ const schemaFor = predictionPath => ({
     try { localStorage.setItem("ai-cae4all.studio.welcomed.v1", "1"); } catch { /* storage blocked */ }
   });
   const browserErrors = [];
+  const schemaBodies = [];
   const runBodies = [];
   page.on("pageerror", error => browserErrors.push(`pageerror: ${error.message}`));
   page.on("console", message => {
@@ -70,14 +71,18 @@ const schemaFor = predictionPath => ({
   await page.route("**/api/files?kind=dataset", route => route.fulfill({
     contentType: "application/json",
     body: JSON.stringify({
-      items: [{ path: "dataset/truth.h5", extension: ".h5" }],
-      matched: 1,
+      items: [
+        { path: "dataset/truth.h5", extension: ".h5" },
+        { path: "dataset/truth-alt.h5", extension: ".h5" }
+      ],
+      matched: 2,
       limit: 250,
       truncated: false
     })
   }));
   await page.route("**/api/evaluation/schema", async route => {
     const body = route.request().postDataJSON();
+    schemaBodies.push(body);
     if (String(body.prediction_path).includes("prediction-b.h5")) {
       await new Promise(resolve => setTimeout(resolve, 250));
     }
@@ -134,8 +139,38 @@ const schemaFor = predictionPath => ({
     assert(await page.locator(".evaluation-contract-summary > span").nth(2).locator("strong").innerText() === "2", "The sample-ID overlap is missing");
     assert((await page.locator("#evaluationSchema").innerText()).includes("id-matched samples"), "The sample matching strategy is missing");
 
+    await page.locator("#evaluationTruth").selectOption("dataset/truth-alt.h5");
+    await page.waitForFunction(
+      () => document.querySelectorAll(".evaluation-field-row").length === 2
+        && !document.querySelector("#evaluationSchema .live-empty")
+    );
+    assert(schemaBodies.at(-1)?.truth_path === "dataset/truth-alt.h5", "The visible truth selector did not refresh the selected schema");
+    const truthSelection = await page.evaluate(id => {
+      const node = window.__AI_CAE_FRONTEND__.state.nodes.find(item => item.id === id);
+      return {
+        truthPath: node?.config.truth_path,
+        fieldPairs: node?.config.field_pairs,
+        confirmed: node?.config.mapping_confirmed
+      };
+    }, nodeId);
+    assert(truthSelection.truthPath === "dataset/truth-alt.h5", "The visible truth selection was not persisted on the evaluation node");
+    assert(truthSelection.fieldPairs === "", "Changing truth data did not clear the stale field mapping");
+    assert(truthSelection.confirmed === "False", "Changing truth data did not clear mapping confirmation");
+
     await page.locator("#evaluationConfirmMapping").check();
     assert(!(await runButton.isDisabled()), "Confirmed unique mapping did not enable evaluation");
+
+    await page.locator('[data-evaluation-field="1"]').uncheck();
+    assert(!(await page.locator("#evaluationConfirmMapping").isChecked()), "Deselecting a prediction field did not clear mapping confirmation");
+    const oneFieldMapping = await page.evaluate(id => {
+      const node = window.__AI_CAE_FRONTEND__.state.nodes.find(item => item.id === id);
+      return JSON.parse(node?.config.field_pairs || "[]");
+    }, nodeId);
+    assert(oneFieldMapping.length === 1 && oneFieldMapping[0].prediction_index === 0, "The field checkbox did not persist the reduced mapping");
+    await page.locator('[data-evaluation-field="1"]').check();
+    assert(!(await page.locator("#evaluationConfirmMapping").isChecked()), "Restoring a prediction field did not keep confirmation cleared");
+    await page.locator("#evaluationConfirmMapping").check();
+    assert(!(await runButton.isDisabled()), "Restoring and confirming the full mapping did not enable evaluation");
 
     await page.locator('[data-evaluation-truth="0"]').selectOption("1");
     assert(!(await page.locator("#evaluationConfirmMapping").isChecked()), "Changing a mapping did not clear its confirmation");
@@ -148,6 +183,7 @@ const schemaFor = predictionPath => ({
     await runButton.click();
     await page.waitForSelector("#evaluationResults .live-summary");
     assert(runBodies.length === 1, "Evaluation endpoint was not called exactly once");
+    assert(runBodies[0].truth_path === "dataset/truth-alt.h5", "Evaluation did not use the truth file selected through the GUI");
     assert(runBodies[0].confirm_mapping === true, "The confirmation was not sent to the backend");
     assert(new Set(runBodies[0].field_pairs.map(pair => pair.truth_index)).size === 2, "The submitted truth mapping was not unique");
     assert((await page.locator("#evaluationResults").innerText()).includes("2\nevaluated samples"), "Real evaluation results were not rendered");

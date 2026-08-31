@@ -1095,7 +1095,11 @@ export async function openArtifact(nodeId) {
   if (node.type === "source.parameters") {
     renderParameterSpreadsheet(node);
     const datasetPath = parameterContext(node).datasetPath;
-    if (state.api.connected && datasetPath) {
+    // The runtime handshake completes after the initial graph render. A user can
+    // legitimately open this sheet during that window, so attempt the catalog
+    // request whenever a dataset is configured; apiRequest already reports a
+    // genuinely offline runtime through the catch path below.
+    if (datasetPath) {
       try {
         const catalog = await loadPreviewCatalog(datasetPath, PARAMETER_CATALOG_LIMIT);
         if (!isCurrentArtifactLoad(requestGeneration)) return;

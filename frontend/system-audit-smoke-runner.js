@@ -72,7 +72,8 @@ function assert(condition, message) {
       assert(await page.locator("#auditDetail .diagnostic").count() > 0, "Audit Diagnostics did not reveal the real messages");
     }
     assert(browserErrors.length === 0, `Browser errors: ${browserErrors.join(" | ")}`);
-    console.log(`PASS: System audit searched and paged ${files} real configs and accurately rendered ${failing} structural failures`);
+    const failureLabel = failing === 1 ? "failure" : "failures";
+    console.log(`PASS: System audit searched and paged ${files} real configs and accurately rendered ${failing} structural ${failureLabel}`);
   } finally {
     await browser.close();
   }

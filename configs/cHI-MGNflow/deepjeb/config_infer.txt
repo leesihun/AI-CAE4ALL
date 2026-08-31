@@ -1,0 +1,45 @@
+%   ============================================================
+%   DeepJEB surrogate -- predict stress and displacement on held-out brackets.
+%
+%   The 10 brackets here were never seen in training (the split is by bracket,
+%   so none of their four load cases leaked in either). Their labels are real
+%   DeepJEB FEA, which makes this the honest measure of whether the surrogate
+%   can stand in for the solver.
+%   ============================================================
+model	chi-mgnflow
+mode	inference
+gpu_ids	0
+modelpath	../output/deepjeb_himgn/deepjeb_himgn.pth
+infer_dataset	../dataset/deepjeb_mgn_infer.h5
+
+input_var	2
+output_var	2
+cond_var	4
+edge_var	8
+positional_features	4
+
+%   Architecture must match the checkpoint's V-cycle; the checkpoint's own
+%   model_config is authoritative at load time, but preflight checks the config.
+use_multiscale	True
+coarsening_type	voronoi_seedmean
+voronoi_clusters	500, 100
+multiscale_levels	2
+mp_per_level	3, 4, 6, 4, 3
+hierarchy_variants	1
+hierarchy_seed	1234
+hierarchy_cache_keep	True
+latent_dim	96
+message_passing_num	12
+
+%   Static: one step, no autoregressive feedback.
+infer_timesteps	1
+
+%   Deterministic readout -- this stage stands in for a solver, so the
+%   conditional mean is what is wanted, not a draw from the distribution.
+flow_predict	mean
+flow_steps	20
+flow_solver	heun
+num_vae_samples	1
+
+test_batch_idx	0
+display_testset	False

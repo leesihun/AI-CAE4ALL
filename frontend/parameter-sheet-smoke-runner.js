@@ -24,9 +24,38 @@ function assert(condition, message) {
     if (message.type() === "error") browserErrors.push(message.text());
   });
 
+  let resolveInitialHealthGate = () => {};
+  let initialHealthGateReleased = false;
+  let initialHealthRequestHeld = false;
+  const initialHealthGate = new Promise(resolve => {
+    resolveInitialHealthGate = resolve;
+  });
+  const releaseInitialHealthGate = () => {
+    if (initialHealthGateReleased) return;
+    initialHealthGateReleased = true;
+    resolveInitialHealthGate();
+  };
+
   try {
+    await page.route("**/api/health", async route => {
+      if (initialHealthRequestHeld) {
+        await route.continue();
+        return;
+      }
+      initialHealthRequestHeld = true;
+      await initialHealthGate;
+      await route.continue();
+    });
+    const initialHealthRequest = page.waitForRequest(request =>
+      new URL(request.url()).pathname === "/api/health"
+    );
     await page.goto(studioUrl);
+    await initialHealthRequest;
     await page.waitForFunction(() => window.__AI_CAE_FRONTEND__?.state?.nodes?.length);
+    assert(
+      await page.evaluate(() => window.__AI_CAE_FRONTEND__.state.api.connected) === false,
+      "Initial runtime health gate did not keep the Studio disconnected"
+    );
     await page.evaluate(() => window.__AI_CAE_FRONTEND__.loadTemplate("parametric", false));
     const mlpParametersId = await page.evaluate(() =>
       window.__AI_CAE_FRONTEND__.state.nodes.find(node => node.type === "source.parameters")?.id
@@ -34,10 +63,28 @@ function assert(condition, message) {
     assert(mlpParametersId, "Parametric template Design Parameters node is missing");
 
     await page.locator(`[data-node-id="${mlpParametersId}"] .node-head`).click();
+    const mlpPreviewResponse = page.waitForResponse(response => {
+      const url = new URL(response.url());
+      return url.pathname === "/api/preview/samples"
+        && url.searchParams.get("path") === "dataset/mlp/train.h5";
+    });
     await page.locator("#openParameterSpreadsheet").click();
     await page.locator(".parameter-sheet").waitFor({ state: "visible" });
+    assert(
+      await page.evaluate(() => window.__AI_CAE_FRONTEND__.state.api.connected) === false,
+      "Spreadsheet opened only after the runtime health gate was released"
+    );
+    const previewResponse = await mlpPreviewResponse;
+    assert(previewResponse.ok(), `MLP preview request failed with HTTP ${previewResponse.status()}`);
+    await page.waitForFunction(() => document.querySelectorAll("#parameterSheetRows tr").length === 512);
     assert((await page.locator("#artifactTitle").innerText()).includes("MLP paired dataset"), "MLP mapping profile is missing");
     assert(await page.locator("#parameterSheetRows tr").count() === 512, "MLP sheet must have one row for every HDF5 sample");
+    assert(
+      await page.evaluate(() => window.__AI_CAE_FRONTEND__.state.api.connected) === false,
+      "Runtime connected before the gated spreadsheet preview rendered"
+    );
+    releaseInitialHealthGate();
+    await page.waitForFunction(() => window.__AI_CAE_FRONTEND__.state.api.connected);
     const initialInputColumns = await page.locator('.parameter-column-kind.input').count();
     assert(initialInputColumns === 3, `Expected three HDF5 input columns, found ${initialInputColumns}`);
     assert(await page.locator('.parameter-column-kind.output').count() === 2, "Expected two HDF5 output columns");
@@ -152,6 +199,7 @@ function assert(condition, message) {
 
     console.log("PASS: parameter sheets preserve MLP pairs and explicitly materialize one validated SDFFlow generation row.");
   } finally {
+    releaseInitialHealthGate();
     await browser.close();
   }
 })().catch(error => {

@@ -54,7 +54,10 @@ function fileItem(index, extension = ".h5") {
   const page = await context.newPage();
   await page.addInitScript(() => {
     localStorage.setItem("ai-cae4all.studio.welcomed.v1", "1");
-    localStorage.removeItem("ai-cae4all.studio.pipeline.v1");
+    if (sessionStorage.getItem("ai-cae4all.control-surface.initialized.v1") !== "1") {
+      localStorage.removeItem("ai-cae4all.studio.pipeline.v1");
+      sessionStorage.setItem("ai-cae4all.control-surface.initialized.v1", "1");
+    }
   });
 
   const browserErrors = [];
@@ -371,6 +374,50 @@ function fileItem(index, extension = ".h5") {
     }, type);
   }
 
+  async function nodePosition(id) {
+    return page.evaluate(nodeId => {
+      const node = window.__AI_CAE_FRONTEND__.state.nodes.find(item => item.id === nodeId);
+      return node ? { x: node.x, y: node.y } : null;
+    }, id);
+  }
+
+  async function dragNodeBy(id, deltaX, deltaY) {
+    const handle = page.locator(`[data-node-id="${id}"] [data-drag-handle]`);
+    await handle.scrollIntoViewIfNeeded();
+    const box = await handle.boundingBox();
+    assert(box, `Drag handle for ${id} has no visible bounding box`);
+    const startX = box.x + Math.min(64, box.width * .3);
+    const startY = box.y + box.height / 2;
+    await page.mouse.move(startX, startY);
+    await page.mouse.down();
+    await page.mouse.move(startX + deltaX, startY + deltaY, { steps: 8 });
+    await page.mouse.up();
+    await page.waitForFunction(() => !window.__AI_CAE_FRONTEND__.state.drag);
+    return nodePosition(id);
+  }
+
+  async function dragElementTo(source, target) {
+    await source.scrollIntoViewIfNeeded();
+    await target.scrollIntoViewIfNeeded();
+    const dataTransfer = await page.evaluateHandle(() => new DataTransfer());
+    try {
+      await source.dispatchEvent("dragstart", { dataTransfer });
+      await target.dispatchEvent("dragenter", { dataTransfer });
+      await target.dispatchEvent("dragover", { dataTransfer });
+      await target.dispatchEvent("drop", { dataTransfer });
+      await source.dispatchEvent("dragend", { dataTransfer });
+    } finally {
+      await dataTransfer.dispose();
+    }
+  }
+
+  async function focusCanvas() {
+    const box = await page.locator("#stage").boundingBox();
+    assert(box, "Canvas stage has no visible bounding box");
+    await page.mouse.click(box.x + 12, box.y + box.height - 12);
+    await page.waitForFunction(() => !document.activeElement?.matches("input,textarea,select,[contenteditable=true]"));
+  }
+
   try {
     await page.goto(studioUrl);
     await page.waitForFunction(() => document.querySelector(".route-health")?.textContent.includes("routes live"));
@@ -386,7 +433,7 @@ function fileItem(index, extension = ".h5") {
     assert(!(await page.locator("#studioShell").evaluate(element => element.classList.contains("library-collapsed"))), "Show library did not restore the panel");
     await page.locator("#templateSelect").selectOption("blank");
     const sourceId = await addBlock("source.hdf5");
-    await addBlock("model.mlp");
+    const modelId = await addBlock("model.mlp");
     const scaleBefore = await page.evaluate(() => window.__AI_CAE_FRONTEND__.state.view.scale);
     await page.locator("#zoomIn").click();
     assert(await page.evaluate(() => window.__AI_CAE_FRONTEND__.state.view.scale) > scaleBefore, "Zoom in did not change the graph scale");
@@ -394,6 +441,172 @@ function fileItem(index, extension = ".h5") {
     await page.locator("#arrangeGraph").click();
     await page.locator("#fitGraph").click();
     assert(Number.isFinite(await page.evaluate(() => window.__AI_CAE_FRONTEND__.state.view.scale)), "Fit graph produced an invalid scale");
+
+    // Exercise the actual pointer/HTML5 interaction paths rather than their
+    // click alternatives: palette drop, typed port drop, and node movement.
+    const stage = page.locator("#stage");
+    const stageBox = await stage.boundingBox();
+    assert(stageBox, "Canvas stage has no visible drop target");
+    const nodeCountBeforePaletteDrop = await page.locator(".node").count();
+    await page.locator('.palette-item[data-block-type="source.parameters"]').dragTo(stage, {
+      targetPosition: { x: stageBox.width * .78, y: stageBox.height * .76 }
+    });
+    await page.waitForFunction(expected => window.__AI_CAE_FRONTEND__.state.nodes.length === expected, nodeCountBeforePaletteDrop + 1);
+    const parameterId = await page.evaluate(() =>
+      window.__AI_CAE_FRONTEND__.state.nodes.find(node => node.type === "source.parameters")?.id || ""
+    );
+    assert(parameterId, "Palette drag/drop did not create the Design Parameters block");
+    await page.locator("#fitGraph").click();
+
+    const edgesBeforePortDrag = await page.evaluate(() => window.__AI_CAE_FRONTEND__.state.edges.length);
+    await dragElementTo(
+      page.locator(`[data-node="${sourceId}"][data-port="data"][data-direction="output"]`),
+      page.locator(`[data-node="${modelId}"][data-port="data"][data-direction="input"]`)
+    );
+    await page.waitForFunction(({ sourceId, modelId, expected }) =>
+      window.__AI_CAE_FRONTEND__.state.edges.length === expected
+      && window.__AI_CAE_FRONTEND__.state.edges.some(edge => edge.fromNode === sourceId && edge.toNode === modelId),
+    { sourceId, modelId, expected: edgesBeforePortDrag + 1 });
+    const compatibleEdges = await page.evaluate(() => window.__AI_CAE_FRONTEND__.state.edges.length);
+    await dragElementTo(
+      page.locator(`[data-node="${parameterId}"][data-port="parameters"][data-direction="output"]`),
+      page.locator(`[data-node="${modelId}"][data-port="data"][data-direction="input"]`)
+    );
+    assert(await page.evaluate(() => window.__AI_CAE_FRONTEND__.state.edges.length) === compatibleEdges, "Incompatible parameter-to-dataset drag created an edge");
+    assert(await page.evaluate(({ sourceId, modelId }) =>
+      window.__AI_CAE_FRONTEND__.state.edges.some(edge => edge.fromNode === sourceId && edge.toNode === modelId),
+    { sourceId, modelId }), "Incompatible drop replaced the existing compatible edge");
+    await page.keyboard.press("Escape");
+
+    const dragOrigin = await nodePosition(sourceId);
+    const draggedOnce = await dragNodeBy(sourceId, 92, 58);
+    assert(draggedOnce.x > dragOrigin.x + 20 && draggedOnce.y > dragOrigin.y + 20, "Node drag handle did not move the source block");
+    await focusCanvas();
+    await page.keyboard.press("Control+z");
+    await page.waitForFunction(({ id, origin }) => {
+      const node = window.__AI_CAE_FRONTEND__.state.nodes.find(item => item.id === id);
+      return node && Math.abs(node.x - origin.x) < .01 && Math.abs(node.y - origin.y) < .01;
+    }, { id: sourceId, origin: dragOrigin });
+    const persistedPosition = await dragNodeBy(sourceId, 74, 46);
+    await page.waitForFunction(({ id, expected }) => {
+      const saved = JSON.parse(localStorage.getItem("ai-cae4all.studio.pipeline.v1") || "null");
+      const node = saved?.nodes?.find(item => item.id === id);
+      return node && Math.abs(node.x - expected.x) < .01 && Math.abs(node.y - expected.y) < .01;
+    }, { id: sourceId, expected: persistedPosition }, { timeout: 5000 });
+    await page.reload();
+    await page.waitForFunction(() => document.querySelector(".route-health")?.textContent.includes("routes live"));
+    const reloadedPosition = await nodePosition(sourceId);
+    assert(reloadedPosition && Math.abs(reloadedPosition.x - persistedPosition.x) < .01 && Math.abs(reloadedPosition.y - persistedPosition.y) < .01, "Dragged node position did not survive local reload");
+    assert(await page.evaluate(({ sourceId, modelId }) =>
+      window.__AI_CAE_FRONTEND__.state.edges.some(edge => edge.fromNode === sourceId && edge.toNode === modelId),
+    { sourceId, modelId }), "Compatible drag-created edge did not survive local reload");
+
+    // Keyboard shortcuts must execute from the canvas and stay inert while a
+    // user is typing in a field.
+    const guardedView = await page.evaluate(() => ({ ...window.__AI_CAE_FRONTEND__.state.view }));
+    await page.locator("#pipelineName").fill("Keyboard guard");
+    await page.keyboard.press("f");
+    const typingGuard = await page.evaluate(() => ({
+      name: document.querySelector("#pipelineName")?.value,
+      view: { ...window.__AI_CAE_FRONTEND__.state.view }
+    }));
+    assert(typingGuard.name === "Keyboard guardf", "Typing guard did not leave the focused pipeline-name field editable");
+    assert(JSON.stringify(typingGuard.view) === JSON.stringify(guardedView), "Canvas Fit shortcut fired while an input was focused");
+
+    await page.locator("#hideLibrary").click();
+    await focusCanvas();
+    await page.keyboard.press("/");
+    await page.waitForFunction(() =>
+      !document.querySelector("#studioShell")?.classList.contains("library-collapsed")
+      && document.activeElement?.id === "blockSearch"
+    );
+
+    await focusCanvas();
+    const shortcutScale = await page.evaluate(() => window.__AI_CAE_FRONTEND__.state.view.scale);
+    await page.keyboard.press("Equal");
+    await page.waitForFunction(previous => window.__AI_CAE_FRONTEND__.state.view.scale > previous, shortcutScale);
+    const shortcutScaleUp = await page.evaluate(() => window.__AI_CAE_FRONTEND__.state.view.scale);
+    await page.keyboard.press("Minus");
+    await page.waitForFunction(previous => window.__AI_CAE_FRONTEND__.state.view.scale < previous, shortcutScaleUp);
+    await page.locator("#zoomIn").click();
+    const beforeFitShortcut = await page.evaluate(() => ({ ...window.__AI_CAE_FRONTEND__.state.view }));
+    await focusCanvas();
+    await page.keyboard.press("f");
+    await page.waitForFunction(previous => JSON.stringify(window.__AI_CAE_FRONTEND__.state.view) !== JSON.stringify(previous), beforeFitShortcut);
+
+    const beforeLayoutShortcut = await page.evaluate(() => window.__AI_CAE_FRONTEND__.state.nodes.map(node => ({ id: node.id, x: node.x, y: node.y })));
+    await focusCanvas();
+    await page.keyboard.press("l");
+    await page.waitForFunction(previous => {
+      const positions = new Map(previous.map(item => [item.id, item]));
+      return window.__AI_CAE_FRONTEND__.state.nodes.some(node => {
+        const before = positions.get(node.id);
+        return before && (Math.abs(node.x - before.x) > .01 || Math.abs(node.y - before.y) > .01);
+      });
+    }, beforeLayoutShortcut);
+
+    const beforeDeleteShortcut = await page.locator(".node").count();
+    await page.locator(`[data-node-id="${parameterId}"] .node-head`).click();
+    await page.keyboard.press("Delete");
+    await page.waitForFunction(id => !window.__AI_CAE_FRONTEND__.state.nodes.some(node => node.id === id), parameterId);
+    assert(await page.locator(".node").count() === beforeDeleteShortcut - 1, "Delete shortcut did not remove the selected block");
+    await focusCanvas();
+    await page.keyboard.press("Control+z");
+    await page.waitForFunction(id => window.__AI_CAE_FRONTEND__.state.nodes.some(node => node.id === id), parameterId);
+
+    const shortcutPreflights = requests.preflights.length;
+    const shortcutPreflightResponse = page.waitForResponse(response =>
+      new URL(response.url()).pathname.endsWith("/api/preflight")
+      && response.request().method() === "POST"
+    );
+    await focusCanvas();
+    await page.keyboard.press("v");
+    await shortcutPreflightResponse;
+    await page.waitForFunction(() => window.__AI_CAE_FRONTEND__.state.api.activeJob?.id === "preflight");
+    assert(requests.preflights.length === shortcutPreflights + 1, "V shortcut did not submit validation");
+    await page.locator("#runtimeDismiss").click();
+
+    const shortcutPipelineCount = requests.pipelines.length;
+    await focusCanvas();
+    await page.keyboard.press("Control+Enter");
+    await page.waitForFunction(expected => window.__AI_CAE_FRONTEND__.state.api.activeJob?.id === expected, `control-pipeline-${shortcutPipelineCount + 1}`);
+    assert(requests.pipelines.length === shortcutPipelineCount + 1, "Ctrl+Enter did not submit the pipeline");
+    await page.locator("#runtimeCancel").click();
+    await page.waitForFunction(() => window.__AI_CAE_FRONTEND__.state.api.activeJob?.status === "cancelled");
+    await page.locator("#runtimeDismiss").click();
+
+    // Render a contained structured failure, then activate its real Fix now
+    // row and verify the full node-to-field focus contract.
+    await page.evaluate(async ({ nodeId }) => {
+      const { renderRuntimeJob } = await import("./src/run.js");
+      renderRuntimeJob({
+        id: "control-diagnostic",
+        label: "Control diagnostic",
+        status: "failed",
+        current_step: 1,
+        total_steps: 1,
+        diagnostics: [{
+          severity: "error",
+          code: "CONTROL-FIELD",
+          stepLabel: "Simple MLP",
+          nodeId,
+          field: "batch_size",
+          message: "Choose a valid batch size."
+        }]
+      });
+    }, { nodeId: modelId });
+    await page.locator('[data-jump-diagnostic="0"]').click();
+    await page.waitForFunction(expected =>
+      window.__AI_CAE_FRONTEND__.state.selectedNode === expected.nodeId
+      && window.__AI_CAE_FRONTEND__.state.configRejectedNode === expected.nodeId
+      && window.__AI_CAE_FRONTEND__.state.configRejectedField === expected.field
+      && document.querySelector("#configOverlay")?.classList.contains("open")
+      && document.activeElement?.matches(`.full-config-control[data-key="${expected.field}"]`),
+    { nodeId: modelId, field: "batch_size" });
+    assert(await page.locator("#runtimeDrawer").evaluate(element => element.classList.contains("minimized")), "Fix now did not minimize the runtime drawer");
+    await page.locator('#configOverlay [data-close="configOverlay"]').click();
+    await page.locator("#runtimeDismiss").click();
+    await page.locator("#runBanner").evaluate(element => element.classList.remove("show"));
 
     await page.locator(`[data-node-id="${sourceId}"] .node-head`).click();
     const nodeCount = await page.locator(".node").count();
@@ -471,8 +684,9 @@ function fileItem(index, extension = ".h5") {
     await page.waitForFunction(() => window.__AI_CAE_FRONTEND__.state.api.activeJob?.id === "preflight");
     assert(requests.preflights.length > 0, "Validate did not submit contained authoritative preflight checks");
     await page.locator("#runtimeDismiss").click();
+    const topPipelineCount = requests.pipelines.length;
     await page.locator("#runTop").click();
-    await page.waitForFunction(() => window.__AI_CAE_FRONTEND__.state.api.activeJob?.id === "control-pipeline-1");
+    await page.waitForFunction(expected => window.__AI_CAE_FRONTEND__.state.api.activeJob?.id === expected, `control-pipeline-${topPipelineCount + 1}`);
     await page.locator("#stopRun").click();
     await page.waitForFunction(() => window.__AI_CAE_FRONTEND__.state.api.activeJob?.status === "cancelled");
     await page.locator("#runtimeCopyLog").click();
@@ -482,11 +696,11 @@ function fileItem(index, extension = ".h5") {
     await page.locator("#brandHome").click();
     await page.locator("#runtimeDismiss").click();
     await page.locator("#runTop").click();
-    await page.waitForFunction(() => window.__AI_CAE_FRONTEND__.state.api.activeJob?.id === "control-pipeline-2");
+    await page.waitForFunction(expected => window.__AI_CAE_FRONTEND__.state.api.activeJob?.id === expected, `control-pipeline-${topPipelineCount + 2}`);
     await page.locator("#runtimeCancel").click();
     await page.waitForFunction(() => window.__AI_CAE_FRONTEND__.state.api.activeJob?.status === "cancelled");
     await page.locator("#runtimeDismiss").click();
-    assert(requests.pipelines.length === 2, "Top-level Run did not submit two contained pipeline jobs");
+    assert(requests.pipelines.length === topPipelineCount + 2, "Top-level Run did not submit two contained pipeline jobs");
 
     // Configuration actions, including visible file chooser/download, real
     // explain/save endpoints, and a mocked LLM transport that cannot leak data.
@@ -702,6 +916,16 @@ function fileItem(index, extension = ".h5") {
         await page.waitForFunction(() => window.__AI_CAE_FRONTEND__.state.realArtifact?.currentSample?.feature === 0);
       }
       if (!(await page.locator("#viewerPlay").isDisabled())) {
+        const timeline = page.locator(".viewer-timeline input");
+        const timelineMax = Number(await timeline.getAttribute("max"));
+        const timelineCurrent = Number(await timeline.inputValue());
+        assert(timelineMax > 0, "Temporal viewer fixture did not expose a usable timeline range");
+        const timelineTarget = timelineCurrent === 0 ? timelineMax : 0;
+        await timeline.press(timelineTarget === 0 ? "Home" : "End");
+        await page.waitForFunction(expected =>
+          window.__AI_CAE_FRONTEND__.state.realArtifact?.currentSample?.timestep === expected,
+        timelineTarget, { timeout: 5000 });
+        assert(Number(await page.locator(".viewer-timeline input").inputValue()) === timelineTarget, "Direct timeline range input did not render the selected timestep");
         const timelineBefore = await page.locator(".viewer-timeline input").inputValue();
         await page.locator("#viewerPlay").click();
         await page.waitForFunction(previous => document.querySelector(".viewer-timeline input")?.value !== previous, timelineBefore, { timeout: 5000 });

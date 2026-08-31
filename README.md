@@ -1,8 +1,8 @@
 # AI-CAE4ALL
 
-**The all-in-one SciML platform for AI-driven CAE.** Eight self-contained method
-repositories — seven ML methods plus a CAD-to-dataset front end — exposing
-**11 routable model IDs across 28 mode routes**, behind one config-driven
+**The all-in-one SciML platform for AI-driven CAE.** Nine self-contained method
+repositories — eight ML methods plus a CAD-to-dataset front end — exposing
+**12 routable model IDs across 31 mode routes**, behind one config-driven
 launcher that validates everything before a single GPU-second is spent, and a
 full browser Studio that turns the whole thing into a drag-and-drop pipeline.
 
@@ -25,7 +25,7 @@ frontend\START_STUDIO.bat
 ## Table of contents
 
 - [What this is](#what-this-is)
-- [The model zoo — 11 routes, one contract](#the-model-zoo--11-routes-one-contract)
+- [The model zoo — 12 routes, one contract](#the-model-zoo--12-routes-one-contract)
 - [The Studio](#the-studio-a-real-gui-over-real-runs)
 - [The launcher: fail before you burn GPU hours](#the-launcher-fail-before-you-burn-gpu-hours)
 - [One dataset contract, no conversion step](#one-dataset-contract-no-conversion-step)
@@ -78,7 +78,7 @@ No code changes, no format conversion, no per-method CLI to memorize.
 | `fno` | **FNO** | `train`, `inference` | Native spectral (Fourier) convolutions — no `neuraloperator` dependency |
 | `gino` | **GINO** | `train`, `inference` | GNO in ↔ latent FNO ↔ GNO out; mesh→grid→query via radius neighborhoods |
 | `transolver` | **Transolver** | `train`, `inference` | Transformer surrogate over learned Physics-Attention "slices": `O(N²)` → `O(N·slice_num)` |
-| `sdfflow` | **SDFFlow** | `train`, `train_vae`, `train_fm`, `sample`, `reconstruct`, `interpolate` | *Generates new 3D shapes*: SDF-VAE + rectified-flow matching, conditioned on geometric descriptors, meshed with marching cubes |
+| `sdfflow` | **SDFFlow** | `train`, `train_vae`, `train_fm`, `sample`, `reconstruct`, `interpolate`, `optimize` | *Generates new 3D shapes*: SDF-VAE + rectified-flow matching, conditioned on geometric descriptors, meshed with marching cubes |
 | `simulgenvae` | **SimulGenVAE** | `train`, `train_vae`, `train_lc`, `reconstruct` | Hierarchical VAE + latent conditioner: conditions → full simulation field, no FOM solve |
 | `mlp` | **MLP Surrogate** | `train`, `inference` | Tabular parametric regressor: N scalar inputs → M scalar outputs. CPU-only, seconds to train |
 | `geometry_ingest` | **Geometry Ingest** | `ingest`, `inspect` | Non-ML data prep: STEP/IGES/STL/PLY/OBJ → the shared mesh HDF5 contract |
@@ -235,7 +235,9 @@ Windows and POSIX.
 
 > **Known gap:** `--audit-configs` scans the wrong root today and reports
 > `files=0` — see [Known gaps](#known-gaps--the-honest-list). Use the Studio's
-> System workspace, which runs the identical checks over all 127 files.
+> System workspace, which runs the identical checks over all 330 tracked
+> `configs/**/config*.txt` files and reports the authoritative current
+> per-file results.
 
 ---
 
@@ -492,7 +494,7 @@ python frontend\start_studio.py 8080
 Do **not** use `python -m http.server` — it will display the HTML but provide no
 model execution, preflight, repository browsing, or artifact APIs. The correct
 console prints `AI-CAE4ALL Studio is ready` and the badge in the browser reads
-`11 routes healthy`.
+`12 routes healthy`.
 
 ### SDFFlow (geometry generation)
 
@@ -556,7 +558,7 @@ cae_suite/                    # the launcher (parse → route → preflight → 
   └── specs/                  # one MethodSpec per method — validation truth
 frontend/                     # the Studio: browser UI + local Python API bridge
 inference/                    # stand-alone CPU inference bundle + PyInstaller spec
-configs/                      # 127 config templates per method + benchmarks
+configs/                      # 330 tracked config*.txt templates + benchmarks
 dataset/                      # shared HDF5 data, format spec, benchmarks, geometry_ingest
 docs/                         # per-method deep dives, Studio plans, images
 output/                       # run artifacts (checkpoints, rollouts, samples)
@@ -565,6 +567,7 @@ MeshGraphNets/                # model = meshgraphnets
 MeshGraphNets - variational/  # model = meshgraphnets-v   (note: the name has spaces)
 Neural_Operator/              # model = point_deeponet | deeponet | fno | gino
 Transolver/                   # model = transolver
+cHI-MGNflow/                  # model = chi-mgnflow
 Geometry_generation/          # model = sdfflow
 SimulGenVAE/                  # model = simulgenvae
 MLP/                          # model = mlp
@@ -638,7 +641,8 @@ rediscovered the hard way. The short version:
 - **`--audit-configs` reports `files=0`.** It walks `suite_root /
   spec.repository`, but every checked-in config lives in the top-level
   `configs/` tree. The Studio's System workspace runs the identical checks
-  against the correct root and does cover all 127 files.
+  against the correct root, covers all 330 tracked `config*.txt` files, and
+  reports the authoritative current per-file results.
 - **`num_workers` is runtime-required but not preflight-required** for
   mesh/operator training — a config omitting it can pass validation and fail
   natively. Same story for `infer_timesteps` on static `T=1` data.
@@ -687,12 +691,12 @@ a method's internals, that method's own docs and code are authoritative.
 
 | | |
 | --- | --- |
-| Tracked Python files | **411** (~79,400 lines) |
-| Registered model IDs | **11** across **28** mode routes |
-| Config templates | **127**, all lintable in one command |
-| Method repositories | **8**, each independently runnable |
-| Studio JS + backend | ~11,200 lines across 18 ES modules and 17 Python modules |
-| Live Studio API routes | 30+ endpoints over 12 repository-backed workspaces |
+| Tracked Python source | Count from the live tree with `git ls-files '*.py'`; no stale file/line snapshot |
+| Registered model IDs | **12** across **31** mode routes; **12 healthy** in the current Studio health check |
+| Config templates | **330** tracked `configs/**/config*.txt` files; Studio audits all 330 and reports authoritative per-file results |
+| Method repositories | **9**, each independently runnable |
+| Studio JS + backend | Browser ES modules plus Python API modules; module and line counts follow the live tree |
+| Live Studio API | Repository-backed endpoints over **12** workspaces |
 
 ---
 
