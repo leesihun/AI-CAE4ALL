@@ -106,6 +106,7 @@ then the other 15, then inference, then scoring.
 | --- | --- | --- |
 | `ARMS` | all 16 | subset to run |
 | `PREFLIGHT` | 1 | `--check` every arm before launching any |
+| `TRAIN` | 1 | `0` skips training entirely and goes straight to infer + score on the checkpoints already on disk — how you finish a two-wave run |
 | `INFER` | 1 | run the per-arm inference stage |
 | `INFER_TAGS` | all 3 | which eval sets to infer |
 | `SCORE` | 1 | build the report when training ends |
@@ -140,6 +141,46 @@ ground truth. **This is the sweep's dominant cost**: total forwards are
 first if the inference stage overruns. `vae_batch_vram_fraction` is 0.35 rather
 than the default 0.70 because two arms share each card during inference too, and
 both auto-size against the same *free* VRAM reading.
+
+## If batch 16 does not fit two-per-card
+
+It did not, the first time. The three options, and why the first one is the
+default answer:
+
+| | batch | MMD samples | wall clock | design |
+| --- | --- | --- | --- | --- |
+| **two waves of 8** | **16 kept** | **16 kept** | 2x | intact |
+| all arms at batch 8 | 8 | 8 | unchanged | intact, axes all survive |
+| shrink the `c1` level | 16 | 16 | unchanged | capacity axis weakened |
+
+Batch size matters here for a SPECIFIC reason, not the usual one: **MMD is a
+two-sample statistic and its effective sample count is the per-rank batch**,
+because `mmd_loss` runs inside the model forward. Halving the batch halves the
+sample count of the very term the `r` axis exists to measure. For the
+reconstruction gradient alone, 8 vs 16 would barely matter.
+
+**`grad_accum_steps 2` does NOT fix this.** It restores the optimizer batch but
+MMD still only ever sees one micro-batch — it fixes gradient noise and leaves
+the thing we care about untouched.
+
+Splitting by name prefix does not work: the first eight arms are all `cc`, so
+the wave would be fully confounded with `z_conditioning`. These two halves are
+**4/4 balanced on all five factors** and each fills GPUs 0–7 one arm per card:
+
+```bash
+ARMS="cc_g0_z16_c0_r001 cc_g0_z16_c1_r100 cc_g1_z64_c0_r001 cc_g1_z64_c1_r100 ad_g0_z64_c0_r001 ad_g0_z64_c1_r100 ad_g1_z16_c0_r001 ad_g1_z16_c1_r100" \
+  INFER=0 SCORE=0 bash configs/MeshGraphNets-V/SAOI_sweep3/run_sweep.sh
+
+ARMS="cc_g0_z64_c0_r100 cc_g0_z64_c1_r001 cc_g1_z16_c0_r100 cc_g1_z16_c1_r001 ad_g0_z16_c0_r100 ad_g0_z16_c1_r001 ad_g1_z64_c0_r100 ad_g1_z64_c1_r001" \
+  INFER=0 SCORE=0 bash configs/MeshGraphNets-V/SAOI_sweep3/run_sweep.sh
+
+# both waves trained -> one inference + scoring pass over all 16
+TRAIN=0 INFER=1 SCORE=1 bash configs/MeshGraphNets-V/SAOI_sweep3/run_sweep.sh
+```
+
+`INFER=0 SCORE=0` on the waves because the inference stage also packs two arms
+per card, so it should run once over the full grid at the end, not twice over
+halves.
 
 ## Watch these in the first hour
 

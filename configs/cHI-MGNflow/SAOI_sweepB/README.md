@@ -75,8 +75,14 @@ nohup bash configs/cHI-MGNflow/SAOI_sweepB/run_sweep.sh > sweep.out 2>&1 &
 ```
 
 preflight (64 configs) → warm both caches → train 16 → infer 48 → score.
-Env knobs: `ARMS`, `PREFLIGHT`, `INFER`, `INFER_TAGS`, `SCORE`,
+Env knobs: `ARMS`, `PREFLIGHT`, `TRAIN`, `INFER`, `INFER_TAGS`, `SCORE`,
 `WARM_TIMEOUT`, `CACHE_COUNT_REQUIRED`.
+
+`TRAIN=0` skips training and runs only inference + scoring on the checkpoints
+already on disk. If batch 32 does not fit two-per-card, train in two halves that
+are 4/4 balanced on all five factors (do **not** split by name prefix — the
+first eight arms are all `b16`), then finish with one
+`TRAIN=0 INFER=1 SCORE=1` pass over all 16.
 
 ## What comes out
 

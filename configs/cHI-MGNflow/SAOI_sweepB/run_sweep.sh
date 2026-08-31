@@ -63,6 +63,10 @@
 #   LOG_ROOT      transcript directory (default: outputs/saoi_sweepB/run_logs)
 #   ARMS          space-separated arm names (default: all 16)
 #   PREFLIGHT     1 = --check every arm before launching any (default); 0 = skip
+#   TRAIN         1 = train (default). 0 = SKIP training and go straight to
+#                 inference + scoring on checkpoints that already exist --
+#                 which is how you finish a sweep that had to be trained in
+#                 two waves of 8 to keep the per-arm batch size.
 #   WARM_TIMEOUT  seconds to wait for the shared cache (default: 21600 = 6h)
 #   INFER         1 = run each arm's inference configs after training (default)
 #   INFER_TAGS    eval sets to infer (default: s26fe_main s26fe_sec sm_l345u)
@@ -80,6 +84,7 @@ set -uo pipefail
 
 PYTHON="${PYTHON:-python}"
 PREFLIGHT="${PREFLIGHT:-1}"
+TRAIN="${TRAIN:-1}"
 WARM_TIMEOUT="${WARM_TIMEOUT:-21600}"
 INFER="${INFER:-1}"
 INFER_TAGS="${INFER_TAGS:-s26fe_main s26fe_sec sm_l345u}"
@@ -176,6 +181,14 @@ fi
 
 started=$(date +%s)
 pids=(); names=()
+rc=0
+
+if [ "$TRAIN" != "1" ]; then
+    echo "TRAIN=0 -- skipping training; using the checkpoints already on disk."
+    echo "Arms with no checkpoint will fail their inference preflight and be"
+    echo "reported, without stopping the rest."
+    echo ""
+else
 
 # ---- Warm the shared multiscale cache with a single arm --------------------
 # Word-split into an array: `cut -d' ' -f2-` echoes the WHOLE line back when it
@@ -243,7 +256,6 @@ done
 echo ""
 echo "$(echo "${names[*]}" | wc -w) arms running. Waiting..."
 
-rc=0
 for k in "${!pids[@]}"; do
     if ! wait "${pids[$k]}"; then
         echo "${names[$k]} exited non-zero" >&2
@@ -254,6 +266,8 @@ done
 ended=$(date +%s)
 echo ""
 echo "Training finished in $(( (ended - started) / 3600 ))h $(( ((ended - started) % 3600) / 60 ))m (rc=$rc)."
+
+fi   # TRAIN
 echo ""
 echo "Transcripts : $LOG_ROOT/<arm>.log"
 echo "Checkpoints : output/chi-mgnflow/saoi_sweepB/<arm>.pth"
