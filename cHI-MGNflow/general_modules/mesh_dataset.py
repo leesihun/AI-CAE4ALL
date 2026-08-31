@@ -1,4 +1,5 @@
 import h5py
+import random
 import numpy as np
 import torch
 from torch.utils.data import Dataset
@@ -369,7 +370,18 @@ class MeshGraphDataset(Dataset):
         self.coarse_edge_stds = [s.copy() for s in source_dataset.coarse_edge_stds]
 
     def write_preprocessing_to_hdf5(self, split_seed: int) -> None:
-        """Persist train-derived preprocessing statistics to the HDF5 dataset."""
+        """Persist train-derived preprocessing statistics to the HDF5 dataset.
+
+        Retries the open on a transient failure: a sweep launches many arms
+        against the SAME shared dataset file within seconds of each other, and
+        this is the only writer -- every other process only ever opens the file
+        'r'. HDF5_USE_FILE_LOCKING=FALSE is set repo-wide (required so opens do
+        not fail on NFS-mounted datasets), which removes HDF5's own guard
+        against a reader colliding with this 'r+' open, and that collision
+        raises exactly "Unable to synchronously open file". The write itself
+        (six small arrays) takes milliseconds, so a short backoff clears the
+        window; it does not paper over a real problem with the file.
+        """
         if any(value is None for value in (
             self.node_mean, self.node_std,
             self.edge_mean, self.edge_std,
@@ -377,7 +389,23 @@ class MeshGraphDataset(Dataset):
         )):
             raise RuntimeError("Cannot write preprocessing stats before prepare_preprocessing()")
 
-        with h5py.File(self.h5_file, 'r+') as f:
+        import time
+        last_exc = None
+        f = None
+        for attempt in range(8):
+            try:
+                f = h5py.File(self.h5_file, 'r+')
+                break
+            except OSError as exc:
+                last_exc = exc
+                time.sleep(0.5 * (attempt + 1) + random.random())
+        else:
+            raise OSError(
+                f"Could not open {self.h5_file} for writing after 8 retries "
+                f"(likely a concurrent reader from another sweep arm): {last_exc}"
+            ) from last_exc
+
+        with f:
             metadata = f.require_group('metadata')
             norm_group = metadata.require_group('normalization_params')
 

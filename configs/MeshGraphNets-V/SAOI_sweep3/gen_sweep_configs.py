@@ -1,30 +1,48 @@
-"""Generate the SAOI wave-3 sweep: a 2^(5-1) resolution-V half fraction, 16 arms.
+"""Generate the SAOI wave-3 sweep: a 2^(4-1) resolution-IV half fraction, 8 arms.
 
     python configs/MeshGraphNets-V/SAOI_sweep3/gen_sweep_configs.py
 
 Every arm is ../SAOI_all_input/config_train_bot.txt with the swept keys
-overridden and the run-scoped keys (gpu_ids, epochs, paths) retargeted for a
-16-way parallel sweep; the per-arm inference configs are derived the same way
-from that folder's *_bot infer configs. Nothing here is hand-edited —
-regenerate instead, and change the production config when a NON-swept key
-needs to move.
+overridden and the run-scoped keys (gpu_ids, epochs, paths) retargeted for an
+8-way parallel sweep, ONE ARM PER GPU; the per-arm inference configs are
+derived the same way from that folder's *_bot infer configs. Nothing here is
+hand-edited -- regenerate instead, and change the production config when a
+NON-swept key needs to move.
 
 THE DESIGN
-  Five factors in sixteen runs, defining relation  I = ABCDE  (resolution V):
-  E is set to A xor B xor C xor D rather than run freely. All five main effects
-  and all ten 2-factor interactions are estimable clean; only 3-factor and
-  higher interactions alias with them. With one run per cell there is no
-  replication either way, so three-factor interactions were never trustworthy --
-  the half fraction gives up nothing real and buys a whole extra factor.
+  Four factors in eight runs, defining relation  I = ABCD  (resolution IV):
+  D is set to A xor B xor C rather than run freely. All four main effects are
+  estimable clean; the six 2-factor interactions come in three CONFOUNDED
+  PAIRS (AB=CD, AC=BD, AD=BC) -- a large one cannot be attributed to a single
+  pair without a follow-up run. With one run per cell there was never
+  replication anyway, so 3-factor terms were never trustworthy either way --
+  this is the shape that keeps main effects clean at the lowest run count.
+
+  This replaced an earlier 2^(5-1) x 16-arm design (two arms per GPU, 2000
+  epochs). A measured epoch cost of ~576 s/epoch meant that budget was
+  multiple GPU-weeks (24h of wall time only reached epoch 150), and
+  two-per-GPU sharing was the source of the OOM risk documented below. Eight
+  arms at one-per-GPU and 500 epochs is a
+  576 s/epoch x 500 epochs ~= 3.3-day, BUDGET-LIMITED comparison instead of a
+  converged one -- see the twin cHI-MGNflow sweep (SAOI_sweepB), which made
+  the identical trade for the identical reason.
 
   A  z_conditioning         cc  concat (legacy fuser) | ad  AdaLN-Zero
   B  prior_grad_to_encoder  g0  detached | g1  end-to-end (CVAE rate term)
-  C  vae_latent_dim         z16 | z64
-  D  capacity               c0  128 / 4,6,8,6,4 | c1  192 / 6,8,12,8,6 (+prior/VAE depth)
-  E  regularizer scale      r001 lambda_mmd 1 + prior_nll_weight 1
+  C  capacity               c0  128 / 4,6,8,6,4 | c1  128 / 6,8,12,8,6 (+prior/VAE depth)
+  D  regularizer scale (generated: D = A xor B xor C)
+                            r001 lambda_mmd 1 + prior_nll_weight 1
                             r100 lambda_mmd 100 + prior_nll_weight 100
 
-WHY THESE FIVE
+  `vae_latent_dim` was DROPPED from the earlier 5-factor grid and is pinned at
+  16 (see FIXED below) -- the lowest-priority of the five. Wave-1's small-z
+  win was measured with MMD statistically dead (batch 4, per-rank), so
+  re-measuring it matters, but less than the three architectural axes kept
+  here, and it costs almost nothing in VRAM or wall time -- unlike `capacity`,
+  it was never going to be what made this budget unaffordable, so it is the
+  natural one to cut rather than degrading the others.
+
+WHY THE REMAINING THREE
   z_conditioning  AdaLN-Zero is provably identity-at-init and shrinks the
                   residual stream ~8.6x at 12 blocks, but that is an INIT
                   property; whether it converges better is open, and it is the
@@ -33,16 +51,14 @@ WHY THESE FIVE
                   detached objective was missing entirely. It also adds pressure
                   toward z = h(g); beta_aux (1.0, fixed) is the I(z;y) floor that
                   guards it. Untested -- must be an axis.
-  vae_latent_dim  Wave-1's small-z win was measured with MMD statistically dead
-                  (batch 4, per-rank). With the estimator alive and AdaLN giving
-                  z multiplicative reach, the answer can move.
   capacity        The SAOI config was scaled DOWN from the b8 winner for mesh
                   size, so under-capacity is genuinely open. More importantly
                   this factor carries the sharpest predicted INTERACTION in the
                   grid: under `cc`, every extra block compounds the fuser's ~1.33x
                   gain, so depth should HURT; under `ad` the residual highway is
-                  intact, so depth should HELP. adaln x capacity is exactly the
-                  kind of 2-way term resolution V estimates cleanly.
+                  intact, so depth should HELP. z_conditioning x capacity is
+                  estimable here (confounded only with prior_grad_to_encoder x
+                  regularizer-scale, not with itself).
   regularizer scale  alpha_recon is 1000 while both regularizers sit at ~1, so
                   each is ~0.1% of the objective -- plausibly off. That matters
                   most for prior_grad_to_encoder: the rate term it opens competes
@@ -53,16 +69,11 @@ WHY THESE FIVE
 
   None of the swept keys enter the coarsening cache signature (that is
   multiscale_levels / coarsening_type / voronoi_clusters / hierarchy_variants /
-  positional_features + the source file), so all 16 arms still share ONE cache.
+  positional_features + the source file), so all 8 arms still share ONE cache.
 
 GPU PACKING
-  Arms are paired by complementing A B C D; E is then unchanged (four flips
-  leave the parity alone). So each GPU hosts both levels of z_conditioning,
-  prior_grad_to_encoder, vae_latent_dim AND capacity -- which is what keeps VRAM
-  balanced, since capacity is the only factor that moves memory much. The
-  regularizer scale is constant within a GPU pair, which costs nothing here: it
-  changes no memory or runtime, and eight identical cards in one node carry no
-  batch/day/operator effect for it to confound with.
+  One arm per GPU (gpu = arm index) -- no card sharing, so the OOM exposure
+  the old two-per-GPU design carried disappears along with the wall time.
 """
 import itertools
 # newline='\n' on EVERY write: the default (None) translates to CRLF on
@@ -91,17 +102,13 @@ FACTORS = [
         ('g0', {'prior_grad_to_encoder': '0.0'}),
         ('g1', {'prior_grad_to_encoder': '1.0'}),
     ]),
-    ('vae_latent_dim', [
-        ('z16', {'vae_latent_dim': '16'}),
-        ('z64', {'vae_latent_dim': '64'}),
-    ]),
     ('capacity', [
         ('c0', {'Latent_dim': '128', 'mp_per_level': '4, 6, 8, 6, 4',
                 'vae_mp_layers': '5', 'prior_mp_layers': '5', 'prior_hidden_dim': '256'}),
         ('c1', {'Latent_dim': '128', 'mp_per_level': '6, 8, 12, 8, 6',
                 'vae_mp_layers': '7', 'prior_mp_layers': '7', 'prior_hidden_dim': '384'}),
     ]),
-    # GENERATED, not free: E = A xor B xor C xor D  (defining relation I = ABCDE).
+    # GENERATED, not free: D = A xor B xor C  (defining relation I = ABCD).
     ('regularizer scale', [
         ('r001', {'lambda_mmd': '1',   'prior_nll_weight': '1.0'}),
         ('r100', {'lambda_mmd': '100', 'prior_nll_weight': '100'}),
@@ -109,40 +116,35 @@ FACTORS = [
 ]
 
 # ── held fixed for every arm, overriding the production config ───────────────
-# Batch_size 16 matches production per-rank, but TWO arms share each GPU, so the
-# pair must fit in one card. The c1 arms are the memory risk: ~1.5x the width and
-# 40 blocks instead of 28. Check the first c1 arm's `VRAM peak=` line; if the
-# pair does not fit, either drop Batch_size to 8 here and regenerate, or shrink
-# the c1 level -- both leave the design intact.
-# MMD still sees 16 samples per arm, not production's 64: mmd_gather_ranks stays
-# True but is inert at world_size 1. A 4x smaller sample makes the V-statistic
-# more biased AND its gradient noisier, which can push the optimum in either
-# direction -- re-check the winning regularizer scale at the production batch.
+# Batch_size 16 matches production per-rank. ONE arm per GPU now, so there is
+# no sharing and the c1 (40-block) arms no longer risk OOM the way they did
+# when paired with another arm on the same card.
 FIXED = {
-    'Batch_size':           ('16',   'production per-rank value; two arms share each GPU -- watch VRAM peak'),
-    'num_workers':          ('2',    '16 concurrent jobs -- 4 workers each would be 64 processes'),
-    'Training_epochs':      ('2000', 'sweep budget'),
-    'val_interval':         ('100',  'CRPS is the selection metric; 20 evals over the run'),
-    'test_interval':        ('500',  'periodic plots; 4 over the run'),
-    'hierarchy_cache_keep': ('True', 'REQUIRED: 16 arms share one cache; a finishing arm must not delete it'),
+    'Batch_size':           ('16',   'production per-rank value; one arm per GPU, no sharing'),
+    'num_workers':          ('4',    'matches production; one arm per GPU, no need to economize'),
+    'Training_epochs':      ('500',  'measured budget: 576 s/epoch x 500 = ~3.3 days per arm at '
+                                     'one arm per GPU. NOT a converged comparison -- see the README'),
+    'vae_latent_dim':       ('16',   'FIXED, not swept -- see the module docstring for why'),
+    'val_interval':         ('100',  'CRPS is the selection metric; 5 evals over the run'),
+    'test_interval':        ('500',  'periodic plots; fires once, at the last epoch'),
+    'hierarchy_cache_keep': ('True', 'REQUIRED: all 8 arms share one cache; a finishing arm must not delete it'),
     'best_by':              ('crps', 'select on the GENERATIVE metric, not the posterior recon loss'),
 }
 
 HEADER = """%   ============================================================
-%   SAOI wave 3 -- 2^(5-1) resolution-V half fraction, 16 arms, 2 per GPU.
-%   Defining relation I = ABCDE: the regularizer scale is A xor B xor C xor D,
-%   not free. All 5 main effects and all 10 two-factor interactions are clean.
+%   SAOI wave 3 -- 2^(4-1) resolution-IV half fraction, 8 arms, ONE PER GPU.
+%   Defining relation I = ABCD: the regularizer scale is A xor B xor C, not
+%   free. All 4 main effects are clean; the 6 two-factor interactions come in
+%   3 CONFOUNDED PAIRS (AB=CD, AC=BD, AD=BC).
 %   GENERATED by gen_sweep_configs.py; do not hand-edit, regenerate.
 %
 %   ARM: {arm}
 {axis_lines}
-%     gpu {gpu} -- shared with {mate}
-%     (that arm flips all four free factors, so this GPU carries both
-%      capacity levels and VRAM is balanced across the node)
+%     gpu {gpu} -- one arm per card ({mate})
 %
 %   Everything else is config_train_bot.txt, except the sweep-scoped keys
-%   (batch, workers, epochs, intervals, cache-keep, best_by) listed inline
-%   below with the reason on each line.
+%   (batch, workers, epochs, intervals, cache-keep, best_by, vae_latent_dim)
+%   listed inline below with the reason on each line.
 %   ============================================================
 """
 
@@ -151,8 +153,6 @@ TAG_NOTE = {
     'ad':   'AdaLN-Zero modulation, identity at init',
     'g0':   'detached: no CVAE rate term (legacy)',
     'g1':   'end-to-end: rate term restored',
-    'z16':  'posterior/global latent width',
-    'z64':  'posterior/global latent width',
     'c0':   'current production size (28 processor blocks)',
     'c1':   'DEEPER only, same width (40 blocks vs 28) -- width was dropped back to 128 for VRAM, and depth is the sharper test anyway: the concat fuser gain compounds PER BLOCK',
     'r001': 'both regularizers ~0.1% of the objective (alpha_recon is 1000)',
@@ -161,11 +161,11 @@ TAG_NOTE = {
 
 
 def arms():
-    """The 16 runs of the half fraction: (index, name, {key: value}, [tags])."""
+    """The 8 runs of the half fraction: (index, name, {key: value}, [tags])."""
     out = []
-    for i in range(16):
-        free = [(i >> (3 - k)) & 1 for k in range(4)]     # A B C D
-        bits = free + [free[0] ^ free[1] ^ free[2] ^ free[3]]   # E = A^B^C^D
+    for i in range(8):
+        free = [(i >> (2 - k)) & 1 for k in range(3)]      # A B C
+        bits = free + [free[0] ^ free[1] ^ free[2]]         # D = A^B^C
         tags, values = [], {}
         for (_, levels), b in zip(FACTORS, bits):
             tag, kv = levels[b]
@@ -176,25 +176,22 @@ def arms():
 
 
 def check_design(table):
-    """Assert the properties that make this a usable resolution-V design."""
+    """Assert the properties that make this a usable resolution-IV design.
+
+    Main effects 4v4, and every PAIR of factors sees all four combinations
+    twice -- so each 2-factor effect is estimable, just confounded with the
+    complementary pair (AB=CD, AC=BD, AD=BC). Every arm is on its own GPU, so
+    there is no pairing constraint to check.
+    """
     tags = [t for _, _, _, t in table]
-    n = len(FACTORS)
-    # every main effect is balanced 8 v 8
     for k, (label, lv) in enumerate(FACTORS):
         counts = [sum(1 for t in tags if t[k] == lv[b][0]) for b in (0, 1)]
-        assert counts == [8, 8], (label, counts)
-    # every PAIR of factors sees all four combinations 4 times -> 2-way effects
-    # are orthogonal, which is the whole point of resolution V
-    for a, b in itertools.combinations(range(n), 2):
+        assert counts == [4, 4], (label, counts)
+    for a, b in itertools.combinations(range(len(FACTORS)), 2):
         cells = {}
         for t in tags:
             cells[(t[a], t[b])] = cells.get((t[a], t[b]), 0) + 1
-        assert sorted(cells.values()) == [4, 4, 4, 4], (a, b, cells)
-    # each GPU pair carries both levels of every FREE factor (VRAM balance)
-    for i in range(8):
-        ti, tj = tags[i], tags[15 - i]
-        for k in range(4):
-            assert ti[k] != tj[k], (i, k)
+        assert sorted(cells.values()) == [2, 2, 2, 2], (a, b, cells)
 
 
 # ── per-arm inference configs ───────────────────────────────────────────────
@@ -208,25 +205,22 @@ INFER_SOURCES = {
 # Draws per scene for the spread histogram (production uses 5000).
 # THIS IS THE SWEEP'S DOMINANT COST: total forwards = arms x eval sets x scenes
 # x INFER_SAMPLES. No trajectory files are written (save_rollouts False), so it
-# costs compute and nothing else -- but 16 x 3 x scenes x 2000 is a lot of it.
-# Lower it first if the inference stage overruns; the histogram only needs
-# enough draws to be smooth, and its sample count is scenes x this.
+# costs compute and nothing else. 8 arms (not 16) halves this stage's cost
+# relative to the earlier design at the same INFER_SAMPLES.
 INFER_SAMPLES = '2000'
 
 INFER_OVERRIDES = {
     'num_vae_samples': (INFER_SAMPLES, 'sweep draws per scene (production uses 5000)'),
     'save_rollouts':   ('False', 'write NO trajectory HDF5s -- scene x draws would be '
-                                 'tens of thousands of files across the grid; the '
-                                 'histogram and spread_values.npz still get written'),
+                                 'thousands of files across the grid; the histogram '
+                                 'and spread_values.npz still get written'),
     'make_histogram':  ('True',  'GT vs generated z_disp spread (max - min) per realization'),
     'show_histogram':  ('False', 'headless node: save the PNG, do not try to open a viewer'),
     'histogram_bins':  ('60',    'bins in the overlaid GT/generated histogram'),
-    # TWO ARMS SHARE EACH GPU during the inference stage too, and the automatic
-    # VAE batch sizer targets a fraction of *free* VRAM measured at startup. Two
-    # jobs reading the same free figure would each claim 0.70 and together ask
-    # for 140%. The OOM ladder would recover, but at the cost of a wasted probe
-    # per arm -- half the default is the deterministic fix.
-    'vae_batch_vram_fraction': ('0.35', 'two arms share the GPU; 2 x 0.35 = the usual 0.70'),
+    # ONE arm per GPU during inference too now, so the automatic VAE batch
+    # sizer can use the full default fraction of free VRAM -- no more halving
+    # for a card-sharing partner that no longer exists.
+    'vae_batch_vram_fraction': ('0.70', 'one arm per GPU; this is the native default'),
 }
 
 
@@ -339,7 +333,7 @@ def render(base_lines, values, arm, gpu, mate):
             skip_pct = key in swept       # its comment described the other level
             continue
         if key == 'gpu_ids':
-            out.append(f"gpu_ids\t{gpu}  # one GPU; {mate} shares it")
+            out.append(f"gpu_ids\t{gpu}  # one GPU; {mate}")
             continue
         if key == 'log_file_dir':
             out.append(f"log_file_dir\t../../output/meshgraphnets-v/saoi_sweep3/{arm}.log")
@@ -366,10 +360,9 @@ def main():
 
     table = arms()
     check_design(table)
-    by_index = {i: name for i, name, _, _ in table}
     for i, arm, values, tags in table:
-        gpu = min(i, 15 - i)
-        mate = by_index[15 - i]
+        gpu = i                    # one arm per GPU: no sharing, no OOM exposure
+        mate = 'no card-sharing arm (one arm per GPU)'
         axis_lines = []
         for (label, levels), tag in zip(FACTORS, tags):
             kv = dict(levels)[tag]
@@ -393,8 +386,8 @@ def main():
         print(f"  gpu {gpu}  {arm}  (+{n_inf} inference configs)")
     print(f"\n{len(table)} training + {len(table) * len(INFER_SOURCES)} "
           f"inference configs written to {HERE}")
-    print("design checks passed: 8v8 on all 5 main effects, "
-          "4/4/4/4 on all 10 factor pairs, VRAM-balanced GPU pairs")
+    print("design checks passed: 4v4 on all 4 main effects, "
+          "2/2/2/2 on all 6 factor pairs, one arm per GPU")
     print("ARMS=\"" + ' '.join(n for _, n, _, _ in table) + "\"")
     print("INFER_TAGS=\"" + ' '.join(INFER_SOURCES) + "\"")
 

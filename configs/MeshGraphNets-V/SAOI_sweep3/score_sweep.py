@@ -43,25 +43,32 @@ REPO_ROOT = HERE.parents[2]
 METHOD_REPO = REPO_ROOT / "MeshGraphNets - variational"
 EVAL_SCRIPT = METHOD_REPO / "misc" / "eval_distribution.py"
 
-# Wave 3: a 2^(5-1) resolution-V half fraction. Keep AXES in the order the arm
-# name encodes, so a name splits straight into its cell coordinates.
+# Wave 3: a 2^(4-1) resolution-IV half fraction. Keep AXES in the order the
+# arm name encodes, so a name splits straight into its cell coordinates.
+# vae_latent_dim was dropped and is FIXED at 16 across every arm -- see
+# gen_sweep_configs.py for why.
 AXES = [
     ("z_conditioning",        ["cc", "ad"],     ["concat", "adaln"]),
     ("prior_grad_to_encoder", ["g0", "g1"],     ["0.0", "1.0"]),
-    ("vae_latent_dim",        ["z16", "z64"],   ["16", "64"]),
-    ("capacity",              ["c0", "c1"],     ["128 / 4,6,8,6,4", "192 / 6,8,12,8,6"]),
+    ("capacity",              ["c0", "c1"],     ["128 / 4,6,8,6,4", "128 / 6,8,12,8,6"]),
     ("lambda_mmd + prior_nll_weight", ["r001", "r100"], ["both 1", "both 100"]),
 ]
-def _half_fraction():
-    """The 16 cells of the 2^(5-1) resolution-V design: E = A xor B xor C xor D.
 
-    NOT the full product of the five axes -- that would be 32 runs. Mirrors
+# Confounded 2-factor pairs at resolution IV, by axis index (0=A .. 3=D).
+# AB=CD, AC=BD, AD=BC -- an "effect" computed for (0,1) is really AB+CD, etc.
+CONFOUND = {(0, 1): (2, 3), (0, 2): (1, 3), (0, 3): (1, 2)}
+
+
+def _half_fraction():
+    """The 8 cells of the 2^(4-1) resolution-IV design: D = A xor B xor C.
+
+    NOT the full product of the four axes -- that would be 16 runs. Mirrors
     gen_sweep_configs.arms(); if one changes, the other must.
     """
     out = []
-    for i in range(16):
-        free = [(i >> (3 - k)) & 1 for k in range(4)]
-        bits = free + [free[0] ^ free[1] ^ free[2] ^ free[3]]
+    for i in range(8):
+        free = [(i >> (2 - k)) & 1 for k in range(3)]
+        bits = free + [free[0] ^ free[1] ^ free[2]]      # D = A xor B xor C
         out.append("_".join(AXES[k][1][b] for k, b in enumerate(bits)))
     return out
 
@@ -70,7 +77,7 @@ DEFAULT_ARMS = _half_fraction()
 
 
 def arm_tags(arm):
-    """'ad_g1_z64_c1_r100' -> ['ad', 'g1', 'z64', 'c1', 'r100']."""
+    """'ad_g1_c1_r100' -> ['ad', 'g1', 'c1', 'r100']."""
     return arm.split("_")
 
 # Eval sets each arm is inferred on (gen_sweep_configs.INFER_SOURCES).
@@ -358,7 +365,7 @@ def main():
     # score anything. run_sweep.sh tells you to delete the cache when the sweep
     # ends; that has to happen AFTER scoring, not before.
     for probe_arm in args.arms:
-        probe_cfg = HERE / f"config_{probe_arm}.txt"
+        probe_cfg = HERE / f"config_train_{probe_arm}.txt"
         if not probe_cfg.exists():
             continue
         ds = (METHOD_REPO / parse_config(probe_cfg).get("dataset_dir", "")).resolve()
@@ -419,7 +426,7 @@ def main():
 
     # Warpage spread (max - min z_disp) from the inference stage. Attached
     # before the JSON dump so the raw numbers land there too, and plotted so the
-    # 16 arms can be compared on one axis instead of 16 separate PNGs.
+    # 8 arms can be compared on one axis instead of 8 separate PNGs.
     collect_warpage(rows)
     for path in plot_warpage_overlay(rows, out_dir):
         print(f"  warpage overlay -> {path}", flush=True)
@@ -458,14 +465,18 @@ def _metric_by_cell(rows, k, fn):
 
 
 def render_interactions(rows):
-    """All ten 2-factor interactions on best CRPS, largest first.
+    """The three confounded 2-factor pairs on best CRPS, largest first.
 
-    A resolution-V design estimates every one of these clean, but a main-effects
-    table cannot show them -- and this grid's sharpest PREDICTION is an
-    interaction: under `cc` each extra processor block compounds the concat
-    fuser's ~1.33x gain, under `ad` it does not, so capacity should hurt one half
-    and help the other. A large interaction also means the corresponding MAIN
-    effect is an average over two opposite behaviours and must not be read alone.
+    At resolution IV, the six C(4,2) pairs collapse into three ESTIMABLE
+    quantities: AB+CD, AC+BD, AD+BC. What is printed here for e.g.
+    `z_conditioning x capacity` is actually that sum -- a large value means
+    EITHER (or both) of the confounded pair is real, and telling them apart
+    needs a follow-up run that breaks the alias. The sharpest PREDICTION in
+    this grid lives in one of these three: under `cc` each extra processor
+    block compounds the concat fuser's ~1.33x gain, under `ad` it does not, so
+    capacity should hurt one half and help the other. A large value also means
+    the corresponding MAIN effects are averages over two opposite behaviours
+    and must not be read alone.
 
     Effect for factors (A, B), standard two-level definition:
         AB = ( mean(A1B1) + mean(A0B0) - mean(A1B0) - mean(A0B1) ) / 2
@@ -474,8 +485,16 @@ def render_interactions(rows):
     def crps(r):
         return (r.get("train_log") or {}).get("best_crps")
 
+    seen = set()
     out = []
     for a, b in itertools.combinations(range(len(AXES)), 2):
+        pair = tuple(sorted((a, b)))
+        if pair in seen:
+            continue
+        seen.add(pair)
+        confound = CONFOUND.get(pair)
+        if confound:
+            seen.add(confound)
         ta, tb = AXES[a][1], AXES[b][1]
         cell, ok = {}, True
         for ia in (0, 1):
@@ -493,25 +512,28 @@ def render_interactions(rows):
         if not ok:
             continue
         eff = (cell[(1, 1)] + cell[(0, 0)] - cell[(1, 0)] - cell[(0, 1)]) / 2
-        out.append((abs(eff), eff, AXES[a][0], AXES[b][0], cell, ta, tb))
+        cname = f"{AXES[confound[0]][0]} x {AXES[confound[1]][0]}" if confound else "-"
+        out.append((abs(eff), eff, AXES[a][0], AXES[b][0], cname, cell, ta, tb))
     if not out:
         return ""
     out.sort(reverse=True)
 
-    L = ["## Two-factor interactions on best CRPS (largest first)", ""]
-    L.append("| factor A | factor B | AB effect | A0B0 | A0B1 | A1B0 | A1B1 |")
-    L.append("|" + "---|" * 7)
-    for _, eff, na, nb, cell, ta, tb in out:
+    L = ["## Confounded two-factor effects on best CRPS (largest first)", ""]
+    L.append("| factor A | factor B | confounded with | effect | A0B0 | A0B1 | A1B0 | A1B1 |")
+    L.append("|" + "---|" * 8)
+    for _, eff, na, nb, cname, cell, ta, tb in out:
         L.append(
-            f"| `{na}` | `{nb}` | {eff:+.4g} | "
+            f"| `{na}` | `{nb}` | `{cname}` | {eff:+.4g} | "
             f"{fmt(cell[(0, 0)])} | {fmt(cell[(0, 1)])} | "
             f"{fmt(cell[(1, 0)])} | {fmt(cell[(1, 1)])} |"
         )
     L.append("")
     L.append("Level order is the one in the axis legend above (A0 = first level).")
-    L.append("Read an interaction as real only if it is large next to the spread")
-    L.append("of the four cell means it is built from -- with one run per cell")
-    L.append("there is no replication, so small values here are noise.")
+    L.append("Each printed value is the SUM of the named pair and its confound --")
+    L.append("resolution IV cannot separate them without another run. Read one as")
+    L.append("real only if it is large next to the spread of the four cell means")
+    L.append("it is built from -- with one run per cell there is no replication,")
+    L.append("so small values here are noise.")
     return "\n".join(L)
 
 
@@ -620,7 +642,7 @@ def render_warpage(rows):
 def plot_warpage_overlay(rows, out_dir):
     """One figure per eval set: GT filled, every arm's generated density on top.
 
-    Sixteen separate PNGs cannot be compared by eye; this puts them on one axis,
+    Eight separate PNGs cannot be compared by eye; this puts them on one axis,
     ordered and coloured by W1 so the ranking is visible without reading numbers.
     """
     have = [r for r in rows if r.get("warpage")]
@@ -672,16 +694,18 @@ def plot_warpage_overlay(rows, out_dir):
 
 
 def render_main_effects(rows):
-    """Average each metric over the 8 arms at each level of each factor.
+    """Average each metric over the 4 arms at each level of each factor.
 
-    This is what a FULL FACTORIAL buys over a one-factor-at-a-time scan: every
-    arm contributes to all four comparisons, so each main effect is an 8-vs-8
-    difference rather than a 1-vs-1 one. `delta` is (level 1 - level 0); for
-    CRPS and wild% NEGATIVE is better, so a negative delta means level 1 wins.
+    This is what a FRACTIONAL FACTORIAL buys over a one-factor-at-a-time scan:
+    every arm contributes to all four comparisons, so each main effect is a
+    4-vs-4 difference rather than a 1-vs-1 one. `delta` is (level 1 - level 0);
+    for CRPS and wild% NEGATIVE is better, so a negative delta means level 1
+    wins.
 
     Read a main effect as provisional if the two levels' spreads overlap -- with
-    n=1 per cell there is no replication, and a large interaction shows up here
-    as a main effect that does not reproduce in the per-arm table.
+    n=1 per cell there is no replication, and a large interaction (see the
+    confounded-pairs table) shows up here as a main effect averaging two
+    opposite behaviours, which must not be read alone.
     """
     def crps(r):
         return (r.get("train_log") or {}).get("best_crps")
@@ -690,7 +714,7 @@ def render_main_effects(rows):
         return ((r.get("eval") or {}).get("prior") or {}).get("wild0_pct")
 
     metrics = [("best CRPS", crps, ".4g"), ("wild0% prior", wild, ".1f")]
-    L = ["## Main effects (8 arms per level)", ""]
+    L = ["## Main effects (4 arms per level)", ""]
     L.append("| factor | level 0 | level 1 | metric | mean @0 | mean @1 | delta | n |")
     L.append("|" + "---|" * 8)
     for k, (key, tags, vals) in enumerate(AXES):
@@ -718,7 +742,7 @@ def render_main_effects(rows):
 
 def render_markdown(rows, args):
     L = []
-    L.append("# SAOI wave 3 -- 2^(5-1) resolution-V half fraction (16 arms, 2 per GPU)")
+    L.append("# SAOI wave 3 -- 2^(4-1) resolution-IV half fraction (8 arms, 1 per GPU)")
     L.append("")
     L.append(f"split={args.split}  K={args.k}  samplers={','.join(args.samplers)}")
     L.append("")
@@ -738,12 +762,21 @@ def render_markdown(rows, args):
     L.append("r001 half is the \"regularizers effectively off\" control -- and the")
     L.append("g0/g1 contrast can only show force in the r100 half.")
     L.append("")
-    L.append("Defining relation I = ABCDE: the regularizer scale is not free,")
-    L.append("it is A xor B xor C xor D. All 5 main effects and all 10 two-factor")
-    L.append("interactions are clean; 3-factor and higher alias with them.")
-    L.append("The interaction to read first is z_conditioning x capacity: under")
-    L.append("cc every extra block compounds the fuser's ~1.33x gain, under ad")
-    L.append("it does not -- so depth should HURT one half and HELP the other.")
+    L.append("Defining relation I = ABCD: the regularizer scale is not free, it")
+    L.append("is A xor B xor C. The 4 main effects are clean, but the 6 two-factor")
+    L.append("interactions come in 3 CONFOUNDED PAIRS -- AB=CD, AC=BD, AD=BC --")
+    L.append("so a large one cannot be attributed to a single pair without a")
+    L.append("follow-up run (see the confounded-pairs table below). The pair to")
+    L.append("read first is z_conditioning x capacity: under cc every extra block")
+    L.append("compounds the fuser's ~1.33x gain, under ad it does not -- so depth")
+    L.append("should HURT one half and HELP the other.")
+    L.append("")
+    L.append("**500 epochs at a measured ~576 s/epoch is a BUDGET-LIMITED")
+    L.append("comparison, NOT a converged one.** Read every number here as")
+    L.append("\"best at this budget\", not as an asymptotic ranking.")
+    L.append("")
+    L.append("`vae_latent_dim` is FIXED at 16 in every arm (dropped from an")
+    L.append("earlier 5-factor version of this grid) -- see gen_sweep_configs.py.")
     L.append("")
     L.append("**Read CRPS and wild%, not recon.** Reconstruction measures the")
     L.append("posterior path; the generative path is what inference uses.")
@@ -760,7 +793,7 @@ def render_markdown(rows, args):
     L.append("one end heavy = biased location.")
     L.append("")
 
-    hdr = ("| arm | zcond | grad | z | mmd | best CRPS | valid recon | spread | "
+    hdr = ("| arm | zcond | grad | capacity | mmd | best CRPS | valid recon | spread | "
            "wild0% prior | wild0% N(0,I) | wild% prior | chi2/crit | "
            "rank% (prior) | n |")
     L.append(hdr)
@@ -782,9 +815,10 @@ def render_markdown(rows, args):
         if num is None or not den:
             num, den = ep.get("chi2"), ep.get("crit")
         ratio = num / den if num is not None and den else None
+        capacity = arm_tags(r["arm"])[2] if len(arm_tags(r["arm"])) == len(AXES) else "?"
         L.append(
             f"| {r['arm']} | {r.get('z_conditioning','?')} | "
-            f"{r.get('prior_grad_to_encoder','?')} | {r.get('z','?')} | "
+            f"{r.get('prior_grad_to_encoder','?')} | {capacity} | "
             f"{r.get('lambda_mmd','?')} | "
             f"{fmt(tl.get('best_crps'))} | {fmt(tl.get('final_valid'))} | "
             f"{fmt(tl.get('min_spread_ratio'), '.2f')} | "

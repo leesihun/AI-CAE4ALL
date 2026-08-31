@@ -1,35 +1,39 @@
 #!/usr/bin/env bash
-# One-click runner for the SAOI WAVE 3 sweep: a 2^4 full factorial, 16 arms.
+# One-click runner for the SAOI WAVE 3 sweep: a 2^(4-1) resolution-IV half
+# fraction, 8 arms, ONE PER GPU.
 #
-# A 2^(5-1) RESOLUTION-V HALF FRACTION, not a full factorial: the fifth factor
-# is E = A xor B xor C xor D (defining relation I = ABCDE). All 5 main effects
-# and all 10 two-factor interactions are clean; only 3-factor and higher alias.
+# Defining relation I = ABCD: the fourth factor is D = A xor B xor C. The 4
+# main effects are clean; the 6 two-factor interactions come in 3 CONFOUNDED
+# PAIRS (AB=CD, AC=BD, AD=BC) -- a large one cannot be attributed to a single
+# pair without a follow-up run.
 #
 #   A  z_conditioning         cc  concat (legacy fuser) | ad  adaln (AdaLN-Zero)
 #   B  prior_grad_to_encoder  g0  detached (no CVAE rate term) | g1  end-to-end
-#   C  vae_latent_dim         z16 | z64
-#   D  capacity               c0  Latent_dim 128 / mp 4,6,8,6,4  |
-#                             c1  Latent_dim 192 / mp 6,8,12,8,6 (+VAE/prior depth)
-#   E  regularizer scale      r001 (lambda_mmd 1, prior_nll_weight 1) |
+#   C  capacity               c0  128 / mp 4,6,8,6,4  | c1  128 / mp 6,8,12,8,6
+#   D  regularizer scale      r001 (lambda_mmd 1, prior_nll_weight 1) |
 #                             r100 (lambda_mmd 100, prior_nll_weight 100)
+#                             GENERATED: D = A xor B xor C
 #
-# Arm names encode the cell: <cc|ad>_<g0|g1>_<z16|z64>_<c0|c1>_<r001|r100>, and
-# the files are config_train_<arm>.txt / config_infer_<arm>_<tag>.txt.
+# `vae_latent_dim` is FIXED at 16 in every arm -- dropped from an earlier
+# 5-factor / 16-arm version of this grid. See gen_sweep_configs.py for why.
+#
+# Arm names encode the cell: <cc|ad>_<g0|g1>_<c0|c1>_<r001|r100>, and the
+# files are config_train_<arm>.txt / config_infer_<arm>_<tag>.txt.
 # Regenerate the configs with gen_sweep_configs.py; do not hand-edit them.
 #
-# 16 arms, TWO per GPU across GPUs 0-7, paired by complementing the four FREE
-# factors, so every GPU carries one c0 + one c1 and VRAM stays balanced. Each arm
-# pins its GPU in its own config (gpu_ids), so this script only launches them;
-# it does not set CUDA_VISIBLE_DEVICES.
+# EIGHT arms, ONE PER GPU (0-7) -- no card sharing, so there is no VRAM
+# co-residency exposure. Each arm pins its GPU in its own config (gpu_ids), so
+# this script only launches them; it does not set CUDA_VISIBLE_DEVICES.
 #
-# WATCH THE `VRAM peak=` LINE OF A c1 ARM. Two arms share each GPU at the full
-# production Batch_size 16, so ONE CARD MUST HOLD BOTH, and c1 is ~1.5x the width
-# with 40 processor blocks instead of 28. If the pair does not fit, either set
-# Batch_size 8 in gen_sweep_configs.py and regenerate (the design survives, MMD's
-# sample count halves), or shrink the c1 level. Splitting into two waves of 8
-# does NOT work by name prefix -- the first 8 arms are all `cc`.
+# Budget: 500 epochs at a measured ~576 s/epoch is ~3.3 days per arm. This
+# replaced an earlier 2000-epoch / 16-arm / 2-per-GPU design: 24h of wall time
+# only reached epoch 150 on that budget (multiple GPU-weeks to finish), and
+# two-per-GPU sharing was a real OOM risk on the wider capacity level.
+# **THIS IS A BUDGET-LIMITED COMPARISON, NOT A CONVERGED ONE** -- read the
+# report that way, and see the twin cHI-MGNflow sweep (SAOI_sweepB), which
+# made the identical trade for the identical reason.
 #
-# ALSO WATCH THE FIRST EPOCHS' tqdm postfix: `mmd` AND `fm_p` against `total`.
+# WATCH THE FIRST EPOCHS' tqdm postfix: `mmd` AND `fm_p` against `total`.
 # alpha_recon is 1000 while both regularizers sit at ~1 in r001, so each is
 # ~0.1% of the objective there -- that half of the grid is the "regularizers
 # effectively off" control, and the g0/g1 contrast can only show force in the
@@ -39,34 +43,43 @@
 # THIS IS A MULTI-DAY RUN. Start it detached:
 #   nohup bash configs/MeshGraphNets-V/SAOI_sweep3/run_sweep.sh > sweep.out 2>&1 &
 #   tail -f sweep.out
-#   tail -f outputs/saoi_sweep3/run_logs/ad_g1_z16_c1_r100.log   # watch one arm
+#   tail -f outputs/saoi_sweep3/run_logs/ad_g1_c1_r100.log   # watch one arm
 #
-# Multiscale cache: all 16 arms hash to ONE cache file (none of the swept keys
-# are part of the coarsening signature). An
-# exclusive O_EXCL lock in general_modules/multiscale_cache.py lets exactly one
-# process build it while the rest poll. Rather than have 15 jobs idle through a
-# potentially hours-long build, this script launches ONE arm first and waits for
-# the cache to appear before launching the other 15 — and aborts the whole
-# batch if that first arm dies, so a config error costs minutes, not days.
+# Multiscale cache: all 8 arms hash to ONE cache file (none of the swept keys
+# are part of the coarsening signature). An exclusive O_EXCL lock in
+# general_modules/multiscale_cache.py lets exactly one process build it while
+# the rest poll. Rather than have 7 jobs idle through a potentially hours-long
+# build, this script launches ONE arm first and waits for the cache to appear
+# before launching the other 7 -- and aborts the whole batch if that first arm
+# dies, so a config error costs minutes, not days.
 #
 # DELETE ANY LEFTOVER CACHE BEFORE STARTING: cache_ready() only globs the file
 # name, so a stale cache from a previous run makes this script skip the warm-up
-# and launch all 16 straight into a cache MISS (the signature pins the source
+# and launch all 8 straight into a cache MISS (the signature pins the source
 # HDF5's mtime, which write_preprocessing_to_hdf5 bumps every run).
 #
 # The configs set hierarchy_cache_keep True so no finishing arm deletes the
 # cache out from under the others. DELETE IT MANUALLY when the sweep is done:
 #   rm dataset/saoi/saoi_train_bot.mscache.*.h5
 #
+# NOTE ON THE SHARED DATASET FILE: every arm's setup phase re-derives and
+# rewrites normalization stats into saoi_train_bot.h5 itself (unconditionally,
+# every run -- there is no "already present" guard). With 8 arms launched
+# seconds apart against the SAME file, one arm's writer can collide with
+# another's reader and raise "Unable to synchronously open file"
+# (HDF5_USE_FILE_LOCKING=FALSE is set repo-wide for NFS compatibility, which
+# removes HDF5's own guard against exactly this). general_modules/mesh_dataset.py
+# now retries that specific open with backoff, so a transient collision no
+# longer kills the arm -- if one still fails outright, just relaunch it:
+#   ARMS="<the one arm>" PREFLIGHT=0 TRAIN=1 INFER=0 SCORE=0 bash .../run_sweep.sh
+#
 # Environment overrides:
 #   PYTHON        interpreter (default: python)
 #   LOG_ROOT      transcript directory (default: outputs/saoi_sweep3/run_logs)
-#   ARMS          space-separated arm names (default: all 16)
+#   ARMS          space-separated arm names (default: all 8)
 #   PREFLIGHT     1 = --check every arm before launching any (default); 0 = skip
 #   TRAIN         1 = train (default). 0 = SKIP training and go straight to
-#                 inference + scoring on checkpoints that already exist --
-#                 which is how you finish a sweep that had to be trained in
-#                 two waves of 8 to keep the per-arm batch size.
+#                 inference + scoring on checkpoints that already exist.
 #   WARM_TIMEOUT  seconds to wait for the shared cache (default: 21600 = 6h)
 #   INFER         1 = run each arm's inference configs after training (default)
 #   INFER_TAGS    eval sets to infer (default: s26fe_main s26fe_sec sm_l345u)
@@ -76,8 +89,9 @@
 #
 # Usage:
 #   bash configs/MeshGraphNets-V/SAOI_sweep3/run_sweep.sh
-#   ARMS="ad_g1_z16_c1_r100 cc_g0_z16_c0_r001" bash .../run_sweep.sh  # subset
-#   PREFLIGHT=0 bash .../run_sweep.sh                       # skip validation
+#   ARMS="ad_g1_c1_r100 cc_g0_c0_r001" bash .../run_sweep.sh   # subset
+#   PREFLIGHT=0 bash .../run_sweep.sh                          # skip validation
+#   TRAIN=0 bash .../run_sweep.sh                              # infer + score only
 
 # NOT `set -e`: per-arm failures are collected so one bad arm cannot kill the batch.
 set -uo pipefail
@@ -102,17 +116,11 @@ CFG_DIR="$SCRIPT_DIR"
 LOG_ROOT="${LOG_ROOT:-outputs/saoi_sweep3/run_logs}"
 CACHE_GLOB="dataset/saoi/saoi_train_bot.mscache.*.h5"
 
-# Kept in the generator's emission order (bit order A P Z M); gen_sweep_configs.py
-# prints this exact line so the two can never drift.
+# Must match gen_sweep_configs.arms() exactly -- it prints this line, so if the
+# generator changes, re-paste its ARMS= output here rather than hand-editing.
 DEFAULT_ARMS="\
-cc_g0_z16_c0_r001 cc_g0_z16_c1_r100 \
-cc_g0_z64_c0_r100 cc_g0_z64_c1_r001 \
-cc_g1_z16_c0_r100 cc_g1_z16_c1_r001 \
-cc_g1_z64_c0_r001 cc_g1_z64_c1_r100 \
-ad_g0_z16_c0_r100 ad_g0_z16_c1_r001 \
-ad_g0_z64_c0_r001 ad_g0_z64_c1_r100 \
-ad_g1_z16_c0_r001 ad_g1_z16_c1_r100 \
-ad_g1_z64_c0_r100 ad_g1_z64_c1_r001"
+cc_g0_c0_r001 cc_g0_c1_r100 cc_g1_c0_r100 cc_g1_c1_r001 \
+ad_g0_c0_r100 ad_g0_c1_r001 ad_g1_c0_r001 ad_g1_c1_r100"
 ARMS="${ARMS:-$DEFAULT_ARMS}"
 
 mkdir -p "$LOG_ROOT"
@@ -139,11 +147,11 @@ run_arm() {
         echo "[$arm] DONE"
         return 0
     fi
-    echo "[$arm] FAILED (exit $rc) — see $log" >&2
+    echo "[$arm] FAILED (exit $rc) -- see $log" >&2
     return 1
 }
 
-echo "SAOI wave 3 -- 2^(5-1) res-V: zcond x rate coupling x latent x capacity x reg"
+echo "SAOI wave 3 -- 2^(4-1) resolution IV: zcond x rate coupling x capacity x reg"
 echo "  REPO_ROOT = $REPO_ROOT"
 echo "  PYTHON    = $PYTHON"
 echo "  LOG_ROOT  = $LOG_ROOT"
@@ -157,18 +165,21 @@ if [ "$PREFLIGHT" = "1" ]; then
     for arm in $ARMS; do
         cfg="$(cfg_for "$arm")"
         if [ ! -f "$cfg" ]; then
-            echo "  $arm  MISSING CONFIG" >&2; pf_bad=1; continue
+            echo "  $arm  MISSING CONFIG ($cfg)" >&2; pf_bad=1; continue
         fi
         if "$PYTHON" AI_CAE4ALL_main.py --config "$cfg" --check > "$LOG_ROOT/${arm}.check.log" 2>&1; then
             echo "  $arm  ok"
         else
-            echo "  $arm  FAILED — see $LOG_ROOT/${arm}.check.log" >&2; pf_bad=1
+            echo "  $arm  FAILED -- see $LOG_ROOT/${arm}.check.log" >&2; pf_bad=1
         fi
     done
     if [ "$pf_bad" != "0" ]; then
         echo "" >&2
         echo "Preflight failed. Nothing launched. Fix the configs and re-run," >&2
         echo "or set PREFLIGHT=0 to launch anyway." >&2
+        echo "If every arm reports MISSING CONFIG, the generated configs are" >&2
+        echo "stale or absent -- regenerate them first:" >&2
+        echo "  python configs/MeshGraphNets-V/SAOI_sweep3/gen_sweep_configs.py" >&2
         exit 2
     fi
     echo "All arms validated."
@@ -195,7 +206,7 @@ first_arm="${arm_list[0]}"
 rest_arms="${arm_list[*]:1}"
 
 if cache_ready; then
-    echo "Multiscale cache already present — launching all arms at once."
+    echo "Multiscale cache already present -- launching all arms at once."
     rest_arms="$ARMS"
 else
     echo "Cold cache. Launching $first_arm alone to build it (timeout ${WARM_TIMEOUT}s)..."
@@ -210,7 +221,7 @@ else
         fi
         if ! kill -0 "$warm_pid" 2>/dev/null; then
             echo "" >&2
-            echo "$first_arm exited before the cache appeared — aborting the batch." >&2
+            echo "$first_arm exited before the cache appeared -- aborting the batch." >&2
             echo "See $(log_for "$first_arm")" >&2
             exit 3
         fi
@@ -253,13 +264,13 @@ echo "Checkpoints : output/meshgraphnets-v/saoi_sweep3/<arm>.pth"
 echo ""
 
 # ---- Inference: every arm against every held-out eval set -------------------
-# Each arm's eval sets run SEQUENTIALLY on the GPU it trained on, and the arms
-# run concurrently, so the same two-per-card packing applies as in training.
-# The generated configs set save_rollouts False: no trajectory HDF5s are written
-# (scene x draws would be tens of thousands of files across the grid). What each
-# run leaves behind is histogram_compare.png and spread_values.npz -- the GT vs
-# generated z_disp spread (max - min per realization) that score_sweep.py then
-# tabulates and overlays for all 16 arms on one axis.
+# One arm per GPU, so all 8 run concurrently; each arm's 3 eval sets run
+# sequentially on the GPU it trained on. The generated configs set
+# save_rollouts False: no trajectory HDF5s are written (scene x draws would be
+# thousands of files across the grid). What each run leaves behind is
+# histogram_compare.png and spread_values.npz -- the GT vs generated z_disp
+# spread (max - min per realization) that score_sweep.py then tabulates and
+# overlays for all 8 arms on one axis.
 #
 # An arm whose training failed has no checkpoint; its inference preflights as a
 # missing-input error, is logged, and does not stop the others.
@@ -326,7 +337,7 @@ if [ "$SCORE" = "1" ]; then
             > "$LOG_ROOT/score_sweep.log" 2>&1; then
         echo "Scoring complete."
     else
-        echo "Scoring FAILED (exit $?) — see $LOG_ROOT/score_sweep.log" >&2
+        echo "Scoring FAILED (exit $?) -- see $LOG_ROOT/score_sweep.log" >&2
         rc=1
     fi
     echo ""
@@ -339,7 +350,7 @@ if [ "$SCORE" = "1" ]; then
         echo "Raw JSON : outputs/saoi_sweep3/sweep_results.json"
     fi
 else
-    echo "SCORE=0 — skipped. Run it later with:"
+    echo "SCORE=0 -- skipped. Run it later with:"
     echo "  $PYTHON $CFG_DIR/score_sweep.py --split $SCORE_SPLIT --k $SCORE_K --run-logs $LOG_ROOT"
 fi
 
