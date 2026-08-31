@@ -72,6 +72,8 @@ GPU PACKING
   effect for it to confound with.
 """
 import itertools
+# newline='\n' on EVERY write: the default (None) translates to CRLF on
+# Windows, and a CRLF run_sweep.sh dies on Linux with `bad interpreter: ^M`.
 import pathlib
 
 HERE = pathlib.Path(__file__).resolve().parent
@@ -357,11 +359,11 @@ def main():
         (HERE / f'{TRAIN_PREFIX}{arm}.txt').write_text(
             TRAIN_HEADER.format(arm=arm, gpu=gpu, mate=mate,
                                 axis_lines='\n'.join(axis_lines))
-            + render(base_lines, values, arm, gpu, mate), encoding='utf-8')
+            + render(base_lines, values, arm, gpu, mate), encoding='utf-8', newline='\n')
         for tag in INFER_SOURCES:
             (HERE / f'{INFER_PREFIX}{arm}_{tag}.txt').write_text(
                 INFER_HEADER.format(arm=arm, tag=tag, gpu=gpu)
-                + render_infer(infer_src[tag], arm, tag, gpu), encoding='utf-8')
+                + render_infer(infer_src[tag], arm, tag, gpu), encoding='utf-8', newline='\n')
         print(f"  gpu {gpu}  {arm}  (+{len(INFER_SOURCES)} inference configs)")
 
     print(f"\n{len(table)} training + {len(table) * len(INFER_SOURCES)} inference "

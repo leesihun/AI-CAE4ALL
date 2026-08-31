@@ -425,11 +425,11 @@ def main():
         print(f"  warpage overlay -> {path}", flush=True)
 
     json_path = out_dir / "sweep_results.json"
-    json_path.write_text(json.dumps(rows, indent=2), encoding="utf-8")
+    json_path.write_text(json.dumps(rows, indent=2), encoding="utf-8", newline="\n")
 
     md = render_markdown(rows, args)
     md_path = out_dir / "sweep_results.md"
-    md_path.write_text(md, encoding="utf-8")
+    md_path.write_text(md, encoding="utf-8", newline="\n")
 
     # The report file is always UTF-8; the CONSOLE may not be (a cp949/cp1252
     # Windows terminal raises UnicodeEncodeError and would lose the whole run's
