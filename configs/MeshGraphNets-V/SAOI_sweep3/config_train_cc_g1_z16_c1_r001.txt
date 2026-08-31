@@ -11,8 +11,8 @@
 %                                 prior_grad_to_encoder 1.0
 %     vae_latent_dim        z16   posterior/global latent width
 %                                 vae_latent_dim 16
-%     capacity              c1    wider + deeper (40 blocks); the adaln x capacity interaction lives here
-%                                 Latent_dim 192
+%     capacity              c1    DEEPER only, same width (40 blocks vs 28) -- width was dropped back to 128 for VRAM, and depth is the sharper test anyway: the concat fuser gain compounds PER BLOCK
+%                                 Latent_dim 128
 %                                 mp_per_level 6, 8, 12, 8, 6
 %                                 vae_mp_layers 7
 %                                 prior_mp_layers 7
@@ -60,7 +60,7 @@ message_passing_num	15  # Only used for non-multiscale modes (vanilla MeshGraphN
 Training_epochs	2000  # sweep budget
 Batch_size	16  # production per-rank value; two arms share each GPU -- watch VRAM peak
 LearningR	0.0001
-Latent_dim	192  # SWEPT AXIS
+Latent_dim	128  # SWEPT AXIS
 num_workers	2  # 16 concurrent jobs -- 4 workers each would be 64 processes
 std_noise	0.01  # Gaussian physical-input noise (training only)
 augment_geometry	True  # Training-only random Z-rotation + reflection augmentation

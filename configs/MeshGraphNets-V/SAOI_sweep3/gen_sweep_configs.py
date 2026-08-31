@@ -98,7 +98,7 @@ FACTORS = [
     ('capacity', [
         ('c0', {'Latent_dim': '128', 'mp_per_level': '4, 6, 8, 6, 4',
                 'vae_mp_layers': '5', 'prior_mp_layers': '5', 'prior_hidden_dim': '256'}),
-        ('c1', {'Latent_dim': '192', 'mp_per_level': '6, 8, 12, 8, 6',
+        ('c1', {'Latent_dim': '128', 'mp_per_level': '6, 8, 12, 8, 6',
                 'vae_mp_layers': '7', 'prior_mp_layers': '7', 'prior_hidden_dim': '384'}),
     ]),
     # GENERATED, not free: E = A xor B xor C xor D  (defining relation I = ABCDE).
@@ -154,7 +154,7 @@ TAG_NOTE = {
     'z16':  'posterior/global latent width',
     'z64':  'posterior/global latent width',
     'c0':   'current production size (28 processor blocks)',
-    'c1':   'wider + deeper (40 blocks); the adaln x capacity interaction lives here',
+    'c1':   'DEEPER only, same width (40 blocks vs 28) -- width was dropped back to 128 for VRAM, and depth is the sharper test anyway: the concat fuser gain compounds PER BLOCK',
     'r001': 'both regularizers ~0.1% of the objective (alpha_recon is 1000)',
     'r100': 'both regularizers ~10% of the objective',
 }
