@@ -29,6 +29,7 @@ from studio_backend.analysis import (
     run_model_comparison,
     run_optimization,
     write_candidate_table,
+    write_optimize_summary_table,
 )
 from studio_backend.prediction_preview import (
     invalidate_prediction_runs,
@@ -780,7 +781,10 @@ class StudioState:
         # what the Optimization block downstream actually reads.
         generated_dir = configured_dir("output_dir") if item.get("node_type") == "run.cad_generator" else None
         if generated_dir is not None:
-            table = write_candidate_table(generated_dir)
+            # `mode optimize` writes summary.json, not sample_*_meta.json --
+            # try its table first so a closed-loop run's winner/baseline/typical
+            # comparison shows up instead of silently falling through empty.
+            table = write_optimize_summary_table(generated_dir) or write_candidate_table(generated_dir)
             if table:
                 with self.lock:
                     steps = job.get("steps") or []

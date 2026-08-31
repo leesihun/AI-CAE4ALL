@@ -15,6 +15,16 @@ from design_loop import fea
 from design_loop.generator import SDFFlowGenerator
 from design_loop.loop import Evaluator, baseline_population, calibrate, run, save_history
 from design_loop.problem import Bracket, MassObjective
+from design_loop.surrogate import (
+    HIMGNSurrogate, SurrogateEvaluator, surrogate_baseline_population, surrogate_search,
+)
+
+# Bracket.LOAD_CASES uses the GE-challenge names this suite's FEA path was
+# written against; DeepJEB's own files (and therefore the surrogate's training
+# data) use its short codes. One config vocabulary (the GE names) covers both
+# backends so `opt_load_cases` never has to change when `opt_analysis` does.
+_SURROGATE_CASE_NAMES = {'vertical': 'ver', 'horizontal': 'hor',
+                        'diagonal': 'dia', 'torsion': 'tor'}
 
 
 def _as_list(value):
@@ -76,15 +86,48 @@ def run_optimize(config, config_filename='config.txt'):
     print(f'Structural problem: {material.name}, load cases {load_cases}, '
           f'part length {bracket.length_scale * 1.8 * 1e3:.0f} mm', flush=True)
 
-    evaluator = Evaluator(generator, bracket,
-                          mesh_size_max=_flt(config, 'opt_mesh_size_max', 0.05),
-                          target_faces=_int(config, 'opt_target_faces', 12000))
+    analysis_backend = str(config.get('opt_analysis', 'fea')).lower()
+    if analysis_backend not in ('fea', 'surrogate'):
+        raise ValueError(f"opt_analysis must be 'fea' or 'surrogate', got {analysis_backend!r}")
+
+    if analysis_backend == 'surrogate':
+        surrogate = HIMGNSurrogate(
+            config_path=config['opt_surrogate_config'],
+            checkpoint=config['opt_surrogate_checkpoint'],
+            load_cases=tuple(_SURROGATE_CASE_NAMES[c] for c in load_cases),
+            target_nodes=_int(config, 'opt_surrogate_target_nodes', 5000),
+            density=material.rho,
+            stress_percentile=_flt(config, 'opt_stress_percentile', 99.5),
+            workdir=os.path.join(out_dir, 'surrogate_batches'),
+        )
+        evaluator = SurrogateEvaluator(generator, surrogate)
+        print(f'Analysis backend: HI-MGN surrogate ({surrogate.checkpoint})', flush=True)
+        print('  ACCURACY NOTICE: this checkpoint was trained on 40 DeepJEB brackets '
+              '(the public dataset download was rate-limited mid-fetch). Scored against '
+              '40 held-out real-FEA brackets it currently manages field R^2 ~ 0 (predicts '
+              'close to the mean) and peak-stress MAPE ~88%; displacement ranking is '
+              'moderately useful (Spearman ~0.9) but its magnitude is not. Treat this run '
+              "as a demonstration that the AI-replaces-FEA path executes end to end, not "
+              'as a trustworthy structural result -- opt_analysis fea remains the accurate '
+              'path until the surrogate is retrained on the full 2,138-bracket dataset.',
+              flush=True)
+    else:
+        evaluator = Evaluator(generator, bracket,
+                              mesh_size_max=_flt(config, 'opt_mesh_size_max', 0.05),
+                              target_faces=_int(config, 'opt_target_faces', 12000))
+        print(f'Analysis backend: FEA ({bracket.load_cases})', flush=True)
 
     # ---- Stage 1: baseline population and calibration -------------------- #
     baseline_size = _int(config, 'opt_baseline_size', 12)
     print(f'\n=== Baseline population ({baseline_size} designs) ===', flush=True)
-    baseline = baseline_population(evaluator, size=baseline_size,
-                                   seed=_int(config, 'opt_seed', 0))
+    if analysis_backend == 'surrogate':
+        # One native call for the whole population instead of `baseline_size`
+        # separate ones -- see `surrogate_baseline_population`'s docstring.
+        baseline = surrogate_baseline_population(generator, surrogate, size=baseline_size,
+                                                 seed=_int(config, 'opt_seed', 0))
+    else:
+        baseline = baseline_population(evaluator, size=baseline_size,
+                                       seed=_int(config, 'opt_seed', 0))
     limits = calibrate(baseline,
                        stress_margin=_flt(config, 'opt_stress_margin', 1.0),
                        disp_margin=_flt(config, 'opt_disp_margin', 1.0))
@@ -122,16 +165,34 @@ def run_optimize(config, config_filename='config.txt'):
     popsize = _int(config, 'opt_popsize', 8)
     print(f'\n=== CMA-ES search (budget {budget} evaluations, popsize {popsize}) ===',
           flush=True)
-    evaluator.history = []          # the search log is separate from the baseline
-    best_x, best_score, log = run(
-        evaluator,
-        x0=np.asarray(reference['x']),
-        sigma0=_flt(config, 'opt_sigma0', 1.0),
-        budget=budget,
-        popsize=popsize,
-        seed=_int(config, 'opt_seed', 0),
-    )
-    search_history = evaluator.history
+    if analysis_backend == 'surrogate':
+        # Batched per-generation, not per-candidate -- see `surrogate_search`.
+        best_x, best_score, log, search_history = surrogate_search(
+            generator, surrogate, evaluator.objective,
+            x0=np.asarray(reference['x']),
+            sigma0=_flt(config, 'opt_sigma0', 1.0),
+            budget=budget, popsize=popsize, seed=_int(config, 'opt_seed', 0),
+        )
+        evaluator.history = search_history       # so save_history sees it below
+        # surrogate_baseline_population/surrogate_search build their own record
+        # lists rather than calling through evaluator, so its failure tally
+        # never saw them -- recompute it here or every surrogate run reports
+        # zero failures no matter how many candidates actually failed.
+        for record in baseline + search_history:
+            if not record['ok']:
+                kind = record['error'].split(':', 1)[0]
+                evaluator.failures[kind] = evaluator.failures.get(kind, 0) + 1
+    else:
+        evaluator.history = []      # the search log is separate from the baseline
+        best_x, best_score, log = run(
+            evaluator,
+            x0=np.asarray(reference['x']),
+            sigma0=_flt(config, 'opt_sigma0', 1.0),
+            budget=budget,
+            popsize=popsize,
+            seed=_int(config, 'opt_seed', 0),
+        )
+        search_history = evaluator.history
 
     # ---- Stage 3: refined verification of the winner --------------------- #
     print('\n=== Verification of the best design at refined resolution ===', flush=True)
@@ -157,16 +218,16 @@ def run_optimize(config, config_filename='config.txt'):
                         ('typical', typical_verified)):
         if record['ok']:
             mesh = record.pop('mesh_object', None)
-            if mesh is None:
-                print(f"  {tag:9s}: (mesh already released)", flush=True)
-            path = os.path.join(out_dir, f'{tag}.stl')
-            mesh.export(path)
-            record['stl'] = path
             f = record['fea']
+            if mesh is not None:
+                path = os.path.join(out_dir, f'{tag}.stl')
+                mesh.export(path)
+                record['stl'] = path
+            mesh_note = f"{f['num_tets']} tets" if analysis_backend == 'fea'                 else f"{f['num_nodes']} surface nodes (surrogate)"
             print(f"  {tag:9s}: mass {f['mass']:.4f} kg | "
                   f"peak vM {f['peak_von_mises'] / 1e6:.1f} MPa | "
                   f"max disp {f['max_displacement'] * 1e3:.4f} mm | "
-                  f"{f['num_tets']} tets", flush=True)
+                  f"{mesh_note}", flush=True)
         else:
             print(f'  {tag:9s}: FAILED {record["error"]}', flush=True)
 
@@ -174,7 +235,7 @@ def run_optimize(config, config_filename='config.txt'):
     summary = _summarize(limits, reference, reference_verified, verified,
                          best_x, best_score, log, search_history, baseline,
                          evaluator, material, load_cases, bracket, time.time() - started,
-                         search_best, typical_verified)
+                         search_best, typical_verified, analysis_backend)
     summary['design_space'] = {
         'subspace_dim': generator.subspace_dim,
         'condition_dims': list(generator.cond_dims),
@@ -199,7 +260,8 @@ def run_optimize(config, config_filename='config.txt'):
                                    for r in search_history],
                         'limits': limits})
     _plot(out_dir, baseline, search_history, log, limits)
-    if verified['ok'] and reference_verified['ok']:
+    if (analysis_backend == 'fea' and verified['ok'] and reference_verified['ok']
+            and 'fields' in verified and 'fields' in reference_verified):
         try:
             from design_loop.visualize import render_comparison
             path = render_comparison(
@@ -210,6 +272,10 @@ def run_optimize(config, config_filename='config.txt'):
             print(f'  wrote {path}', flush=True)
         except Exception as exc:
             print(f'  (skipping stress render: {type(exc).__name__}: {exc})', flush=True)
+    elif analysis_backend == 'surrogate':
+        print('  (skipping stress render: the surrogate path has no interface node '
+              'sets or per-node field mesh to draw -- see the accuracy notice above)',
+              flush=True)
     _write_report(out_dir, summary)
 
     print(f'\nWrote results to {out_dir}', flush=True)
@@ -220,10 +286,12 @@ def run_optimize(config, config_filename='config.txt'):
 
 def _summarize(limits, reference, reference_verified, verified, best_x, best_score,
                log, search_history, baseline, evaluator, material, load_cases,
-               bracket, wall_time, search_best=None, typical_verified=None):
+               bracket, wall_time, search_best=None, typical_verified=None,
+               analysis_backend='fea'):
     ok = [r for r in search_history if r['ok']]
     feasible = [r for r in ok if r['penalty'].get('feasible')]
     summary = {
+        'analysis_backend': analysis_backend,
         'wall_time_s': wall_time,
         'total_evaluations': len(baseline) + len(search_history) + 2,
         'search_evaluations': len(search_history),
@@ -245,8 +313,12 @@ def _summarize(limits, reference, reference_verified, verified, best_x, best_sco
             'median_mass_kg': float(np.median([r['fea']['mass'] for r in ok_baseline])),
             'best_of_population_mass_kg': float(reference['fea']['mass']),
         }
-    # Same design, search mesh vs verification mesh: the discretization sensitivity.
-    if search_best is not None and search_best['ok'] and verified['ok']:
+    # Same design, search mesh vs verification mesh: a meaningful
+    # discretization sensitivity only on the tetrahedral FEA path. The
+    # surrogate always resamples a surface graph to opt_surrogate_target_nodes;
+    # calling that a refined-mesh convergence check would invent evidence.
+    if (analysis_backend == 'fea' and search_best is not None
+            and search_best['ok'] and verified['ok']):
         a, b = search_best['fea'], verified['fea']
         summary['mesh_sensitivity'] = {
             'search_tets': a['num_tets'], 'verify_tets': b['num_tets'],
@@ -259,18 +331,23 @@ def _summarize(limits, reference, reference_verified, verified, best_x, best_sco
     if verified['ok'] and reference_verified['ok']:
         a, b = reference_verified['fea'], verified['fea']
         summary['verified'] = {
-            'baseline': _brief(a), 'optimized': _brief(b),
+            'baseline': _brief(a, analysis_backend),
+            'optimized': _brief(b, analysis_backend),
             'mass_change_pct': 100.0 * (b['mass'] - a['mass']) / a['mass'],
             'stress_change_pct': 100.0 * (b['peak_von_mises'] - a['peak_von_mises'])
             / a['peak_von_mises'],
             'disp_change_pct': 100.0 * (b['max_displacement'] - a['max_displacement'])
             / a['max_displacement'],
-            'stiffness_to_mass_gain_pct': 100.0 * (
-                (a['max_compliance'] * a['mass']) / (b['max_compliance'] * b['mass']) - 1.0),
         }
+        # Compliance is only ever formed by solving the system, which the
+        # surrogate path never does (max_compliance stays a 0.0 placeholder
+        # there) -- computing a ratio of two zeros would divide by zero.
+        if analysis_backend == 'fea':
+            summary['verified']['stiffness_to_mass_gain_pct'] = 100.0 * (
+                (a['max_compliance'] * a['mass']) / (b['max_compliance'] * b['mass']) - 1.0)
         if typical_verified is not None and typical_verified['ok']:
             t = typical_verified['fea']
-            summary['verified']['typical'] = _brief(t)
+            summary['verified']['typical'] = _brief(t, analysis_backend)
             summary['verified']['vs_typical'] = {
                 'mass_change_pct': 100.0 * (b['mass'] - t['mass']) / t['mass'],
                 'stress_change_pct': 100.0 * (b['peak_von_mises'] - t['peak_von_mises'])
@@ -281,18 +358,20 @@ def _summarize(limits, reference, reference_verified, verified, best_x, best_sco
     return summary
 
 
-def _brief(f):
-    return {
+def _brief(f, analysis_backend='fea'):
+    result = {
         'mass_kg': f['mass'],
         'peak_von_mises_MPa': f['peak_von_mises'] / 1e6,
         'max_von_mises_MPa': f['max_von_mises'] / 1e6,
         'max_displacement_mm': f['max_displacement'] * 1e3,
         'max_compliance_J': f['max_compliance'],
-        'num_tets': f['num_tets'],
         'cases': {k: {'peak_von_mises_MPa': v['peak_von_mises'] / 1e6,
                       'max_displacement_mm': v['max_displacement'] * 1e3,
                       'compliance_J': v['compliance']} for k, v in f['cases'].items()},
     }
+    cardinality_key = 'num_nodes' if analysis_backend == 'surrogate' else 'num_tets'
+    result[cardinality_key] = f[cardinality_key]
+    return result
 
 
 def _plot(out_dir, baseline, search_history, log, limits):
@@ -357,11 +436,22 @@ def _plot(out_dir, baseline, search_history, log, limits):
 
 
 def _write_report(out_dir, summary):
+    backend = summary.get('analysis_backend', 'fea')
     lines = ['# DeepJEB closed-loop geometry optimization', '']
+    lines.append(f"Analysis backend: **{'FEA (gmsh + linear-static solve)' if backend == 'fea' else 'HI-MGN AI surrogate'}**.")
     lines.append(f"Wall time {summary['wall_time_s'] / 60:.1f} min over "
-                 f"{summary['total_evaluations']} generate-mesh-solve evaluations "
-                 f"({summary['search_success_rate'] * 100:.0f}% of search evaluations "
+                 f"{summary['total_evaluations']} generate-{'mesh-solve' if backend == 'fea' else 'analyze'} "
+                 f"evaluations ({summary['search_success_rate'] * 100:.0f}% of search evaluations "
                  f"completed the chain).")
+    if backend == 'surrogate':
+        lines += ['', '> **Accuracy notice.** This HI-MGN checkpoint was trained on 40 DeepJEB '
+                 'brackets (the public 2,138-bracket download was rate-limited mid-fetch). '
+                 'Scored against 40 held-out real-FEA brackets: field R² ≈ 0 (predicts '
+                 'close to the training mean), peak-stress MAPE ≈ 88%, displacement ranking '
+                 'moderately useful (Spearman ≈ 0.9) but its magnitude is not. This run '
+                 'demonstrates that the AI-replaces-FEA path executes end to end -- it is not '
+                 'a trustworthy structural result. Re-run with `opt_analysis fea` for numbers '
+                 'you can act on.']
     lines.append('')
     limits = summary['limits']
     lines += ['## Calibration', '',
@@ -378,20 +468,33 @@ def _write_report(out_dir, summary):
     if 'verified' in summary:
         v = summary['verified']
         a, b = v['baseline'], v['optimized']
-        lines += ['## Verified result (refined mesh)', '',
-                  '| quantity | baseline | optimized | change |',
-                  '| --- | ---: | ---: | ---: |',
-                  f"| mass (kg) | {a['mass_kg']:.4f} | {b['mass_kg']:.4f} | "
-                  f"{v['mass_change_pct']:+.1f}% |",
-                  f"| peak von Mises (MPa) | {a['peak_von_mises_MPa']:.1f} | "
-                  f"{b['peak_von_mises_MPa']:.1f} | {v['stress_change_pct']:+.1f}% |",
-                  f"| max displacement (mm) | {a['max_displacement_mm']:.4f} | "
-                  f"{b['max_displacement_mm']:.4f} | {v['disp_change_pct']:+.1f}% |",
-                  f"| max compliance (J) | {a['max_compliance_J']:.4f} | "
-                  f"{b['max_compliance_J']:.4f} | |",
-                  f"| tetrahedra | {a['num_tets']} | {b['num_tets']} | |", '',
-                  f"Stiffness-per-unit-mass gain: **{v['stiffness_to_mass_gain_pct']:+.1f}%**",
-                  '']
+        result_heading = ('Verified result (refined mesh)' if backend == 'fea'
+                          else 'Surrogate re-evaluation (not FEA verified)')
+        table = [f'## {result_heading}', '',
+                '| quantity | baseline | optimized | change |',
+                '| --- | ---: | ---: | ---: |',
+                f"| mass (kg) | {a['mass_kg']:.4f} | {b['mass_kg']:.4f} | "
+                f"{v['mass_change_pct']:+.1f}% |",
+                f"| peak von Mises (MPa) | {a['peak_von_mises_MPa']:.1f} | "
+                f"{b['peak_von_mises_MPa']:.1f} | {v['stress_change_pct']:+.1f}% |",
+                f"| max displacement (mm) | {a['max_displacement_mm']:.4f} | "
+                f"{b['max_displacement_mm']:.4f} | {v['disp_change_pct']:+.1f}% |"]
+        if 'stiffness_to_mass_gain_pct' in v:
+            table.append(f"| max compliance (J) | {a['max_compliance_J']:.4f} | "
+                        f"{b['max_compliance_J']:.4f} | |")
+        cardinality_key = 'num_tets' if backend == 'fea' else 'num_nodes'
+        cardinality_label = 'tetrahedra' if backend == 'fea' else 'surface graph nodes'
+        if cardinality_key in a and cardinality_key in b:
+            table.append(f"| {cardinality_label} | {a[cardinality_key]} | "
+                         f"{b[cardinality_key]} | |")
+        lines += table + ['']
+        if 'stiffness_to_mass_gain_pct' in v:
+            lines += [f"Stiffness-per-unit-mass gain: "
+                     f"**{v['stiffness_to_mass_gain_pct']:+.1f}%**", '']
+        else:
+            lines += ['Compliance is not formed on the surrogate path (no solved system to '
+                     'take it from); mass, stress, and displacement above are the '
+                     'comparison.', '']
         if 'vs_typical' in v:
             t, vt = v['typical'], v['vs_typical']
             lines += ['### Against a typical population member', '',
@@ -405,26 +508,32 @@ def _write_report(out_dir, summary):
                       f"{b['peak_von_mises_MPa']:.1f} MPa ({vt['stress_change_pct']:+.1f}%)",
                       f"- max displacement {t['max_displacement_mm']:.4f} -> "
                       f"{b['max_displacement_mm']:.4f} mm ({vt['disp_change_pct']:+.1f}%)", '']
-    lines += ['## Solver', '',
-              'Linear-static 4-node tetrahedra, AMG-preconditioned CG, nodal von Mises '
-              'volume-averaged from the constant per-element stress. The element passes '
-              'the constant-strain patch test to 1e-9 but shear-locks: on a slender '
-              'cantilever it recovers 0.40/0.65/0.83/0.90 of the Timoshenko tip '
-              'deflection at 288/1.3k/6k/16.5k tets. Absolute deflection and stress here '
-              'are therefore optimistic; the baseline-vs-optimized comparison at equal '
-              'discretization is the meaningful quantity.', '']
+    if backend == 'fea':
+        lines += ['## Solver', '',
+                  'Linear-static 4-node tetrahedra, AMG-preconditioned CG, nodal von Mises '
+                  'volume-averaged from the constant per-element stress. The element passes '
+                  'the constant-strain patch test to 1e-9 but shear-locks: on a slender '
+                  'cantilever it recovers 0.40/0.65/0.83/0.90 of the Timoshenko tip '
+                  'deflection at 288/1.3k/6k/16.5k tets. Absolute deflection and stress here '
+                  'are therefore optimistic; the baseline-vs-optimized comparison at equal '
+                  'discretization is the meaningful quantity.', '']
+    else:
+        lines += ['## Solver', '',
+                  'HI-MGN (hierarchical multiscale graph network), one forward pass per '
+                  'candidate in place of a mesh-and-solve. See the accuracy notice above '
+                  'for what this checkpoint can and cannot be trusted for.', '']
 
-    if 'mesh_sensitivity' in summary:
+    if backend == 'fea' and 'mesh_sensitivity' in summary:
         m = summary['mesh_sensitivity']
         lines += ['## Discretization sensitivity', '',
-                  f"The same winning design re-analyzed on the verification mesh "
+                  f"The same winning design re-analyzed at the verification resolution "
                   f"({m['search_tets']} -> {m['verify_tets']} tets) moves by "
                   f"{m['mass_change_pct']:+.1f}% in mass, "
                   f"{m['peak_stress_change_pct']:+.1f}% in peak von Mises and "
-                  f"{m['disp_change_pct']:+.1f}% in deflection. The search mesh is therefore "
-                  'a ranking device, not a converged absolute; baseline and optimized are '
-                  'compared above on the same refined mesh so the comparison is unaffected.',
-                  '']
+                  f"{m['disp_change_pct']:+.1f}% in deflection. The search resolution is "
+                  'therefore a ranking device, not a converged absolute; baseline and '
+                  'optimized are compared above at the same refined resolution so the '
+                  'comparison is unaffected.', '']
 
     if summary['failures']:
         lines += ['## Failure modes', '']

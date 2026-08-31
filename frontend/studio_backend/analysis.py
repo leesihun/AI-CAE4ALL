@@ -1051,6 +1051,60 @@ def export_artifact(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 CANDIDATE_TABLE_NAME = "candidates.csv"
+OPTIMIZE_TABLE_NAME = "optimize_summary.csv"
+
+
+def write_optimize_summary_table(output_dir: Path) -> dict[str, Any] | None:
+    """Turn SDFFlow `mode optimize`'s `summary.json` into a small CSV.
+
+    That mode produces one winning design plus two comparison references, not
+    a population of i.i.d. candidates, so it does not fit `write_candidate_table`
+    (built around `sample_*_meta.json`, which optimize mode never writes). This
+    reuses the same {path, rows} shape so the CAD Generator block's results
+    panel renders it exactly like the sample-mode gallery does.
+
+    Returns None when no `summary.json` is present, so callers can try this
+    before falling back to the sample-mode table without special-casing which
+    mode actually ran.
+    """
+    summary_path = output_dir / "summary.json"
+    if not summary_path.is_file():
+        return None
+    try:
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    verified = summary.get("verified")
+    if not verified:
+        return None
+
+    backend = summary.get("analysis_backend", "fea")
+    mesh_key = "num_nodes" if backend == "surrogate" else "num_tets"
+    rows: list[dict[str, Any]] = []
+    for tag in ("baseline", "typical", "optimized"):
+        entry = verified.get(tag)
+        if not entry:
+            continue
+        stl_path = output_dir / f"{tag}.stl"
+        rows.append({
+            "id": tag,
+            "mass_kg": round(entry.get("mass_kg", 0.0), 4),
+            "peak_von_mises_mpa": round(entry.get("peak_von_mises_MPa", 0.0), 2),
+            "max_displacement_mm": round(entry.get("max_displacement_mm", 0.0), 4),
+            mesh_key: entry.get(mesh_key, ""),
+            "analysis_backend": backend,
+            "path": stl_path.name if stl_path.is_file() else "",
+        })
+    if not rows:
+        return None
+    table = output_dir / OPTIMIZE_TABLE_NAME
+    fieldnames = list(rows[0])
+    with table.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({key: row.get(key, "") for key in fieldnames})
+    return {"path": relative(table), "rows": len(rows)}
 
 
 def write_candidate_table(output_dir: Path) -> dict[str, Any] | None:

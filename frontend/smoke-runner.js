@@ -71,6 +71,29 @@ async function replaceTemplate(page, name) {
       const backend = window.__AI_CAE_FRONTEND__.state.api.models.find(item => item.model === "simulgenvae");
       const trainable = window.__AI_CAE_FRONTEND__.state.api.models.filter(item => item.spec_id !== "geometry_ingest");
       const chi = window.__AI_CAE_FRONTEND__.MODEL_CATALOG["chi-mgnflow"];
+      const registryMismatches = trainable.flatMap(item => {
+        const gui = window.__AI_CAE_FRONTEND__.MODEL_CATALOG[item.model];
+        if (!gui) return [`${item.model}: missing GUI catalog`];
+        const mismatches = [];
+        if (JSON.stringify(gui.modes) !== JSON.stringify(item.modes)) mismatches.push(`${item.model}: modes`);
+        if (JSON.stringify(gui.keys) !== JSON.stringify(item.known_keys)) mismatches.push(`${item.model}: keys`);
+        if (JSON.stringify(gui.required) !== JSON.stringify(item.required)) mismatches.push(`${item.model}: required`);
+        if (JSON.stringify(gui.backendDefaults) !== JSON.stringify(Object.fromEntries(
+          Object.entries(item.defaults || {}).map(([key, value]) => [key, typeof value === "boolean" ? (value ? "True" : "False") : String(value ?? "")])
+        ))) mismatches.push(`${item.model}: defaults`);
+        const expectedDefaultsByMode = Object.fromEntries(
+          Object.entries(item.defaults_by_mode || {}).map(([mode, defaults]) => [
+            mode,
+            Object.fromEntries(Object.entries(defaults || {}).map(([key, value]) => [
+              key,
+              typeof value === "boolean" ? (value ? "True" : "False") : String(value ?? "")
+            ]))
+          ])
+        );
+        if (JSON.stringify(gui.backendDefaultsByMode) !== JSON.stringify(expectedDefaultsByMode)) mismatches.push(`${item.model}: defaults_by_mode`);
+        return mismatches;
+      });
+      const sdfflow = window.__AI_CAE_FRONTEND__.MODEL_CATALOG.sdfflow;
       return {
         models: Object.keys(window.__AI_CAE_FRONTEND__.MODEL_CATALOG).length,
         liveTrainable: trainable.length,
@@ -84,7 +107,10 @@ async function replaceTemplate(page, name) {
         chiKeys: chi?.keys.length,
         backendChiKeys: trainable.find(item => item.model === "chi-mgnflow")?.known_keys.length,
         chiModes: chi?.modes,
-        chiFlowSolver: chi?.defaults.flow_solver
+        chiFlowSolver: chi?.defaults.flow_solver,
+        registryMismatches,
+        sdfflowModes: sdfflow?.modes,
+        sdfflowOptimizeDefaults: sdfflow?.backendDefaultsByMode?.optimize
       };
     });
     assert(contract.missingBlocks.length === 0, `Live trainable routes without GUI blocks: ${contract.missingBlocks.join(", ")}`);
@@ -94,6 +120,9 @@ async function replaceTemplate(page, name) {
     assert(contract.chiKeys === contract.backendChiKeys, "cHI-MGNflow GUI keys disagree with its live MethodSpec");
     assert(JSON.stringify(contract.chiModes) === JSON.stringify(["train", "inference"]), "cHI-MGNflow modes are missing");
     assert(contract.chiFlowSolver === "heun", "cHI-MGNflow live defaults were not merged into the block");
+    assert(contract.registryMismatches.length === 0, `Live MethodSpec/GUI contract drift: ${contract.registryMismatches.join(", ")}`);
+    assert(contract.sdfflowModes.includes("optimize"), "SDFFlow optimize mode is missing from the live GUI contract");
+    assert(contract.sdfflowOptimizeDefaults?.opt_budget === "120", "SDFFlow optimize defaults were not retained from the live MethodSpec");
 
     // This whole section is about the SimulGen pipeline's shape (it asserts the
     // simulgen block, its condition wiring, and its link count), so load it
@@ -362,6 +391,43 @@ async function replaceTemplate(page, name) {
       await page.locator('[data-node-id="generator"] .node-head').click();
       assert(await page.locator('.inspector-config[data-key="num_samples"]').inputValue() === "24", "CAD Generator candidate count is not editable");
       assert(await page.locator('.inspector-config[data-key="cfg_scale"]').inputValue() === "2.5", "CAD Generator guidance is not editable");
+
+      // A newly published native mode must be usable without duplicating its
+      // defaults in static JavaScript. Exercise the real model sheet, its
+      // default provenance, optimization help, and one-click explicit preset.
+      await page.locator('[data-node-id="generator_model"] .node-head').click();
+      await page.locator("#openFullConfig").click();
+      assert(await page.locator('#configMode option[value="optimize"]').count() === 1, "SDFFlow optimize mode is absent from the full config selector");
+      await page.locator("#configMode").selectOption("optimize");
+      assert((await page.locator("#configBadges").innerText()).includes("backend-defaulted"), "Published optimize defaults are not disclosed in the GUI");
+      await page.locator("#configSearch").fill("opt_budget");
+      const optimizeBudget = page.locator('.full-config-control[data-key="opt_budget"]');
+      await optimizeBudget.waitFor();
+      assert(await optimizeBudget.inputValue() === "", "An implicit backend default was silently serialized as a manual value");
+      assert((await optimizeBudget.getAttribute("placeholder"))?.includes("120"), "The opt_budget backend default is not visible in the control");
+      const budgetCard = optimizeBudget.locator("xpath=ancestor::article[1]");
+      assert(await budgetCard.locator(".config-status.defaulted").count() === 1, "Optimization backend default is not labelled as defaulted");
+      assert((await budgetCard.innerText()).includes("Maximum number of generate-mesh-solve evaluations"), "Optimization key help is missing");
+      assert(!(await page.locator("#configRaw").inputValue()).split(/\r?\n/).some(line => line.trim().startsWith("opt_budget")), "Implicit optimize default leaked into the explicit raw config");
+      await page.locator("#configSearch").fill("");
+      await page.locator('[data-config-section="Optimization"]').click();
+      assert(await page.locator("#configFields .config-card").count() >= 20, "Optimization keys are not grouped into a usable dedicated section");
+      await page.locator("#configPreset").selectOption("sdfflow_optimize");
+      const optimizePresetDialog = page.waitForEvent("dialog");
+      await page.locator("#applyPreset").click();
+      const presetDialog = await optimizePresetDialog;
+      const optimizePresetMessage = presetDialog.message();
+      assert(optimizePresetMessage.includes("preset changes"), `Optimization preset did not show its review confirmation: ${optimizePresetMessage}`);
+      await presetDialog.accept();
+      await page.waitForFunction(() => {
+        const node = window.__AI_CAE_FRONTEND__.state.nodes.find(item => item.id === "generator_model");
+        return node?.config.mode === "optimize" && Boolean(node.config.opt_budget) && Boolean(node.config.seed);
+      });
+      const explicitOptimizeConfig = await page.locator("#configRaw").inputValue();
+      assert(explicitOptimizeConfig.split(/\r?\n/).some(line => /^opt_budget\s+\d+\s*$/.test(line)), "Optimization preset did not materialize opt_budget");
+      assert(explicitOptimizeConfig.split(/\r?\n/).some(line => /^seed\s+0\s*$/.test(line)), "Optimization preset did not materialize its reproducibility seed");
+      assert(explicitOptimizeConfig.includes("/optimization"), "Optimization preset did not isolate its output directory");
+      await page.locator('[data-close="configOverlay"]').click();
 
       await replaceTemplate(page, "blank");
       await page.locator('.palette-item[data-block-type="source.hdf5"]').click();

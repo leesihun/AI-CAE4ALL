@@ -1,75 +1,67 @@
-"""Generate the cHI-MGNflow SAOI Wave-B sweep: 2^(5-1) resolution V, 16 arms.
+"""Generate the cHI-MGNflow SAOI Wave-B sweep: 2^(4-1) resolution IV, 8 arms.
 
     python configs/cHI-MGNflow/SAOI_sweepB/gen_sweep_configs.py
 
 Emits, from the production configs in ../SAOI_all_input/:
-    config_train_<arm>.txt          16   one training arm
-    config_infer_<arm>_<tag>.txt    48   one arm x one held-out eval set
+    config_train_<arm>.txt         8    one training arm, ONE PER GPU (0-7)
+    config_infer_<arm>_<tag>.txt   24   one arm x one held-out eval set
 
-Deliberately the same shape as configs/MeshGraphNets-V/SAOI_sweep3/ so the two
-methods are compared on identical data with identical machinery. Nothing here is
-hand-edited -- regenerate, and change ../SAOI_all_input/ when a NON-swept key
-has to move.
+Nothing here is hand-edited -- regenerate, and change ../SAOI_all_input/ when a
+NON-swept key has to move.
 
 THE DESIGN
-  Five factors in sixteen runs, defining relation  I = ABCDE  (resolution V):
-  E is set to A xor B xor C xor D rather than run freely. All five main effects
-  and all ten 2-factor interactions are estimable clean; only 3-factor and
-  higher alias. With one run per cell there is no replication either way, so the
-  half fraction gives up nothing real and buys a whole extra factor over the
-  2^4 design this replaces.
+  Four factors in eight runs, defining relation  I = ABCD  (resolution IV):
+  D is set to A xor B xor C rather than run freely. All four main effects are
+  estimable clean; the six 2-factor interactions come in three CONFOUNDED
+  PAIRS (AB=CD, AC=BD, AD=BC) -- a large one cannot be attributed to a single
+  pair without another run. This replaced an earlier 2^(5-1) x 16-arm design:
+  at a measured 500 s/epoch, 16 arms two-per-GPU for 2000 epochs was multiple
+  GPU-weeks. Eight arms at one-per-GPU and 500 epochs is a
+  500 s/epoch x 500 epochs ~= 2.9-day, BUDGET-LIMITED comparison instead of a
+  converged one.
 
-WHY THESE FIVE, AND WHY NOT THE OBVIOUS ONES
-  The variational tree's wave-3 swept z_conditioning / prior_grad_to_encoder /
-  vae_latent_dim / regularizer scale. NONE of those exist here -- there is no
-  posterior and no learned prior, so there is nothing to transfer.
+WHY THESE FOUR, AND WHY NOT THE OBVIOUS FIFTH
+  There is no posterior and no learned prior in this method, so nothing from
+  the variational tree's axes (z_conditioning, prior_grad_to_encoder, ...)
+  transfers here.
 
-  And the two knobs that look most tempting, `flow_steps` and `flow_solver`,
-  must NOT be here: they are SAMPLING-TIME choices. The same checkpoint
-  integrates at K=4 or K=100, so sweeping them across training runs would burn
-  the entire 16-arm budget on a question inference answers for free. They belong
-  to Wave A (docs/SWEEP_PLAN.md), which costs zero training runs.
+  `flow_steps` and `flow_solver` are NOT axes, on purpose: they are
+  SAMPLING-TIME choices. The same checkpoint integrates at K=4 or K=100, so
+  sweeping them across training runs would burn budget on a question inference
+  answers for free. They belong to Wave A (docs/SWEEP_PLAN.md), which costs
+  zero training runs.
+
+  `voronoi_clusters` was dropped from an earlier 5-factor version of this grid.
+  It is the only key that would enter the coarsening cache signature, so
+  sweeping it means building and warming TWO caches instead of one -- real
+  infrastructure cost for a hypothesis unlikely to separate at a 500-epoch
+  budget. It stays fixed at the production value (1000, 100).
 
   A  batch_size        16 | 32     Gradient variance is flow matching's real cost
                                    driver: the target y - z0 carries irreducible
                                    noise of size Var(y|g). Per-step forward cost
-                                   dropped (no posterior encoder, no prior trunk),
-                                   so a larger batch now fits the same VRAM --
-                                   spending that headroom on variance is the most
-                                   direct answer to the method's main expense.
+                                   is lower than the variational method's (no
+                                   posterior encoder, no prior trunk), so a
+                                   larger batch fits the same VRAM -- spending
+                                   that headroom on variance is the most direct
+                                   answer to the method's main expense.
   B  flow_t_sampling   tu | tl     logit-normal concentrates the budget on
                                    mid-path, where the velocity is hardest: t=0
                                    is nearly pure noise and t=1 nearly the data,
                                    both easy. Changes only WHERE budget is spent,
                                    never the optimum, so the levels stay
                                    comparable.
-  C  voronoi_clusters  c1k | c2k   FM-specific hypothesis: at t~0 the input is
-                                   white noise plus geometry, and recovering
-                                   global structure is the coarsest level's job.
-                                   This should matter MORE here than for
-                                   deterministic regression.
-                                   COSTS: this is the ONLY swept key that enters
-                                   the coarsening cache signature, so the grid
-                                   builds TWO caches, not one, and run_sweep.sh
-                                   warms one arm per level.
-  D  capacity          k0 | k1     latent_dim + mp_per_level together. Added to
-                                   match wave-3's capacity axis so the two
-                                   studies can be read side by side, and because
-                                   a velocity field is a harder function than a
-                                   point prediction -- whether it wants more
-                                   width is open.
-  E  learningr         lr1 | lr3   A noisier target may want a different LR, and
+  C  capacity          k0 | k1     latent_dim + mp_per_level together (28 vs 40
+                                   processor blocks). A velocity field is a
+                                   harder function than a point prediction --
+                                   whether it wants more width is open.
+  D  learningr         lr1 | lr3   A noisier target may want a different LR, and
                                    it is the classic partner of batch size.
-                                   GENERATED: E = A xor B xor C xor D.
+                                   GENERATED: D = A xor B xor C.
 
 GPU PACKING
-  Arms are paired by complementing the four free factors; E is then unchanged
-  (four flips leave the parity alone). Every GPU therefore hosts one of each
-  level of batch_size, flow_t_sampling, voronoi_clusters and capacity -- which
-  is what balances VRAM, since batch and capacity are what move memory. The LR
-  is constant within a pair, which costs nothing: it changes no memory or
-  runtime, and eight identical cards in one node carry no batch/day/operator
-  effect for it to confound with.
+  One arm per GPU (gpu = arm index), so there is no VRAM-sharing exposure and
+  no complement-pairing logic is needed.
 """
 import itertools
 # newline='\n' on EVERY write: the default (None) translates to CRLF on
@@ -123,7 +115,8 @@ TAG_NOTE = {
 FIXED_TRAIN = {
     'training_epochs':      ('500',  'measured budget: 500 s/epoch x 500 = 2.9 days per arm '
                                      'at one arm per GPU. NOT a converged comparison -- see the README'),
-    'num_workers':          ('2',    '16 concurrent jobs; 4 workers each would be 64 processes'),
+    'num_workers':          ('4',    'matches production; one arm per GPU now, so there is no '
+                                     'need to economize workers the way a shared-GPU sweep does'),
     'val_interval':         ('100',  'CRPS is the selection metric; validation integrates the ODE'),
     'test_interval':        ('500',  'periodic plots'),
     'val_flow_steps':       ('12',   'cheap integration for the periodic validation score'),
@@ -131,7 +124,7 @@ FIXED_TRAIN = {
                                      'so varying it would only add noise to the comparison'),
     'flow_steps':           ('30',   'provenance only; the inference configs set the K actually used'),
     'flow_solver':          ('heun', '2nd-order trapezoid'),
-    'hierarchy_cache_keep': ('True', 'REQUIRED: arms share a cache per voronoi level; '
+    'hierarchy_cache_keep': ('True', 'REQUIRED: all 8 arms share ONE cache; '
                                      'a finishing arm must not delete it'),
     'best_by':              ('crps', 'select on the sampling metric, not the one-step regression loss'),
 }

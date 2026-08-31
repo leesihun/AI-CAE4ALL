@@ -209,17 +209,20 @@ The handoff is based on checks actually run against the live checkout:
    tests pass.
 2. `/api/health` reports 12/12 healthy routes, including all 11 trainable model
    routes represented by GUI blocks.
-3. The live System audit checks 330 current configs and accurately exposes one
-   unrelated failure in the untracked Geometry optimization draft
-   (`mode optimize` is not a registered SDFFlow mode); the strict cHI-MGNflow
-   ex9 config check still passes.
-4. Fourteen Chrome runners exercise graph editing, repository file selection,
+3. The live System audit checks every current `configs/**/config*.txt` file and
+   renders authoritative per-file results. SDFFlow's closed-loop `optimize`
+   mode is registered and its config is included; the strict cHI-MGNflow ex9
+   config check still passes.
+4. Fifteen Chrome runners exercise graph editing, repository file selection,
     configuration/autofill, history, accessibility, responsive layout, HDF5 and
     geometry viewing, evaluation, comparison, optimization, export, deployment,
     System audit, stale-response races, and process-state behavior. The dedicated
     control-surface runner also clicks every previously uncovered action family;
     the only ID-bearing controls not named directly are the three hidden file
     inputs exercised through their visible Import/Load/Upload buttons.
+   Live global/per-mode defaults are also compared for every trainable route;
+   the SDFFlow `optimize` sheet exposes backend-default provenance, a dedicated
+   Optimization section, field guidance, and a confirmation-gated preset.
 5. The checkpoint-only cHI-MGNflow runner clicks the real repository picker,
    connects the real checkpoint and held-out HDF5, sets CPU/one-step/mean
    controls in the Inspector, accepts the launch confirmation, passes the exact

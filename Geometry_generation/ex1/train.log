@@ -1,0 +1,6 @@
+==== Pipeline 2026-09-01 07:19:35 config=C:\Users\Lee\Desktop\Huni\AI-CAE4ALL\frontend\runtime\configs\20260901-071924-SDFFlow-train-preflight-bd6c68e8.txt ====
+VAE start: checkpoint does not exist
+VAE complete: complete at epoch 0
+FM start: checkpoint does not exist
+FM complete: complete at epoch 0
+Pipeline complete in 200.49s: VAE=../output/geometry_generation/gui_train_smoke_1788214760/sdfflow_vae.pth, FM=../output/geometry_generation/gui_train_smoke_1788214760/sdfflow_fm.pth

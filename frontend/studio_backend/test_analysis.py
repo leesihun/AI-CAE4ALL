@@ -1,9 +1,16 @@
 import csv
+import json
 import tempfile
 import unittest
 from pathlib import Path
 
-from studio_backend.analysis import comparison_schema, optimization_schema, run_model_comparison, run_optimization
+from studio_backend.analysis import (
+    comparison_schema,
+    optimization_schema,
+    run_model_comparison,
+    run_optimization,
+    write_optimize_summary_table,
+)
 from studio_backend.paths import RUNTIME_ROOT
 
 
@@ -76,6 +83,39 @@ class OptimizationSchemaTests(unittest.TestCase):
 
             self.assertEqual(report["rows"], 3)
             self.assertEqual(report["numeric_candidates"], 2)
+
+
+class OptimizationSummaryTableTests(unittest.TestCase):
+    def test_mesh_cardinality_column_matches_analysis_backend(self):
+        RUNTIME_ROOT.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="optimization-summary-", dir=RUNTIME_ROOT) as directory:
+            root = Path(directory)
+            for backend, mesh_key, other_key, mesh_value in (
+                ("surrogate", "num_nodes", "num_tets", 5003),
+                ("fea", "num_tets", "num_nodes", 12345),
+            ):
+                output = root / backend
+                output.mkdir()
+                (output / "summary.json").write_text(json.dumps({
+                    "analysis_backend": backend,
+                    "verified": {
+                        "baseline": {
+                            "mass_kg": 1.0,
+                            "peak_von_mises_MPa": 100.0,
+                            "max_displacement_mm": 0.1,
+                            mesh_key: mesh_value,
+                        },
+                    },
+                }), encoding="utf-8")
+
+                result = write_optimize_summary_table(output)
+                self.assertEqual(result["rows"], 1)
+                with (output / "optimize_summary.csv").open(encoding="utf-8", newline="") as handle:
+                    reader = csv.DictReader(handle)
+                    rows = list(reader)
+                self.assertIn(mesh_key, reader.fieldnames)
+                self.assertNotIn(other_key, reader.fieldnames)
+                self.assertEqual(rows[0][mesh_key], str(mesh_value))
 
 
 if __name__ == "__main__":

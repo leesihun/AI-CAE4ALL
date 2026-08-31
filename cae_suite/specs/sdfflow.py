@@ -58,6 +58,9 @@ SDFFLOW_KEYS = frozenset(
         "opt_material_e", "opt_material_nu", "opt_material_rho", "opt_yield_stress",
         "opt_stress_margin", "opt_disp_margin", "opt_stress_weight", "opt_disp_weight",
         "opt_verify_resolution", "opt_verify_target_faces", "opt_verify_mesh_size_max",
+        # optimize: AI-surrogate analysis backend (HI-MGN in place of gmsh + FEA)
+        "opt_analysis", "opt_surrogate_checkpoint", "opt_surrogate_config",
+        "opt_surrogate_target_nodes",
     }
 )
 
@@ -204,9 +207,30 @@ def validate_sdfflow(ctx: SpecValidationContext) -> None:
              "opt_sigma0", "opt_target_faces", "opt_mesh_size_max", "opt_length_scale",
              "opt_material_e", "opt_material_rho", "opt_yield_stress",
              "opt_verify_resolution", "opt_verify_target_faces",
-             "opt_latent_range", "opt_shell_scale"),
+             "opt_latent_range", "opt_shell_scale", "opt_surrogate_target_nodes"),
             "SDF-OPT-POSITIVE-001",
         )
+        analysis_backend = str(values.get("opt_analysis", "fea")).strip().lower()
+        if analysis_backend not in {"fea", "surrogate"}:
+            ctx.add(
+                "SDF-OPT-ANALYSIS-001",
+                Severity.ERROR,
+                "opt_analysis must be 'fea' or 'surrogate'.",
+                field_name="opt_analysis",
+            )
+        elif analysis_backend == "surrogate":
+            for field_name, label in (
+                ("opt_surrogate_checkpoint", "HI-MGN checkpoint"),
+                ("opt_surrogate_config", "HI-MGN inference config"),
+            ):
+                if not str(values.get(field_name, "")).strip():
+                    ctx.add(
+                        "SDF-OPT-SURROGATE-001",
+                        Severity.ERROR,
+                        f"{field_name} is required when opt_analysis=surrogate ({label}).",
+                        field_name=field_name,
+                        hint="Choose an existing file or switch opt_analysis back to fea.",
+                    )
         known_cases = {"vertical", "horizontal", "diagonal", "torsion"}
         cases = {str(c).strip().lower() for c in as_list(values.get("opt_load_cases", []))}
         unknown = cases - known_cases
@@ -300,6 +324,7 @@ def build_sdfflow_spec() -> MethodSpec:
                 "opt_material_rho": 4430.0, "opt_yield_stress": 903e6,
                 "opt_stress_margin": 1.0, "opt_disp_margin": 1.0,
                 "opt_stress_weight": 6.0, "opt_disp_weight": 3.0,
+                "opt_analysis": "fea", "opt_surrogate_target_nodes": 5000,
                 "opt_verify_resolution": 160, "opt_verify_target_faces": 30000,
                 "opt_verify_mesh_size_max": 0.035,
             },
@@ -312,6 +337,8 @@ def build_sdfflow_spec() -> MethodSpec:
             PathRule("fm_modelpath", PathKind.OUTPUT_FILE, frozenset({"train", "train_fm"})),
             PathRule("fm_modelpath", PathKind.INPUT_FILE, frozenset({"sample", "interpolate", "optimize"})),
             PathRule("input_mesh", PathKind.INPUT_FILE, frozenset({"reconstruct"})),
+            PathRule("opt_surrogate_checkpoint", PathKind.INPUT_FILE, frozenset({"optimize"})),
+            PathRule("opt_surrogate_config", PathKind.INPUT_FILE, frozenset({"optimize"})),
             PathRule("output_dir", PathKind.OUTPUT_DIR),
         ),
         validators=(validate_sdfflow,),

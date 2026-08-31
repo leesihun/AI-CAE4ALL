@@ -1,117 +1,161 @@
 # cHI-MGNflow SAOI Wave B — sweep
 
-A 2^(5-1) resolution-V half fraction: **five factors in sixteen arms**, two arms
+A 2^(4-1) resolution-IV half fraction: **four factors in eight arms**, one arm
 per GPU across GPUs 0–7. Trains on `saoi_train_bot.h5`, infers every arm against
 the three held-out `*_bot` eval sets, and scores the grid into one report.
 
-Deliberately the same shape as `configs/MeshGraphNets-V/SAOI_sweep3/` — same
-data, same eval sets, same report format — so the two methods can be read side
-by side. Everything except the three scripts and this file is **generated**:
+Everything here except the three scripts and this file is **generated**:
 
 ```bash
 python configs/cHI-MGNflow/SAOI_sweepB/gen_sweep_configs.py
 ```
 
-## Design
+## Layout
 
-Defining relation **`I = ABCDE`**: `learningr` is `A xor B xor C xor D`, not
-free. All 5 main effects and all 10 two-factor interactions are clean.
+| Path | Authored? | What |
+| --- | --- | --- |
+| `gen_sweep_configs.py` | yes | Emits all 32 configs from the production ones in `../SAOI_all_input/` |
+| `run_sweep.sh` | yes | preflight → cache warm → train → infer → score, one command |
+| `score_sweep.py` | yes | Builds `sweep_results.md` + the warpage overlay figures |
+| `config_train_<arm>.txt` | generated (8) | One training arm |
+| `config_infer_<arm>_<tag>.txt` | generated (24) | One arm × one eval set |
+
+The base is `../SAOI_all_input/config_train_bot.txt`; the inference configs
+are derived from that folder's three `*_bot` infer configs. A non-swept key
+that needs to change should change there, not here.
+
+## The design
+
+Defining relation **`I = ABCD`**: the fourth factor is `A xor B xor C`, not
+free. All 4 main effects are estimable clean; the six 2-factor interactions
+collapse into **three confounded pairs** — `AB=CD`, `AC=BD`, `AD=BC` — so a
+large effect on one pair cannot be attributed to either half without a
+follow-up run. With one run per cell there is no replication either way, so
+3-factor terms were never trustworthy — this is the shape that keeps main
+effects clean at the lowest run count.
 
 | | factor | level 0 | level 1 |
 | --- | --- | --- | --- |
 | A | `batch_size` | `b16` 16 | `b32` 32 |
 | B | `flow_t_sampling` | `tu` uniform | `tl` logit-normal |
-| C | `voronoi_clusters` | `c1k` 1000,100 | `c2k` 2000,250 |
-| D | capacity | `k0` 128 / `4,6,8,6,4` | `k1` 192 / `6,8,12,8,6` |
-| E | `learningr` | `lr1` 1e-4 | `lr3` 3e-4 |
+| C | capacity | `k0` `latent_dim` 128 / `mp_per_level` 4,6,8,6,4 (28 blocks) | `k1` 192 / 6,8,12,8,6 (40 blocks) |
+| D | `learningr` (generated) | `lr1` 1e-4 | `lr3` 3e-4 |
 
-`flow_steps` and `flow_solver` are **not** here on purpose: they are
-sampling-time choices, so the same checkpoint integrates at any K and sweeping
-them over training runs would burn the budget on what inference answers for
+Arm names encode the cell: `<b16\|b32>_<tu\|tl>_<k0\|k1>_<lr1\|lr3>`.
+
+**This replaced an earlier 5-factor / 16-arm design** (`voronoi_clusters` as a
+fifth axis, two arms per GPU, 2000-epoch budget). At a measured 500 s/epoch
+that was multiple GPU-weeks and risked OOM from card-sharing. `voronoi_clusters`
+was dropped rather than any of the other four: it is the only key that would
+enter the coarsening cache signature, so sweeping it means building and
+warming **two** caches instead of one — real infrastructure cost for a
+hypothesis unlikely to separate at a short, budget-limited run. It stays fixed
+at the production value (`1000, 100`).
+
+`flow_steps` and `flow_solver` are **not** swept, on purpose: they are
+sampling-time choices, so the same checkpoint integrates at any `K` and
+sweeping them over training runs would burn arms on what inference answers for
 free. They belong to Wave A (`cHI-MGNflow/docs/SWEEP_PLAN.md`).
-
-**`voronoi_clusters` is the only swept key that enters the coarsening cache
-signature**, so this grid builds **two** caches, not one. `run_sweep.sh` warms
-one arm per level and `cache_ready()` counts files rather than testing
-existence — a single-file check would release all 16 arms as soon as the first
-cache appeared, leaving 15 of them to race on the second build.
 
 ## Before you launch: Wave 0
 
-`training_epochs` is a **placeholder (6000)**. Flow matching needs more steps
-than deterministic regression because the target `y − z0` carries irreducible
-noise of size `Var(y|g)`, and that multiple has never been measured on this
-data. Launch at a guessed budget and the ranking becomes a function of
-convergence speed rather than of the factors.
+`training_epochs` is fixed at **500**, set from a Wave 0 measurement (a
+deterministic HI-MGN vs. a flow arm on the same backbone/data/budget, compared
+on where their loss curves flatten) combined with a measured **500 s/epoch**
+on this dataset and backbone. **500 epochs is ~2.9 days per arm — a
+BUDGET-LIMITED comparison, not a converged one.** Read the report that way:
+"best at this budget," not an asymptotic ranking. If the budget changes,
+update `FIXED_TRAIN['training_epochs']` in the generator and regenerate.
 
-`docs/SWEEP_PLAN.md` Wave 0 is two arms (~1 day): a deterministic HI-MGN and a
-flow arm on the same backbone/data/budget, compared on where their loss curves
-flatten. Set `FIXED_TRAIN['training_epochs']` from that and regenerate.
+## GPU packing
 
-## Cost — read this before starting the inference stage
+One arm per GPU (`gpu_ids = arm index`) — no card sharing, so there is no
+VRAM-exposure from co-residency and no complement-pairing logic is needed.
 
-Unlike the variational method, **one draw is not one forward**: a draw
-integrates the ODE, so it costs `flow_steps x 2` forwards under Heun.
+```
+gpu 0  b16_tu_k0_lr1      gpu 4  b32_tu_k0_lr3
+gpu 1  b16_tu_k1_lr3      gpu 5  b32_tu_k1_lr1
+gpu 2  b16_tl_k0_lr3      gpu 6  b32_tl_k0_lr1
+gpu 3  b16_tl_k1_lr1      gpu 7  b32_tl_k1_lr3
+```
 
-| | per draw | per scene at 2000 draws |
-| --- | --- | --- |
-| MeshGraphNets-V | 1 forward | 2,000 |
-| cHI-MGNflow, `flow_steps 12` | 24 forwards | 48,000 |
-| cHI-MGNflow, `flow_steps 30` | 60 forwards | 120,000 |
-
-The stage total is `16 arms x 3 eval sets x scenes x that`. `INFER_STEPS` is set
-to **12**, not the production 30, precisely because of this: K is a sampling-time
-choice, and the spread statistic (max − min over nodes) is far less sensitive to
-integration error than a per-node field. If Wave A shows the spread histogram
-still moving between K=12 and K=30, raise `INFER_STEPS` and re-run **only the
-inference stage** — no retraining. The launcher's `FLOW-COST` warning prints the
-exact figure for every config.
+None of the swept keys enter the coarsening cache signature (`voronoi_clusters`
+is fixed, not an axis here), so all 8 arms share **ONE** `*.mscache.*.h5`.
 
 ## Running it
 
 ```bash
-rm -f dataset/saoi/saoi_train_bot.mscache.*.h5      # BOTH caches
+rm -f dataset/saoi/saoi_train_bot.mscache.*.h5
 nohup bash configs/cHI-MGNflow/SAOI_sweepB/run_sweep.sh > sweep.out 2>&1 &
+tail -f sweep.out
 ```
 
-preflight (64 configs) → warm both caches → train 16 → infer 48 → score.
-Env knobs: `ARMS`, `PREFLIGHT`, `TRAIN`, `INFER`, `INFER_TAGS`, `SCORE`,
-`WARM_TIMEOUT`, `CACHE_COUNT_REQUIRED`.
+`run_sweep.sh` preflights all 32 configs, launches ONE arm to build the shared
+cache (aborting the batch if it dies, so a config error costs minutes not
+days), then the other 7, then inference, then scoring.
 
-`TRAIN=0` skips training and runs only inference + scoring on the checkpoints
-already on disk. If batch 32 does not fit two-per-card, train in two halves that
-are 4/4 balanced on all five factors (do **not** split by name prefix — the
-first eight arms are all `b16`), then finish with one
-`TRAIN=0 INFER=1 SCORE=1` pass over all 16.
+| env | default | effect |
+| --- | --- | --- |
+| `ARMS` | all 8 | subset to run |
+| `PREFLIGHT` | 1 | `--check` every arm before launching any |
+| `TRAIN` | 1 | `0` skips training and goes straight to infer + score on checkpoints already on disk |
+| `WARM_TIMEOUT` | 21600 | seconds to wait for the shared cache |
+| `INFER` | 1 | run the per-arm inference stage |
+| `INFER_TAGS` | all 3 | which eval sets to infer |
+| `SCORE` | 1 | build the report when training ends |
 
 ## What comes out
 
 ```
-outputs/saoi_sweepB/sweep_results.md        the report
-outputs/saoi_sweepB/warpage_<tag>.png       GT + all 16 arms on ONE axis, ranked by W1
+outputs/saoi_sweepB/sweep_results.md      the report — read/paste this
+outputs/saoi_sweepB/sweep_results.json    everything, incl. per-arm log detail
+outputs/saoi_sweepB/warpage_<tag>.png     GT + all 8 arms on ONE axis, ranked by W1
+outputs/saoi_sweepB/run_logs/<arm>.log    per-arm transcripts
 output/chi-mgnflow/saoi_sweepB/<arm>.pth
 output/chi-mgnflow/saoi_sweepB/infer/<arm>/<tag>/histogram_compare.png
 output/chi-mgnflow/saoi_sweepB/infer/<arm>/<tag>/spread_values.npz
 ```
 
-The report carries the per-arm table, **main effects** (8 vs 8), **two-factor
-interactions**, and the **warpage spread table** — `max(z_disp) − min(z_disp)`
-per realization against ground truth, normalized by the GT spread's own std so
-the three eval sets are comparable. `W1/sd` is the ranking column; `sd ratio < 1`
-is under-dispersion.
+The report carries: the per-arm table (best CRPS, valid `fm` loss, ensemble
+spread ratio, one-step deterministic MSE), **main effects** (4 vs 4 per
+factor), **confounded two-factor effects** (3 pairs, each the sum of its
+alias), and the **warpage spread table** — `max(z_disp) − min(z_disp)` per
+realization, generated against ground truth, normalized by the GT spread's
+own std so the three eval sets are comparable. `W1/sd` is the ranking column;
+`sd ratio < 1` is the classic under-dispersion failure.
 
-**There is no rank-histogram stage.** The variational tree's
-`misc/eval_distribution.py` samples through a latent prior this method does not
-have; porting it means reimplementing its draw loop against the ODE sampler.
-Until then the report is training-log CRPS plus the spread comparison, and the
-`eval` columns read `-`.
+**There is no rank-histogram / verification-rank stage.** The variational
+tree's `misc/eval_distribution.py` samples through a learned latent prior that
+this method does not have; the warpage comparison is this sweep's calibration
+signal instead.
+
+The inference configs set `save_rollouts False`, so **no trajectory HDF5s are
+written** — scene × draws would be thousands of files across the grid.
+`num_vae_samples` is 2000 per scene against production's 5000; raise
+`INFER_SAMPLES` in the generator if the histograms look ragged. Unlike the
+variational method, **one draw is not one forward** here — a draw integrates
+the ODE, so it costs `flow_steps x 2` forwards under Heun. `INFER_STEPS` is set
+to 12, not the production 30, because `K` is purely a sampling-time choice and
+the spread statistic is far less sensitive to integration error than a
+per-node field; the launcher's `FLOW-COST` warning prints the exact forward
+count for every config.
 
 ## Watch these in the first hour
 
-1. **`VRAM peak=` on a `b32_*_k1` arm** — the worst corner is batch 32 ×
-   capacity k1 × `c2k`. If the pair on a card does not fit, drop the batch
-   levels to `('8', '16')` in the generator and regenerate.
-2. **Both cache files appear** before the other 14 arms launch — the runner
-   prints the count it is waiting for.
-3. **CRPS actually moving** by the first few `val_interval`s. If it is flat, the
-   epoch budget is the problem, not the factors — go do Wave 0.
+1. **`VRAM peak=` on a `b32_*_k1` arm** — batch 32 at the wider/deeper capacity
+   level is the worst corner, even with one arm per card.
+2. **The first few epochs' log line**: `Train fm=... | Valid fm=... | CRPS ...`.
+   If CRPS is flat from the first `val_interval` on, the epoch budget is the
+   problem, not the factors — that is what Wave 0 exists to catch beforehand.
+3. **`[FlowDiag] spread/gt=`** in the transcript — this is the same
+   under-/over-dispersion signal as the warpage table's `sd ratio`, but
+   measured on the train split during training rather than on a held-out set.
+
+## Caveats
+
+- 500 epochs is a **budget-limited**, not converged, comparison — see "Before
+  you launch" above.
+- Resolution IV means a large confounded-pair effect needs a follow-up run to
+  attribute to one member or the other.
+- Only the three `*_bot` eval sets are inferred: the sweep trains on
+  `saoi_train_bot.h5`, so no `*_top` checkpoint exists for these arms.

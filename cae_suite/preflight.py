@@ -57,9 +57,13 @@ def _validate_spec(result: PreflightResult) -> None:
     report = result.report
     model_id = result.resolved.model_id
     mode = result.mode
+    active_defaults = dict(spec.defaults)
+    if mode is not None:
+        active_defaults.update(spec.defaults_by_mode.get(mode, {}))
 
     for name in sorted(spec.required_fields(model_id, mode)):
-        if name not in parsed.values or _missing(parsed.values.get(name)):
+        if (name not in parsed.values or _missing(parsed.values.get(name))) \
+                and name not in active_defaults:
             report.add(
                 "CFG-REQ-001",
                 Severity.ERROR,
@@ -90,9 +94,6 @@ def _validate_spec(result: PreflightResult) -> None:
                     promote_in_strict=True,
                 )
 
-    active_defaults = dict(spec.defaults)
-    if mode is not None:
-        active_defaults.update(spec.defaults_by_mode.get(mode, {}))
     for name, default in sorted(active_defaults.items()):
         if name not in parsed.values:
             report.add(

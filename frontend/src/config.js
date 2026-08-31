@@ -35,6 +35,17 @@ export function requiredFor(modelId, mode) {
     : keys(`model mode gpu_ids dataset_dir modelpath input_var output_var training_epochs batch_size learningr`));
 }
 
+/** Defaults published by the live MethodSpec, kept separate from the Studio's
+ * opinionated new-block values so the raw config remains explicit. */
+export function backendDefaultsFor(modelId, mode) {
+  const model = MODEL_CATALOG[String(modelId || "").toLowerCase()] || {};
+  const canonicalMode = String(mode || "").toLowerCase();
+  return {
+    ...(model.backendDefaults || {}),
+    ...(model.backendDefaultsByMode?.[canonicalMode] || {})
+  };
+}
+
 export function keyDisposition(modelId, key, config = null) {
   // The multiscale trainer prints "[message_passing_num is IGNORED when
   // use_multiscale=True]" and then obeys mp_per_level instead, but the sheet
@@ -98,6 +109,7 @@ function conditionallyMissing(modelId, config) {
 export function sectionFor(modelId, key, required, config = null) {
   if (keyDisposition(modelId, key, config) !== "active") return "Inactive / rejected";
   if (required.has(key)) return "Required";
+  if (key.startsWith("opt_")) return "Optimization";
   if (/dataset|modelpath|output_dir|log_file|pipeline_log|param_dir|input_mesh|sidecar|split_seed/.test(key)) return "Data & output";
   if (/^(point_|pointnet_|deeponet_|fno_|gino_|encoder_|decoder_|fm_arch|fm_blocks|fm_hidden|fm_cond_hidden|flow_time_freqs|latent_|latent_dim|message_passing|slice_num|num_layers|num_heads|attention_kernel|mlp_ratio|coarsening|multiscale|mp_per_level|positional|fourier|operator_dim|global_condition|num_filter|lc_filter|network_size)/.test(key)) return "Architecture";
   // Network-shape keys the prefix-anchored test above misses. Without these,
@@ -205,7 +217,7 @@ export function parseConfig(text) {
 export function presetOptions(modelId) {
   const options = [["repository", "Checked-in example"], ["smoke", "Smoke test"], ["low_vram", "Low VRAM"]];
   if (modelId === "meshgraphnets") options.push(["mgn_flat", "Flat MGN"], ["mgn_hi", "HI-MGN"], ["mgn_bsms", "BSMS-GNN"]);
-  if (modelId === "sdfflow") options.push(["sdfflow_full", "Full VAE + FM"], ["sdfflow_vae", "VAE only"], ["sdfflow_fm", "Flow matching only"]);
+  if (modelId === "sdfflow") options.push(["sdfflow_full", "Full VAE + FM"], ["sdfflow_vae", "VAE only"], ["sdfflow_fm", "Flow matching only"], ["sdfflow_optimize", "Checked-in closed-loop optimization"]);
   if (modelId === "simulgenvae") options.push(["simulgen_full", "VAE → LC pipeline"], ["simulgen_vae", "VAE only"], ["simulgen_lc", "LC only"], ["simulgen_reconstruct", "Reconstruct fields"]);
   return options;
 }
@@ -246,6 +258,7 @@ export function renderConfig() {
   node.config.model = spec.modelId;
   node.config.mode = mode;
   const required = requiredFor(spec.modelId, mode);
+  const backendDefaults = backendDefaultsFor(spec.modelId, mode);
   const search = state.configSearch.toLowerCase().trim();
   const changedOnly = $("#changedOnly").checked;
   const showInactive = $("#showInactive").checked;
@@ -292,7 +305,10 @@ export function renderConfig() {
     ? `${visible.length} matching keys across all sections · ${mode} mode`
     : `${visible.length} visible keys · ${mode} mode`;
   const automaticCount = autoFillCount(node);
-  $("#configBadges").innerHTML = `<span class="badge">${model.keys.length} accepted</span><span class="badge warn">${required.size} required</span>${automaticCount ? `<span class="badge auto">${automaticCount} graph-filled</span>` : ""}`;
+  const defaultedRequiredCount = [...required].filter(key =>
+    !Object.hasOwn(node.config, key) && Object.hasOwn(backendDefaults, key)
+  ).length;
+  $("#configBadges").innerHTML = `<span class="badge">${model.keys.length} accepted</span><span class="badge warn">${required.size} required</span>${defaultedRequiredCount ? `<span class="badge">${defaultedRequiredCount} backend-defaulted</span>` : ""}${automaticCount ? `<span class="badge auto">${automaticCount} graph-filled</span>` : ""}`;
   $("#schemaNote").innerHTML = `<strong>${model.keys.length} live keys</strong><br>All MethodSpec keys are present. Closed choices use dropdowns; paths, widths, lists, and open family values remain manual.<br><br>${spec.modelId === "simulgenvae" ? "The live SimulGen route has separate VAE, LC, combined, and reconstruction requirements." : "Shared-family inactive and rejected keys remain visible for diagnostic honesty."}`;
 
   $("#configFields").innerHTML = visible.length ? visible.map(key => {
@@ -300,15 +316,18 @@ export function renderConfig() {
     const disposition = accepted ? keyDisposition(spec.modelId, key, node.config) : "unknown";
     const set = Object.hasOwn(node.config, key);
     const requiredKey = required.has(key);
+    const hasBackendDefault = !set && Object.hasOwn(backendDefaults, key);
+    const backendDefault = hasBackendDefault ? backendDefaults[key] : "";
     const rejectedByPreflight = state.configRejectedNode === node.id && state.configRejectedField === key;
-    const status = rejectedByPreflight || disposition === "removed" || disposition === "unknown" ? "rejected" : disposition === "inactive" ? "inactive" : disposition === "runtime" ? "runtime" : requiredKey ? "required" : set ? "set" : "optional";
+    const status = rejectedByPreflight || disposition === "removed" || disposition === "unknown" ? "rejected" : disposition === "inactive" ? "inactive" : disposition === "runtime" ? "runtime" : hasBackendDefault ? "defaulted" : requiredKey ? "required" : set ? "set" : "optional";
     const value = set ? node.config[key] : "";
     const automatic = autoFillMeta(node, key);
     const choices = choicesFor(spec.modelId, key);
     const disabled = disposition === "removed" || disposition === "runtime";
+    const unsetLabel = hasBackendDefault ? `backend default: ${backendDefault}` : "not set";
     const control = choices
-      ? `<select class="config-control full-config-control" data-key="${key}"${disabled ? " disabled" : ""}><option value="">— not set —</option>${choices.map(choice => `<option value="${escapeHtml(choice)}"${String(value).toLowerCase() === String(choice).toLowerCase() ? " selected" : ""}>${escapeHtml(choice)}</option>`).join("")}</select>`
-      : `<input class="config-control full-config-control" data-key="${key}" value="${escapeHtml(value)}" placeholder="manual value"${disabled ? " disabled" : ""}>`;
+      ? `<select class="config-control full-config-control" data-key="${key}"${disabled ? " disabled" : ""}><option value="">— ${escapeHtml(unsetLabel)} —</option>${choices.map(choice => `<option value="${escapeHtml(choice)}"${String(value).toLowerCase() === String(choice).toLowerCase() ? " selected" : ""}>${escapeHtml(choice)}</option>`).join("")}</select>`
+      : `<input class="config-control full-config-control" data-key="${key}" value="${escapeHtml(value)}" placeholder="${hasBackendDefault ? `backend default: ${escapeHtml(backendDefault)}` : "manual value"}"${disabled ? " disabled" : ""}>`;
     // Why a key is dead outranks what the key means: the generic help for
     // message_passing_num reads as though the value still does something, which
     // is the whole reason nobody noticed the trainer ignores it under multiscale.
@@ -318,9 +337,12 @@ export function renderConfig() {
       : disposition === "removed" ? "Known by a shared diagnostic schema, but rejected for this selected model."
       : disposition === "inactive" ? "Accepted by the shared family schema but configures a different variant."
       : "";
+    const baseHelp = dispositionHelp || HELP[key] || "Manual input is retained because the live spec does not publish a closed value set for this field.";
     const help = automatic
       ? `Auto-filled from ${automatic.sourceLabel}: ${automatic.reason}. Edit it to keep a manual override, or clear it to follow the graph again.`
-      : dispositionHelp || HELP[key] || "Manual input is retained because the live spec does not publish a closed value set for this field.";
+      : hasBackendDefault && disposition === "active"
+        ? `${baseHelp} Backend default for ${mode}: ${backendDefault}; leave this unset to use it or enter a value to override it.`
+        : baseHelp;
     return `<article class="config-card ${disposition}${automatic ? " graph-autofilled" : ""}${rejectedByPreflight ? " preflight-rejected" : ""}"><header class="config-card-head"><span class="config-key">${key}</span><span class="config-card-states">${automatic ? `<span class="config-status autofill">auto · ${escapeHtml(automatic.sourceLabel)}</span>` : ""}<span class="config-status ${status}">${status}</span></span></header>${control}<p class="config-help">${escapeHtml(help)}</p></article>`;
   }).join("") : `<div class="inspect-empty" style="height:auto;grid-column:1/-1"><p>No keys match this filter.</p></div>`;
 
@@ -340,7 +362,10 @@ export function renderConfig() {
   }));
 
   $("#configRaw").value = rawConfig(node.config, model.keys);
-  const missing = [...required].filter(key => !Object.hasOwn(node.config, key) || node.config[key] === "");
+  const missing = [...required].filter(key =>
+    (!Object.hasOwn(node.config, key) || node.config[key] === "")
+    && !Object.hasOwn(backendDefaults, key)
+  );
   // Same exclusion as rawConfig: the Studio's own bookkeeping keys are never
   // emitted, so warning that they "will fail preflight" was false -- and the
   // authoritative preflight beside it disagreed, reporting 0 errors.
@@ -349,7 +374,7 @@ export function renderConfig() {
   const conditional = conditionallyMissing(spec.modelId, node.config);
   const diagnostics = [
     { type: "", text: `${model.keys.length} accepted keys loaded; ${Object.keys(node.config).length} currently set.` },
-    ...(missing.length ? [{ type: "warn", text: `Missing required for ${mode}: ${missing.join(", ")}` }] : [{ type: "", text: `All required ${mode} keys currently have values.` }]),
+    ...(missing.length ? [{ type: "warn", text: `Missing required for ${mode}: ${missing.join(", ")}` }] : [{ type: "", text: `All required ${mode} keys have explicit values or published backend defaults.` }]),
     ...conditional,
     ...(unknown.length ? [{ type: "warn", text: `Unknown keys will fail preflight: ${unknown.join(", ")}` }] : []),
     ...state.configMessages
@@ -414,6 +439,16 @@ export async function applyPreset() {
   };
   if (preset === "sdfflow_vae") values = { mode: "train_vae" };
   if (preset === "sdfflow_fm") values = { mode: "train_fm" };
+  if (preset === "sdfflow_optimize") {
+    if (!requireRuntime()) return;
+    try {
+      const payload = await apiRequest("/api/config?path=configs%2FGeometry_generation%2Fconfig_optimize.txt");
+      values = parseConfig(payload.text).values;
+    } catch (error) {
+      toast(`Could not load the checked-in SDFFlow optimization config: ${error.message}`, "error");
+      return;
+    }
+  }
   if (preset === "simulgen_vae") values = { mode: "train_vae", training_epochs: model.defaults.vae_training_epochs, batch_size: model.defaults.vae_batch_size, learningr: model.defaults.vae_learningr };
   if (preset === "simulgen_lc") values = { mode: "train_lc", training_epochs: model.defaults.lc_training_epochs, batch_size: model.defaults.lc_batch_size, learningr: model.defaults.lc_learningr };
   if (preset === "simulgen_reconstruct") values = { mode: "reconstruct", batch_size: "16", output_dir: "../output/simulgenvae/ex1/reconstruct" };
@@ -476,7 +511,7 @@ export function explainMessages(payload) {
     { type: "", text: list("Required and present", payload.required_present) },
     { type: payload.required_missing.length ? "error" : "", text: list("Required and missing", payload.required_missing) },
     { type: payload.recommended_missing.length ? "warn" : "", text: list("Recommended but missing", payload.recommended_missing) },
-    { type: "", text: list("Optional; native default applies", payload.optional_defaulted) },
+    { type: "", text: list("Not explicit; published default applies", payload.optional_defaulted) },
     { type: payload.inactive_or_removed.length ? "warn" : "", text: list("Inactive/ignored/removed for this model", payload.inactive_or_removed) },
     { type: "", text: list("Checkpoint-owned or checkpoint-validated", payload.checkpoint_owned) },
     { type: payload.unknown_keys.length ? "warn" : "", text: list("Unknown keys", payload.unknown_keys) },

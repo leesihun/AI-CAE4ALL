@@ -267,8 +267,15 @@ export function executableSteps(targetId = null) {
       return;
     }
     const modelId = BLOCK_SPECS[upstream.type].modelId;
+    // A CAD Generator block runs whichever SDFFlow runtime mode its own `mode`
+    // field names -- "sample" is the default and every graph saved before
+    // `optimize` existed still has that value, but a block switched to
+    // `optimize` closes the full generate -> analyze -> search loop in one
+    // native launch instead of producing a plain candidate batch.
+    const cadGeneratorModes = ["sample", "reconstruct", "interpolate", "optimize"];
+    const requestedCadMode = String(node.config?.mode || "").toLowerCase();
     const mode = node.type === "run.cad_generator"
-      ? "sample"
+      ? (cadGeneratorModes.includes(requestedCadMode) ? requestedCadMode : "sample")
       : modelId === "simulgenvae"
         ? "reconstruct"
         : modelId === "sdfflow"
@@ -565,6 +572,21 @@ export function validateGraph(showToast = true) {
   });
   state.nodes.filter(node => node.type === "run.cad_generator").forEach(node => {
     const label = BLOCK_SPECS[node.type].label;
+    const generatorMode = String(node.config.mode || "sample").trim().toLowerCase();
+    const analysisBackend = String(node.config.opt_analysis || "fea").trim().toLowerCase();
+    if (generatorMode === "optimize" && !["fea", "surrogate"].includes(analysisBackend)) {
+      errors.push(`${label}: analysis backend must be fea or surrogate.`);
+    }
+    if (generatorMode === "optimize" && analysisBackend === "surrogate") {
+      const modelEdge = state.edges.find(edge => edge.toNode === node.id && edge.toPort === "model");
+      const modelNode = modelEdge && state.nodes.find(candidate => candidate.id === modelEdge.fromNode);
+      const merged = { ...(modelNode?.config || {}), ...node.config };
+      const missing = ["opt_surrogate_checkpoint", "opt_surrogate_config"]
+        .filter(key => !String(merged[key] || "").trim());
+      if (missing.length) {
+        errors.push(`${label}: surrogate analysis needs ${missing.join(" and ")} in the connected SDFFlow block's Full config.`);
+      }
+    }
     const rawConditions = String(node.config.cond_values || "").split(",").map(item => item.trim()).filter(Boolean);
     if (rawConditions.some(value => !Number.isFinite(Number(value)))) {
       errors.push(`${label}: condition values must all be finite numbers.`);

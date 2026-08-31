@@ -61,7 +61,7 @@ training_epochs	500  # measured budget: 500 s/epoch x 500 = 2.9 days per arm at 
 batch_size	16  # SWEPT AXIS
 learningr	0.0001  # SWEPT AXIS
 latent_dim	128  # SWEPT AXIS
-num_workers	2  # 16 concurrent jobs; 4 workers each would be 64 processes
+num_workers	4  # matches production; one arm per GPU now, so there is no need to economize workers the way a shared-GPU sweep does
 std_noise	0.0  # OFF. MGN input noise exists for autoregressive rollout
 %   stability; with T=1 there is no rollout, and the flow already trains on
 %   noisy inputs by construction.
@@ -119,4 +119,4 @@ time_integration	ar_ot
 
 %   Sweep-only keys (absent from the production config)
 flow_t_sampling	uniform  # SWEPT AXIS
-hierarchy_cache_keep	True  # REQUIRED: arms share a cache per voronoi level; a finishing arm must not delete it
+hierarchy_cache_keep	True  # REQUIRED: all 8 arms share ONE cache; a finishing arm must not delete it

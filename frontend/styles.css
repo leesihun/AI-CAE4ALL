@@ -605,6 +605,7 @@ body.workspace-overlay #studioOverlay.open { top: var(--topbar-height, 66px); }
 .config-status { color: var(--quiet); font-size: 6px; font-weight: 850; text-transform: uppercase; }
 .config-status.required, .config-status.rejected { color: var(--red); }
 .config-status.set { color: var(--green); }
+.config-status.defaulted { color: var(--blue); }
 .config-status.autofill { padding: 2px 5px; border-radius: 999px; color: #285f76; background: #e5f2f7; text-transform: none; }
 .form-row.graph-autofilled { padding: 7px; border: 1px solid #b9d4de; border-radius: 8px; background: #f7fbfd; }
 .form-row label .inline-auto { display: block; margin-top: 2px; color: #367188; font-size: 8px; font-weight: 750; text-transform: none; }

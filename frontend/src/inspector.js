@@ -295,7 +295,14 @@ export function renderInspector() {
       // no sign the value was the problem.
       : node.type === "evaluate.predictions"
         ? { mapping_confirmed: ["False", "True"], mapping_mode: ["schema", "legacy"] }
-        : {};
+        : node.type === "run.cad_generator"
+          // `optimize` runs the closed generate -> analyze -> search loop
+          // instead of producing a plain candidate batch; opt_analysis then
+          // picks whether "analyze" is the exact FEA solve or a fast but
+          // currently unproven HI-MGN forward pass.
+          ? { mode: ["sample", "reconstruct", "interpolate", "optimize"],
+              opt_analysis: ["fea", "surrogate"] }
+          : {};
   const ports = [
     ...spec.inputs.map(port => ({ ...port, direction: "in" })),
     ...spec.outputs.map(port => ({ ...port, direction: "out" }))
@@ -331,6 +338,11 @@ export function renderInspector() {
         return `<div class="form-row${automatic ? " graph-autofilled" : ""}"><label>${escapeHtml(key.replaceAll("_", " "))}${automatic ? `<small class="inline-auto">auto · ${escapeHtml(automatic.sourceLabel)}</small>` : ""}</label><input class="field inspector-config" data-key="${key}" value="${escapeHtml(value)}"></div>`;
       }).join("")}</div>
     </section>
+    ${node.type === "run.cad_generator"
+      && String(node.config.mode || "").toLowerCase() === "optimize"
+      && String(node.config.opt_analysis || "fea").toLowerCase() === "surrogate"
+      ? `<section class="inspect-section"><div class="section-title">Surrogate accuracy gate</div><div class="diagnostic warning"><i></i><div><strong>Demonstration path, not verified structural evidence.</strong><br>Add <code>opt_surrogate_checkpoint</code> and <code>opt_surrogate_config</code> in the connected SDFFlow block's Full config. Preflight blocks a missing pair. Use FEA for actionable stress or displacement values until the surrogate is validated on representative held-out designs.</div></div></section>`
+      : ""}
     ${inputSourcePanel(node)}
     ${embeddedInspector(node, spec)}
     ${node.type === "source.parameters" ? parameterTableEditor(node) : ""}

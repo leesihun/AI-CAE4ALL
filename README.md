@@ -123,8 +123,12 @@ that connection are removed.
 
 The configuration workspace exposes the complete live key catalog per method —
 required, recommended, inactive, and checkpoint-owned — with the flat `.txt`
-rendered side-by-side and synchronized in both directions. **Run preflight** and
-**Explain config** call the authoritative launcher, not a reimplementation.
+rendered side-by-side and synchronized in both directions. Defaults published by
+the live `MethodSpec` are labelled as backend defaults without silently entering
+the raw file. SDFFlow's native `optimize` mode also gets a dedicated section,
+field-level FEA/search guidance, and a reviewed preset that materializes an
+explicit reproducible configuration. **Run preflight** and **Explain config**
+call the authoritative launcher, not a reimplementation.
 
 ![SimulGen-VAE full configuration workspace — 67 live keys](docs/images/studio-config-workspace.png)
 
@@ -235,8 +239,8 @@ Windows and POSIX.
 
 > **Known gap:** `--audit-configs` scans the wrong root today and reports
 > `files=0` — see [Known gaps](#known-gaps--the-honest-list). Use the Studio's
-> System workspace, which runs the identical checks over all 330 tracked
-> `configs/**/config*.txt` files and reports the authoritative current
+> System workspace, which runs the identical checks over every current
+> `configs/**/config*.txt` file and reports the authoritative
 > per-file results.
 
 ---
@@ -558,7 +562,7 @@ cae_suite/                    # the launcher (parse → route → preflight → 
   └── specs/                  # one MethodSpec per method — validation truth
 frontend/                     # the Studio: browser UI + local Python API bridge
 inference/                    # stand-alone CPU inference bundle + PyInstaller spec
-configs/                      # 330 tracked config*.txt templates + benchmarks
+configs/                      # live config*.txt templates + benchmarks
 dataset/                      # shared HDF5 data, format spec, benchmarks, geometry_ingest
 docs/                         # per-method deep dives, Studio plans, images
 output/                       # run artifacts (checkpoints, rollouts, samples)
@@ -622,7 +626,9 @@ cd SimulGenVAE          && python -m pytest -q tests/test_fom_dataset.py
 cd MLP                  && python -m pytest -q tests/                 # CPU train → infer smoke test
 ```
 
-The Studio ships 14 browser smoke runners (`frontend/*-smoke-runner.js`)
+The Studio ships 15 Node/Chrome browser runners: 13
+`frontend/*-smoke-runner.js` files, the main `frontend/smoke-runner.js`, and
+the native `frontend/deepjeb-optimize-gui-runner.js` E2E.
 covering the viewer, autofill, parameter sheet, training metrics, workflow UX,
 native cHI-MGNflow inference, races, accessibility, deployment, and the complete
 interactive control surface, plus Python tests for the analysis and metric
@@ -641,7 +647,7 @@ rediscovered the hard way. The short version:
 - **`--audit-configs` reports `files=0`.** It walks `suite_root /
   spec.repository`, but every checked-in config lives in the top-level
   `configs/` tree. The Studio's System workspace runs the identical checks
-  against the correct root, covers all 330 tracked `config*.txt` files, and
+  against the correct root, covers every current `config*.txt` file, and
   reports the authoritative current per-file results.
 - **`num_workers` is runtime-required but not preflight-required** for
   mesh/operator training — a config omitting it can pass validation and fail
@@ -693,7 +699,7 @@ a method's internals, that method's own docs and code are authoritative.
 | --- | --- |
 | Tracked Python source | Count from the live tree with `git ls-files '*.py'`; no stale file/line snapshot |
 | Registered model IDs | **12** across **31** mode routes; **12 healthy** in the current Studio health check |
-| Config templates | **330** tracked `configs/**/config*.txt` files; Studio audits all 330 and reports authoritative per-file results |
+| Config templates | Count with `git ls-files 'configs/**/config*.txt'`; Studio audits the live tree and reports authoritative per-file results |
 | Method repositories | **9**, each independently runnable |
 | Studio JS + backend | Browser ES modules plus Python API modules; module and line counts follow the live tree |
 | Live Studio API | Repository-backed endpoints over **12** workspaces |

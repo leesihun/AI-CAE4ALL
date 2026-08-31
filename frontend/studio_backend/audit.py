@@ -34,7 +34,7 @@ def audit_configs(*, strict: bool = False) -> dict[str, Any]:
     `cae_suite/cli.py --audit-configs` walks `suite_root / spec.repository`
     (each method's own repo directory) looking for config*.txt. In this
     repository every checked-in config actually lives under the top-level
-    `configs/` tree instead (330 tracked files in the current checkout and 0
+    `configs/` tree instead (all current files in the checkout rather than 0
     under the method repos), so
     that scan root finds nothing here. This mirrors the CLI's validation
     semantics exactly but scans `configs/` — the directory the rest of the
@@ -147,9 +147,20 @@ def explain_config(
     required_present: list[str] = []
     required_missing: list[str] = []
     if result.resolved is not None:
-        required = result.resolved.spec.required_fields(result.resolved.model_id, result.mode)
-        required_present = sorted(name for name in required if name in parsed.values)
-        required_missing = sorted(name for name in required if name not in parsed.values)
+        spec = result.resolved.spec
+        required = spec.required_fields(result.resolved.model_id, result.mode)
+        active_defaults = dict(spec.defaults)
+        if result.mode is not None:
+            active_defaults.update(spec.defaults_by_mode.get(result.mode, {}))
+        required_present = sorted(
+            name for name in required
+            if name in parsed.values and parsed.values[name] not in (None, "", [])
+        )
+        required_missing = sorted(
+            name for name in required
+            if (name not in parsed.values or parsed.values[name] in (None, "", []))
+            and name not in active_defaults
+        )
 
     checkpoint_fields = sorted(set(collect(_CHECKPOINT_CODES)) | set(result.checkpoint_metadata))
     malformed = [

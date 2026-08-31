@@ -16,6 +16,8 @@ PATH_KEYS = frozenset({
     'vae_log_file_dir',
     'fm_log_file_dir',
     'pipeline_log_file',
+    'opt_surrogate_checkpoint',
+    'opt_surrogate_config',
 })
 
 

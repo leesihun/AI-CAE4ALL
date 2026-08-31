@@ -1,5 +1,6 @@
 const playwrightModule = process.argv[2] || "playwright";
 const { chromium } = require(playwrightModule);
+const fs = require("fs");
 const path = require("path");
 
 const studioUrl = process.argv[3] || "http://127.0.0.1:8097/index.html";
@@ -1052,6 +1053,12 @@ function fileItem(index, extension = ".h5") {
     await page.locator("#exportLabel").dispatchEvent("change");
     await page.locator("#runExport").click();
     await page.waitForSelector("#exportResults a[download]", { timeout: 30000 });
+    const artifactDownload = page.waitForEvent("download");
+    await page.locator("#exportResults a[download]").click();
+    const downloadedArtifact = await artifactDownload;
+    assert(downloadedArtifact.suggestedFilename().endsWith(".h5"), "Export download lost the artifact filename");
+    const downloadedArtifactPath = await downloadedArtifact.path();
+    assert(downloadedArtifactPath && fs.statSync(downloadedArtifactPath).size > 0, "Export download produced an empty file");
     const exportEvidence = await page.evaluate(id => window.__AI_CAE_FRONTEND__.state.nodes.find(node => node.id === id)?.config, exportId);
     assert(exportEvidence.export_path && exportEvidence.export_label === "control-surface-export", "Export result was not persisted on its block");
 

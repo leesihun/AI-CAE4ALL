@@ -34,7 +34,7 @@ export const KEY_CATALOGS = {
   meshgraphnetsV: keys(`alpha_prior_max alpha_recon augment_geometry batch_size best_by beta_aux bipartite_unpool coarse_world_edges coarsening_type cond_var dataset_dir display_testset display_trainset edge_var ema_decay eval_dataset feature_loss_weights fit_latent_gmm free_bits gmm_components gmm_covariance_type gmm_reg_covar gpu_ids grad_accum_steps hierarchy_cache_build_workers hierarchy_cache_dir hierarchy_cache_keep hierarchy_cache_wait_timeout hierarchy_seed hierarchy_variants histogram_bins histogram_clip_quantile infer_dataset infer_timesteps inference_output_dir input_var lambda_det lambda_kl lambda_mmd latent_dim learningr log_file_dir make_histogram message_passing_num mmd_bandwidth mmd_gather_ranks mode model modelpath mp_per_level multiscale_levels noise_gamma noise_std_ratio num_vae_samples num_workers num_z output_var parallel_mode pipeline_microbatches plot_feature_idx positional_encoding positional_features posterior_min_std prefetch_factor prior_cov_rank prior_family prior_fm_solver prior_fm_steps prior_grad_to_encoder prior_hidden_dim prior_kl_reg_weight prior_min_std prior_mixture_components prior_mp_layers prior_nll_weight prior_temperature prior_type recon_loss residual_scale save_rollouts show_histogram split_seed static_cache_per_worker std_noise test_batch_idx test_interval test_max_batches time_integration training_epochs use_amp use_checkpointing use_compile use_conditional_prior use_ema use_multiscale use_node_types use_parallel_stats use_vae use_world_edges vae_batch_size vae_batch_size_max vae_batch_size_min vae_batch_vram_fraction vae_graph_aware vae_latent_dim vae_mp_layers vae_valid_prior_samples val_interval voronoi_clusters warmup_epochs weight_decay world_edge_backend world_max_num_neighbors world_radius_multiplier z_conditioning`),
   operator: keys(`_ddp_port _pin_memory augment_geometry batch_size checkpoint_interval coarse_cache_per_worker coarse_world_edges coarsening_type cond_var coordinate_normalization dataset_dir deeponet_activation deeponet_basis_dim deeponet_branch_depth deeponet_branch_source deeponet_hidden_channels deeponet_max_branch_params deeponet_multi_output deeponet_sensor_resolution deeponet_trunk_depth dimension_tolerance display_testset display_trainset edge_var ema_decay feature_loss_weights fno_grid_resolution fno_hidden_channels fno_layers fno_modes fno_norm fno_use_channel_mlp fno_variant free_bits gino_cache_neighbors gino_channel_mlp_expansion gino_coord_embed_dim gino_fno_hidden_channels gino_fno_layers gino_fno_modes gino_grid_resolution gino_group_shared_geometry gino_in_radius gino_include_grid_coordinates gino_kernel_hidden gino_kernel_widths gino_lifting_hidden gino_max_empty_input_fraction gino_max_num_neighbors gino_out_radius gino_pos_embedding_type gino_projection_widths gino_query_chunk_size gino_tucker_rank gino_use_torch_cluster gino_variant global_condition_features gpu_ids grad_accum_steps grid_padding infer_dataset infer_query_chunk_size infer_timesteps inference_output_dir input_var integration_weight_source lambda_det lambda_kl lambda_mmd latent_dim learningr log_dir log_file_dir max_grad_norm message_passing_num mode model modelpath mp_per_level multiscale_levels noise_gamma noise_std_ratio num_node_types num_timesteps num_workers operator_dim out_of_bounds_policy output_var parallel_mode pipeline_microbatches plot_feature_idx point_branch_merge point_condition_depth point_feature_dim point_hidden_channels point_output_activation point_refiner_depth point_resample_each_epoch point_sampling point_sensor_count point_siren_omega0 point_trunk_depth point_variant pointnet_activation pointnet_depth pointnet_norm positional_features posterior_min_std prefetch_factor profile_batches sdf_sidecar sdf_source split_seed std_noise test_batch_idx test_interval test_max_batches time_integration train_query_chunk_size training_epochs use_amp use_checkpointing use_compile use_ema use_multiscale use_node_types use_vae use_world_edges vae_graph_aware vae_latent_dim vae_mp_layers val_interval voronoi_clusters warmup_epochs weight_decay world_edge_backend world_max_num_neighbors world_radius_multiplier write_preprocessing`),
   transolver: keys(`amortized_cache_nodes amortized_query_nodes amortized_training attention_kernel augment_geometry batch_size chunk_size coarse_world_edges coarsening_type cond_var coordinate_normalization dataset_dir display_trainset dropout edge_var ema_decay feature_loss_weights gpu_ids grad_accum_steps infer_chunk_size infer_dataset infer_mode infer_timesteps inference_output_dir input_var latent_dim learningr log_file_dir max_grad_norm max_train_batches max_val_batches message_passing_num mlp_ratio mode model modelpath mp_per_level multiscale_levels noise_gamma num_heads num_layers num_workers output_var parallel_mode positional_features prefetch_factor slice_num small_output_init split_seed std_noise temperature_init temperature_max temperature_min test_interval test_max_batches time_integration training_epochs use_amp use_checkpointing use_compile use_ema use_multiscale use_node_types use_parallel_stats use_world_edges val_interval voronoi_clusters warmup_epochs weight_decay world_edge_backend world_max_num_neighbors world_radius_multiplier write_preprocessing write_test_predictions`),
-  sdfflow: keys(`alpha batch_size candidate_multiplier cfg_scale clamp_dist cond_dropout cond_values condition_clip condition_names condition_ood_policy dataset_dir decoder_heads decoder_hidden decoder_layers decoder_type deterministic_warmup_epochs eikonal_weight ema_decay encode_batch_size encoder_blocks encoder_dim encoder_heads encoder_self_attention fm_arch fm_batch_size fm_blocks fm_cond_hidden fm_ema_decay fm_heads fm_hidden fm_learningr fm_log_file_dir fm_mc_resolution_test fm_modelpath fm_num_test_shapes fm_num_workers fm_test_interval fm_time_logit_mean fm_time_logit_std fm_time_sampling fm_training_epochs fm_use_amp fm_use_ema fm_val_interval fm_warmup_epochs fm_weight_decay fourier_bands fsdp_min_params gpu_ids hybrid_grad_points init_vae_modelpath input_mesh kl_warmup_epochs kl_weight latent_clip latent_dim latent_tokens learningr log_file_dir max_condition_z mc_resolution mc_resolution_test min_condition_std mode model normal_weight num_encoder_points num_query_points num_samples num_test_shapes num_workers ode_steps output_dir overfit_all_shapes overfit_num_shapes parallel_mode pipeline_log_file plot_dpi plot_max_faces posterior_noise_max_scale posterior_noise_warmup_epochs sample_index_a sample_index_b seed skip_completed_stages source_num_samples split_seed surface_weight test_interval training_epochs use_amp use_conditions use_ema vae_batch_size vae_ema_decay vae_learningr vae_log_file_dir vae_mc_resolution_test vae_modelpath vae_num_test_shapes vae_num_workers vae_test_interval vae_training_epochs vae_use_amp vae_use_ema vae_val_interval vae_warmup_epochs vae_weight_decay val_interval warmup_epochs weight_decay`),
+  sdfflow: keys(`alpha batch_size candidate_multiplier cfg_scale clamp_dist cond_dropout cond_values condition_clip condition_names condition_ood_policy dataset_dir decoder_heads decoder_hidden decoder_layers decoder_type deterministic_warmup_epochs eikonal_weight ema_decay encode_batch_size encoder_blocks encoder_dim encoder_heads encoder_self_attention fm_arch fm_batch_size fm_blocks fm_cond_hidden fm_ema_decay fm_heads fm_hidden fm_learningr fm_log_file_dir fm_mc_resolution_test fm_modelpath fm_num_test_shapes fm_num_workers fm_test_interval fm_time_logit_mean fm_time_logit_std fm_time_sampling fm_training_epochs fm_use_amp fm_use_ema fm_val_interval fm_warmup_epochs fm_weight_decay fourier_bands fsdp_min_params gpu_ids hybrid_grad_points init_vae_modelpath input_mesh kl_warmup_epochs kl_weight latent_clip latent_dim latent_tokens learningr log_file_dir max_condition_z mc_resolution mc_resolution_test min_condition_std mode model normal_weight num_encoder_points num_query_points num_samples num_test_shapes num_workers ode_steps output_dir overfit_all_shapes overfit_num_shapes parallel_mode pipeline_log_file plot_dpi plot_max_faces posterior_noise_max_scale posterior_noise_warmup_epochs sample_index_a sample_index_b seed skip_completed_stages source_num_samples split_seed surface_weight test_interval training_epochs use_amp use_conditions use_ema vae_batch_size vae_ema_decay vae_learningr vae_log_file_dir vae_mc_resolution_test vae_modelpath vae_num_test_shapes vae_num_workers vae_test_interval vae_training_epochs vae_use_amp vae_use_ema vae_val_interval vae_warmup_epochs vae_weight_decay val_interval warmup_epochs weight_decay opt_subspace_dim opt_subspace_seed opt_condition_dims opt_latent_range opt_shell_scale opt_budget opt_popsize opt_sigma0 opt_baseline_size opt_load_cases opt_length_scale opt_stress_percentile opt_mesh_size_max opt_target_faces opt_material_e opt_material_nu opt_material_rho opt_yield_stress opt_stress_margin opt_disp_margin opt_stress_weight opt_disp_weight opt_verify_resolution opt_verify_target_faces opt_verify_mesh_size_max opt_analysis opt_surrogate_checkpoint opt_surrogate_config opt_surrogate_target_nodes`),
   simulgenvae: keys(`alpha batch_size beta_target cond_var dataset_dir ema_decay field_start_row gpu_ids init_beta_divisor init_vae_modelpath kl_warmup_epochs kl_warmup_start_frac latent_dim latent_dim_end lc_batch_size lc_data_type lc_dropout lc_ema_decay lc_filter lc_learningr lc_log_file_dir lc_modelpath lc_num_workers lc_training_epochs lc_use_amp lc_use_ema lc_warmup_epochs lc_weight_decay learningr load_all log_file_dir loss_type mode model network_size node_end node_start num_filter_enc num_var num_workers output_dir parallel_mode param_data_type param_dir pipeline_log_file plot_mode recon_iter skip_completed_stages split_seed timesteps_reduced training_epochs use_amp use_ema use_spatial_attention vae_batch_size vae_ema_decay vae_learningr vae_log_file_dir vae_modelpath vae_num_workers vae_training_epochs vae_use_amp vae_use_ema vae_warmup_epochs vae_weight_decay val_interval warmup_epochs weight_decay`)
 };
 
@@ -131,7 +131,7 @@ export const MODEL_CATALOG = {
     defaults: { model: "transolver", mode: "train", gpu_ids: "0", modelpath: "../output/transolver/studio/transolver.pth", coordinate_normalization: "centered_isotropic", latent_dim: "256", num_layers: "10", num_heads: "8", slice_num: "128", attention_kernel: "slice_space", use_checkpointing: "True", training_epochs: "500", batch_size: "1", grad_accum_steps: "4", learningr: "0.0001" }
   },
   sdfflow: {
-    label: "SDFFlow", short: "SDF", accent: "#8b7837", modes: ["train", "train_vae", "train_fm", "sample", "reconstruct", "interpolate"], keys: KEY_CATALOGS.sdfflow,
+    label: "SDFFlow", short: "SDF", accent: "#8b7837", modes: ["train", "train_vae", "train_fm", "sample", "reconstruct", "interpolate", "optimize"], keys: KEY_CATALOGS.sdfflow,
     description: "SDF-VAE and conditional flow matching for CAD candidate generation.", dataset: "SDF HDF5",
     // SDFFlow's train route requires 25 keys. Without architecture/checkpoint
     // defaults a freshly added block needed 18 hand-typed values before it could
@@ -203,7 +203,8 @@ export const REQUIRED = {
     train_fm: keys(`model mode gpu_ids dataset_dir output_dir vae_modelpath fm_modelpath training_epochs batch_size learningr fm_hidden fm_blocks fm_cond_hidden`),
     sample: keys(`model mode gpu_ids vae_modelpath fm_modelpath output_dir num_samples seed ode_steps mc_resolution`),
     reconstruct: keys(`model mode gpu_ids vae_modelpath input_mesh output_dir mc_resolution`),
-    interpolate: keys(`model mode gpu_ids vae_modelpath fm_modelpath output_dir seed source_num_samples sample_index_a sample_index_b alpha ode_steps mc_resolution`)
+    interpolate: keys(`model mode gpu_ids vae_modelpath fm_modelpath output_dir seed source_num_samples sample_index_a sample_index_b alpha ode_steps mc_resolution`),
+    optimize: keys(`model mode gpu_ids vae_modelpath fm_modelpath output_dir seed ode_steps mc_resolution opt_subspace_dim opt_budget opt_popsize opt_baseline_size opt_load_cases`)
   }
 };
 
@@ -229,6 +230,10 @@ export const CHOICES = {
   // it (MGN-COARSEN-001); voronoi_seedmean is what every checked-in config uses.
   coarsening_type: ["none", "bfs", "voronoi_centroid", "voronoi_inherit", "voronoi_seedmean"],
   condition_ood_policy: ["warn", "clamp", "error"],
+  // fea is the exact mesh-and-solve path; surrogate swaps in a trained HI-MGN
+  // forward pass -- see the Optimization block's own notes on when that
+  // checkpoint's numbers can be trusted before switching a live run to it.
+  opt_analysis: ["fea", "surrogate"],
   decoder_type: ["mlp", "attention"],
   fm_arch: ["mlp", "dit"],
   fm_time_sampling: ["uniform", "logit_normal"],
@@ -319,7 +324,13 @@ export const BLOCK_SPECS = {
     defaults: {
       mode: "sample", num_samples: "24", cfg_scale: "2.5", ode_steps: "50",
       mc_resolution: "128", seed: "42", cond_values: "",
-      geometry_checks: "automatic: connected + watertight + bounds"
+      geometry_checks: "automatic: connected + watertight + bounds",
+      // Only load-bearing in `mode optimize` (generate -> analyze -> search);
+      // inert otherwise. Kept visible here rather than buried in the
+      // generator model's own full-config panel since it is the one switch
+      // that decides whether "analyze" is the exact FEA solve or the faster,
+      // currently unproven HI-MGN surrogate -- see that model's own notes.
+      opt_analysis: "fea"
     }, sampleLabel: "24 CAD candidates", executable: true
   },
   "optimize.design": {
@@ -419,6 +430,12 @@ export function registerLiveModel(model) {
   const liveDefaults = Object.fromEntries(
     Object.entries(model.defaults || {}).map(([key, value]) => [key, stringifyDefault(value)])
   );
+  const liveDefaultsByMode = Object.fromEntries(
+    Object.entries(model.defaults_by_mode || {}).map(([mode, defaults]) => [
+      mode,
+      Object.fromEntries(Object.entries(defaults || {}).map(([key, value]) => [key, stringifyDefault(value)]))
+    ])
+  );
   const existing = MODEL_CATALOG[modelId];
   const local = existing || {
     label: model.method || modelId,
@@ -433,6 +450,8 @@ export function registerLiveModel(model) {
     required: model.required || {},
     dataset: model.dataset_kind || local.dataset || "backend-defined dataset",
     backend: model,
+    backendDefaults: liveDefaults,
+    backendDefaultsByMode: liveDefaultsByMode,
     defaults: { ...(local.defaults || {}), ...liveDefaults }
   });
   MODEL_CATALOG[modelId] = local;
@@ -746,14 +765,15 @@ export const STUDIO_SECTIONS = {
   }
 };
 
-export const CONFIG_SECTIONS = ["Required", "Data & output", "Architecture", "Training", "Resources & runtime", "Inference & evaluation", "Advanced", "Inactive / rejected"];
+export const CONFIG_SECTIONS = ["Required", "Data & output", "Architecture", "Training", "Resources & runtime", "Inference & evaluation", "Optimization", "Advanced", "Inactive / rejected"];
 
 export const HELP = {
   model: "Exact live registry ID. The display name may be friendlier, but saved config uses this route.",
   mode: "Only modes accepted by the selected live route are listed.",
   dataset_dir: "Input HDF5 path, resolved relative to the method repository by existing launcher rules.",
   gpu_ids: "One CUDA ID or a comma-separated list. SimulGen DDP/FSDP requires multiple IDs to distribute.",
-  vae_modelpath: "SimulGen VAE checkpoint output for train/train_vae and input for train_lc/reconstruct.",
+  vae_modelpath: "VAE checkpoint path. SimulGen uses it across VAE/LC stages; SDFFlow uses it to decode latent shapes.",
+  fm_modelpath: "SDFFlow flow-matching checkpoint. It defines the learned latent distribution used by sample, interpolate, and optimize modes.",
   lc_modelpath: "SimulGen latent-conditioner checkpoint output for train/train_lc and input for reconstruct.",
   num_filter_enc: "Space-separated progressive VAE encoder widths; hierarchical levels equal length minus one.",
   latent_dim: "Per-level hierarchical latent width.",
@@ -787,7 +807,37 @@ export const HELP = {
   infer_query_chunk_size: "Neural-operator query decode chunk size. Leave blank for the checkpoint/model default.",
   val_flow_steps: "Cheaper ODE step count used during validation.",
   val_num_samples: "Number of validation ensemble members used for sampling metrics.",
-  best_by: "Checkpoint selection metric: reconstruction, CRPS, or deterministic validation error."
+  best_by: "Checkpoint selection metric: reconstruction, CRPS, or deterministic validation error.",
+  opt_subspace_dim: "Number of orthonormal flow-noise directions exposed to the optimizer; a smaller subspace makes the search cheaper and easier to interpret.",
+  opt_subspace_seed: "Seed that fixes the orthonormal latent search basis. Keep it fixed when comparing optimization runs.",
+  opt_condition_dims: "Comma-separated trained FM condition names that become design variables, such as volume and area.",
+  opt_shell_scale: "Maximum latent-noise shell radius multiplier used to keep candidates near the learned distribution.",
+  opt_latent_range: "Per-coordinate bound for latent search variables inside the selected subspace.",
+  opt_target_faces: "Target surface-face count used for each search-stage FEA mesh.",
+  opt_mesh_size_max: "Maximum gmsh element size, in normalized geometry units, during the search stage.",
+  opt_load_cases: "Comma-separated structural load cases evaluated for every candidate: vertical, horizontal, diagonal, or torsion.",
+  opt_length_scale: "Metres per normalized geometry unit; required to convert generated shapes into physical FEA dimensions.",
+  opt_material_e: "Young's modulus in pascals for the structural solve.",
+  opt_material_nu: "Poisson ratio for the structural material model.",
+  opt_material_rho: "Material density in kg/m^3, used to compute mass.",
+  opt_yield_stress: "Yield stress in pascals used for the stress feasibility constraint.",
+  opt_stress_percentile: "Nodal von Mises percentile treated as peak stress; a percentile is more robust than a single-node maximum.",
+  opt_baseline_size: "Number of random generated designs used to calibrate active stress and displacement allowables.",
+  opt_stress_margin: "Multiplier applied to the baseline peak-stress allowance; values below one are stricter.",
+  opt_disp_margin: "Multiplier applied to the baseline displacement allowance; values below one are stricter.",
+  opt_stress_weight: "Quadratic objective penalty for exceeding the stress allowance.",
+  opt_disp_weight: "Quadratic objective penalty for exceeding the displacement allowance.",
+  opt_budget: "Maximum number of generate-mesh-solve evaluations in the CMA-ES search.",
+  opt_popsize: "CMA-ES population evaluated per generation.",
+  opt_sigma0: "Initial CMA-ES step size in normalized design coordinates.",
+  opt_seed: "Seed for the baseline population and CMA-ES trajectory.",
+  opt_analysis: "Analysis backend for optimize mode. fea runs the exact mesh-and-solve path; surrogate runs the faster HI-MGN approximation and must not be treated as structurally trustworthy until its checkpoint is validated on representative held-out data.",
+  opt_surrogate_checkpoint: "HI-MGN checkpoint used only when opt_analysis is surrogate. It must match the model family and feature contract named by opt_surrogate_config.",
+  opt_surrogate_config: "HI-MGN inference config used only when opt_analysis is surrogate. It defines the dataset schema, variables, normalization, graph construction, and rollout settings expected by the checkpoint.",
+  opt_surrogate_target_nodes: "Approximate surface-node count sampled for each surrogate evaluation. Larger values preserve more geometric detail but increase graph construction and inference cost.",
+  opt_verify_resolution: "Marching Cubes resolution used to regenerate the final winner for verification.",
+  opt_verify_target_faces: "Surface-face target for the final refined verification mesh.",
+  opt_verify_mesh_size_max: "Maximum gmsh element size for the final refined verification solve."
 };
 
 export const INPUT_SOURCE_META = {
