@@ -18,6 +18,7 @@ _KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 PATH_KEYS = frozenset({
     "dataset_dir",
     "infer_dataset",
+    "eval_dataset",
     "modelpath",
     "init_modelpath",
     "inference_output_dir",

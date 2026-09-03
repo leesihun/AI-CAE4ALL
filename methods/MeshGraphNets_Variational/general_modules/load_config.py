@@ -6,6 +6,7 @@
 PATH_KEYS = frozenset({
     'dataset_dir',
     'infer_dataset',
+    'eval_dataset',
     'modelpath',
     'inference_output_dir',
     'hierarchy_cache_dir',

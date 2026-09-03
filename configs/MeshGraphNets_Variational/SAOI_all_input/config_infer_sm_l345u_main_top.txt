@@ -8,7 +8,7 @@
 %   what actually runs rather than contradicting it.
 %   5000 prior samples per scene.
 %   NOTE: load_config.py lowercases every single-token string value, so at
-%   runtime this path becomes ../dataset/saoi/test_sm-l345u-main_infer_top.h5.
+%   runtime this path becomes ../dataset/SAOI/test_sm-l345u-main_infer_top.h5.
 %   Fine on Windows; on a case-sensitive filesystem the directory and file
 %   names must already be lowercase.
 %   ============================================================
@@ -20,8 +20,8 @@ modelpath	../../output/meshgraphnets-v/saoi_all/saoi_top.pth
 inference_output_dir	../../output/meshgraphnets-v/saoi_all/infer_sm_l345u_main_top
 
 %   Datasets
-dataset_dir	../../dataset/saoi/saoi_train_top.h5  # training set; unused in inference mode
-infer_dataset	../../dataset/saoi/test_SM-L345U-MAIN_infer_top.h5
+dataset_dir	../../dataset/SAOI/saoi_train_top.h5  # training set; unused in inference mode
+infer_dataset	../../dataset/SAOI/test_SM-L345U-MAIN_infer_top.h5
 infer_timesteps	1  # Inference timesteps
 num_vae_samples	5000  # Number of probabilistic generation
 

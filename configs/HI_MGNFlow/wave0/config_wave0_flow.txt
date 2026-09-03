@@ -24,8 +24,8 @@ gpu_ids	1  # the det arm takes gpu 0
 parallel_mode	ddp  # inert at one GPU
 log_file_dir	../../output/chi-mgnflow/wave0/flow.log
 modelpath	../../output/chi-mgnflow/wave0/flow.pth
-dataset_dir	../../dataset/saoi/saoi_train_bot.h5
-infer_dataset	../../dataset/saoi/saoi_train_bot.h5
+dataset_dir	../../dataset/SAOI/saoi_train_bot.h5
+infer_dataset	../../dataset/SAOI/saoi_train_bot.h5
 infer_timesteps	1
 split_seed	42
 num_vae_samples	200

@@ -28,8 +28,8 @@ gpu_ids	0  # the flow arm takes gpu 1
 parallel_mode	ddp  # inert at one GPU
 log_file_dir	../../output/chi-mgnflow/wave0/det.log
 modelpath	../../output/chi-mgnflow/wave0/det.pth
-dataset_dir	../../dataset/saoi/saoi_train_bot.h5
-infer_dataset	../../dataset/saoi/saoi_train_bot.h5
+dataset_dir	../../dataset/SAOI/saoi_train_bot.h5
+infer_dataset	../../dataset/SAOI/saoi_train_bot.h5
 infer_timesteps	1
 split_seed	42
 input_var	3

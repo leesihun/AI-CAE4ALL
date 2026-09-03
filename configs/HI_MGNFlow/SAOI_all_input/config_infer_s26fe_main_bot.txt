@@ -17,8 +17,8 @@ gpu_ids	0  # one GPU per job; the six SAOI infer configs use 0-5 so they can run
 log_file_dir	../../output/chi-mgnflow/saoi_all/infer_s26fe_main_bot.log
 modelpath	../../output/chi-mgnflow/saoi_all/saoi_bot.pth
 inference_output_dir	../../output/chi-mgnflow/saoi_all/infer_s26fe_main_bot
-dataset_dir	../../dataset/saoi/saoi_train_bot.h5  # training set; unused in inference mode
-infer_dataset	../../dataset/saoi/test_S26FE-MAIN_infer_bot.h5
+dataset_dir	../../dataset/SAOI/saoi_train_bot.h5  # training set; unused in inference mode
+infer_dataset	../../dataset/SAOI/test_S26FE-MAIN_infer_bot.h5
 infer_timesteps	1  # Inference timesteps
 num_vae_samples	5000  # Number of probabilistic generation
 input_var	3  # number of input variables: x_disp, y_disp, z_disp, stress (state: input AND output)

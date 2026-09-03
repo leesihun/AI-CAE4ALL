@@ -264,6 +264,13 @@ def render(base_lines, values, arm, gpu, mate):
                        else f"{key}\t{overrides[key]}")
             skip_pct = key in swept
             continue
+        if key in ('dataset_dir', 'infer_dataset'):
+            # Same normalization render_infer() applies. The on-disk directory is
+            # UPPERCASE 'SAOI'; a lowercase twin also exists and holds a different
+            # vintage that opens without error and yields wrong numbers.
+            out.append(re.sub(r'/dataset/SAOI/', '/dataset/SAOI/', line,
+                              flags=re.IGNORECASE))
+            continue
         if key == 'gpu_ids':
             out.append(f"gpu_ids\t{gpu}  # one GPU; {mate} shares it")
             continue
@@ -337,13 +344,15 @@ def render_infer(src_lines, arm, tag, gpu):
             # Passed through from the production config -- it is the single
             # source of truth for where the data lives.
             val = line.split('\t', 1)[1].split('#')[0].strip()
-            # Normalize the dataset directory to the on-disk spelling. Linux is
-            # case-sensitive, so '/dataset/SAOI/' and '/dataset/saoi/' are two
-            # different directories that can both exist and hold different
-            # vintages of the same file -- a config naming the wrong one reads
-            # real data and produces wrong numbers, with no error anywhere.
-            # Case-insensitive so 'SAOI', 'Saoi', ... all land on 'saoi'.
-            val = re.sub(r'/dataset/SAOI/', '/dataset/saoi/', val,
+            # Normalize the dataset directory to the on-disk spelling, which is
+            # UPPERCASE 'SAOI'. Linux is case-sensitive, so '/dataset/SAOI/' and
+            # '/dataset/saoi/' are two different directories; both exist here and
+            # hold different vintages of the same file. A config naming the wrong
+            # one opens real data and produces wrong numbers, with no error
+            # anywhere -- that is how an eval file came back with a flat
+            # z-displacement row. Case-insensitive so 'saoi', 'Saoi', ... all
+            # land on 'SAOI'.
+            val = re.sub(r'/dataset/SAOI/', '/dataset/SAOI/', val,
                          flags=re.IGNORECASE)
             out.append(f"{key}\t{val}")
             if key == 'infer_dataset':

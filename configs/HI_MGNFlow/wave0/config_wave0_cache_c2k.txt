@@ -16,8 +16,8 @@ gpu_ids	2
 parallel_mode	ddp
 log_file_dir	../../output/chi-mgnflow/wave0/cache_c2k.log
 modelpath	../../output/chi-mgnflow/wave0/cache_c2k.pth
-dataset_dir	../../dataset/saoi/saoi_train_bot.h5
-infer_dataset	../../dataset/saoi/saoi_train_bot.h5
+dataset_dir	../../dataset/SAOI/saoi_train_bot.h5
+infer_dataset	../../dataset/SAOI/saoi_train_bot.h5
 infer_timesteps	1
 split_seed	42
 num_vae_samples	200

@@ -18,10 +18,15 @@ log_file_dir	../../output/meshgraphnets-v/saoi_all/train_top.log
 modelpath	../../output/meshgraphnets-v/saoi_all/saoi_top.pth
 
 %   Datasets
-%   NOTE: the native parser lowercases every string value, so the directory must
-%   be dataset/saoi/ (lowercase) on a case-sensitive filesystem.
-dataset_dir	../../dataset/saoi/saoi_train_top.h5
-infer_dataset	../../dataset/saoi/saoi_train_top.h5  # inference-only; unused in train mode
+%   NOTE: the directory is dataset/SAOI/ (UPPERCASE). Path-valued keys keep the
+%   case written here -- they are exempt from the parser's value lowercasing via
+%   PATH_KEYS (general_modules/load_config.py, mirrored in
+%   cae_suite/config_parser.py). A path key MISSING from that set is lowercased,
+%   which silently retargets it to the stale lowercase twin that also exists on
+%   disk -- it opens without error and yields wrong numbers. `eval_dataset` was
+%   missing exactly that way.
+dataset_dir	../../dataset/SAOI/saoi_train_top.h5
+infer_dataset	../../dataset/SAOI/saoi_train_top.h5  # inference-only; unused in train mode
 infer_timesteps	1   # Inference timesteps
 split_seed	42  # Seed for the deterministic 80/10/10 random split
 num_vae_samples	10000   # Number of probabilistic generation

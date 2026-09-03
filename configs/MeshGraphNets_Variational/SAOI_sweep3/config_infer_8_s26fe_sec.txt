@@ -19,9 +19,9 @@ modelpath	../../output/meshgraphnets-v/saoi_sweep3/8.pth
 inference_output_dir	../../output/meshgraphnets-v/saoi_sweep3/infer/8/s26fe_sec
 
 %   Datasets
-dataset_dir	../../dataset/saoi/saoi_train_bot.h5
-infer_dataset	../../dataset/saoi/test_S26FE-SEC_infer_bot.h5
-eval_dataset	../../dataset/saoi/test_S26FE-SEC_infer_bot_orig.h5  # ground truth for the spread histogram (see render_infer)
+dataset_dir	../../dataset/SAOI/saoi_train_bot.h5
+infer_dataset	../../dataset/SAOI/test_S26FE-SEC_infer_bot.h5
+eval_dataset	../../dataset/SAOI/test_S26FE-SEC_infer_bot_orig.h5  # ground truth for the spread histogram (see render_infer)
 infer_timesteps	1  # Inference timesteps
 num_vae_samples	2000  # sweep draws per scene (production uses 5000)
 
