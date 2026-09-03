@@ -19,7 +19,7 @@ modelpath	../../output/chi-mgnflow/saoi_sweepB/3.pth
 inference_output_dir	../../output/chi-mgnflow/saoi_sweepB/infer/3/sm_l345u_main
 dataset_dir	../../dataset/SAOI/saoi_train_bot.h5
 infer_dataset	../../dataset/SAOI/test_SM-L345U-MAIN_infer_bot.h5
-eval_dataset	../../dataset/SAOI/test_SM-L345U-MAIN_infer_bot_orig.h5  # ground truth for the spread histogram
+eval_dataset	../../dataset/SAOI/test_SM-L345U-MAIN_compare_bot.h5  # ground truth for the spread histogram
 infer_timesteps	1  # Inference timesteps
 num_vae_samples	2000  # draws per scene; the histogram carries scenes x this
 input_var	3  # number of input variables: x_disp, y_disp, z_disp, stress (state: input AND output)

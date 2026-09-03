@@ -8,10 +8,12 @@ Three failures have already cost us a run, and NONE of them raises:
      a clean run with an empty warpage table -- the one metric the comparison
      rests on.
 
-  2. `eval_dataset` pointing at the answer-stripped file instead of its `_orig`
-     twin. The ground-truth column is all zeros, the histogram is drawn against
-     it, and the plot looks perfectly plausible. Worse than (1): a skip is
-     visible, a wrong axis is not.
+  2. `eval_dataset` pointing at the rollout's own input file instead of the
+     `_compare_` file that carries the true fields. SAOI pairs
+     test_<MODEL>_infer_<half>.h5 with test_<MODEL>_compare_<half>.h5; point
+     the histogram at the wrong one and it is drawn against the wrong column,
+     and the plot looks perfectly plausible. Worse than (1): a skip is visible,
+     a wrong axis is not.
 
   3. A path key missing from PATH_KEYS. The native parser lowercases every
      string value that is not a declared path key, so `dataset/SAOI/File.h5`

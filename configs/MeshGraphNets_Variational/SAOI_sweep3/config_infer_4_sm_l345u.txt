@@ -21,7 +21,7 @@ inference_output_dir	../../output/meshgraphnets-v/saoi_sweep3/infer/4/sm_l345u
 %   Datasets
 dataset_dir	../../dataset/SAOI/saoi_train_bot.h5
 infer_dataset	../../dataset/SAOI/test_SM-L345U-MAIN_infer_bot.h5
-eval_dataset	../../dataset/SAOI/test_SM-L345U-MAIN_infer_bot_orig.h5  # ground truth for the spread histogram (see render_infer)
+eval_dataset	../../dataset/SAOI/test_SM-L345U-MAIN_compare_bot.h5  # ground truth for the spread histogram (see render_infer)
 infer_timesteps	1  # Inference timesteps
 num_vae_samples	2000  # sweep draws per scene (production uses 5000)
 

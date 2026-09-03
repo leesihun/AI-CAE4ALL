@@ -3,9 +3,11 @@
 %   Mirrors ../../MeshGraphNets_Variational/SAOI_all_input/config_infer_sm_l345u_main_bot.txt so the two
 %   methods are scored on exactly the same held-out scenes.
 %
-%   `eval_dataset` is the SAME file as `infer_dataset`: that HDF5 carries the
-%   true fields, and the rollout reads channel 5 (z_disp) at the final timestep
-%   out of it for the spread histogram. Without it the comparison is skipped.
+%   `eval_dataset` is the `_compare_` file of the same held-out geometry, NOT
+%   `infer_dataset`. The `_infer_` file is what the rollout runs on; the
+%   `_compare_` file carries the true fields, and the rollout reads channel 5
+%   (z_disp) at the final timestep out of it for the spread histogram. Without
+%   the key the comparison is silently skipped and the warpage table is empty.
 %
 %   The architecture comes from the checkpoint's model_config; the keys below
 %   are the run-scoped and sampling-time ones. flow_steps / flow_solver are NOT
@@ -19,6 +21,7 @@ modelpath	../../output/chi-mgnflow/saoi_all/saoi_bot.pth
 inference_output_dir	../../output/chi-mgnflow/saoi_all/infer_sm_l345u_main_bot
 dataset_dir	../../dataset/SAOI/saoi_train_bot.h5  # training set; unused in inference mode
 infer_dataset	../../dataset/SAOI/test_SM-L345U-MAIN_infer_bot.h5
+eval_dataset	../../dataset/SAOI/test_SM-L345U-MAIN_compare_bot.h5  # ground truth for the spread histogram (the `_compare_` half)
 infer_timesteps	1  # Inference timesteps
 num_vae_samples	5000  # Number of probabilistic generation
 input_var	3  # number of input variables: x_disp, y_disp, z_disp, stress (state: input AND output)

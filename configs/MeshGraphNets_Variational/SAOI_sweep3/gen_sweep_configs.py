@@ -227,24 +227,37 @@ INFER_OVERRIDES = {
 }
 
 
-def _orig_twin(path_value: str) -> str:
-    """`.../X.h5` -> `.../X_orig.h5`.
+def _compare_twin(path_value: str) -> str:
+    """`.../test_X_infer_bot.h5` -> `.../test_X_compare_bot.h5`.
 
-    The eval HDF5 that carries the true fields is the `_orig` twin of the
-    rollout's input file, whose displacement rows are stripped so the model
-    cannot read its own target.
+    SAOI stores each held-out geometry twice: the `_infer_` file is what the
+    rollout runs on, and the `_compare_` file carries the true fields the draws
+    are scored against. Only the `_infer_` segment of the BASENAME is rewritten,
+    so a directory containing "infer" is left alone.
+
+    Raises rather than guessing: a silently wrong ground-truth path scores the
+    generated spread against the wrong distribution and looks plausible doing
+    it, which is far worse than failing here.
     """
-    if path_value.endswith('.h5'):
-        return path_value[:-len('.h5')] + '_orig.h5'
-    return path_value + '_orig'
+    p = path_value.rsplit('/', 1)
+    stem = p[-1]
+    if '_infer_' not in stem:
+        raise ValueError(
+            f"cannot derive the ground-truth path from {path_value!r}: expected "
+            f"an '_infer_' segment in the file name (SAOI pairs "
+            f"test_<MODEL>_infer_<half>.h5 with test_<MODEL>_compare_<half>.h5)")
+    p[-1] = stem.replace('_infer_', '_compare_')
+    return '/'.join(p)
 
 
 def render_infer(src_lines, arm, tag, gpu, values):
     """One inference config: same eval set, this arm's checkpoint.
 
-    `eval_dataset` is set to the SAME file as `infer_dataset`: that HDF5 carries
-    the true fields, and _eval_dataset_spreads reads channel 5 (z_disp) at the
-    final timestep out of it. Without it the runtime skips the comparison.
+    `eval_dataset` is the `_compare_` half of the same held-out geometry, NOT
+    `infer_dataset`. SAOI stores test_<MODEL>_infer_<half>.h5 (the rollout's
+    input) alongside test_<MODEL>_compare_<half>.h5 (the true fields), and
+    _eval_dataset_spreads reads channel 5 (z_disp) at the final timestep out of
+    the latter. Without the key the runtime skips the comparison entirely.
 
     The architecture keys are written out even though the checkpoint's
     model_config overrides them -- it keeps the file self-describing and stops
@@ -264,6 +277,10 @@ def render_infer(src_lines, arm, tag, gpu, values):
             out.append(line)
             continue
         key = line.split('\t')[0].split()[0] if '\t' in line else line.split()[0]
+        if key == 'eval_dataset':
+            # Derived below from this arm's infer_dataset, so the inherited line
+            # would be a duplicate -- a hard error in the native parser.
+            continue
         if key in over:
             seen.add(key)
             note = notes.get(key, 'matches the training arm')
@@ -308,14 +325,13 @@ def render_infer(src_lines, arm, tag, gpu, values):
             out.append(f"{key}\t{val}")
             if key == 'infer_dataset':
                 # GROUND TRUTH IS A DIFFERENT FILE. `infer_dataset` is the
-                # rollout's INPUT: its displacement rows are stripped so the
-                # model cannot read the answer it is being asked to predict.
-                # The `_orig` twin keeps those rows, and it is what
-                # _eval_dataset_spreads must read channel 5 (z_disp) from.
-                # Pointing eval_dataset at infer_dataset instead does not error
-                # -- it silently scores the generated spread against a column of
-                # zeros, which is worse than the histogram being skipped.
-                out.append(f"eval_dataset\t{_orig_twin(val)}  "
+                # rollout's INPUT; the `_compare_` file of the same geometry
+                # carries the true fields, and it is what _eval_dataset_spreads
+                # reads channel 5 (z_disp) from. Pointing eval_dataset at
+                # infer_dataset instead does not error -- it silently scores the
+                # generated spread against the wrong column, which is worse than
+                # the histogram being skipped.
+                out.append(f"eval_dataset	{_compare_twin(val)}  "
                            f"# ground truth for the spread histogram (see render_infer)")
                 seen.add('eval_dataset')
             continue

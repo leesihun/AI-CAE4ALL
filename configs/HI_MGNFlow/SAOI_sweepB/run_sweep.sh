@@ -161,10 +161,10 @@ if [ "$PREFLIGHT" = "1" ]; then
 
     # Valid train configs say NOTHING about whether the histogram will have
     # ground truth. rollout.py skips it silently when `eval_dataset` is absent,
-    # and draws against an all-zero axis when it points at the answer-stripped
-    # file instead of the `_orig` twin. Both have happened, neither raises, and
-    # the sweep still reports a clean run. Catch it here -- before the GPU-days,
-    # not on Monday morning.
+    # and draws against the wrong column when it points at the rollout's own
+    # input instead of the `_compare_` file. Both have happened, neither raises,
+    # and the sweep still reports a clean run. Catch it here -- before the
+    # GPU-days, not on Monday morning.
     echo ""
     echo "Preflight (inference + histogram inputs)..."
     if ! "$PYTHON" "$CFG_DIR/check_eval_inputs.py"; then

@@ -22,6 +22,7 @@ inference_output_dir	../../output/meshgraphnets-v/saoi_all/infer_sm_l345u_main_b
 %   Datasets
 dataset_dir	../../dataset/SAOI/saoi_train_bot.h5  # training set; unused in inference mode
 infer_dataset	../../dataset/SAOI/test_SM-L345U-MAIN_infer_bot.h5
+eval_dataset	../../dataset/SAOI/test_SM-L345U-MAIN_compare_bot.h5  # ground truth for the spread histogram (the `_compare_` half)
 infer_timesteps	1  # Inference timesteps
 num_vae_samples	5000  # Number of probabilistic generation
 

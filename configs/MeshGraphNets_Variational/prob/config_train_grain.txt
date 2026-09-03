@@ -1,0 +1,92 @@
+%   ============================================================
+%   GrainPaint SPPARKS, centre 50^3 crop  (Sandia, CC-BY-4.0)
+%   arm: MeshGraphNets-V (VAE + FM prior)
+%
+%   125,000 nodes / 367,500 edges, T=1 (static), 900 train + 100 infer.
+%   Target is the grain-BOUNDARY indicator, not grain_id: ids are arbitrary
+%   labels, so an L2 loss on them punishes a correct microstructure that merely
+%   permutes labels. T=1 with cond_var 0 means every sample has identical model
+%   input -- the whole outcome has to come out of the latent/prior, which is the
+%   hardest possible test of the generative head and degenerate for a
+%   deterministic one. 900 items/epoch -> 100 epochs ~ 90k steps.
+%
+%   Everything outside the arm-specific block below is identical between the two
+%   arms so the comparison isolates the stochastic head. Both select on CRPS.
+%   Sized for one 8 GB RTX 2080 SUPER: batch 1, checkpointing on, AMP (fp16 on sm_75).
+%   ============================================================
+model	meshgraphnets-v
+mode	train
+gpu_ids	0
+parallel_mode	ddp
+log_file_dir	../../output/prob_grain_mgnv/train.log
+modelpath	../../output/prob_grain_mgnv/model.pth
+
+%   Data
+dataset_dir	../../dataset/prob_grainpaint50.h5
+infer_dataset	../../dataset/prob_grainpaint50_infer.h5
+infer_timesteps	1
+split_seed	42
+
+input_var	1
+output_var	1
+cond_var	0
+feature_loss_weights	1.0
+edge_var	8
+positional_features	4
+
+%   Optimisation (identical across arms)
+message_passing_num	15
+Training_epochs	100
+Batch_size	1
+LearningR	0.0003
+Latent_dim	96
+num_workers	2
+augment_geometry	False
+grad_accum_steps	1
+
+use_checkpointing	True
+use_amp	True
+use_ema	True
+ema_decay	0.99
+test_interval	1000
+val_interval	1
+
+use_node_types	False
+use_world_edges	False
+test_batch_idx	0, 1
+plot_feature_idx	0
+display_testset	False
+display_trainset	False
+
+%   Multiscale hierarchy (identical across arms)
+use_multiscale	True
+coarsening_type	voronoi_seedmean
+voronoi_clusters	8000, 1500
+multiscale_levels	2
+mp_per_level	3, 4, 6, 4, 3
+hierarchy_variants	1
+hierarchy_seed	1234
+hierarchy_cache_keep	True
+time_integration	ar_ot
+best_by	crps
+
+%   ---- arm-specific: MMD-InfoVAE latent + jointly trained conditional FM prior ----
+std_noise	0.0
+use_vae	True
+vae_latent_dim	128
+vae_mp_layers	5
+vae_graph_aware	True
+recon_loss	mse
+alpha_recon	1000
+lambda_mmd	0.2
+mmd_bandwidth	median
+beta_aux	1.0
+posterior_min_std	0.05
+prior_type	gnn_e2e
+use_conditional_prior	True
+prior_family	fm
+prior_nll_weight	1.0
+prior_fm_steps	40
+prior_mp_layers	5
+prior_hidden_dim	256
+prior_temperature	1.0
