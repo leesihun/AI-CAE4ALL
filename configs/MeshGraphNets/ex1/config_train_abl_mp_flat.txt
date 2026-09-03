@@ -10,10 +10,10 @@ mode	train  # Train / Inference
 gpu_ids	3  # 0, 1, 2, 3.....
 parallel_mode	ddp     # ddp, model_split
 log_file_dir	../../output/meshgraphnets/ex1/abl_mp_flat_train.log
-modelpath	../output/meshgraphnets/ex1/abl_mp_flat.pth
+modelpath	../../output/meshgraphnets/ex1/abl_mp_flat.pth
 %   Datasets
-dataset_dir	../dataset/ex1.h5
-infer_dataset	../dataset/ex1_infer.h5
+dataset_dir	../../dataset/ex1.h5
+infer_dataset	../../dataset/ex1_infer.h5
 infer_timesteps	1
 %   Common params
 input_var	4  # number of input variables: x_disp, y_disp, z_disp, stress (excluding node types)

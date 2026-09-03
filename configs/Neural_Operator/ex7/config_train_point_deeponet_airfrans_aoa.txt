@@ -11,10 +11,10 @@ mode                           train
 gpu_ids                        0
 parallel_mode                  ddp
 log_file_dir                   ../../output/neural_operator/ex7/point_deeponet_airfrans_aoa.log
-modelpath                      ../output/neural_operator/ex7/point_deeponet_airfrans_aoa.pth
-dataset_dir                    ../dataset/ex7.h5
-infer_dataset                  ../dataset/ex7_infer.h5
-inference_output_dir           ../output/neural_operator/rollout/ex7/point_deeponet_airfrans_aoa
+modelpath                      ../../output/neural_operator/ex7/point_deeponet_airfrans_aoa.pth
+dataset_dir                    ../../dataset/ex7.h5
+infer_dataset                  ../../dataset/ex7_infer.h5
+inference_output_dir           ../../output/neural_operator/rollout/ex7/point_deeponet_airfrans_aoa
 infer_timesteps                1
 split_seed                     42
 input_var                      4

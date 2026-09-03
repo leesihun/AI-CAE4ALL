@@ -2,15 +2,15 @@ model	MeshGraphNets
 mode	inference  # Train / Inference
 gpu_ids	0  # ex2 inference for the regular/vanilla (20 MP) baseline
 log_file_dir	../../output/meshgraphnets/ex2/infer_vanilla.log
-modelpath	../output/meshgraphnets/ex2/model_vanilla.pth
+modelpath	../../output/meshgraphnets/ex2/model_vanilla.pth
 %   Datasets. dataset_dir = the training set (inert in inference mode);
 %   infer_dataset = ex2_infer.h5, 5 UNSEEN scenes (val_dp0_SYS-2/3/4,
 %   sample4_dp0_SYS-2/3) x 50 timesteps. The rollout reads ONLY the stored
 %   t=0 state as the initial condition, so t=1..49 stay clean ground truth
 %   for scoring -- generalization, not reconstruction of the training set.
-dataset_dir	../dataset/ex2.h5
-infer_dataset	../dataset/ex2_infer.h5  # held out from training
-inference_output_dir	../output/meshgraphnets/rollout/ex2/model_vanilla
+dataset_dir	../../dataset/ex2.h5
+infer_dataset	../../dataset/ex2_infer.h5  # held out from training
+inference_output_dir	../../output/meshgraphnets/rollout/ex2/model_vanilla
 infer_timesteps	49  # autoregressive rollout steps from t=0
 %   Common params (architecture overridden by checkpoint model_config at load)
 input_var	4  # number of input variables: x_disp, y_disp, z_disp, stress (excluding node types)

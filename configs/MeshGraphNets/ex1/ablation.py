@@ -50,7 +50,7 @@ import numpy as np
 
 HERE = Path(__file__).resolve().parent
 REPO_ROOT = HERE.parents[2]
-MGN_ROOT = REPO_ROOT / 'MeshGraphNets'
+MGN_ROOT = REPO_ROOT / 'methods' / 'MeshGraphNets'
 BASE_CFG = HERE / 'config_train1.txt'
 RESULT_DIR = REPO_ROOT / 'output' / 'meshgraphnets' / 'ex1' / 'ablation'
 TRAIN_DATASET = REPO_ROOT / 'dataset' / 'ex1.h5'

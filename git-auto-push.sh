@@ -1,66 +1,26 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/bash
+# Add all changes
+git add .
 
-REMOTE="${REMOTE:-origin}"
-BRANCH="$(git rev-parse --abbrev-ref HEAD)"
-
-if [ "$BRANCH" = "HEAD" ]; then
-    echo "Error: detached HEAD. Check out a branch before auto-pushing."
-    exit 1
-fi
-
-if [ "$#" -gt 0 ]; then
-    COMMIT_MESSAGE="$*"
-else
-    printf -v COMMIT_MESSAGE '%(%Y-%m-%d %H:%M:%S)T' -1
-fi
-
-echo "Staging changes..."
-git add -A
-
+# Check if there is anything to commit
 if ! git diff --cached --quiet; then
-    echo "Creating commit..."
-    git commit -m "$COMMIT_MESSAGE"
-else
-    echo "No file changes to commit."
-fi
+    # Commit with current date and time as the message
+    git commit -m "$(date '+%Y-%m-%d %H:%M:%S')"
 
-echo "Fetching $REMOTE..."
-git fetch "$REMOTE"
-
-UPSTREAM="$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || true)"
-if [ -z "$UPSTREAM" ]; then
-    if git show-ref --verify --quiet "refs/remotes/$REMOTE/$BRANCH"; then
-        UPSTREAM="$REMOTE/$BRANCH"
+    # Pull remote changes first (rebase to keep linear history)
+    echo "Pulling remote changes..."
+    if ! git pull --rebase; then
+        echo "Warning: Failed to pull from remote. You may need to manually sync."
     fi
-    echo "No upstream configured. Setting upstream to $REMOTE/$BRANCH on push."
-    PUSH_ARGS=(-u "$REMOTE" "$BRANCH")
-else
-    PUSH_ARGS=()
-fi
 
-if [ -n "$UPSTREAM" ]; then
-    BEHIND="$(git rev-list --count "HEAD..$UPSTREAM")"
-    if [ "$BEHIND" -gt 0 ]; then
-        echo "Rebasing onto $UPSTREAM..."
-        git rebase "$UPSTREAM"
+    # Push to the current branch's upstream (with timeout)
+    echo "Pushing to remote..."
+    if timeout 30 git push 2>&1; then
+        echo "Successfully pushed to remote!"
     else
-        echo "Already up to date with $UPSTREAM."
+        echo "Warning: Failed to push to remote. Changes are committed locally."
+        echo "Run 'git push' manually when ready."
     fi
-fi
-
-push_with_timeout() {
-    if [ -x /usr/bin/timeout ]; then
-        /usr/bin/timeout 60 "$@"
-    else
-        "$@"
-    fi
-}
-
-echo "Pushing to remote..."
-if push_with_timeout git push "${PUSH_ARGS[@]}"; then
-    echo "Successfully pushed to remote!"
 else
-    echo "Error: failed to push. Changes remain committed locally."
-    exit 1
+    echo "No changes to commit."
 fi

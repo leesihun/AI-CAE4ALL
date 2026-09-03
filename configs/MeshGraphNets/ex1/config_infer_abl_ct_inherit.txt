@@ -5,10 +5,10 @@ mode	inference  # Train / Inference
 gpu_ids	7  # 0, 1, 2, 3.....
 parallel_mode	ddp     # ddp, model_split
 log_file_dir	../../output/meshgraphnets/ex1/abl_ct_inherit_infer.log
-modelpath	../output/meshgraphnets/ex1/abl_ct_inherit.pth
+modelpath	../../output/meshgraphnets/ex1/abl_ct_inherit.pth
 %   Datasets
-dataset_dir	../dataset/ex1.h5
-infer_dataset	../dataset/ex1_infer.h5
+dataset_dir	../../dataset/ex1.h5
+infer_dataset	../../dataset/ex1_infer.h5
 infer_timesteps	1
 %   Common params
 input_var	4  # number of input variables: x_disp, y_disp, z_disp, stress (excluding node types)
@@ -56,7 +56,7 @@ voronoi_clusters	5000, 100       # HI-MGN parameters
 multiscale_levels	2               # HI-MGN parameters
 mp_per_level	4, 6, 8, 6, 4       # Overides message_passing_num if use_multiscale=True
 split_seed	42
-inference_output_dir	../output/meshgraphnets/ex1/ablation/infer_ct_inherit
+inference_output_dir	../../output/meshgraphnets/ex1/ablation/infer_ct_inherit
 '
 %   Time integration (CONFIGURATION_REFERENCE.md section 3.5)
 time_integration	ar_ot  # ar_ot = one-step/teacher-forced (default); ar_rt = full-trajectory autoregressive rollout training

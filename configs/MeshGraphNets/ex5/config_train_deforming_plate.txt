@@ -3,16 +3,16 @@ mode	train
 gpu_ids	0
 parallel_mode	ddp
 log_file_dir	../../output/meshgraphnets/ex5/train_deforming_plate.log
-modelpath	../output/meshgraphnets/ex5/model_deforming_plate.pth
-inference_output_dir	../output/meshgraphnets/rollout/ex5/model_deforming_plate
+modelpath	../../output/meshgraphnets/ex5/model_deforming_plate.pth
+inference_output_dir	../../output/meshgraphnets/rollout/ex5/model_deforming_plate
 %   ex5.h5: DeepMind deforming_plate, 100 trajectories, full 400-step rollout.
 %   Rigid actuator pressed into a hyperelastic plate -- the only ex4-ex6
 %   dataset with contact, so use_world_edges is exercised here. ex5_infer.h5
 %   holds out the 20 trajectories with the deepest actuator indentation as a
 %   genuine extrapolation test, not a same-distribution held-out sample -- see
 %   dataset/build_public_mgn.py and dataset/PUBLIC_DATASETS.md.
-dataset_dir	../dataset/ex5.h5
-infer_dataset	../dataset/ex5_infer.h5
+dataset_dir	../../dataset/ex5.h5
+infer_dataset	../../dataset/ex5_infer.h5
 infer_timesteps	399
 split_seed	42
 input_var	4

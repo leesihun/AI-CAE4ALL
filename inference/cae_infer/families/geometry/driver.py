@@ -1,4 +1,4 @@
-"""Explicit-args refactor of Geometry_generation/inference_profiles/sample.py's
+"""Explicit-args refactor of methods/SDFFlow/inference_profiles/sample.py's
 `run_sample`. Generative, not rollout: noise -> FM ODE (optional condition +
 CFG) -> SDF-VAE decode -> Marching Cubes -> STL. `input` is unused (kept in
 the signature for a uniform driver contract across families).
@@ -43,7 +43,7 @@ def _load_vae(fm_ckpt, device):
             raise FileNotFoundError(
                 "This checkpoint has no embedded 'vae' block (pre-merge FM checkpoint) "
                 f"and its recorded vae_modelpath ({vae_path!r}) is not reachable. Run "
-                "Geometry_generation/merge_sdfflow_checkpoint.py to produce a single "
+                "methods/SDFFlow/merge_sdfflow_checkpoint.py to produce a single "
                 "self-contained .pth, or make the VAE file available at that path."
             )
         vae_ckpt = torch.load(vae_path, map_location="cpu", weights_only=False)

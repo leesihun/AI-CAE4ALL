@@ -38,6 +38,9 @@ wandb/
 inference/build/
 inference/dist/
 
+# NVIDIA driver shader/log scratch dirs; recreated on every CUDA run.
+NVIDIA Corporation/
+
 # Local environments and machine-specific settings
 .venv/
 venv/

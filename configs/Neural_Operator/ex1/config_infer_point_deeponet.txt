@@ -3,11 +3,11 @@ mode     inference       # run mode -- {train|inference}
 gpu_ids  0               # CUDA device id(s) -- int or comma list; -1 = CPU (never mixed with CUDA ids)
 '
 %   Datasets and outputs
-log_file_dir          ../../output/neural_operator/ex1/infer_point_deeponet.log  # log file path, relative to the backend output dir
-modelpath             ../output/neural_operator/ex1/point_deeponet.pth           # checkpoint path -- save target in train, load source in inference
-dataset_dir           ../dataset/ex1.h5                                          # training mesh-state HDF5 path
-infer_dataset         ../dataset/ex1_infer.h5                                    # inference input HDF5 path -- state rows hold the GT field (zeroed as input at T=1)
-inference_output_dir  ../output/neural_operator/rollout/ex1/point_deeponet       # rollout output directory
+log_file_dir          ../../output/neural_operator/ex1/infer_point_deeponet.log  # log file path, relative to the method repo
+modelpath             ../../output/neural_operator/ex1/point_deeponet.pth           # checkpoint path -- save target in train, load source in inference
+dataset_dir           ../../dataset/ex1.h5                                          # training mesh-state HDF5 path
+infer_dataset         ../../dataset/ex1_infer.h5                                    # inference input HDF5 path -- state rows hold the GT field (zeroed as input at T=1)
+inference_output_dir  ../../output/neural_operator/rollout/ex1/point_deeponet       # rollout output directory
 infer_timesteps       1                                                          # rollout length (int) -- required for static T=1; omit only when a temporal input has >1 timestep
 split_seed            42                                                         # RNG seed for the deterministic 80/10/10 train/val/test split; default 42
 '

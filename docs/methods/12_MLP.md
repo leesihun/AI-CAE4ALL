@@ -9,7 +9,7 @@
 - **Repo / entrypoint:** `MLP/` · `MLP_main.py`
 - **Modes:** `train` · `inference`
 - **Family:** parametric regression / surrogate modeling
-- **Own docs:** [MLP/CLAUDE.md](../../MLP/CLAUDE.md)
+- **Own docs:** [MLP/CLAUDE.md](../../methods/MLP/CLAUDE.md)
 
 ## What it does
 
@@ -21,7 +21,7 @@ microseconds.
 
 It is a plain fully-connected network — `Linear → [Norm] → Activation →
 [Dropout]` blocks from `hidden_layers`, then a linear head with an optional
-output activation ([MLP/mlp/model.py](../../MLP/mlp/model.py)). The point of the
+output activation ([MLP/mlp/model.py](../../methods/MLP/mlp/model.py)). The point of the
 method is not architectural novelty; it is being a **first-class, launcher-routed,
 preflight-validated** member of the suite for the common "I just have a table of
 inputs and outputs" case.
@@ -29,7 +29,7 @@ inputs and outputs" case.
 ## Data contract (tabular `X`/`Y` HDF5)
 
 A single HDF5 per split — see
-[dataset/DATASET_FORMAT.md](../../dataset/DATASET_FORMAT.md) → *Tabular Parametric
+[dataset/DATASET_FORMAT.md](../reference/DATASET_FORMAT.md) → *Tabular Parametric
 Dataset*:
 
 ```
@@ -48,7 +48,7 @@ A tiny sample generator ships at
 
 ## Training details
 
-[MLP/mlp/train.py](../../MLP/mlp/train.py): AdamW with a linear-warmup→cosine LR
+[MLP/mlp/train.py](../../methods/MLP/mlp/train.py): AdamW with a linear-warmup→cosine LR
 schedule, `mse` / `mae` / `huber` loss, a deterministic 80/10/10 train/val/test
 split by `split_seed`, optional bf16 AMP and EMA. **Normalization
 (`standard`/`minmax`/`none`) is fit on the train split only and stored in the
@@ -75,7 +75,7 @@ fields rather than a fixed-length scalar vector, this is the wrong method.
 
 ## Config keys
 
-See [CONFIGURATION_REFERENCE.md §9.10](../../CONFIGURATION_REFERENCE.md) for the
+See [CONFIGURATION_REFERENCE.md §9.10](../CONFIGURATION.md) for the
 full catalog; the launcher spec
 [cae_suite/specs/mlp.py](../../cae_suite/specs/mlp.py) is the validation source of
 truth. Minimal train example:

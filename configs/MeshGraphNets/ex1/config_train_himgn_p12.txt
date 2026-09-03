@@ -3,7 +3,7 @@ mode	train  # Train / Inference
 gpu_ids	3  # ablation arm p12 (ex1) -- one GPU, no DDP
 parallel_mode	ddp     # ddp, model_split
 log_file_dir	../../output/meshgraphnets/ex1/train_himgn_p12.log
-modelpath	../output/meshgraphnets/ex1/model_himgn_p12.pth
+modelpath	../../output/meshgraphnets/ex1/model_himgn_p12.pth
 %   ABLATION ARM p12 for the transfer-operator / multi-partition study.
 %
 %   GENERATED from config_train_himgn_base.txt -- edit that file and re-run the
@@ -12,8 +12,8 @@ modelpath	../output/meshgraphnets/ex1/model_himgn_p12.pth
 %   bottom (marked "ARM DIFFERENCE"). Read the baseline for why the shared
 %   settings are what they are, including which time_integration this ex uses.
 %   See MeshGraphNets/ATTENTION_TRANSFER_DESIGN.md.
-dataset_dir	../dataset/ex1.h5
-infer_dataset	../dataset/ex1_infer.h5
+dataset_dir	../../dataset/ex1.h5
+infer_dataset	../../dataset/ex1_infer.h5
 infer_timesteps	1
 split_seed	42
 %   Common params

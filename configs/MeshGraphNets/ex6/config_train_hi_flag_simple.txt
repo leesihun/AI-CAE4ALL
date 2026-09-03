@@ -12,8 +12,8 @@ mode	train
 gpu_ids	0
 parallel_mode	ddp
 log_file_dir	../../output/meshgraphnets/ex6/train_hi_flag_simple.log
-modelpath	../output/meshgraphnets/ex6/model_hi_flag_simple.pth
-inference_output_dir	../output/meshgraphnets/rollout/ex6/model_hi_flag_simple
+modelpath	../../output/meshgraphnets/ex6/model_hi_flag_simple.pth
+inference_output_dir	../../output/meshgraphnets/rollout/ex6/model_hi_flag_simple
 %   ex6.h5: DeepMind flag_simple, 100 trajectories, full 401-step rollout.
 %   Cloth pinned to a pole in the wind, self-contact -> use_world_edges.
 %   UNLIKE cylinder_flow/deforming_plate, every trajectory shares the SAME
@@ -26,8 +26,8 @@ inference_output_dir	../output/meshgraphnets/rollout/ex6/model_hi_flag_simple
 %   parameter (handle motion is ~constant across trajectories), so this is an
 %   outcome-magnitude proxy rather than a strict parameter extrapolation like
 %   ex4/ex5 -- see dataset/build_public_mgn.py and dataset/PUBLIC_DATASETS.md.
-dataset_dir	../dataset/ex6.h5
-infer_dataset	../dataset/ex6_infer.h5
+dataset_dir	../../dataset/ex6.h5
+infer_dataset	../../dataset/ex6_infer.h5
 infer_timesteps	400
 split_seed	42
 input_var	3

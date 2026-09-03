@@ -4,28 +4,35 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this repository is
 
-AI-CAE4ALL is a **monorepo of six independent ML-for-CAE method repositories**
+AI-CAE4ALL is a **monorepo of nine independent ML-for-CAE method repositories**
 unified by one config-driven launcher. The launcher (`cae_suite/`, the
 `ai-cae4all` console script, `AI_CAE4ALL_main.py`) reads a native flat-text
 config, routes on its `model` field to the right method repo, runs a layered
 preflight validation, and then **subprocess-launches that repo's native
 entrypoint** — it never imports the ML code.
 
-Each method repo is self-contained (own venv, own tests, own `CLAUDE.md`) and
-also runnable directly. The specs live in [cae_suite/specs/](cae_suite/specs/):
+Every method repo is self-contained (own venv, own tests) and also runnable
+directly. All nine live under [methods/](methods/); the specs that route to them
+live in [cae_suite/specs/](cae_suite/specs/):
 
-| `model` config value(s) | Repo | Entrypoint | Has own CLAUDE.md |
+| `model` config value(s) | Directory | Entrypoint | Own CLAUDE.md |
 | --- | --- | --- | --- |
-| `meshgraphnets` | `MeshGraphNets/` | `MeshGraphNets_main.py` | — |
-| `meshgraphnets-v` | `MeshGraphNets - variational/` | `MeshGraphNets_main.py` | — |
-| `point_deeponet`, `deeponet`, `fno`, `gino` | `Neural_Operator/` | `main.py` | [yes](Neural_Operator/CLAUDE.md) |
-| `transolver` | `Transolver/` | `Transolver_main.py` | — |
-| `sdfflow` | `Geometry_generation/` | `SDFFlow_main.py` | [yes](Geometry_generation/CLAUDE.md) |
-| `simulgenvae` | `SimulGenVAE/` | `SimulGenVAE_main.py` | [yes](SimulGenVAE/CLAUDE.md) |
-| `mlp` | `MLP/` | `MLP_main.py` | [yes](MLP/CLAUDE.md) |
-| `geometry_ingest` | `dataset/geometry_ingest/` | `main.py` | [yes](dataset/geometry_ingest/README.md) |
+| `meshgraphnets` | `methods/MeshGraphNets/` | `MeshGraphNets_main.py` | — |
+| `meshgraphnets-v` | `methods/MeshGraphNets_Variational/` | `MeshGraphNets_main.py` | — |
+| `chi-mgnflow` | `methods/HI_MGNFlow/` | `CHiMGNFlow_main.py` | — (see its README.md) |
+| `point_deeponet`, `deeponet`, `fno`, `gino` | `methods/Neural_Operator/` | `main.py` | [yes](methods/Neural_Operator/CLAUDE.md) |
+| `transolver` | `methods/Transolver/` | `Transolver_main.py` | — |
+| `sdfflow` | `methods/SDFFlow/` | `SDFFlow_main.py` | [yes](methods/SDFFlow/CLAUDE.md) |
+| `simulgenvae` | `methods/SimulGenVAE/` | `SimulGenVAE_main.py` | [yes](methods/SimulGenVAE/CLAUDE.md) |
+| `mlp` | `methods/MLP/` | `MLP_main.py` | [yes](methods/MLP/CLAUDE.md) |
+| `geometry_ingest` | `methods/GeometryIngest/` | `main.py` | — (see its [README.md](methods/GeometryIngest/README.md)) |
 
-The first seven are the ML methods. **`simulgenvae`** is a hierarchical VAE +
+**Model ID and directory name do not always match**, because model IDs are
+frozen by every checked-in config: `chi-mgnflow` lives in `HI_MGNFlow/`,
+`sdfflow` in `SDFFlow/` (formerly `Geometry_generation/`), `meshgraphnets-v` in
+`MeshGraphNets_Variational/`. The spec's `repository=` field is the mapping.
+
+The first eight are the ML methods. **`simulgenvae`** is a hierarchical VAE +
 latent conditioner for parametric simulation fields; structurally it mirrors
 `sdfflow` (a VAE stage + a second stage), with modes `train` (VAE→LC pipeline),
 `train_vae`, `train_lc`, and `reconstruct`, in-process multi-GPU via `mp.spawn`,
@@ -33,13 +40,12 @@ and stage-prefixed `vae_*`/`lc_*` config keys. It reads the **shared mesh HDF5**
 (`dataset_kind=mesh_hdf5`) but is a **fixed-geometry dense FOM** model: it flattens
 the physical field rows into a dense `[samples, channels, time]` tensor, so every
 sample must share the same node and timestep counts. See
-[SimulGenVAE/CLAUDE.md](SimulGenVAE/CLAUDE.md) and CONFIGURATION_REFERENCE.md section 9.11.
+[methods/SimulGenVAE/CLAUDE.md](methods/SimulGenVAE/CLAUDE.md).
 
 **`mlp` is the odd one out among them**: a parametric surrogate (N scalar inputs →
 M scalar outputs) that is **tabular, not mesh** — it reads an `X[S,N]`/`Y[S,M]`
 HDF5 (`dataset_kind=table_hdf5`, `native_probe=False`), not the shared mesh
-contract, and needs no GPU. See [MLP/CLAUDE.md](MLP/CLAUDE.md) and
-CONFIGURATION_REFERENCE.md section 9.10.
+contract, and needs no GPU. See [methods/MLP/CLAUDE.md](methods/MLP/CLAUDE.md).
 
 **SDFFlow additionally carries the suite's only closed-loop mode.** Alongside
 its train/sample/reconstruct/interpolate modes, `mode optimize` chains
@@ -47,19 +53,44 @@ generation, gmsh tetrahedral meshing, a linear-static structural solve, and a
 CMA-ES search into one config-driven run over the trained DeepJEB generator --
 the one place where a method repo *evaluates* geometry rather than only
 producing or predicting it. It trains nothing and needs `gmsh`, `pyamg`, and
-`cma`. See [Geometry_generation/CLAUDE.md](Geometry_generation/CLAUDE.md).
+`cma`. See [methods/SDFFlow/CLAUDE.md](methods/SDFFlow/CLAUDE.md).
 
 **`geometry_ingest` is a non-ML data-prep utility** routed through the same
 launcher: it meshes CAD/geometry (STEP/IGES/STL) into the shared mesh HDF5
 contract (graph for MeshGraphNets, point cloud for the operators/Transolver). Its
-spec sets `native_probe=False` and `dataset_kind=None`, its modes are
-`ingest`/`inspect`, and it needs no GPU. See
-[dataset/geometry_ingest/README.md](dataset/geometry_ingest/README.md) and
-CONFIGURATION_REFERENCE.md section 9.9.
+spec sets `native_probe=False` and `dataset_kind=None`, and its modes are
+`ingest`/`inspect`.
 
 **When working inside a method repo, its own `CLAUDE.md` is authoritative** for
 that method's data contract, architecture facts, and validation steps. This file
 covers only the root-level launcher and the cross-cutting conventions.
+
+## Layout invariants
+
+Two rules hold across the whole tree; breaking either is a bug, not a style
+choice:
+
+1. **`configs/<Name>/` mirrors `methods/<Name>/`.** Adding a method means adding
+   both directories under the same name. `configs/campaigns/` is the one
+   exception: it holds multi-arm runners (`ex1`, `ex2`, `ex3`,
+   `benchmarks_all`), not per-method configs.
+2. **`output/` at the repo root is the only artifact destination.** Nothing is
+   written inside a method directory. Because the native process runs with its
+   cwd set to `methods/<Name>/`, every artifact path in a config is spelled
+   `../../output/...` and every dataset path `../../dataset/...`.
+
+```text
+AI-CAE4ALL/
+├── AI_CAE4ALL_main.py   cae_suite/      # launcher (no ML imports)
+├── methods/             configs/        # nine runtimes, mirrored config dirs
+├── dataset/             output/         # inputs (git-ignored), single artifact root
+├── studio/              inference/      # browser Studio, portable CPU bundle
+├── docs/                tests/          # all documentation, launcher contract tests
+```
+
+> The `output/` **subdirectory** names are historical and deliberately left
+> alone: `output/geometry_generation/` (SDFFlow), `output/chi-mgnflow/`,
+> `output/meshgraphnets-v/`. They name runs, not directories in the tree.
 
 ## Commands
 
@@ -74,7 +105,7 @@ python AI_CAE4ALL_main.py --config configs/Transolver/ex2/config_train_transolve
 python AI_CAE4ALL_main.py --config configs/Neural_Operator/ex1/config_train_fno.txt --dry-run
 
 # A clean preflight auto-launches the native process:
-python AI_CAE4ALL_main.py --config configs/MeshGraphNets/ex1/config_train1.txt
+python AI_CAE4ALL_main.py --config configs/MeshGraphNets/ex1/config_train_himgn_base.txt
 
 # Introspection (no config needed):
 python AI_CAE4ALL_main.py --list-models        # registered models + install health
@@ -90,19 +121,23 @@ also provides the `ai-cae4all` command.
 
 ### Tests
 
-There is **no root-level test suite** — `[tool.pytest.ini_options] testpaths =
-["tests"]` in [pyproject.toml](pyproject.toml) is stale (no root `tests/` dir
-exists). Tests live per method repo and run in that repo's venv:
+The root suite covers launcher and MethodSpec contracts and runs in the
+launcher's own interpreter:
 
 ```bash
-cd Neural_Operator && pytest tests/        # fast, tiny synthetic HDF5 fixtures
-cd Geometry_generation && python -m pytest -q tests/test_sdfflow_pipeline.py
+python -m pytest -q tests/
+python -m pytest -q studio/studio_backend
 ```
 
-`MeshGraphNets/`, `MeshGraphNets - variational/`, `Neural_Operator/`, and `MLP/`
-ship `tests/`; consult a repo's own CLAUDE.md for its exact validation command
-set. `MLP/` runs `cd MLP && python -m pytest -q tests/` (CPU, tiny synthetic
-fixture).
+Method tests run in that method's venv, from that method's directory:
+
+```bash
+cd methods/Neural_Operator && python -m pytest -q tests/
+cd methods/SDFFlow         && python -m pytest -q tests/
+```
+
+Every method except `GeometryIngest` ships a `tests/` package. See
+[docs/guides/testing.md](docs/guides/testing.md) for the full per-layer map.
 
 ## Launcher architecture (`cae_suite/`)
 
@@ -126,6 +161,9 @@ The launch pipeline is: **parse → resolve → layered preflight → command �
   layers and **short-circuits: each layer runs only if no errors so far**
   (`spec → filesystem paths → environment → dataset → checkpoint → native
   probe`). It builds the final `command` list.
+- [path_checks.py](cae_suite/path_checks.py) — resolves native config paths
+  against the method repository and flags missing inputs, unwritable outputs,
+  and case mismatches.
 - [diagnostics.py](cae_suite/diagnostics.py) — `Severity` (ERROR/WARNING/
   NOTICE), `Diagnostic` (with `promote_in_strict`), and the report renderer.
 - [cli.py](cae_suite/cli.py) — arg parsing, the introspection subcommands, and
@@ -166,8 +204,17 @@ whose location CPython walks up from to find `pyvenv.cfg`; dereferencing it
 would silently drop the venv's site-packages. When launched from an already
 activated venv with no local TOML, that venv's Python is used for everything.
 
-Note the **directory name `MeshGraphNets - variational/` contains spaces** —
-quote it in shell commands and rely on `pathlib`, never string concatenation.
+### Artifact paths in native code
+
+`log_file_dir` is a **plain cwd-relative path**, like every other path key. The
+trainers used to prefix it with a literal `'outputs/'`, which configs cancelled
+with an extra `../` — that hack is gone from all five repos that had it
+(`training_profiles/setup.py::init_log_file`). If you add a new artifact path in
+native code, spell its default `../../output/<slug>/...`; do not reintroduce a
+method-local `outputs/`.
+
+`init_log_file` records `config['log_dir']`, and the periodic train/test
+prediction dumps write under it, so every artifact of one run lands together.
 
 ### Config value parsing (shared with the native repos)
 
@@ -185,9 +232,9 @@ every native call site:
   lives in `cae_suite/config_parser.py::PATH_KEYS` and is mirrored per repo as
   `PATH_KEYS` in each native `general_modules/load_config.py` — **adding a new
   path key means editing both**, or the launcher's mirror and the native parser
-  will disagree about what the model actually opens. `MLP/` and
-  `dataset/geometry_ingest/` store raw value strings and need no exemption.
-  Preflight's `PATH-CASE-001` (warning) now flags a config whose path case
+  will disagree about what the model actually opens. `methods/MLP/` and
+  `methods/GeometryIngest/` store raw value strings and need no exemption.
+  Preflight's `PATH-CASE-001` (warning) flags a config whose path case
   differs from the on-disk name — it resolves on Windows but not on Linux.
 - `true`/`false` → `bool`; `%` starts a comment; a UTF-8 **BOM is a hard error**
   (native parsers misread the first key); duplicate keys are an error (native
@@ -200,7 +247,8 @@ mesh HDF5 layout** with no conversion step — `data/{sample_id}/{nodal_data,
 mesh_edge}` where `nodal_data` is `[num_features, num_timesteps, num_nodes]`,
 rows `0:3` are reference coordinates, and `write_preprocessing` may append
 train-derived normalizers. SDFFlow uses a different SDF layout. See
-[dataset/DATASET_FORMAT.md](dataset/DATASET_FORMAT.md) for the full spec.
+[docs/reference/DATASET_FORMAT.md](docs/reference/DATASET_FORMAT.md) for the
+full spec.
 
 Row layout past the coordinates is:
 
@@ -222,9 +270,19 @@ SimulGenVAE reads the same rows as a per-sample parameter vector via
 `lc_data_type hdf5` + `cond_var`. MLP needs nothing: its tabular `X`/`Y`
 contract already separates inputs from outputs.
 
-> Note: `CONFIGURATION_REFERENCE.md` is referenced throughout this file and the
-> per-method docs but **does not exist** in the checkout; treat the specs in
-> `cae_suite/specs/` as the live key catalog.
+## Documentation
+
+All documentation lives under [docs/](docs/) — see [docs/README.md](docs/README.md)
+for the index. Method directories keep only their own `CLAUDE.md`/`README.md`.
+
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — full architecture guide, one
+  section per method, plus the honest known-gaps list.
+- [docs/CONFIGURATION.md](docs/CONFIGURATION.md) — config grammar, routes, and
+  pointers to the executable key/default contracts.
+- [docs/reference/](docs/reference/) — dataset format, public dataset
+  provenance, per-method config key references.
+- [docs/research/](docs/research/) — design notes grouped by method. These are
+  design context, not implementation truth; the code wins on current behaviour.
 
 ## When you change something
 
@@ -232,7 +290,10 @@ contract already separates inputs from outputs.
   (and validator/required lists) in `cae_suite/specs/`, or the launcher will
   reject a valid config or accept an invalid one. Then re-run
   `--audit-configs`.
-- **New method repo** → add a `build_*_spec()` and register it in
+- **New method repo** → create `methods/<Name>/` and `configs/<Name>/`, add a
+  `build_*_spec()` with `repository="methods/<Name>"`, and register it in
   [registry.py](cae_suite/registry.py)'s `MethodRegistry.__init__`.
+- **New artifact path** → point it at `../../output/...`; never inside
+  `methods/`.
 - **Changing behavior inside a method repo** → follow that repo's `CLAUDE.md`
   and run its own tests; the launcher change (if any) is usually just the spec.

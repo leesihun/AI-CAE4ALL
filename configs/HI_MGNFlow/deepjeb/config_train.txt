@@ -1,0 +1,83 @@
+%   ============================================================
+%   DeepJEB bracket surrogate -- HI-MGN replaces the FEA solver.
+%
+%   Input : bracket surface graph (5k nodes) + a one-hot load case
+%   Output: per-node stress (MPa) and resultant displacement (mm)
+%
+%   This is the analysis stage of the closed design loop: SDFFlow generates a
+%   bracket, the mesh bridge turns it into this contract, and this model
+%   predicts the fields that would otherwise cost a full solve.
+%
+%   Data: DeepJEB (Hong et al., ASME JMD 147(4) 041703, 2025; ODC-By v1.0),
+%   converted by dataset/build_deepjeb_mgn.py. 57 brackets x 4 load cases,
+%   split BY BRACKET so the four cases of one geometry never straddle a split.
+%   ============================================================
+model	chi-mgnflow
+mode	train
+gpu_ids	0
+parallel_mode	ddp
+log_file_dir	../../output/deepjeb_himgn/train.log
+modelpath	../../output/deepjeb_himgn/deepjeb_himgn.pth
+dataset_dir	../../dataset/deepjeb_mgn.h5
+split_seed	42
+
+%   Static problem: one timestep, no autoregressive rollout. The state block is
+%   zeroed on input, so the model sees geometry + connectivity + load case and
+%   must produce the field -- which is exactly the surrogate we want.
+input_var	2
+output_var	2
+cond_var	4
+feature_loss_weights	1.0, 1.0
+edge_var	8
+positional_features	4
+
+message_passing_num	12
+Training_epochs	400
+Batch_size	4
+LearningR	0.0005
+Latent_dim	96
+num_workers	2
+std_noise	0.0
+augment_geometry	False
+grad_accum_steps	1
+
+use_checkpointing	True
+use_amp	True
+use_ema	True
+ema_decay	0.99
+val_interval	5
+test_interval	1000
+
+use_node_types	False
+use_world_edges	False
+
+%   Multiscale: 5k-node surface graphs, so two coarse levels of ~500 and ~100.
+use_multiscale	True
+coarsening_type	voronoi_seedmean
+voronoi_clusters	500, 100
+multiscale_levels	2
+mp_per_level	3, 4, 6, 4, 3
+hierarchy_variants	1
+hierarchy_seed	1234
+hierarchy_cache_keep	True
+
+%   Flow matching tuned for the DETERMINISTIC mode: this stage stands in for a
+%   solver, so the conditional mean is what matters. x0 weighting concentrates
+%   the budget at t~0 and flow_det_prob pins a quarter of graphs there exactly;
+%   best_by det then selects the checkpoint on that same quantity. The sampler
+%   remains available and gives a free uncertainty estimate for screening.
+flow_steps	20
+flow_solver	heun
+flow_time_freqs	16
+flow_t_sampling	uniform
+flow_loss_weighting	x0
+flow_det_prob	0.25
+flow_predict	mean
+val_flow_steps	8
+val_num_samples	4
+best_by	det
+
+test_batch_idx	0, 1
+plot_feature_idx	0
+display_testset	False
+display_trainset	False

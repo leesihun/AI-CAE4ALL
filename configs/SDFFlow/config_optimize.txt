@@ -1,0 +1,54 @@
+model	SDFFlow  # SDF-VAE + latent flow-matching geometry generator
+mode	optimize  # closed loop: generate -> mesh -> FEA -> CMA-ES search
+gpu_ids	0  # SDFFlow is single-process; only the first GPU ID is used
+'
+%   Trained generator that defines the design space
+vae_modelpath	../../output/geometry_generation/ex1/sdfflow_vae.pth  # Frozen VAE (decodes latents to SDF)
+fm_modelpath	../../output/geometry_generation/ex1/sdfflow_fm.pth  # Trained FM (defines latent stats + conditions)
+output_dir	../../output/geometry_generation/ex1/optimization  # STLs, history.json, summary.json, report.md, convergence.png
+'
+%   Shape parameterization
+%   The design vector is a low-dimensional slice of the 256-d flow-matching noise
+%   space plus a few shape-descriptor conditions, so every point maps to an
+%   on-manifold DeepJEB bracket rather than to arbitrary geometry.
+opt_subspace_dim	12  # Orthonormal directions of the FM noise space that are searched
+opt_subspace_seed	0  # Seed for drawing that orthonormal basis (fixes the design space)
+opt_condition_dims	volume,area  # FM conditions included as design variables (bbox_y has zero dataset variance)
+opt_shell_scale	1.25  # Latent noise is kept within this multiple of the Gaussian shell radius sqrt(subspace_dim)
+opt_latent_range	1.25  # Per-coordinate search bound; equal to opt_shell_scale inscribes the box corner on the shell
+seed	0  # Seed for the base noise draw; the search perturbs it inside the subspace
+ode_steps	50  # Euler steps for the FM sampling ODE
+mc_resolution	128  # Marching Cubes grid resolution during the search
+'
+%   Meshing (gmsh)
+opt_target_faces	12000  # Surface faces after decimation; this sets the tet count
+opt_mesh_size_max	0.05  # gmsh MeshSizeMax in normalized units
+'
+%   Structural problem: GE jet-engine-bracket load cases on Ti-6Al-4V
+opt_load_cases	vertical,diagonal  # vertical | horizontal | diagonal | torsion
+opt_length_scale	0.1055556  # metres per normalized unit (1.8 units = 190 mm part length)
+opt_material_e	113.8e9  # Young's modulus (Pa)
+opt_material_nu	0.342  # Poisson ratio
+opt_material_rho	4430.0  # Density (kg/m^3)
+opt_yield_stress	903.0e6  # Yield stress (Pa), reported against the calibrated allowable
+opt_stress_percentile	99.5  # Nodal von Mises percentile used as the peak-stress measure
+'
+%   Objective: minimize mass subject to stress and deflection allowables.
+%   Allowables are calibrated to the median of a random population from the same
+%   generator, so the constraints are active by construction.
+opt_baseline_size	12  # Random designs analyzed to calibrate the allowables
+opt_stress_margin	1.0  # Multiplier on the population-median peak stress
+opt_disp_margin	1.0  # Multiplier on the population-median deflection
+opt_stress_weight	6.0  # Quadratic penalty weight on stress violation
+opt_disp_weight	3.0  # Quadratic penalty weight on deflection violation
+'
+%   Search
+opt_budget	200  # Total generate-mesh-solve evaluations in the CMA-ES phase
+opt_popsize	10  # CMA-ES population size per generation
+opt_sigma0	1.0  # Initial CMA-ES step size
+opt_seed	0  # Seed for the baseline population and CMA-ES
+'
+%   Final verification of the winner at a refined resolution
+opt_verify_resolution	160  # Marching Cubes resolution for the verification run
+opt_verify_target_faces	30000  # Surface faces for the verification mesh
+opt_verify_mesh_size_max	0.035  # gmsh MeshSizeMax for the verification mesh

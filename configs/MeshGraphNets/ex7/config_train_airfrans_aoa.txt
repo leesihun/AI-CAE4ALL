@@ -3,8 +3,8 @@ mode	train
 gpu_ids	0
 parallel_mode	ddp
 log_file_dir	../../output/meshgraphnets/ex7/train_airfrans_aoa.log
-modelpath	../output/meshgraphnets/ex7/model_airfrans_aoa.pth
-inference_output_dir	../output/meshgraphnets/rollout/ex7/model_airfrans_aoa
+modelpath	../../output/meshgraphnets/ex7/model_airfrans_aoa.pth
+inference_output_dir	../../output/meshgraphnets/rollout/ex7/model_airfrans_aoa
 %   ex7.h5/ex7_infer.h5: AirfRANS's published angle-of-attack EXTRAPOLATION
 %   split (804 train / 196 test), not just a held-out sample of the same
 %   distribution -- test AoAs fall outside the train AoA range. This is the
@@ -17,8 +17,8 @@ inference_output_dir	../output/meshgraphnets/rollout/ex7/model_airfrans_aoa
 %   rows 3:7 state (u_x,u_y,p,nu_t), rows 7:12 conditions (u_inf_x,u_inf_y,sdf,
 %   n_x,n_y) -> cond_var 5, row 12 node_type (0 volume, 1 airfoil surface).
 %   T=1 static regression.
-dataset_dir	../dataset/ex7.h5
-infer_dataset	../dataset/ex7_infer.h5
+dataset_dir	../../dataset/ex7.h5
+infer_dataset	../../dataset/ex7_infer.h5
 infer_timesteps	1
 split_seed	42
 input_var	4

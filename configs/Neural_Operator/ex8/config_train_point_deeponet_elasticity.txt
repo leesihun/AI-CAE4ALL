@@ -2,11 +2,11 @@ model	point_deeponet
 mode	train
 gpu_ids	0
 parallel_mode	ddp
-log_file_dir	../output/benchmarks/elasticity/point_deeponet/train.log
-modelpath	../output/benchmarks/elasticity/point_deeponet/model.pth
-dataset_dir	../dataset/ex8.h5
-infer_dataset	../dataset/ex8_infer.h5
-inference_output_dir	../output/benchmarks/elasticity/point_deeponet/inference
+log_file_dir	../../output/benchmarks/elasticity/point_deeponet/train.log
+modelpath	../../output/benchmarks/elasticity/point_deeponet/model.pth
+dataset_dir	../../dataset/ex8.h5
+infer_dataset	../../dataset/ex8_infer.h5
+inference_output_dir	../../output/benchmarks/elasticity/point_deeponet/inference
 infer_timesteps	1
 split_seed	42
 input_var	1

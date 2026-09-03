@@ -21,7 +21,7 @@ SIMULGENVAE_KEYS = frozenset(
     {
         # common / shared
         "model", "mode", "gpu_ids", "parallel_mode", "dataset_dir", "split_seed",
-        "output_dir", "num_workers", "log_file_dir",
+        "output_dir", "num_workers", "log_file_dir", "fsdp_min_params",
         "pipeline_log_file", "skip_completed_stages",
         # data mapping (SimulGenVAE-specific)
         "num_var", "cond_var", "field_start_row", "node_start", "node_end", "timesteps_reduced",
@@ -54,11 +54,20 @@ _NETWORK_SIZES = {"small", "large"}
 _LC_DATA_TYPES = {"csv", "image", "hdf5"}
 _LC_MODES = ("train", "train_lc", "reconstruct")
 _LOSS_TYPES = {1, 2, 3, 4}
+_REMOVED_NOOP_KEYS = {"load_all", "plot_mode", "recon_iter"}
 
 
 def validate_simulgenvae(ctx: SpecValidationContext) -> None:
     validate_common_values(ctx)
     values = ctx.values
+
+    for name in sorted(_REMOVED_NOOP_KEYS.intersection(values)):
+        ctx.add(
+            "SGV-REMOVED-NOOP",
+            Severity.ERROR,
+            f"{name} belongs to the retired standalone/pickle pipeline and has no HDF5-native runtime effect.",
+            field_name=name,
+        )
 
     par_mode = str(values.get("parallel_mode", "single")).lower()
     if par_mode not in {"single", "ddp", "fsdp"}:
@@ -118,7 +127,8 @@ def validate_simulgenvae(ctx: SpecValidationContext) -> None:
     validate_positive_fields(
         ctx,
         ("latent_dim", "latent_dim_end", "vae_training_epochs", "vae_batch_size",
-         "vae_learningr", "lc_training_epochs", "lc_batch_size", "lc_learningr"),
+         "vae_learningr", "lc_training_epochs", "lc_batch_size", "lc_learningr",
+         "fsdp_min_params"),
         "SGV-POSITIVE-001",
     )
 
@@ -128,7 +138,7 @@ def build_simulgenvae_spec() -> MethodSpec:
         spec_id="simulgenvae",
         display_name="SimulGenVAE",
         model_ids=("simulgenvae",),
-        repository="SimulGenVAE",
+        repository="methods/SimulGenVAE",
         entrypoint="SimulGenVAE_main.py",
         valid_modes=("train", "train_vae", "train_lc", "reconstruct"),
         known_keys=SIMULGENVAE_KEYS,
@@ -160,8 +170,9 @@ def build_simulgenvae_spec() -> MethodSpec:
             "train_lc": frozenset({"split_seed", "param_data_type"}),
         },
         defaults={
-            "parallel_mode": "single", "network_size": "small", "num_var": 1,
-            "field_start_row": 3, "loss_type": 1, "split_seed": 42, "plot_mode": 2,
+            "parallel_mode": "single", "fsdp_min_params": 1_000_000,
+            "network_size": "small", "num_var": 1,
+            "field_start_row": 3, "loss_type": 1, "split_seed": 42,
         },
         defaults_by_mode={
             "train": {"skip_completed_stages": True},

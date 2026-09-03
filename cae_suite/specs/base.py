@@ -170,6 +170,7 @@ def validate_common_values(ctx: SpecValidationContext) -> None:
         "training_epochs",
         "batch_size",
         "num_workers",
+        "prefetch_factor",
         "grad_accum_steps",
         "infer_timesteps",
     )

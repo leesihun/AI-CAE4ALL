@@ -35,6 +35,19 @@ def test_fea_does_not_require_surrogate_files():
     assert not [item for item in _diagnostics() if item.code == "SDF-OPT-SURROGATE-001"]
 
 
+def test_fea_mesh_controls_are_conditionally_recommended():
+    diagnostics = _diagnostics(opt_analysis="fea")
+    assert {item.field for item in diagnostics if item.code == "SDF-OPT-FEA-REC-001"} == {
+        "opt_target_faces",
+        "opt_mesh_size_max",
+    }
+
+
+def test_surrogate_does_not_recommend_unused_fea_mesh_controls():
+    diagnostics = _diagnostics(opt_analysis="surrogate")
+    assert not [item for item in diagnostics if item.code == "SDF-OPT-FEA-REC-001"]
+
+
 def test_surrogate_requires_checkpoint_and_config():
     diagnostics = _diagnostics(opt_analysis="surrogate")
     assert {item.field for item in diagnostics if item.code == "SDF-OPT-SURROGATE-001"} == {

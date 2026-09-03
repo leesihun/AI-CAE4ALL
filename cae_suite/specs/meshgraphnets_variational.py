@@ -6,7 +6,7 @@ from .meshgraphnets import validate_meshgraphnets
 
 
 # Keys consumed by the live variational runtime (traced from config[...] /
-# config.get(...) reachable from "MeshGraphNets - variational"/MeshGraphNets_main.py).
+# config.get(...) reachable from methods/MeshGraphNets_Variational/MeshGraphNets_main.py).
 VAR_KEYS = frozenset(
     {
         "model", "mode", "gpu_ids", "parallel_mode", "log_file_dir", "modelpath",
@@ -204,7 +204,7 @@ def build_variational_spec() -> MethodSpec:
         spec_id="meshgraphnets_variational",
         display_name="MeshGraphNets Variational",
         model_ids=("meshgraphnets-v",),
-        repository="MeshGraphNets - variational",
+        repository="methods/MeshGraphNets_Variational",
         entrypoint="MeshGraphNets_main.py",
         valid_modes=("train", "inference"),
         known_keys=VAR_KEYS | VAR_REMOVED_KEYS,

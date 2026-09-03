@@ -82,7 +82,7 @@ def write_mgn_rollout_output(output_dir: str, sample_id, ref_pos: np.ndarray, me
                               output_filename: str = None, vae_sample_idx=None) -> str:
     """MeshGraphNets-specific atomic writer: mirrors the exact HDF5 schema the
     native `MeshGraphNets/inference_profiles/rollout.py` and
-    `MeshGraphNets - variational/inference_profiles/rollout.py` write --
+    `methods/MeshGraphNets_Variational/inference_profiles/rollout.py` write --
     `write_rollout_output` above deliberately omits fields those two rollouts
     always include (per-feature min/max/mean/std, the `normalization_params`
     group with node/edge/delta stats, and MGN's semantic feature names instead

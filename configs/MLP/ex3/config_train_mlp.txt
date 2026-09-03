@@ -9,9 +9,9 @@ gpu_ids  -1      # CPU: 105x6 -> 105x3 tabular regression; a GPU lane would be w
 %   same reordered full-resolution cases as the mesh methods by
 %   dataset/build_ex3_mlp_table.py; it is intentionally a scalar benchmark, not
 %   a nodal-field predictor.
-dataset_dir   ../dataset/ex3_mlp_train.h5   # tabular HDF5 with X[105,6] and Y[105,4]
-modelpath     ../output/mlp/ex3/full/mlp.pth   # checkpoint save target
-log_file_dir  ../output/mlp/ex3/full/mlp.log   # log file path
+dataset_dir   ../../dataset/ex3_mlp_train.h5   # tabular HDF5 with X[105,6] and Y[105,4]
+modelpath     ../../output/mlp/ex3/full/mlp.pth   # checkpoint save target
+log_file_dir  ../../output/mlp/ex3/full/mlp.log   # log file path
 split_seed    42                            # RNG seed for the deterministic 80/10/10 split
 
 %   Problem shape: N inputs -> M outputs

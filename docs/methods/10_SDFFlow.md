@@ -1,9 +1,9 @@
 # 10 — SDFFlow (SDF-VAE + latent flow-matching geometry generator)
 
 - **`model`**: `sdfflow`
-- **Repo / entrypoint**: `Geometry_generation/` → `SDFFlow_main.py`
+- **Repo / entrypoint**: `methods/SDFFlow/` → `SDFFlow_main.py`
 - **Key source**: `model/sdf_vae.py`, `model/velocity_net.py`, `training_profiles/train_pipeline.py`
-- **Prereqs**: `Geometry_generation/CLAUDE.md`, `GEOMETRY_GENERATION_RESEARCH.md` (design context)
+- **Prereqs**: `methods/SDFFlow/CLAUDE.md`, `GEOMETRY_GENERATION_RESEARCH.md` (design context)
 
 ---
 
@@ -192,10 +192,10 @@ Canonical artifacts: `outputs/ex1/sdfflow_vae.pth`, `sdfflow_fm.pth`, `samples/`
 ## Configuration reference
 
 Canonical examples:
-[`configs/Geometry_generation/config_train.txt`](../../configs/Geometry_generation/config_train.txt),
-[`config_sample.txt`](../../configs/Geometry_generation/config_sample.txt),
-[`config_sample_extrapolation.txt`](../../configs/Geometry_generation/config_sample_extrapolation.txt),
-[`config_interpolate.txt`](../../configs/Geometry_generation/config_interpolate.txt).
+[`configs/SDFFlow/config_train.txt`](../../configs/SDFFlow/config_train.txt),
+[`config_sample.txt`](../../configs/SDFFlow/config_sample.txt),
+[`config_sample_extrapolation.txt`](../../configs/SDFFlow/config_sample_extrapolation.txt),
+[`config_interpolate.txt`](../../configs/SDFFlow/config_interpolate.txt).
 
 ### Pipeline / dataset
 

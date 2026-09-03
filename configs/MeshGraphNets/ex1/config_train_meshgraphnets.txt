@@ -3,11 +3,11 @@ mode	train  # Train / Inference
 gpu_ids	0       # 0, 1, 2, 3.....
 parallel_mode	ddp     # ddp, model_split
 log_file_dir	../../output/meshgraphnets/ex1/train_vanilla.log
-modelpath	../output/meshgraphnets/ex1/model_vanilla.pth
+modelpath	../../output/meshgraphnets/ex1/model_vanilla.pth
 %   Datasets (same split as configs/MeshGraphNets/ex1/config_train_himgn.txt; this is the
 %   flat/non-hierarchical baseline -- HI-MGN uses config_train_himgn.txt instead)
-dataset_dir	../dataset/ex1.h5
-infer_dataset	../dataset/ex1_infer.h5
+dataset_dir	../../dataset/ex1.h5
+infer_dataset	../../dataset/ex1_infer.h5
 infer_timesteps	1
 split_seed	42
 %   Common params

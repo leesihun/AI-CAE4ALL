@@ -10,10 +10,10 @@ mode                      train
 gpu_ids                   0
 parallel_mode             ddp
 log_file_dir              ../../output/transolver/ex6/train_flag_simple.log
-modelpath                 ../output/transolver/ex6/flag_simple.pth
-inference_output_dir      ../output/transolver/rollout/ex6/flag_simple
-dataset_dir               ../dataset/ex6.h5
-infer_dataset              ../dataset/ex6_infer.h5
+modelpath                 ../../output/transolver/ex6/flag_simple.pth
+inference_output_dir      ../../output/transolver/rollout/ex6/flag_simple
+dataset_dir               ../../dataset/ex6.h5
+infer_dataset              ../../dataset/ex6_infer.h5
 infer_timesteps           400
 split_seed                42
 input_var                 3

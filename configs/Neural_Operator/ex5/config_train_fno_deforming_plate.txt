@@ -11,10 +11,10 @@ mode                           train
 gpu_ids                        0
 parallel_mode                  ddp
 log_file_dir                   ../../output/neural_operator/ex5/fno_deforming_plate.log
-modelpath                      ../output/neural_operator/ex5/fno_deforming_plate.pth
-dataset_dir                    ../dataset/ex5.h5
-infer_dataset                  ../dataset/ex5_infer.h5
-inference_output_dir           ../output/neural_operator/rollout/ex5/fno_deforming_plate
+modelpath                      ../../output/neural_operator/ex5/fno_deforming_plate.pth
+dataset_dir                    ../../dataset/ex5.h5
+infer_dataset                  ../../dataset/ex5_infer.h5
+inference_output_dir           ../../output/neural_operator/rollout/ex5/fno_deforming_plate
 infer_timesteps                399
 split_seed                     42
 input_var                      4

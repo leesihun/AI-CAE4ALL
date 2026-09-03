@@ -3,7 +3,7 @@ from __future__ import annotations
 from ..diagnostics import Severity
 from .base import MethodSpec, PathKind, PathRule, SpecValidationContext, integer, numeric
 from .meshgraphnets import validate_meshgraphnets
-from .meshgraphnets_variational import VAR_KEYS
+from .meshgraphnets_variational import VAR_KEYS, VAR_REMOVED_KEYS
 
 
 # The backbone is the HI-MGN V-cycle, so the whole mesh/multiscale key surface
@@ -67,9 +67,16 @@ REMOVED_LATENT_KEYS = frozenset(
         "vae_valid_prior_samples",
         "gamma_es", "es_samples", "es_steps", "es_noise_source", "es_start_epoch",
     }
+) | VAR_REMOVED_KEYS
+
+# Controls that only existed in the copied variational model-split path.  They
+# remain known so preflight can diagnose an old config precisely, but they are
+# not part of the executable cHI-MGNflow surface.
+FLOW_RUNTIME_REMOVED_KEYS = frozenset(
+    {"pipeline_microbatches", "std_noise", "noise_gamma", "noise_std_ratio"}
 )
 
-FLOW_KEYS = (VAR_KEYS - REMOVED_LATENT_KEYS) | FLOW_ONLY_KEYS
+FLOW_KEYS = (VAR_KEYS - REMOVED_LATENT_KEYS - FLOW_RUNTIME_REMOVED_KEYS) | FLOW_ONLY_KEYS
 
 
 def validate_chi_mgnflow(ctx: SpecValidationContext) -> None:
@@ -83,8 +90,29 @@ def validate_chi_mgnflow(ctx: SpecValidationContext) -> None:
             f"{name} belongs to the variational method; cHI-MGNflow has no latent "
             f"or learned prior and ignores it.",
             field_name=name,
-            hint="Delete the line. See cHI-MGNflow/README.md for the replacement controls.",
+            hint="Delete the line. See methods/HI_MGNFlow/README.md for the replacement controls.",
             promote_in_strict=True,
+        )
+
+    for name in sorted(FLOW_RUNTIME_REMOVED_KEYS.intersection(values)):
+        value = numeric(values[name])
+        if name == "std_noise" and value == 0.0:
+            ctx.add(
+                "FLOW-LEGACY-NOISE",
+                Severity.NOTICE,
+                "std_noise=0 is accepted only for compatibility with older configs; "
+                "the cHI-MGNflow trainer does not implement MGN input noise.",
+                field_name=name,
+                hint="Delete the line.",
+            )
+            continue
+        ctx.add(
+            "FLOW-RUNTIME-REMOVED",
+            Severity.ERROR,
+            f"{name} belongs to the unavailable copied model-split/noise path and "
+            "is not consumed by cHI-MGNflow.",
+            field_name=name,
+            hint="Delete the line; cHI-MGNflow supports parallel_mode ddp only.",
         )
 
     for name in ("flow_steps", "val_flow_steps", "val_num_samples", "flow_time_freqs"):
@@ -182,10 +210,10 @@ def build_chi_mgnflow_spec() -> MethodSpec:
         spec_id="chi_mgnflow",
         display_name="cHI-MGNflow",
         model_ids=("chi-mgnflow",),
-        repository="cHI-MGNflow",
+        repository="methods/HI_MGNFlow",
         entrypoint="CHiMGNFlow_main.py",
         valid_modes=("train", "inference"),
-        known_keys=FLOW_KEYS | REMOVED_LATENT_KEYS,
+        known_keys=FLOW_KEYS | REMOVED_LATENT_KEYS | FLOW_RUNTIME_REMOVED_KEYS,
         required_by_mode={
             "train": frozenset({
                 "dataset_dir", "modelpath", "input_var", "output_var", "edge_var",

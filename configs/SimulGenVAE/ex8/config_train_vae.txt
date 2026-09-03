@@ -6,7 +6,7 @@ parallel_mode	single
 %   dataset/ex8.h5 -- 972 nodes, T=1, IDENTICAL for every one of the 1000
 %   samples (unlike ex4 cylinder_flow/deforming_plate, whose per-trajectory
 %   mesh violates SimulGenVAE's fixed-N/fixed-T requirement).
-dataset_dir	../dataset/ex8.h5
+dataset_dir	../../dataset/ex8.h5
 split_seed	42
 num_var	1
 field_start_row	3
@@ -24,6 +24,6 @@ batch_size	16
 learningr	0.001
 weight_decay	0.0
 warmup_epochs	5
-vae_modelpath	../output/simulgenvae/ex8/simulgenvae_vae.pth
-output_dir	../output/simulgenvae/ex8
-log_file_dir	../output/simulgenvae/ex8/vae.log
+vae_modelpath	../../output/simulgenvae/ex8/simulgenvae_vae.pth
+output_dir	../../output/simulgenvae/ex8
+log_file_dir	../../output/simulgenvae/ex8/vae.log

@@ -2,13 +2,14 @@
 
 Everything here is driven by [`ablation.py`](ablation.py). All 22 configs in
 this directory named `config_{train,infer}_abl_*.txt` are **generated** — edit
-[`config_train1.txt`](config_train1.txt) or the `ARMS` table in `ablation.py`
+`config_train1.txt` (the historical baseline, no longer checked in) or the
+`ARMS` table in `ablation.py`
 and re-run `gen`, never the generated files. That is the whole point: an arm
 that drifted from the baseline by a hand edit would silently invalidate the
 comparison it exists to make.
 
-Design background: [`../../../MeshGraphNets/EX1_HIERARCHY_ABLATION.md`](../../../MeshGraphNets/EX1_HIERARCHY_ABLATION.md)
-and [`../../../MeshGraphNets/COARSENING_ABLATION_DESIGN.md`](../../../MeshGraphNets/COARSENING_ABLATION_DESIGN.md).
+Design background: [`../../../MeshGraphNets/EX1_HIERARCHY_ABLATION.md`](../../../docs/research/meshgraphnets/EX1_HIERARCHY_ABLATION.md)
+and [`../../../MeshGraphNets/COARSENING_ABLATION_DESIGN.md`](../../../docs/research/meshgraphnets/COARSENING_ABLATION_DESIGN.md).
 
 ---
 

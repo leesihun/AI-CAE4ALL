@@ -3,11 +3,11 @@ mode	train  # Train / Inference
 gpu_ids	4  # ablation reference "orig" (ex2) -- shares GPU with base
 parallel_mode	ddp
 log_file_dir	../../output/meshgraphnets/ex2/train_himgn.log
-modelpath	../output/meshgraphnets/ex2/model_himgn.pth
+modelpath	../../output/meshgraphnets/ex2/model_himgn.pth
 %   Datasets (ex2.h5: 50 samples x 50 timesteps, 3D mesh -> multi-step delta training;
 %   hierarchical Hi-MGN baseline -- flat/vanilla uses config_train_meshgraphnets.txt instead)
-dataset_dir	../dataset/ex2.h5
-infer_dataset	../dataset/ex2_infer.h5  # held out from training
+dataset_dir	../../dataset/ex2.h5
+infer_dataset	../../dataset/ex2_infer.h5  # held out from training
 infer_timesteps	49  # 50 stored timesteps -> 49 autoregressive rollout steps
 split_seed	42
 %   Common params

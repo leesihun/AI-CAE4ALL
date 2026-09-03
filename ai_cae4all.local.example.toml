@@ -5,10 +5,11 @@
 
 [python.models]
 # Relative paths are resolved from the AI-CAE4ALL repository root.
-# meshgraphnets = "MeshGraphNets/.venv/bin/python"
-# meshgraphnets-v = "MeshGraphNets - variational/.venv/bin/python"
-# neural_operator = "Neural_Operator/.venv/bin/python"
-# transolver = "Transolver/.venv/bin/python"
-# sdfflow = "Geometry_generation/.venv/bin/python"
-# simulgenvae = "SimulGenVAE/.venv/bin/python"
-# mlp = "MLP/.venv/bin/python"
+# meshgraphnets = "methods/MeshGraphNets/.venv/bin/python"
+# meshgraphnets-v = "methods/MeshGraphNets_Variational/.venv/bin/python"
+# chi-mgnflow = "methods/HI_MGNFlow/.venv/bin/python"
+# neural_operator = "methods/Neural_Operator/.venv/bin/python"
+# transolver = "methods/Transolver/.venv/bin/python"
+# sdfflow = "methods/SDFFlow/.venv/bin/python"
+# simulgenvae = "methods/SimulGenVAE/.venv/bin/python"
+# mlp = "methods/MLP/.venv/bin/python"

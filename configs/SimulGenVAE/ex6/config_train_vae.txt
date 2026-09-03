@@ -9,7 +9,7 @@ parallel_mode	single
 %   requirement). num_var 3 = disp_x/disp_y/disp_z (rows 3:6); row 6
 %   (node_type) is outside num_var so this VAE stage never reads it, same as
 %   the ex8/ex9 benchmarks below.
-dataset_dir	../dataset/ex6.h5
+dataset_dir	../../dataset/ex6.h5
 split_seed	42
 num_var	3
 field_start_row	3
@@ -27,6 +27,6 @@ batch_size	16
 learningr	0.001
 weight_decay	0.0
 warmup_epochs	5
-vae_modelpath	../output/simulgenvae/ex6/simulgenvae_vae.pth
-output_dir	../output/simulgenvae/ex6
-log_file_dir	../output/simulgenvae/ex6/vae.log
+vae_modelpath	../../output/simulgenvae/ex6/simulgenvae_vae.pth
+output_dir	../../output/simulgenvae/ex6
+log_file_dir	../../output/simulgenvae/ex6/vae.log

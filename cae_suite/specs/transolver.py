@@ -34,6 +34,7 @@ TRANSOLVER_KEYS = frozenset(
         "time_integration",
         "augment_geometry", "use_amp", "use_checkpointing", "use_ema", "ema_decay",
         "use_compile", "val_interval", "test_interval", "test_max_batches",
+        "test_batch_idx",
         "use_world_edges", "use_multiscale", "write_preprocessing",
         "max_train_batches", "max_val_batches", "display_trainset",
         "write_test_predictions", "use_parallel_stats",
@@ -124,6 +125,16 @@ def validate_transolver(ctx: SpecValidationContext) -> None:
          "amortized_cache_nodes", "amortized_query_nodes"),
         "TRANS-CHUNK-VALUE",
     )
+    if "test_batch_idx" in values:
+        for index, raw_value in enumerate(as_list(values["test_batch_idx"])):
+            value = integer(raw_value)
+            if value is None or value < 0:
+                ctx.add(
+                    "TRANS-TEST-INDEX",
+                    Severity.ERROR,
+                    f"test_batch_idx[{index}] must be a non-negative integer.",
+                    field_name="test_batch_idx",
+                )
     chunk = integer(values.get("chunk_size", 0))
     if chunk is not None and chunk > 0 and kernel != "slice_space":
         ctx.add("TRANS-CHUNK-001", Severity.ERROR, "chunk_size > 0 requires attention_kernel=slice_space.", field_name="chunk_size")
@@ -187,7 +198,7 @@ def build_transolver_spec() -> MethodSpec:
         spec_id="transolver",
         display_name="Transolver",
         model_ids=("transolver",),
-        repository="Transolver",
+        repository="methods/Transolver",
         entrypoint="Transolver_main.py",
         valid_modes=("train", "inference"),
         known_keys=TRANSOLVER_KEYS | TRANSOLVER_MGN_KEYS,

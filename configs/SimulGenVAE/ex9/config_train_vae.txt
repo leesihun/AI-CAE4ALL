@@ -7,7 +7,7 @@ parallel_mode	single
 %   count for every one of the 900 samples (unlike ex4 cylinder_flow/
 %   deforming_plate/flag_simple's per-trajectory or single-shared-but-still-
 %   verified-elsewhere mesh).
-dataset_dir	../dataset/ex9.h5
+dataset_dir	../../dataset/ex9.h5
 split_seed	42
 %   num_var 2 = ux,uy (rows 3:5). Was 4, which pulled in rows 5:7 (uz, which is
 %   identically zero, and die_profile, the static driving input parameter) --
@@ -31,6 +31,6 @@ batch_size	16
 learningr	0.001
 weight_decay	0.0
 warmup_epochs	5
-vae_modelpath	../output/simulgenvae/ex9/simulgenvae_vae.pth
-output_dir	../output/simulgenvae/ex9
-log_file_dir	../output/simulgenvae/ex9/vae.log
+vae_modelpath	../../output/simulgenvae/ex9/simulgenvae_vae.pth
+output_dir	../../output/simulgenvae/ex9
+log_file_dir	../../output/simulgenvae/ex9/vae.log

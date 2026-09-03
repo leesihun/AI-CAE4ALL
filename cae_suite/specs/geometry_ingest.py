@@ -90,7 +90,7 @@ def build_geometry_ingest_spec() -> MethodSpec:
         spec_id="geometry_ingest",
         display_name="Geometry Ingest",
         model_ids=("geometry_ingest",),
-        repository="dataset/geometry_ingest",
+        repository="methods/GeometryIngest",
         entrypoint="main.py",
         valid_modes=("ingest", "inspect"),
         known_keys=GEOMETRY_INGEST_KEYS,

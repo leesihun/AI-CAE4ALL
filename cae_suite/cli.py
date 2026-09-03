@@ -5,6 +5,7 @@ from pathlib import Path
 import shlex
 import sys
 
+from .config_discovery import checked_in_config_paths
 from .diagnostics import DiagnosticReport, Severity, render_report
 from .launcher import launch_and_wait
 from .preflight import PreflightOptions, PreflightResult, run_preflight
@@ -183,16 +184,7 @@ def _audit_configs(
     strict: bool,
     json_report: str | None,
 ) -> int:
-    paths: set[Path] = set()
-    for spec in registry.specs:
-        repo = suite_root / spec.repository
-        if not repo.is_dir():
-            continue
-        for path in repo.rglob("config*.txt"):
-            lowered = {part.lower() for part in path.parts}
-            if "outputs" in lowered or ".git" in lowered or "__pycache__" in lowered:
-                continue
-            paths.add(path.resolve())
+    paths = checked_in_config_paths(suite_root)
 
     print(f"Auditing {len(paths)} checked-in configs (structural checks only)")
     total_errors = 0

@@ -3,15 +3,15 @@ mode	train  # Train / Inference
 gpu_ids	4  # ablation base (ex2) -- one GPU, no DDP
 parallel_mode	ddp
 log_file_dir	../../output/meshgraphnets/ex2/train_himgn_base.log
-modelpath	../output/meshgraphnets/ex2/model_himgn_base.pth
+modelpath	../../output/meshgraphnets/ex2/model_himgn_base.pth
 %   ABLATION BASELINE for the transfer-operator / multi-partition study.
 %   Differs from config_train_himgn.txt in exactly ONE setting:
 %   time_integration (ar_ot -> ar_rt). use_world_edges was already True there,
 %   and Batch_size stays 4. The _p1/_p2/_p12 arms are this file plus one
 %   feature block each, so every arm shares this exact configuration.
 %   See MeshGraphNets/ATTENTION_TRANSFER_DESIGN.md.
-dataset_dir	../dataset/ex2.h5
-infer_dataset	../dataset/ex2_infer.h5  # held out from training
+dataset_dir	../../dataset/ex2.h5
+infer_dataset	../../dataset/ex2_infer.h5  # held out from training
 infer_timesteps	49  # 50 stored timesteps -> 49 autoregressive rollout steps
 split_seed	42
 %   Common params

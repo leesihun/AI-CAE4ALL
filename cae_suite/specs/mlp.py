@@ -93,7 +93,7 @@ def build_mlp_spec() -> MethodSpec:
         spec_id="mlp",
         display_name="MLP Surrogate",
         model_ids=("mlp",),
-        repository="MLP",
+        repository="methods/MLP",
         entrypoint="MLP_main.py",
         valid_modes=("train", "inference"),
         known_keys=MLP_KEYS,

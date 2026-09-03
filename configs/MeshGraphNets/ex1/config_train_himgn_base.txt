@@ -3,7 +3,7 @@ mode	train  # Train / Inference
 gpu_ids	0  # ablation base (ex1) -- one GPU, no DDP
 parallel_mode	ddp     # ddp, model_split
 log_file_dir	../../output/meshgraphnets/ex1/train_himgn_base.log
-modelpath	../output/meshgraphnets/ex1/model_himgn_base.pth
+modelpath	../../output/meshgraphnets/ex1/model_himgn_base.pth
 %   ABLATION BASELINE for the transfer-operator / multi-partition study.
 %   Differs from config_train_himgn.txt only in use_world_edges (False -> True).
 %   The _p1/_p2/_p12 arms are this file plus one feature block each.
@@ -18,8 +18,8 @@ modelpath	../output/meshgraphnets/ex1/model_himgn_base.pth
 %   Also note ex1 meshes are a single connected component (ex2's are 2-part
 %   assemblies), so world edges here only capture self-proximity of a folded
 %   geometry, not part-to-part contact.
-dataset_dir	../dataset/ex1.h5
-infer_dataset	../dataset/ex1_infer.h5
+dataset_dir	../../dataset/ex1.h5
+infer_dataset	../../dataset/ex1_infer.h5
 infer_timesteps	1
 split_seed	42
 %   Common params

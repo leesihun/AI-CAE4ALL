@@ -12,8 +12,8 @@ mode	train
 gpu_ids	0
 parallel_mode	ddp
 log_file_dir	../../output/meshgraphnets/ex4/train_hi_cylinder_flow.log
-modelpath	../output/meshgraphnets/ex4/model_hi_cylinder_flow.pth
-inference_output_dir	../output/meshgraphnets/rollout/ex4/model_hi_cylinder_flow
+modelpath	../../output/meshgraphnets/ex4/model_hi_cylinder_flow.pth
+inference_output_dir	../../output/meshgraphnets/rollout/ex4/model_hi_cylinder_flow
 %   ex4.h5: DeepMind cylinder_flow, 100 trajectories, full 600-step rollout,
 %   per-trajectory mesh. ex4_infer.h5 holds out the 20 trajectories with the
 %   highest inflow speed (the randomized per-trajectory BC) as a genuine
@@ -21,8 +21,8 @@ inference_output_dir	../output/meshgraphnets/rollout/ex4/model_hi_cylinder_flow
 %   dataset/build_public_mgn.py and dataset/PUBLIC_DATASETS.md.
 %   7 rows -> node types only usable here (num_features>7 guard elsewhere, see
 %   dataset/PUBLIC_DATASETS.md).
-dataset_dir	../dataset/ex4.h5
-infer_dataset	../dataset/ex4_infer.h5
+dataset_dir	../../dataset/ex4.h5
+infer_dataset	../../dataset/ex4_infer.h5
 infer_timesteps	599
 split_seed	42
 input_var	3

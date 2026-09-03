@@ -4,9 +4,9 @@ mode     train   # run mode -- {train|inference}
 gpu_ids  0       # CUDA device id -- int or comma list; -1 = CPU (never mixed with CUDA ids)
 
 %   Datasets and outputs (paths resolve from the MLP/ repo root)
-dataset_dir   ../dataset/mlp/train.h5     # tabular HDF5 with X[S,N] and Y[S,M]
-modelpath     ../output/mlp/ex1/mlp.pth   # checkpoint save target
-log_file_dir  ../output/mlp/ex1/mlp.log   # log file path
+dataset_dir   ../../dataset/mlp/train.h5     # tabular HDF5 with X[S,N] and Y[S,M]
+modelpath     ../../output/mlp/ex1/mlp.pth   # checkpoint save target
+log_file_dir  ../../output/mlp/ex1/mlp.log   # log file path
 split_seed    42                          # RNG seed for the deterministic 80/10/10 split
 
 %   Problem shape: N inputs -> M outputs

@@ -1,5 +1,5 @@
 """Explicit-args refactor of
-`MeshGraphNets - variational/inference_profiles/rollout.py`'s `run_rollout`.
+`methods/MeshGraphNets_Variational/inference_profiles/rollout.py`'s `run_rollout`.
 CPU-only: no gpu_ids branch, and the CUDA-only auto-VRAM VAE-batch-sizing /
 OOM-retry logic is dropped (the native code itself falls back to
 `vae_batch_size=1` whenever `device.type != 'cuda'`, so this bundle simply
@@ -20,7 +20,7 @@ single z is drawn once, at step 0 of each trajectory (from the conditional
 prior's `.sample()` when available, else `torch.randn`), and is then held
 FIXED for every remaining step of that trajectory via `fixed_z=z_batch` on
 every subsequent `model(...)` call (see `_run_batch` below, and
-`MeshGraphNets - variational/inference_profiles/rollout.py` lines ~600-629).
+`methods/MeshGraphNets_Variational/inference_profiles/rollout.py` lines ~600-629).
 This driver preserves the live behavior exactly (sample-once-per-trajectory,
 fixed for the rollout), not the plan's description. No explicit seeding is
 performed anywhere in the native sampling path (no `torch.manual_seed` call
@@ -264,7 +264,7 @@ def run(checkpoint: str, input: str, output: str, device: torch.device,
     # [FLAG FOR REVIEW] Same gap as the vanilla meshgraphnets driver:
     # `coarse_world_edges` sizes HybridNodeBlock vs NodeBlock at multiscale
     # levels i>0 (a real weight-shape difference) but is not written into
-    # model_config by MeshGraphNets - variational/training_profiles/setup.py
+    # model_config by methods/MeshGraphNets_Variational/training_profiles/setup.py
     # ::build_model_config (verified). Defaults False; override via
     # infer(checkpoint, ..., coarse_world_edges=True) if a checkpoint needs it.
     coarse_world_edges = bool(_ignored.get("coarse_world_edges", False))

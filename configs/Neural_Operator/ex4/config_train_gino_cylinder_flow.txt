@@ -9,10 +9,10 @@ mode                           train
 gpu_ids                        0
 parallel_mode                  ddp
 log_file_dir                   ../../output/neural_operator/ex4/gino_cylinder_flow.log
-modelpath                      ../output/neural_operator/ex4/gino_cylinder_flow.pth
-dataset_dir                    ../dataset/ex4.h5
-infer_dataset                  ../dataset/ex4_infer.h5
-inference_output_dir           ../output/neural_operator/rollout/ex4/gino_cylinder_flow
+modelpath                      ../../output/neural_operator/ex4/gino_cylinder_flow.pth
+dataset_dir                    ../../dataset/ex4.h5
+infer_dataset                  ../../dataset/ex4_infer.h5
+inference_output_dir           ../../output/neural_operator/rollout/ex4/gino_cylinder_flow
 infer_timesteps                599
 split_seed                     42
 input_var                      3

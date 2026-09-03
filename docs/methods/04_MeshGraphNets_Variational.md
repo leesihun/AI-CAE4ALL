@@ -1,7 +1,7 @@
 # 04 — MeshGraphNets-Variational (generative cVAE MGN)
 
 - **`model`**: `meshgraphnets-v`
-- **Repo / entrypoint**: `MeshGraphNets - variational/` → `MeshGraphNets_main.py`
+- **Repo / entrypoint**: `methods/MeshGraphNets_Variational/` → `MeshGraphNets_main.py`
 - **Key source**: `model/MeshGraphNets.py`, `model/vae.py`, `model/conditional_prior.py`
 - **Prereqs**: [01_MeshGraphNets_MGN.md](01_MeshGraphNets_MGN.md), [02_HI-MGN.md](02_HI-MGN.md), [00_shared_foundations.md](00_shared_foundations.md)
 - **Docs in-repo**: `docs/MESHGRAPHNET_ARCHITECTURE.md`, `docs/CONFIG_REFERENCE.md`
@@ -209,7 +209,7 @@ effectively off. Watch `mmd` and `fm_p` against `total` on the progress bar.
 ## Configuration reference (VAE/prior keys)
 
 All flat-MGN and multiscale (HI-MGN) keys apply. Canonical example:
-[`configs/MeshGraphNets-V/b8_all_warpage_input/config_train1.txt`](../../configs/MeshGraphNets-V/b8_all_warpage_input/config_train1.txt).
+[`configs/MeshGraphNets_Variational/b8_all_warpage_input/config_train1.txt`](../../configs/MeshGraphNets_Variational/b8_all_warpage_input/config_train1.txt).
 The full catalog is the repo's `docs/CONFIG_REFERENCE.md`.
 
 ### VAE

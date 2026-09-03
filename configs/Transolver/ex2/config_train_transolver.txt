@@ -6,11 +6,11 @@ parallel_mode  ddp         # parallelism -- {ddp|node_shard}; node_shard needs >
 %   Datasets and outputs (ex2.h5: 50 samples x 50 timesteps, 3D mesh -> multi-step delta
 %   training, same split/rollout convention as
 %   configs/MeshGraphNets/ex2/config_train_meshgraphnets.txt)
-log_file_dir          ../../output/transolver/ex2/train_transolver.log     # log file path, relative to the backend output dir
-modelpath             ../output/transolver/ex2/transolver.pth              # checkpoint path -- save target in train, load source in inference
-dataset_dir           ../dataset/ex2.h5                                    # training mesh-state HDF5 path
-infer_dataset         ../dataset/ex2_infer.h5                              # inference input HDF5 path
-inference_output_dir  ../output/transolver/rollout/ex2/transolver          # rollout output directory
+log_file_dir          ../../output/transolver/ex2/train_transolver.log     # log file path, relative to the method repo
+modelpath             ../../output/transolver/ex2/transolver.pth              # checkpoint path -- save target in train, load source in inference
+dataset_dir           ../../dataset/ex2.h5                                    # training mesh-state HDF5 path
+infer_dataset         ../../dataset/ex2_infer.h5                              # inference input HDF5 path
+inference_output_dir  ../../output/transolver/rollout/ex2/transolver          # rollout output directory
 infer_timesteps       49                                                   # 50 stored timesteps -> 49 autoregressive rollout steps
 split_seed            42                                                   # RNG seed for the deterministic 80/10/10 train/val/test split; default 42
 '

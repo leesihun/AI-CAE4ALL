@@ -3,11 +3,11 @@ mode	train  # Train / Inference
 gpu_ids	0  # ex2 3D transient regular/vanilla (20 MP) baseline
 parallel_mode	ddp
 log_file_dir	../../output/meshgraphnets/ex2/train_vanilla.log
-modelpath	../output/meshgraphnets/ex2/model_vanilla.pth
+modelpath	../../output/meshgraphnets/ex2/model_vanilla.pth
 %   Datasets (ex2.h5: 50 samples x 50 timesteps, 3D mesh -> multi-step delta training;
 %   flat/non-hierarchical baseline -- HI-MGN uses config_train_himgn.txt instead)
-dataset_dir	../dataset/ex2.h5
-infer_dataset	../dataset/ex2_infer.h5  # held out from training
+dataset_dir	../../dataset/ex2.h5
+infer_dataset	../../dataset/ex2_infer.h5  # held out from training
 infer_timesteps	49  # 50 stored timesteps -> 49 autoregressive rollout steps
 split_seed	42
 %   Common params

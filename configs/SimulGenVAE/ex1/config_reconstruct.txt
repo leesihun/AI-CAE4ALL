@@ -3,12 +3,12 @@ mode	reconstruct  # loads the VAE + LC checkpoints, writes reconstructions.h5 + 
 gpu_ids	0  # CUDA device id(s); -1 = CPU
 '
 %   Dataset (ground truth + condition ordering) and checkpoints
-dataset_dir	../dataset/ex1.h5
+dataset_dir	../../dataset/ex1.h5
 split_seed	42
 num_var	1
 field_start_row	3
-vae_modelpath	../output/simulgenvae/ex1/simulgenvae_vae.pth  # input
-lc_modelpath	../output/simulgenvae/ex1/simulgenvae_lc.pth  # input
+vae_modelpath	../../output/simulgenvae/ex1/simulgenvae_vae.pth  # input
+lc_modelpath	../../output/simulgenvae/ex1/simulgenvae_lc.pth  # input
 '
 %   VAE architecture (to rebuild both networks) + LC conditions
 latent_dim	8
@@ -16,8 +16,8 @@ latent_dim_end	32
 num_filter_enc	1024 512 256 128
 lc_filter	32 64 128 256 512 1024
 lc_data_type	csv
-param_dir	../dataset/ex1_conditions.csv
+param_dir	../../dataset/ex1_conditions.csv
 '
 %   Inference output
 batch_size	16
-output_dir	../output/simulgenvae/ex1/reconstruct
+output_dir	../../output/simulgenvae/ex1/reconstruct

@@ -6,7 +6,7 @@
 > method in this suite already consumes.
 
 - **`model` value:** `geometry_ingest`
-- **Repo / entrypoint:** `dataset/geometry_ingest/` · `main.py`
+- **Repo / entrypoint:** `methods/GeometryIngest/` · `main.py`
 - **Modes:** `ingest` (write HDF5) · `inspect` (mesh + stats, write nothing)
 - **Family:** geometry preprocessing / dataset authoring
 
@@ -14,7 +14,7 @@
 
 Reads **STEP / IGES / STL / PLY / OBJ**, produces a single welded node set with
 connectivity, and writes the shared mesh HDF5 contract
-([dataset/DATASET_FORMAT.md](../../dataset/DATASET_FORMAT.md)):
+([dataset/DATASET_FORMAT.md](../reference/DATASET_FORMAT.md)):
 
 ```
 data/{id}/nodal_data   [3 + num_fields, 1, N]   rows 0:3 = physical coords, rest zero-filled
@@ -60,7 +60,7 @@ want; surface triangles match the datasets shipped today.
 
 ## Config keys
 
-See [CONFIGURATION_REFERENCE.md §9.9](../../CONFIGURATION_REFERENCE.md) for the
+See [CONFIGURATION_REFERENCE.md §9.9](../CONFIGURATION.md) for the
 full catalog. Minimal volume example:
 
 ```
@@ -80,7 +80,7 @@ mesh_size_max 5.0
 `numpy`, `h5py`, `trimesh` always; **`gmsh`** additionally for volume/CAD (imported
 lazily, so surface runs need none). A `volume`/`gmsh` config raises the
 `GEOM-GMSH-001` preflight notice. Airgapped install wheels are staged under
-`dataset/geometry_ingest/wheels/`.
+`methods/GeometryIngest/wheels/`.
 
 ## Caveats
 
@@ -91,5 +91,5 @@ lazily, so surface runs need none). A `volume`/`gmsh` config raises the
 3. **Element quality** — sliver tets from dirty CAD poison downstream physics; the
    `clean.py` repair path (watertight fix) runs before volume meshing.
 
-See [dataset/geometry_ingest/README.md](../../dataset/geometry_ingest/README.md)
+See [methods/GeometryIngest/README.md](../../methods/GeometryIngest/README.md)
 for the standalone CLI and install details.

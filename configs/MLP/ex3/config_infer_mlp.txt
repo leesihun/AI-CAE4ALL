@@ -6,9 +6,9 @@ gpu_ids  -1          # CPU: matches the training lane; nothing here needs a GPU
 %   Model + data (paths resolve from the MLP/ repo root)
 %   The held-out 44-sample official test split. Y is present in this file, so
 %   infer.py reports per-output MAE/RMSE for area-weighted Cp and Cf_xyz.
-modelpath             ../output/mlp/ex3/full/mlp.pth        # trained checkpoint to load
-infer_dataset         ../dataset/ex3_mlp_test.h5            # tabular HDF5 with X[44,6] and Y[44,4]
-inference_output_dir  ../output/mlp/ex3/full/predictions    # writes predictions.h5 (Y_pred[44,3])
+modelpath             ../../output/mlp/ex3/full/mlp.pth        # trained checkpoint to load
+infer_dataset         ../../dataset/ex3_mlp_test.h5            # tabular HDF5 with X[44,6] and Y[44,4]
+inference_output_dir  ../../output/mlp/ex3/full/predictions    # writes predictions.h5 (Y_pred[44,3])
 
 %   Problem shape (must match the checkpoint)
 input_var   6   # mach, aoa, aileron in/out, elevator, htp

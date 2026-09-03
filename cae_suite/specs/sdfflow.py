@@ -218,6 +218,21 @@ def validate_sdfflow(ctx: SpecValidationContext) -> None:
                 "opt_analysis must be 'fea' or 'surrogate'.",
                 field_name="opt_analysis",
             )
+        elif analysis_backend == "fea":
+            # These controls define the actual gmsh discretization, but are
+            # meaningless on the surface-graph surrogate path. Keeping them in
+            # the mode-wide recommended set made an otherwise complete
+            # surrogate config fail strict preflight for missing FEA settings.
+            for field_name in ("opt_target_faces", "opt_mesh_size_max"):
+                if not str(values.get(field_name, "")).strip():
+                    ctx.add(
+                        "SDF-OPT-FEA-REC-001",
+                        Severity.WARNING,
+                        f"{field_name} is recommended when opt_analysis=fea; "
+                        "verify the published meshing default is intended.",
+                        field_name=field_name,
+                        promote_in_strict=True,
+                    )
         elif analysis_backend == "surrogate":
             for field_name, label in (
                 ("opt_surrogate_checkpoint", "HI-MGN checkpoint"),
@@ -275,7 +290,7 @@ def build_sdfflow_spec() -> MethodSpec:
         spec_id="sdfflow",
         display_name="SDFFlow",
         model_ids=("sdfflow",),
-        repository="Geometry_generation",
+        repository="methods/SDFFlow",
         entrypoint="SDFFlow_main.py",
         valid_modes=("train", "train_vae", "train_fm", "sample", "reconstruct", "interpolate", "optimize"),
         known_keys=SDFFLOW_KEYS,
@@ -303,8 +318,7 @@ def build_sdfflow_spec() -> MethodSpec:
             "train_vae": frozenset({"split_seed", "use_ema", "use_amp"}),
             "train_fm": frozenset({"split_seed", "use_conditions", "use_ema", "use_amp"}),
             "sample": frozenset({"cfg_scale"}),
-            "optimize": frozenset({"opt_length_scale", "opt_material_e", "opt_yield_stress",
-                                   "opt_target_faces", "opt_mesh_size_max"}),
+            "optimize": frozenset({"opt_length_scale", "opt_material_e", "opt_yield_stress"}),
         },
         defaults={},
         defaults_by_mode={

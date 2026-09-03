@@ -18,14 +18,14 @@ docs describe the implementation.
 | 1 | [01_MeshGraphNets_MGN.md](01_MeshGraphNets_MGN.md) | `meshgraphnets` | `MeshGraphNets/` | GNN simulator |
 | 2 | [02_HI-MGN.md](02_HI-MGN.md) | `meshgraphnets` (+`use_multiscale`) | `MeshGraphNets/` | Hierarchical GNN |
 | 3 | [03_BSMS-GNN.md](03_BSMS-GNN.md) | `meshgraphnets` (+`coarsening_type bfs`) | `MeshGraphNets/` | Hierarchical GNN |
-| 4 | [04_MeshGraphNets_Variational.md](04_MeshGraphNets_Variational.md) | `meshgraphnets-v` | `MeshGraphNets - variational/` | Generative GNN (cVAE) |
+| 4 | [04_MeshGraphNets_Variational.md](04_MeshGraphNets_Variational.md) | `meshgraphnets-v` | `methods/MeshGraphNets_Variational/` | Generative GNN (cVAE) |
 | 5 | [05_DeepONet.md](05_DeepONet.md) | `deeponet` | `Neural_Operator/` | Neural operator |
 | 6 | [06_Point-DeepONet.md](06_Point-DeepONet.md) | `point_deeponet` | `Neural_Operator/` | Neural operator |
 | 7 | [07_FNO.md](07_FNO.md) | `fno` | `Neural_Operator/` | Neural operator |
 | 8 | [08_GINO.md](08_GINO.md) | `gino` | `Neural_Operator/` | Neural operator |
 | 9 | [09_Transolver.md](09_Transolver.md) | `transolver` | `Transolver/` | Transformer operator |
-| 10 | [10_SDFFlow.md](10_SDFFlow.md) | `sdfflow` | `Geometry_generation/` | Generative geometry |
-| 11 | [11_Geometry_Ingest.md](11_Geometry_Ingest.md) | `geometry_ingest` | `dataset/geometry_ingest/` | Data-prep utility (not an ML method) |
+| 10 | [10_SDFFlow.md](10_SDFFlow.md) | `sdfflow` | `methods/SDFFlow/` | Generative geometry |
+| 11 | [11_Geometry_Ingest.md](11_Geometry_Ingest.md) | `geometry_ingest` | `methods/GeometryIngest/` | Data-prep utility (not an ML method) |
 | 12 | [12_MLP.md](12_MLP.md) | `mlp` | `MLP/` | Parametric MLP surrogate (tabular, no mesh) |
 
 > **`geometry_ingest` is a data-prep utility, not an ML method.** It is included
