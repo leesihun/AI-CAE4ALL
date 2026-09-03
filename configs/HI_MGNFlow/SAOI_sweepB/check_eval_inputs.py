@@ -56,6 +56,44 @@ def parse_config(path):
     return cfg
 
 
+def case_variants(path, root):
+    """Components of `path` (below `root`) that have case-differing twins on disk.
+
+    Returns a list of (configured_component, [other_spellings_present]).
+    Empty list = the path is unambiguous. On a case-sensitive filesystem two
+    spellings can both exist and hold different data, which is invisible to a
+    config that names only one of them.
+    """
+    try:
+        rel = path.relative_to(root)
+    except ValueError:
+        return []
+    findings = []
+    here = root
+    for part in rel.parts:
+        if not here.is_dir():
+            break
+        try:
+            entries = list(here.iterdir())
+        except OSError:
+            break
+        twins = [e.name for e in entries
+                 if e.name.lower() == part.lower() and e.name != part]
+        if twins:
+            findings.append((part, twins))
+        here = here / part
+    return findings
+
+
+def render_case_note(path, indent="       "):
+    """One line per ambiguous component, or nothing when the path is clean."""
+    out = []
+    for part, twins in case_variants(path, REPO_ROOT):
+        out.append(f"{indent}CASE: config says '{part}', disk also has "
+                   f"{twins} -- on Linux these are DIFFERENT directories")
+    return out
+
+
 def spread_stats(h5_path, max_samples):
     """(n_checked, n_degenerate, example) or None if h5py is unavailable."""
     try:
@@ -154,8 +192,14 @@ def main():
                 seen.append((key, resolved))
         for key, resolved in seen:
             print(f"\n{key}: {resolved}")
+            for line in render_case_note(resolved, indent="    "):
+                print(line)
             if not resolved.exists():
                 print("    MISSING")
+                sibs = sorted(q.name for q in resolved.parent.glob("*")) \
+                    if resolved.parent.is_dir() else []
+                if sibs:
+                    print(f"    {resolved.parent} holds: {sibs[:20]}")
                 continue
             try:
                 inspect(resolved, args.max_samples)
@@ -200,6 +244,14 @@ def main():
                 except Exception as exc:
                     stats = exc
                 checked_files[p_eval] = stats
+
+            # Both spellings can exist on Linux and hold different data; the
+            # config names one and nothing downstream notices the other. Report
+            # it whether or not the configured spelling resolved.
+            for part, twins in case_variants(p_eval, REPO_ROOT):
+                problems.append(
+                    f"path case ambiguous: config says '{part}', disk also has "
+                    f"{twins} -- on Linux these are DIFFERENT directories")
 
             stats = checked_files.get(p_eval)
             if isinstance(stats, Exception):

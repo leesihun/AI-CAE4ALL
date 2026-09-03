@@ -79,6 +79,7 @@ import itertools
 # newline='\n' on EVERY write: the default (None) translates to CRLF on
 # Windows, and a CRLF run_sweep.sh dies on Linux with `bad interpreter: ^M`.
 import pathlib
+import re
 
 HERE = pathlib.Path(__file__).resolve().parent
 # The sweep lives in its own folder; the configs it derives FROM are the
@@ -294,7 +295,14 @@ def render_infer(src_lines, arm, tag, gpu, values):
             # resolves on a case-sensitive filesystem -- the lowercase one, since
             # that is what produced the checkpoints.
             val = line.split('\t', 1)[1].split('#')[0].strip()
-            val = val.replace('/dataset/SAOI/', '/dataset/saoi/')
+            # Normalize the dataset directory to the on-disk spelling. Linux is
+            # case-sensitive, so '/dataset/SAOI/' and '/dataset/saoi/' are two
+            # different directories that can both exist and hold different
+            # vintages of the same file -- a config naming the wrong one reads
+            # real data and produces wrong numbers, with no error anywhere.
+            # Case-insensitive so 'SAOI', 'Saoi', ... all land on 'saoi'.
+            val = re.sub(r'/dataset/SAOI/', '/dataset/saoi/', val,
+                         flags=re.IGNORECASE)
             out.append(f"{key}\t{val}")
             if key == 'infer_dataset':
                 # GROUND TRUTH IS A DIFFERENT FILE. `infer_dataset` is the
