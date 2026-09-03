@@ -59,10 +59,10 @@ free. They belong to Wave A (`methods/HI_MGNFlow/docs/SWEEP_PLAN.md`).
 
 ## Before you launch: Wave 0
 
-`training_epochs` is fixed at **500**, set from a Wave 0 measurement (a
+`training_epochs` is fixed at **1000**, set from a Wave 0 measurement (a
 deterministic HI-MGN vs. a flow arm on the same backbone/data/budget, compared
 on where their loss curves flatten) combined with a measured **500 s/epoch**
-on this dataset and backbone. **500 epochs is ~2.9 days per arm — a
+on this dataset and backbone. **1000 epochs is ~5.8 days per arm — a
 BUDGET-LIMITED comparison, not a converged one.** Read the report that way:
 "best at this budget," not an asymptotic ranking. If the budget changes,
 update `FIXED_TRAIN['training_epochs']` in the generator and regenerate.
@@ -73,10 +73,10 @@ One arm per GPU (`gpu_ids = arm index`) — no card sharing, so there is no
 VRAM-exposure from co-residency and no complement-pairing logic is needed.
 
 ```
-gpu 0  b16_tu_k0_lr1      gpu 4  b32_tu_k0_lr3
-gpu 1  b16_tu_k1_lr3      gpu 5  b32_tu_k1_lr1
-gpu 2  b16_tl_k0_lr3      gpu 6  b32_tl_k0_lr1
-gpu 3  b16_tl_k1_lr1      gpu 7  b32_tl_k1_lr3
+gpu 0  arm 1  (b16 tu k0 lr1)      gpu 4  arm 5  (b32 tu k0 lr3)
+gpu 1  arm 2  (b16 tu k1 lr3)      gpu 5  arm 6  (b32 tu k1 lr1)
+gpu 2  arm 3  (b16 tl k0 lr3)      gpu 6  arm 7  (b32 tl k0 lr1)
+gpu 3  arm 4  (b16 tl k1 lr1)      gpu 7  arm 8  (b32 tl k1 lr3)
 ```
 
 None of the swept keys enter the coarsening cache signature (`voronoi_clusters`
@@ -153,7 +153,7 @@ count for every config.
 
 ## Caveats
 
-- 500 epochs is a **budget-limited**, not converged, comparison — see "Before
+- 1000 epochs is a **budget-limited**, not converged, comparison — see "Before
   you launch" above.
 - Resolution IV means a large confounded-pair effect needs a follow-up run to
   attribute to one member or the other.

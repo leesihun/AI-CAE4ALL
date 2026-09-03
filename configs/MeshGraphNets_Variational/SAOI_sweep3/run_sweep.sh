@@ -43,7 +43,7 @@
 # THIS IS A MULTI-DAY RUN. Start it detached:
 #   nohup bash configs/MeshGraphNets_Variational/SAOI_sweep3/run_sweep.sh > sweep.out 2>&1 &
 #   tail -f sweep.out
-#   tail -f output/meshgraphnets-v/saoi_sweep3/run_logs/ad_g1_c1_r100.log   # watch one arm
+#   tail -f output/meshgraphnets-v/saoi_sweep3/run_logs/3.log   # watch one arm
 #
 # Multiscale cache: all 8 arms hash to ONE cache file (none of the swept keys
 # are part of the coarsening signature). An exclusive O_EXCL lock in
@@ -89,7 +89,7 @@
 #
 # Usage:
 #   bash configs/MeshGraphNets_Variational/SAOI_sweep3/run_sweep.sh
-#   ARMS="ad_g1_c1_r100 cc_g0_c0_r001" bash .../run_sweep.sh   # subset
+#   ARMS="3 1" bash .../run_sweep.sh   # subset
 #   PREFLIGHT=0 bash .../run_sweep.sh                          # skip validation
 #   TRAIN=0 bash .../run_sweep.sh                              # infer + score only
 
@@ -126,9 +126,7 @@ CACHE_GLOB="dataset/saoi/saoi_train_bot.mscache.*.h5"
 
 # Must match gen_sweep_configs.arms() exactly -- it prints this line, so if the
 # generator changes, re-paste its ARMS= output here rather than hand-editing.
-DEFAULT_ARMS="\
-cc_g0_c0_r001 cc_g0_c1_r100 cc_g1_c0_r100 cc_g1_c1_r001 \
-ad_g0_c0_r100 ad_g0_c1_r001 ad_g1_c0_r001 ad_g1_c1_r100"
+DEFAULT_ARMS="1 2 3 4 5 6 7 8"
 ARMS="${ARMS:-$DEFAULT_ARMS}"
 
 mkdir -p "$LOG_ROOT"
@@ -181,6 +179,19 @@ if [ "$PREFLIGHT" = "1" ]; then
             echo "  $arm  FAILED -- see $LOG_ROOT/${arm}.check.log" >&2; pf_bad=1
         fi
     done
+
+    # Valid train configs say NOTHING about whether the histogram will have
+    # ground truth. rollout.py skips it silently when `eval_dataset` is absent,
+    # and draws against an all-zero axis when it points at the answer-stripped
+    # file instead of the `_orig` twin. Both have happened, neither raises, and
+    # the sweep still reports a clean run. Catch it here -- before the GPU-days,
+    # not on Monday morning.
+    echo ""
+    echo "Preflight (inference + histogram inputs)..."
+    if ! "$PYTHON" "$CFG_DIR/check_eval_inputs.py"; then
+        pf_bad=1
+    fi
+
     if [ "$pf_bad" != "0" ]; then
         echo "" >&2
         echo "Preflight failed. Nothing launched. Fix the configs and re-run," >&2
@@ -302,6 +313,36 @@ run_infer_arm() {
 }
 
 if [ "$INFER" = "1" ]; then
+    # Second gate: the checkpoints exist only now, so this is the first moment
+    # the inference configs can be validated in full. Without it a bad infer
+    # config is discovered after training has already been thrown away for the
+    # night, with nobody watching.
+    if [ "$PREFLIGHT" = "1" ]; then
+        echo "Preflight (--check) on every inference config..."
+        inf_bad=0
+        for arm in $ARMS; do
+            for tag in $INFER_TAGS; do
+                icfg="$(inf_cfg_for "$arm" "$tag")"
+                if [ ! -f "$icfg" ]; then
+                    echo "  $arm/$tag  MISSING CONFIG ($icfg)" >&2; inf_bad=1; continue
+                fi
+                if ! "$PYTHON" AI_CAE4ALL_main.py --config "$icfg" --check                         > "$LOG_ROOT/${arm}.${tag}.check.log" 2>&1; then
+                    echo "  $arm/$tag  FAILED -- see $LOG_ROOT/${arm}.${tag}.check.log" >&2
+                    inf_bad=1
+                fi
+            done
+        done
+        if [ "$inf_bad" != "0" ]; then
+            echo "" >&2
+            echo "Inference preflight failed. No inference launched; the trained" >&2
+            echo "checkpoints are untouched. Fix the configs and re-run with" >&2
+            echo "  TRAIN=0 INFER=1 SCORE=1 bash $0" >&2
+            exit 2
+        fi
+        echo "All inference configs validated."
+        echo ""
+    fi
+
     n_tags=$(echo "$INFER_TAGS" | wc -w)
     n_arms=$(echo "$ARMS" | wc -w)
     echo "Inference: $n_arms arms x $n_tags eval sets = $(( n_arms * n_tags )) runs."

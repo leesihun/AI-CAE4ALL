@@ -52,7 +52,7 @@ Arm names encode the cell: `<cc|ad>_<g0|g1>_<c0|c1>_<r001|r100>`.
 as a fifth axis). At a measured **~576 s/epoch**, 24h of wall time only reached
 epoch 150 on the old 2000-epoch budget — multiple GPU-weeks to finish, and
 two-per-GPU sharing was a real OOM risk on the `c1` (40-block) arms. Eight arms
-at one-per-GPU and **500 epochs** is a `576 s/epoch × 500 ≈ 3.3-day`,
+at one-per-GPU and **1000 epochs** is a `~345 s/epoch × 1000 ≈ 4-day`,
 **BUDGET-LIMITED comparison, NOT a converged one** — read the report that way.
 The twin cHI-MGNflow sweep (`SAOI_sweepB`) made the identical trade for the
 identical reason.
@@ -85,10 +85,10 @@ One arm per GPU (`gpu_ids` = arm index) — no card sharing, so there is no VRAM
 co-residency exposure and no complement-pairing logic is needed.
 
 ```
-gpu 0  cc_g0_c0_r001      gpu 4  ad_g0_c0_r100
-gpu 1  cc_g0_c1_r100      gpu 5  ad_g0_c1_r001
-gpu 2  cc_g1_c0_r100      gpu 6  ad_g1_c0_r001
-gpu 3  cc_g1_c1_r001      gpu 7  ad_g1_c1_r100
+gpu 0  arm 1  (cc g0 c0 r001)      gpu 4  arm 5  (ad g0 c0 r100)
+gpu 1  arm 2  (cc g0 c1 r100)      gpu 5  arm 6  (ad g0 c1 r001)
+gpu 2  arm 3  (cc g1 c0 r100)      gpu 6  arm 7  (ad g1 c0 r001)
+gpu 3  arm 4  (cc g1 c1 r001)      gpu 7  arm 8  (ad g1 c1 r100)
 ```
 
 None of the swept keys enter the coarsening cache signature (that is
@@ -171,7 +171,7 @@ so there is no card-sharing partner to halve it for.
 
 ## Caveats
 
-- 500 epochs at a measured 576 s/epoch is a **budget-limited**, not converged,
+- 1000 epochs at a measured ~345 s/epoch is a **budget-limited**, not converged,
   comparison — treat every ranking here as "best at this budget."
 - MMD sees 16 samples per arm, not production's 64: `mmd_gather_ranks` stays
   `True` but is inert at `world_size 1`. A 4x smaller sample makes the

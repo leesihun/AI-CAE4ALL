@@ -22,8 +22,8 @@ THE DESIGN
   epochs). A measured epoch cost of ~576 s/epoch meant that budget was
   multiple GPU-weeks (24h of wall time only reached epoch 150), and
   two-per-GPU sharing was the source of the OOM risk documented below. Eight
-  arms at one-per-GPU and 500 epochs is a
-  576 s/epoch x 500 epochs ~= 3.3-day, BUDGET-LIMITED comparison instead of a
+  arms at one-per-GPU and 1000 epochs is a
+  ~345 s/epoch x 1000 epochs ~= 4-day, BUDGET-LIMITED comparison instead of a
   converged one -- see the twin cHI-MGNflow sweep (SAOI_sweepB), which made
   the identical trade for the identical reason.
 
@@ -122,7 +122,7 @@ FACTORS = [
 FIXED = {
     'Batch_size':           ('16',   'production per-rank value; one arm per GPU, no sharing'),
     'num_workers':          ('4',    'matches production; one arm per GPU, no need to economize'),
-    'Training_epochs':      ('500',  'measured budget: 576 s/epoch x 500 = ~3.3 days per arm at '
+    'Training_epochs':      ('1000',  'measured budget: ~345 s/epoch x 1000 = ~4 days per arm at '
                                      'one arm per GPU. NOT a converged comparison -- see the README'),
     'vae_latent_dim':       ('16',   'FIXED, not swept -- see the module docstring for why'),
     'val_interval':         ('100',  'CRPS is the selection metric; 5 evals over the run'),
@@ -171,7 +171,9 @@ def arms():
             tag, kv = levels[b]
             tags.append(tag)
             values.update(kv)
-        out.append((i, '_'.join(tags), values, tags))
+        # Arms are numbered, not named after their levels: the level tags
+        # are still returned (4th element) and are what the report keys on.
+        out.append((i, str(i + 1), values, tags))
     return out
 
 

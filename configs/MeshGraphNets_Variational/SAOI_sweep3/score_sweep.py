@@ -59,26 +59,43 @@ AXES = [
 CONFOUND = {(0, 1): (2, 3), (0, 2): (1, 3), (0, 3): (1, 2)}
 
 
-def _half_fraction():
-    """The 8 cells of the 2^(4-1) resolution-IV design: D = A xor B xor C.
+def _design_tags():
+    """Level tags for arms 1..8, in arm order.
 
-    NOT the full product of the four axes -- that would be 16 runs. Mirrors
-    gen_sweep_configs.arms(); if one changes, the other must.
+    Same construction as gen_sweep_configs.arms(): D = A xor B xor C. The arm
+    name is now just its 1-based index, so this -- not the name -- is what
+    carries the design point. If one changes, the other must.
     """
     out = []
     for i in range(8):
         free = [(i >> (2 - k)) & 1 for k in range(3)]
         bits = free + [free[0] ^ free[1] ^ free[2]]      # D = A xor B xor C
-        out.append("_".join(AXES[k][1][b] for k, b in enumerate(bits)))
+        out.append([AXES[k][1][b] for k, b in enumerate(bits)])
     return out
 
 
-DEFAULT_ARMS = _half_fraction()
+DESIGN = _design_tags()
+DEFAULT_ARMS = [str(i + 1) for i in range(8)]
+
+# Confounded 2-factor pairs at resolution IV, by axis index (0=A .. 3=D).
+# AB=CD, AC=BD, AD=BC -- an "effect" computed for (0,1) is really AB+CD, etc.
+CONFOUND = {(0, 1): (2, 3), (0, 2): (1, 3), (0, 3): (1, 2)}
 
 
 def arm_tags(arm):
-    """'ad_g1_c1_r100' -> ['ad', 'g1', 'c1', 'r100']."""
-    return arm.split("_")
+    """Arm '3' -> its design point's level tags, e.g. ['cc', 'g1', 'c0', 'r100'].
+
+    Arms used to be named after their levels ('cc_g1_c0_r100') and this was a
+    string split. They are numbered now, so the levels come from the arm's
+    position in the half fraction instead. Returns [] for anything outside
+    1..8; callers already gate on len(...) == len(AXES).
+    """
+    try:
+        idx = int(arm) - 1
+    except (TypeError, ValueError):
+        return []
+    return DESIGN[idx] if 0 <= idx < len(DESIGN) else []
+
 
 # Eval sets each arm is inferred on (gen_sweep_configs.INFER_SOURCES).
 INFER_TAGS = ["s26fe_main", "s26fe_sec", "sm_l345u"]
@@ -772,7 +789,7 @@ def render_markdown(rows, args):
     L.append("compounds the fuser's ~1.33x gain, under ad it does not -- so depth")
     L.append("should HURT one half and HELP the other.")
     L.append("")
-    L.append("**500 epochs at a measured ~576 s/epoch is a BUDGET-LIMITED")
+    L.append("**1000 epochs at a measured ~345 s/epoch is a BUDGET-LIMITED")
     L.append("comparison, NOT a converged one.** Read every number here as")
     L.append("\"best at this budget\", not as an asymptotic ranking.")
     L.append("")
