@@ -18,23 +18,25 @@ not part of the main training or rollout path.
 
 ## Main Runtime Logs
 
-The current training setup creates the log file in:
+The trainer treats `log_file_dir` as a plain path relative to the method working
+directory. Checked-in configs therefore point back to the suite-wide artifact
+root:
 
 ```text
-outputs/<log_file_dir>
+log_file_dir ../../output/meshgraphnets-v/<run>/train.log
 ```
 
-This comes from `training_profiles/setup.py::init_log_file`. For example, a
-config line:
+For example, when the launcher runs the native process from
+`methods/MeshGraphNets_Variational/`, this config line:
 
 ```text
-log_file_dir b8_all/train1.log
+log_file_dir ../../output/meshgraphnets-v/b8_all/train1.log
 ```
 
-writes:
+writes to the root-facing path:
 
 ```text
-outputs/b8_all/train1.log
+output/meshgraphnets-v/b8_all/train1.log
 ```
 
 Current VAE logs look like:
@@ -51,21 +53,18 @@ Elapsed: 123.45s Epoch 10 Train 1.2345e-02 Valid 1.5678e-02 LR: 1.0000e-04
 
 ## Loss Plotters Are Legacy
 
-`plot_loss.py` and `plot_loss_realtime.py` still construct log paths as:
-
-```text
-outputs/<gpu_ids>/<log_file_dir>
-```
-
-and parse the older log pattern:
+`plot_loss.py` and `plot_loss_realtime.py` now use `log_file_dir` verbatim too,
+so their path resolution agrees with training. They still parse only the older
+log pattern:
 
 ```text
 Epoch N Train Loss: ... Valid Loss: ...
 ```
 
-That does not match the current training log path or current VAE log format.
-Use these scripts only for older logs with that format, or update the scripts
-before using them for current training runs.
+That does not match the current VAE or deterministic log formats shown above.
+Use these scripts only for older logs with that format, or update their parsers
+before using them for current training runs. `gpu_ids` no longer changes the
+log path.
 
 ## Legacy Plotter Usage
 
@@ -79,7 +78,7 @@ Static plotter:
 
 ```bash
 python misc/plot_loss.py config.txt
-python misc/plot_loss.py config.txt --output outputs/loss_plot.png
+python misc/plot_loss.py config.txt --output ../../output/meshgraphnets-v/loss_plot.png
 ```
 
 Realtime dashboard:

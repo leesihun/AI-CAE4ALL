@@ -55,7 +55,7 @@ at the production value (`1000, 100`).
 `flow_steps` and `flow_solver` are **not** swept, on purpose: they are
 sampling-time choices, so the same checkpoint integrates at any `K` and
 sweeping them over training runs would burn arms on what inference answers for
-free. They belong to Wave A (`methods/HI_MGNFlow/docs/SWEEP_PLAN.md`).
+free. They belong to Wave A (`docs/research/hi_mgnflow/SWEEP_PLAN.md`).
 
 ## Before you launch: Wave 0
 

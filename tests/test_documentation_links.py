@@ -17,6 +17,24 @@ LINK_RE = re.compile(r"(?<!!)\[[^\]]*\]\(([^)]+)\)")
 IMAGE_RE = re.compile(r"!\[[^\]]*\]\(([^)]+)\)")
 SCHEME_RE = re.compile(r"^[a-z][a-z0-9+.-]*:", re.I)
 
+# Relative links are not enough to protect a repository-wide move: shell
+# examples and inline-code paths are deliberately excluded from the link parser
+# below. Keep the retired names here so README examples cannot silently drift
+# back to the pre-methods/ layout.
+LEGACY_README_TOKENS = (
+    "MeshGraphNets - variational/",
+    "configs/MeshGraphNets-V/",
+    "configs/cHI-MGNflow/",
+    "configs/geometry_ingest/",
+    "Geometry_generation/",
+    "frontend/",
+    "dataset/geometry_ingest/",
+    "dataset/DATASET_FORMAT.md",
+    "methods/HI_MGNFlow/docs/SWEEP_PLAN.md",
+    "python -m geometry_ingest.cli",
+    "outputs/<log_file_dir>",
+)
+
 
 def _documents():
     for path in sorted(ROOT.rglob("*.md")):
@@ -60,3 +78,14 @@ def test_document_relative_links_resolve(relative_path):
 def test_document_images_resolve(relative_path):
     document = ROOT / relative_path
     assert not _unresolved(document, IMAGE_RE)
+
+
+@pytest.mark.parametrize(
+    "relative_path",
+    [path for path in _documents() if Path(path).name == "README.md"],
+)
+def test_readmes_do_not_use_retired_layout_paths(relative_path):
+    document = ROOT / relative_path
+    text = document.read_text(encoding="utf-8")
+    found = [token for token in LEGACY_README_TOKENS if token in text]
+    assert not found, f"retired layout path(s): {found}"

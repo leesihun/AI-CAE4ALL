@@ -1,7 +1,8 @@
 # AI-CAE4ALL documentation
 
-All documentation lives here. Method directories keep only their own `CLAUDE.md`
-and `README.md`; everything else is indexed below.
+Central suite, reference, and research documentation lives here. Method-local
+`README.md` and `CLAUDE.md` files, plus a few utility notes, remain beside the
+code; their primary entry points are indexed below.
 
 ## Start here
 
@@ -33,8 +34,8 @@ The executable source of truth for config keys is always
 
 ## Methods
 
-[methods/](methods/) holds thirteen numbered write-ups — the shared foundations
-followed by one per architecture:
+[methods/](methods/) holds thirteen numbered write-ups covering the shared
+foundations and the architecture guides listed below:
 
 | | |
 | --- | --- |
@@ -45,6 +46,9 @@ followed by one per architecture:
 | [08_GINO.md](methods/08_GINO.md) | [09_Transolver.md](methods/09_Transolver.md) |
 | [10_SDFFlow.md](methods/10_SDFFlow.md) | [11_Geometry_Ingest.md](methods/11_Geometry_Ingest.md) |
 | [12_MLP.md](methods/12_MLP.md) | |
+
+SimulGenVAE's current user guide remains beside its implementation:
+[methods/SimulGenVAE/README.md](../methods/SimulGenVAE/README.md).
 
 ## Research notes
 
@@ -67,7 +71,9 @@ Authoritative for that method's internals, kept beside the code:
 
 - [methods/Neural_Operator/CLAUDE.md](../methods/Neural_Operator/CLAUDE.md)
 - [methods/SDFFlow/CLAUDE.md](../methods/SDFFlow/CLAUDE.md)
+- [methods/SDFFlow/README.md](../methods/SDFFlow/README.md)
 - [methods/SimulGenVAE/CLAUDE.md](../methods/SimulGenVAE/CLAUDE.md)
+- [methods/SimulGenVAE/README.md](../methods/SimulGenVAE/README.md)
 - [methods/MLP/CLAUDE.md](../methods/MLP/CLAUDE.md)
 - [methods/HI_MGNFlow/README.md](../methods/HI_MGNFlow/README.md)
 - [methods/GeometryIngest/README.md](../methods/GeometryIngest/README.md)

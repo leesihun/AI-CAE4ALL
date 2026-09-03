@@ -7,7 +7,8 @@ shared mesh HDF5 contract — one artifact that feeds every mesh-consuming metho
 - **Neural_Operator (DeepONet/FNO/GINO) / Transolver** read the same nodes as a
   **point cloud** (they ignore `mesh_edge`).
 
-Because it emits the existing contract (`dataset/DATASET_FORMAT.md`), **nothing
+Because it emits the existing
+[shared dataset contract](../../docs/reference/DATASET_FORMAT.md), **nothing
 downstream changes**. It is a registered launcher model (`model geometry_ingest`)
 *and* a standalone CLI.
 
@@ -56,14 +57,15 @@ trimesh only), `config_inspect_surface.txt` (stats-only).
 
 ```bash
 # Volume tet mesh from STEP (needs gmsh), graph + resampled point cloud:
-python -m geometry_ingest.cli part.step --volume --emit graph,pointcloud \
-    --num-points 8192 --mesh-size-max 5.0 --output out/part.h5
+python -m methods.GeometryIngest.cli part.step --volume --emit graph,pointcloud \
+    --num-points 8192 --mesh-size-max 5.0 --output dataset/generated/part.h5
 
 # Surface mesh from a directory of STL/PLY (trimesh), stats only:
-python -m geometry_ingest.cli ./stl_dir --reader trimesh --dry-run
+python -m methods.GeometryIngest.cli ./stl_dir --reader trimesh --dry-run
 ```
 
-Run from the `dataset/` directory (imported as `geometry_ingest`).
+Run these commands from the `AI-CAE4ALL` root. The package now lives at
+`methods/GeometryIngest`, so the module name is `methods.GeometryIngest.cli`.
 
 ## Install
 
@@ -127,4 +129,4 @@ rather than a cryptic traceback.
 | `deps.py` | lazy offline install of missing modules from committed `wheels/` |
 | `config.py` | flat `key value` config parser for the launcher entrypoint |
 | `main.py` | launcher entrypoint (`--config`) invoked by `AI_CAE4ALL_main.py` |
-| `cli.py` | standalone argparse CLI (`python -m geometry_ingest.cli`) |
+| `cli.py` | standalone argparse CLI (`python -m methods.GeometryIngest.cli`) |

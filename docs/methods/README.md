@@ -1,9 +1,9 @@
 # AI-CAE4ALL — Method Documentation
 
-This folder documents **every ML-for-CAE method** shipped in the AI-CAE4ALL
-monorepo: what each one does, what it is good and bad at, its full network
-structure (with diagrams), and the exhaustive list of config keys that control
-it.
+This folder indexes **every ML-for-CAE method** shipped in the AI-CAE4ALL
+monorepo and contains the shared foundations plus architecture-specific guides.
+The live `MethodSpec` and native validators remain authoritative for exhaustive
+config-key contracts.
 
 Everything here is derived directly from the live code (`model/*.py`,
 `general_modules/*.py`, `training_profiles/*.py`) and the checked-in configs, not
@@ -12,21 +12,22 @@ docs describe the implementation.
 
 ## The methods
 
-| # | Doc | `model` config value | Repo / entrypoint | Family |
+| # | Doc | `model` config value | Runtime directory | Family |
 | --- | --- | --- | --- | --- |
 | 0 | [00_shared_foundations.md](00_shared_foundations.md) | — | shared conventions | data + training contract |
-| 1 | [01_MeshGraphNets_MGN.md](01_MeshGraphNets_MGN.md) | `meshgraphnets` | `MeshGraphNets/` | GNN simulator |
-| 2 | [02_HI-MGN.md](02_HI-MGN.md) | `meshgraphnets` (+`use_multiscale`) | `MeshGraphNets/` | Hierarchical GNN |
-| 3 | [03_BSMS-GNN.md](03_BSMS-GNN.md) | `meshgraphnets` (+`coarsening_type bfs`) | `MeshGraphNets/` | Hierarchical GNN |
+| 1 | [01_MeshGraphNets_MGN.md](01_MeshGraphNets_MGN.md) | `meshgraphnets` | `methods/MeshGraphNets/` | GNN simulator |
+| 2 | [02_HI-MGN.md](02_HI-MGN.md) | `meshgraphnets` (+`use_multiscale`) | `methods/MeshGraphNets/` | Hierarchical GNN |
+| 3 | [03_BSMS-GNN.md](03_BSMS-GNN.md) | `meshgraphnets` (+`coarsening_type bfs`) | `methods/MeshGraphNets/` | Hierarchical GNN |
 | 4 | [04_MeshGraphNets_Variational.md](04_MeshGraphNets_Variational.md) | `meshgraphnets-v` | `methods/MeshGraphNets_Variational/` | Generative GNN (cVAE) |
-| 5 | [05_DeepONet.md](05_DeepONet.md) | `deeponet` | `Neural_Operator/` | Neural operator |
-| 6 | [06_Point-DeepONet.md](06_Point-DeepONet.md) | `point_deeponet` | `Neural_Operator/` | Neural operator |
-| 7 | [07_FNO.md](07_FNO.md) | `fno` | `Neural_Operator/` | Neural operator |
-| 8 | [08_GINO.md](08_GINO.md) | `gino` | `Neural_Operator/` | Neural operator |
-| 9 | [09_Transolver.md](09_Transolver.md) | `transolver` | `Transolver/` | Transformer operator |
+| 5 | [05_DeepONet.md](05_DeepONet.md) | `deeponet` | `methods/Neural_Operator/` | Neural operator |
+| 6 | [06_Point-DeepONet.md](06_Point-DeepONet.md) | `point_deeponet` | `methods/Neural_Operator/` | Neural operator |
+| 7 | [07_FNO.md](07_FNO.md) | `fno` | `methods/Neural_Operator/` | Neural operator |
+| 8 | [08_GINO.md](08_GINO.md) | `gino` | `methods/Neural_Operator/` | Neural operator |
+| 9 | [09_Transolver.md](09_Transolver.md) | `transolver` | `methods/Transolver/` | Transformer operator |
 | 10 | [10_SDFFlow.md](10_SDFFlow.md) | `sdfflow` | `methods/SDFFlow/` | Generative geometry |
 | 11 | [11_Geometry_Ingest.md](11_Geometry_Ingest.md) | `geometry_ingest` | `methods/GeometryIngest/` | Data-prep utility (not an ML method) |
-| 12 | [12_MLP.md](12_MLP.md) | `mlp` | `MLP/` | Parametric MLP surrogate (tabular, no mesh) |
+| 12 | [12_MLP.md](12_MLP.md) | `mlp` | `methods/MLP/` | Parametric MLP surrogate (tabular, no mesh) |
+| 13 | [SimulGenVAE user guide](../../methods/SimulGenVAE/README.md) | `simulgenvae` | `methods/SimulGenVAE/` | Fixed-geometry hierarchical VAE |
 
 > **`geometry_ingest` is a data-prep utility, not an ML method.** It is included
 > here because it is a launcher-routed `model`, but it trains nothing: it meshes

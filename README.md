@@ -34,7 +34,7 @@ Three layers, each usable on its own:
 | --- | --- |
 | **Studio** ([studio/](studio/)) | A local, zero-install browser workspace: typed drag-and-drop pipeline blocks, a real 3D field/mesh/CAD viewer, live training metrics, authoritative preflight, and real job execution with logs and cancellation. |
 | **Launcher** ([cae_suite/](cae_suite/)) | `parse → route → layered preflight → subprocess`. One command, every method. Never imports ML code; validates in the *target method's* interpreter. |
-| **Method repos** ([methods/](methods/)) | Nine independent runtimes — each with its own venv, tests, and entrypoint — all runnable standalone. |
+| **Method runtimes** ([methods/](methods/)) | Nine independent runtimes, each with its own entrypoint and optional isolated interpreter. Eight ship native tests; GeometryIngest is covered by the root launcher-contract tests. All remain runnable standalone. |
 
 The launcher's value is **uniform validation and routing**: it reports *every*
 problem with a config before launching, and it always starts the native process
@@ -236,23 +236,35 @@ AI-CAE4ALL/
 │   ├── MLP/                      #   model = mlp          (tabular, not mesh)
 │   └── GeometryIngest/           #   model = geometry_ingest  (non-ML data prep)
 │
-├── configs/                      # one directory per method, mirroring methods/
+├── configs/                      # method configs plus cross-method campaigns
+│   ├── MeshGraphNets/            #   same nine method directory names as methods/
+│   ├── MeshGraphNets_Variational/
+│   ├── HI_MGNFlow/
+│   ├── Neural_Operator/
+│   ├── Transolver/
+│   ├── SDFFlow/
+│   ├── SimulGenVAE/
+│   ├── MLP/
+│   ├── GeometryIngest/
 │   └── campaigns/                #   multi-arm train/infer campaign runners
 ├── dataset/                      # shared HDF5 data (git-ignored payloads)
-├── output/                       # every run artifact: checkpoints, logs, rollouts, samples
-├── studio/                       # the Studio: browser UI + local Python API bridge
+├── output/                       # native method artifacts: checkpoints, logs, rollouts, samples
+├── studio/                       # browser UI + local API; runtime/ holds Studio-owned state
 ├── inference/                    # stand-alone CPU inference bundle + PyInstaller spec
-├── docs/                         # all documentation (see below)
+├── docs/                         # centralized suite, reference, and research documentation
 └── tests/                        # launcher / MethodSpec contract tests
 ```
 
 Two conventions matter:
 
-- **`configs/` mirrors `methods/`.** A method directory and its config directory
-  always carry the same name.
-- **`output/` is the only place artifacts land.** Native paths in a config are
-  relative to the method repository, so a run writes to `../../output/...`. No
-  method writes inside its own directory.
+- **Method config directories mirror `methods/`.** Each of the nine method
+  directories has a same-named directory under `configs/`; `configs/campaigns/`
+  is the one cross-method exception.
+- **Checked-in native configs write method artifacts to root `output/`.** Their
+  paths are relative to the method runtime, so they use `../../output/...`.
+  Studio-owned temporary configs, uploads, job metadata/logs, exports, and
+  deploy builds instead live under git-ignored `studio/runtime/`. Neither path
+  writes generated artifacts into a method source directory.
 
 ---
 
@@ -264,7 +276,7 @@ Two conventions matter:
 | [docs/CONFIGURATION.md](docs/CONFIGURATION.md) | Suite-wide config grammar, routes, validation commands, key/default contracts |
 | [docs/reference/DATASET_FORMAT.md](docs/reference/DATASET_FORMAT.md) | The shared mesh HDF5 contract (and the tabular/SDF exceptions) |
 | [docs/reference/PUBLIC_DATASETS.md](docs/reference/PUBLIC_DATASETS.md) | Where the public benchmark datasets come from |
-| [docs/methods/](docs/methods/) | Per-method deep dives (13 numbered write-ups) |
+| [docs/methods/](docs/methods/) | Architecture write-ups and the complete method index |
 | [docs/guides/studio.md](docs/guides/studio.md) | Studio capabilities, local API surface, integration boundary |
 | [docs/guides/inference-bundle.md](docs/guides/inference-bundle.md) | Portable CPU bundle: family detection, CLI, `.exe` build |
 | [docs/guides/testing.md](docs/guides/testing.md) | What to run after a change, per layer |

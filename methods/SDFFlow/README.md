@@ -27,26 +27,28 @@ python AI_CAE4ALL_main.py --config configs/SDFFlow/config_interpolate.txt
 ```
 
 Direct backend commands are also supported. Run these from
-`Geometry_generation` so relative paths keep their native meaning:
+`methods/SDFFlow` so relative paths keep their native meaning:
 
 ```bash
-python SDFFlow_main.py --config ../configs/SDFFlow/config_train.txt
-python SDFFlow_main.py --config ../configs/SDFFlow/config_sample.txt
+python SDFFlow_main.py --config ../../configs/SDFFlow/config_train.txt
+python SDFFlow_main.py --config ../../configs/SDFFlow/config_sample.txt
 ```
 
 ## Canonical configs and artifacts
 
 | Config | Purpose | Main output |
 | --- | --- | --- |
-| `configs/SDFFlow/config_train.txt` | Sequential VAE -> FM training on DeepJEB | `outputs/ex1/sdfflow_vae.pth`, then `outputs/ex1/sdfflow_fm.pth` |
-| `configs/SDFFlow/config_sample.txt` | Reproducible unconditional generation | `outputs/ex1/samples/` |
-| `configs/SDFFlow/config_sample_extrapolation.txt` | Guarded, one-axis conditional extrapolation | `outputs/ex1/samples_extrapolation/` |
-| `configs/SDFFlow/config_interpolate.txt` | Reproduce samples 0 and 1 and decode their latent interpolation | `outputs/ex1/interpolation/` |
+| `configs/SDFFlow/config_train.txt` | Sequential VAE -> FM training on DeepJEB | `output/geometry_generation/ex1/sdfflow_vae.pth`, then `output/geometry_generation/ex1/sdfflow_fm.pth` |
+| `configs/SDFFlow/config_sample.txt` | Reproducible unconditional generation | `output/geometry_generation/ex1/samples/` |
+| `configs/SDFFlow/config_sample_extrapolation.txt` | Guarded, one-axis conditional extrapolation | `output/geometry_generation/ex1/samples_extrapolation/` |
+| `configs/SDFFlow/config_interpolate.txt` | Reproduce samples 0 and 1 and decode their latent interpolation | `output/geometry_generation/ex1/interpolation/` |
 
-Training writes the pipeline log to `ex1/train.log`, with stage logs at
-`ex1/train_vae.log` and `ex1/train_fm.log`. These paths describe the runtime
-contract; checkpoints and outputs are created only after the corresponding
-jobs run.
+Training writes the pipeline log to
+`output/geometry_generation/ex1/train.log`, with stage logs at
+`output/geometry_generation/ex1/train_vae.log` and
+`output/geometry_generation/ex1/train_fm.log`. The historical
+`geometry_generation` output slug is retained for checkpoint compatibility;
+the runtime itself now lives under `methods/SDFFlow/`.
 
 The old split config names are not the production interface. Native
 `train_vae` and `train_fm` modes remain available for focused debugging, but
@@ -76,8 +78,8 @@ unprefixed.
 Build a synthetic smoke dataset or a real-mesh dataset from this repository:
 
 ```powershell
-python build_dataset.py --output dataset/synthetic256.h5 --synthetic 256
-python build_dataset.py --output dataset/parts.h5 --mesh_dir ./meshes --repair
+python methods/SDFFlow/build_dataset.py --output dataset/synthetic256.h5 --synthetic 256
+python methods/SDFFlow/build_dataset.py --output dataset/parts.h5 --mesh_dir ./meshes --repair
 ```
 
 The HDF5 dataset stores five descriptors in this fixed order:

@@ -52,3 +52,10 @@ env/
 .env
 .env.*
 !.env.example
+
+# Google Drive OAuth client + cached token (junk/fetch_deepjeb_oauth.py) -- secrets, never commit
+dataset/gdrive_credentials.json
+dataset/gdrive_token.json
+
+# One-off scratch scripts (downloaders, converters) -- not part of the launcher
+junk/

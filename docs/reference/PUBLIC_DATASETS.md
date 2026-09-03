@@ -424,6 +424,111 @@ configs. **3 of 8 are structurally incompatible** with ex4/ex5's per-sample-vary
 downloads of the same *kind* of dataset would not change that, only a fixed-topology multi-sample
 dataset (for `simulgenvae`) or a scalar-parameter table (for `mlp`) would.
 
+## Probabilistic / one-to-many datasets (added 2026-09-04)
+
+Everything in `ex1`-`ex9` is **deterministic**: one input, one correct field. That makes them
+useless for validating `meshgraphnets-v`, whose whole point is a distribution over outcomes --
+per [the MGN-V scope note](../../methods/MeshGraphNets_Variational/), it is for one-to-many /
+stochastic problems, not deterministic sims. These three fill that gap. The selection criterion
+was strict: the *same* macroscopic condition must produce *different* valid outcomes, so a large
+parametric sweep with one deterministic solve per parameter (PDEBench, PDEGym, CFDBench, the
+classic Darcy-GRF sets) does **not** qualify no matter how big it is.
+
+| Output (`X.h5` + `X_infer.h5`) | Source | License | What is stochastic | train + infer | Shape / size |
+| --- | --- | --- | --- | --- | --- |
+| `dataset/prob_turb_radiative_layer_2d.h5` | [The Well](https://polymathic-ai.org/the_well/) `turbulent_radiative_layer_2D` (Polymathic AI, NeurIPS 2024 D&B) | CC-BY-4.0 | 9 `t_cool` values x 10 random seeds; the paper itself cites seed sensitivity as motivating a probabilistic treatment | 72 + 18 | `[8, 101, 49152]`, 4.7 + 1.2 GB |
+| `dataset/prob_grainpaint_spparks.h5` | [ASME 2023 Hackathon SPPARKS dataset](https://zenodo.org/record/8241535) (Sandia, GrainPaint) | CC-BY-4.0 | 1000 Potts Monte Carlo runs, one random seed each, explicitly built to capture microstructure-induced aleatory uncertainty | 900 + 100 | `[4, 1, 1000000]`, 434 + 62 MB |
+| `dataset/prob_crack_path.h5` | [Mechanical MNIST Crack Path, extended](https://zenodo.org/records/5149019) (Lejeune Lab, Boston University) | CC0 | identical loading protocol for every case; only the random rigid-inclusion placement differs, so the crack path is the stochastic outcome | 1750 + 250 | `[6, 20, 65536]`, 9.6 + 1.4 GB |
+
+Raw downloads live on `D:/CAE_datasets_raw/probabilistic/`; the one-off downloader and the three
+converters are in `junk/` (gitignored).
+
+### Channel layouts
+
+```text
+prob_turb_radiative_layer_2d   rows 0:3 x,y,z   3:7 density,pressure,vx,vy   7 tcool
+                               input_var 4, output_var 4, cond_var 1, T=101
+prob_grainpaint_spparks        rows 0:3 x,y,z   3   grain_id
+                               input_var 1, output_var 1, cond_var 0, T=1 (static)
+prob_crack_path                rows 0:3 x,y,z   3:6 damage,x_disp,y_disp
+                               input_var 3, output_var 3, cond_var 0, T=20
+```
+
+`tcool` is a per-sample constant broadcast across nodes -- the conditioning-row case the contract
+already allows. The other two carry no conditions **on purpose**: crack path is determined by the
+inclusion positions (shipped separately in `inclusions_test.7z`), and feeding them in would turn
+a one-to-many problem into a near-deterministic microstructure -> crack-path regression, which is
+the opposite of why the dataset was picked.
+
+### Grids become graphs
+
+All three are regular grids, so `mesh_edge` is grid adjacency, not element extraction:
+
+- turbulent radiative layer: 128x384, 4-connected, **periodic in x** (the file's own
+  `boundary_conditions/x_periodic` says so), open in y -> 98,176 edges
+- grainpaint: 100^3, 6-connected, periodic in all three axes (SPPARKS Potts default) -> 3,000,000 edges
+- crack path: 256x256, 4-connected, **non-periodic** -- the plate has a different BC on each edge,
+  so wrapping would fuse unrelated boundaries -> 130,560 edges
+
+Topology is identical across samples in all three, so the grainpaint and crack-path converters
+write `mesh_edge` **once** and hard-link every sample group at it. This is not cosmetic: 1000
+duplicated copies of grainpaint's 3M-edge array would be ~48 GB, and the whole file is 481 MB.
+h5py hard links are transparent to readers -- `f["data"]["500"]["mesh_edge"][:]` works normally.
+
+### Verified, not assumed
+
+- Launcher probe clean on all three (`python cae_suite/dataset_probe.py mesh_hdf5 <file>`).
+- **Crack-path grid orientation was read off the data**: at step 0 damage > 0.5 occupies columns
+  0-64 in a single row band, matching the documented initial crack of length 0.25 on the left
+  edge, which pins the flat index to C-order `row*256 + col`. `y_disp` maxes at exactly 0.02, the
+  documented maximum applied displacement.
+- **One-to-many actually holds**: crack overlap IoU between cases is 0.09-0.25 (same loading,
+  genuinely different paths); grainpaint seeds give different grain counts (924 vs 921) and
+  non-identical fields.
+
+### Splits: same-condition holdout, not extrapolation
+
+Each dataset ships as `<name>.h5` (train) + `<name>_infer.h5`, per the `exN` convention -- but the
+split rule is **not** ex4-ex6's "highest value on a physical axis goes to infer". That rule builds
+an extrapolation test, and extrapolation is the wrong question here: a variational model is judged
+on whether its predicted *spread* at a condition matches the observed spread, so the held-out set
+must contain **several ground-truth outcomes at the same condition**. Holding out the largest
+`tcool` entirely would leave nothing to compare a predicted distribution against.
+
+| Dataset | infer rule | Result |
+| --- | --- | --- |
+| turb radiative layer | the source's own valid+test split | 18 infer = 2 seeds at each of all 9 `tcool` values; every condition present in both halves |
+| grainpaint | `seed % 10 == 0` | 100 / 900, no overlap |
+| crack path | `case_id % 10 == 0` | 250 / 1750, no overlap (12.5%, not 10% -- the converter samples case ids ~5 apart, so multiples of 10 land more often than one in ten) |
+
+All deterministic, no RNG. If a *generalization* test is wanted instead, a `tcool`-extrapolation
+variant of the turbulent-radiative-layer split is the one that makes physical sense; the other two
+have no physical axis to extrapolate along, since every sample is drawn from identical settings.
+
+### Traps hit while building these
+
+- Mechanical MNIST's per-case files are named `*.npy` but are **whitespace-separated ASCII text**
+  ("text files with .npy format" in its readme). `np.load` fails with a *pickled object data*
+  error, which reads like a security warning; the file simply is not an npy. Use
+  `np.fromstring(f.read(), sep=" ")`.
+- Zenodo throttles hard per connection (~0.3-1 MB/s) and drops long transfers; `curl --retry`
+  does **not** retry exit 18 (partial file) without `--retry-all-errors`.
+- Running two downloader instances against the same partial file corrupts it: both resume with
+  `curl -C -` and their appends interleave, which grew a 4.29 GB Zenodo part to 5.76 GB of
+  garbage. The downloader now takes an OS-level single-instance lock and re-fetches any file
+  larger than its recorded size.
+- Verify against the size the API reports, not "file exists and is non-empty" -- a truncated
+  transfer that exits 0 otherwise gets recorded as complete.
+
+### Not converted, and why
+
+Only 2000 of Mechanical MNIST's 10,000 test cases are in the HDF5 (evenly spread across the ten
+1000-case archives; `--max-samples` changes it). All 70,000 cases (60k train + 10k test) would be
+**~2.2 TB** uncompressed at 31.5 MB/case, and 2000 graphs of 65,536 nodes is already a large mesh-GNN
+training set. The full-mesh `dmg-init` / `last-step` FEniCS archives in the same record are
+downloaded but unused -- they are single snapshots at native mesh resolution, redundant with the
+uniform-grid time series.
+
 ## Other candidates, not downloaded
 
 | Dataset | Size | Why it might be worth it |

@@ -6,7 +6,7 @@ import { apiRequest, requireRuntime } from "./api.js";
 import { previewGraphic, nodeVisualLabel } from "./graphics.js";
 import { typeColor, STANDALONE_INFERENCE_MODEL_IDS } from "./validate.js";
 import { duplicateNode, deleteSelected, nodeEvidenceLabel, render } from "./graph.js";
-import { openConfig } from "./config.js";
+import { openConfig, choicesFor, requiredFor } from "./config.js";
 import { openArtifact } from "./viewer.js";
 import { runGraph } from "./run.js";
 import { activateStudioWorkspace, openStudio, openModelDetailWorkspace, openTrainingMetricsWorkspace, liveShell, liveError } from "./studio.js";
@@ -238,6 +238,80 @@ const FIXED_BEHAVIOUR_KEYS = new Set([
   "error_view", "qualification", "selection"
 ]);
 
+/**
+ * Which config rows a model block shows in the side inspector.
+ *
+ * This used to be `Object.entries(node.config).slice(0, 6)` — the first six keys
+ * *in the order the defaults object literal happened to be typed*. The result
+ * was that every model surfaced `model` (which is the block's own identity and
+ * must not be edited) and buried `training_epochs`, `batch_size` and
+ * `learningr` — the three knobs anyone actually turns — behind "Full config".
+ * FNO, for instance, spent two of its six rows on `coordinate_normalization`
+ * (which has exactly one legal value) and `fno_grid_resolution`, and showed no
+ * training control at all. Worse, the panel silently reshuffled whenever
+ * someone reordered a defaults object.
+ *
+ * Eight rows, not six: after the mode, the primary input, the artifact and the
+ * training trio, two slots remain for the keys that distinguish this route
+ * (hidden_layers on MLP, slice_num on Transolver, the multiscale controls on
+ * HI-MGN). Six left no room for any of them.
+ *
+ * So: rank by what the block is for, and stay mode-aware — an inference block
+ * wants the dataset it reads and the checkpoint it loads, not an epoch budget.
+ * Keys absent from the config are skipped, and anything left over keeps its
+ * original order, so a route with unusual keys still fills its rows.
+ */
+const MODEL_INSPECTOR_PRIORITY = [
+  "mode",
+  // Primary input. `inference` flips which of the two is the real one, so both
+  // are listed and the irrelevant one is simply absent from that mode's config.
+  "infer_dataset", "dataset_dir",
+  // Primary artifact, including the staged variants.
+  "modelpath", "vae_modelpath", "fm_modelpath", "lc_modelpath",
+  // The training trio, plus the per-stage spellings SDFFlow/SimulGen-VAE use.
+  "training_epochs", "vae_training_epochs", "fm_training_epochs", "lc_training_epochs",
+  "batch_size", "vae_batch_size", "fm_batch_size", "lc_batch_size",
+  "learningr", "vae_learningr", "fm_learningr", "lc_learningr",
+  // Generative run knobs: for sdfflow sample/interpolate these *are* the job.
+  "num_samples", "seed", "ode_steps", "mc_resolution",
+  "gpu_ids"
+];
+
+function modelInspectorEntries(node, modelId, limit) {
+  const config = node.config || {};
+  const mode = String(config.mode || "").toLowerCase();
+  const isInference = mode === "inference" || mode === "reconstruct";
+  // The live spec's per-mode required set decides between competing spellings,
+  // so this needs no per-model table and cannot drift from the launcher. It is
+  // what separates SDFFlow's merged `train` (vae_training_epochs /
+  // fm_training_epochs are required, plain training_epochs does nothing) from
+  // its `train_vae` / `train_fm` stages, which use the generic trio instead.
+  let required;
+  try { required = requiredFor(modelId, mode); } catch { required = new Set(); }
+  // Training-only knobs stay *in the config* when the mode is inference or
+  // reconstruct -- the block keeps its training values so switching back is
+  // lossless -- but they do nothing in those modes, and the panel used to spend
+  // three of its rows on them. Hide them here; the Full config sheet still
+  // lists everything.
+  const trainingOnly = key => isInference && /^(?:vae_|fm_|lc_)?(?:training_epochs|learningr)$/.test(key);
+  const applicable = MODEL_INSPECTOR_PRIORITY.filter(key => {
+    if (!(key in config)) return false;
+    // Both dataset keys are usually present; show the one this mode reads.
+    if (key === "dataset_dir" && isInference && "infer_dataset" in config) return false;
+    if (key === "infer_dataset" && !isInference) return false;
+    if (trainingOnly(key)) return false;
+    return true;
+  });
+  const ranked = [
+    ...applicable.filter(key => required.has(key)),
+    ...applicable.filter(key => !required.has(key))
+  ];
+  // `model` is deliberately excluded: it is the block's identity, the header
+  // already names it, and the summary line above prints the exact route id.
+  const rest = Object.keys(config).filter(key => key !== "model" && !ranked.includes(key) && !trainingOnly(key));
+  return [...ranked, ...rest].slice(0, limit).map(key => [key, config[key]]);
+}
+
 const WORKSPACE_ACTION_LABELS = {
   comparison: "Open comparison",
   deploy: "Open deployment",
@@ -291,9 +365,11 @@ export function renderInspector() {
   }
   const spec = BLOCK_SPECS[node.type];
   $("#inspectorHint").textContent = spec.maturity;
-  const configEntries = Object.entries(node.config)
-    .filter(([key]) => node.type !== "source.parameters" || !["condition_names", "feature_names", "parameter_table", "parameter_dataset"].includes(key))
-    .slice(0, spec.isModel ? 6 : 20);
+  const configEntries = spec.isModel
+    ? modelInspectorEntries(node, spec.modelId, 8)
+    : Object.entries(node.config)
+      .filter(([key]) => node.type !== "source.parameters" || !["condition_names", "feature_names", "parameter_table", "parameter_dataset"].includes(key))
+      .slice(0, 20);
   const inspectorChoices = node.type === "prep.geometry"
     ? {
         mode: ["inspect", "ingest"],
@@ -338,10 +414,18 @@ export function renderInspector() {
     </section>
     <section class="inspect-section">
       <div class="section-title">${spec.isModel ? "ML configuration" : "Configuration"}</div>
-      ${spec.isModel ? `<div class="config-summary"><span><strong>${MODEL_CATALOG[spec.modelId].keys.length} accepted keys</strong><small>${MODEL_CATALOG[spec.modelId].modes.length} modes · ${escapeHtml(MODEL_CATALOG[spec.modelId].dataset)}${autoFillCount(node) ? ` · ${autoFillCount(node)} graph-filled` : ""}</small></span><button class="button small primary" id="openFullConfig">Full config</button></div>` : ""}
+      ${spec.isModel ? `<div class="config-summary"><span><strong>${escapeHtml(spec.modelId)}</strong><small>${MODEL_CATALOG[spec.modelId].keys.length} keys · ${MODEL_CATALOG[spec.modelId].modes.length} modes · ${escapeHtml(MODEL_CATALOG[spec.modelId].dataset)}${autoFillCount(node) ? ` · ${autoFillCount(node)} graph-filled` : ""}</small></span><button class="button small primary" id="openFullConfig">Full config</button></div>` : ""}
       <div style="margin-top:${spec.isModel ? 9 : 0}px">${configEntries.map(([key, value]) => {
-        if (spec.isModel && key === "mode") {
-          return `<div class="form-row"><label>${escapeHtml(key.replaceAll("_", " "))}</label><select class="field inspector-config" data-key="${key}">${MODEL_CATALOG[spec.modelId].modes.map(mode => `<option value="${mode}"${String(value) === mode ? " selected" : ""}>${mode}</option>`).join("")}</select></div>`;
+        // Model blocks: reuse the config sheet's own choice table rather than a
+        // second hand-written one. Only `mode` used to become a <select> here,
+        // so parallel_mode, activation, coordinate_normalization, lc_data_type,
+        // coarsening_type, flow_solver, best_by and every boolean were free-text
+        // in the inspector while the Full config sheet offered a dropdown for
+        // the exact same key -- the inspector happily accepted values the
+        // launcher rejects.
+        const modelChoices = spec.isModel ? choicesFor(spec.modelId, key) : null;
+        if (modelChoices?.length) {
+          return `<div class="form-row"><label>${escapeHtml(key.replaceAll("_", " "))}</label><select class="field inspector-config" data-key="${key}">${modelChoices.map(choice => `<option value="${escapeHtml(choice)}"${String(value) === String(choice) ? " selected" : ""}>${escapeHtml(choice)}</option>`).join("")}</select></div>`;
         }
         if (inspectorChoices[key]) {
           return `<div class="form-row"><label>${escapeHtml(key.replaceAll("_", " "))}</label><select class="field inspector-config" data-key="${key}">${inspectorChoices[key].map(choice => `<option value="${escapeHtml(choice)}"${String(value) === choice ? " selected" : ""}>${escapeHtml(choice)}</option>`).join("")}</select></div>`;
