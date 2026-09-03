@@ -71,7 +71,9 @@ def analyze_dataset(h5_path: str) -> None:
             meta = grp.get('metadata')
             if meta is not None and 'num_cells' in meta.attrs:
                 cell_counts.append(int(meta.attrs['num_cells']))
-                has_cells = True
+                # positive count only -- see mesh_dataset.py
+                if cell_counts[-1] > 0:
+                    has_cells = True
             else:
                 cell_counts.append(0)
 
