@@ -242,6 +242,11 @@ def build_chi_mgnflow_spec() -> MethodSpec:
             PathRule("modelpath", PathKind.OUTPUT_FILE, frozenset({"train"})),
             PathRule("modelpath", PathKind.INPUT_FILE, frozenset({"inference"})),
             PathRule("infer_dataset", PathKind.INPUT_FILE, frozenset({"inference"})),
+            # Scoring-only, but a stale path here is SILENT: rollout.py prints a
+            # skip at the very end of a finished run, so the histogram is simply
+            # missing after the GPU time is already spent. Validating it as an
+            # input file also brings PATH-CASE-001, which catches SAOI vs saoi.
+            PathRule("eval_dataset", PathKind.INPUT_FILE, frozenset({"inference"})),
             PathRule("inference_output_dir", PathKind.OUTPUT_DIR, frozenset({"inference"})),
         ),
         validators=(validate_chi_mgnflow,),
