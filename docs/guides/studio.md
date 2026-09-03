@@ -16,12 +16,13 @@ On Windows, double-click:
 START_STUDIO.bat
 ```
 
-The full data viewer and evaluation workspaces require NumPy and h5py. Install
-the Studio's small bridge dependency set into the Python environment you intend
+The HDF5 viewer and evaluation workspaces require NumPy and h5py. Surface/CAD
+and VTK previews additionally use trimesh, gmsh, and meshio. Install the
+Studio's bridge and viewer dependencies into the Python environment you intend
 to use:
 
 ```powershell
-python -m pip install -r frontend\requirements.txt
+python -m pip install -r studio\requirements.txt
 ```
 
 `START_STUDIO.bat` prefers the active virtual environment, then a working
@@ -37,13 +38,13 @@ Close the window or press `Ctrl+C` to stop it.
 If port 8080 is occupied, launch it from a terminal with another port:
 
 ```powershell
-frontend\START_STUDIO.bat 8081
+studio\START_STUDIO.bat 8081
 ```
 
 Alternatively, start the same API server manually:
 
 ```powershell
-python frontend\start_studio.py 8080
+python studio\start_studio.py 8080
 ```
 
 Do not use `python -m http.server`: it can display the HTML, but it cannot
@@ -52,8 +53,10 @@ provide model execution, preflight, repository browsing, or artifact APIs.
 If a terminal still prints `Serving HTTP on 127.0.0.1 port 8080`, that is the
 wrong static server. Stop it with `Ctrl+C`, then run `START_STUDIO.bat`.
 The correct console starts with `AI-CAE4ALL Studio is ready`. The top-right
-badge reports the registry dynamically (for example, `12/12 routes live`);
-both numbers must match the current `GET /api/models` response.
+badge reports repository/entrypoint discovery dynamically (for example,
+`12/12 entrypoints found`); both numbers must match the current
+`GET /api/models` response. This is not an environment or data validation:
+run Preflight on a concrete block before execution.
 
 Useful review URLs:
 
@@ -96,7 +99,7 @@ Useful review URLs:
   checkpoint-selection controls; stale VAE/prior keys are visibly rejected
 - SimulGen-VAE as a first-class block with `train`, `train_vae`, `train_lc`,
   and `reconstruct` modes
-- All 68 live SimulGen-VAE configuration keys, mode-specific required fields,
+- All registered SimulGen-VAE configuration keys, mode-specific required fields,
   obvious presets, manual values, and synchronized flat `.txt` input/output
 - Case-insensitive config keys and closed values, matching the authoritative
   suite parser (`MODEL`, `Model`, and `model` resolve to one canonical key),
@@ -200,10 +203,8 @@ redesign. The only method/portable-boundary edits are checkpoint family metadata
 for future cHI-MGNflow saves and explicit unsupported-family rejection in the
 portable classifier; native cHI-MGNflow inference remains the owning route.
 
-The implementation and verification roadmap is recorded in
-`IMPLEMENTATION_PLAN.md`.
-The research-backed workflow findings and requirement-by-requirement repair
-record are in `WORKFLOW_AUDIT.md`.
-
-The PNG files in this folder are reproducible visual-review captures of the
-SimulGen pipeline, full configuration workspace, and optimization pipeline.
+Architecture and testing boundaries are maintained in
+[`../ARCHITECTURE.md`](../ARCHITECTURE.md) and
+[`testing.md`](testing.md). The PNG files under `docs/images/` are reproducible
+visual-review captures of the SimulGen pipeline, full configuration workspace,
+and optimization pipeline.

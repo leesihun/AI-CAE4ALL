@@ -211,7 +211,15 @@ export function watchOverlayOrder() {
           && !closedTop.contains(active)
           && canReceiveFocus(active)
         );
-        if (!explicitlyFocusedOutside && !focusElement(origin)) focusInsideOverlay(nextTop);
+        if (
+          !explicitlyFocusedOutside
+          && !focusElement(origin)
+          && !focusInsideOverlay(nextTop)
+        ) {
+          // The first-run welcome card opens without a trigger, so it has no
+          // origin to restore. Do not leave focus on its now-hidden button.
+          focusElement($("#brandHome"));
+        }
       }
     }
     closed.forEach(overlay => overlayFocusOrigins.delete(overlay));
@@ -234,4 +242,12 @@ export function topOverlayId() {
 export function closeOverlay(id) {
   $(`#${id}`)?.classList.remove("open");
   if (id === "configOverlay") state.configNode = null;
+  if (id === "studioOverlay") {
+    $$(".nav-item").forEach(item => {
+      const active = item.dataset.section === "pipeline";
+      item.classList.toggle("active", active);
+      if (active) item.setAttribute("aria-current", "page");
+      else item.removeAttribute("aria-current");
+    });
+  }
 }

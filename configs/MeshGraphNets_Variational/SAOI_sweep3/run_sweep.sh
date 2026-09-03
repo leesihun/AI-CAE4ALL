@@ -43,7 +43,7 @@
 # THIS IS A MULTI-DAY RUN. Start it detached:
 #   nohup bash configs/MeshGraphNets_Variational/SAOI_sweep3/run_sweep.sh > sweep.out 2>&1 &
 #   tail -f sweep.out
-#   tail -f outputs/saoi_sweep3/run_logs/ad_g1_c1_r100.log   # watch one arm
+#   tail -f output/meshgraphnets-v/saoi_sweep3/run_logs/ad_g1_c1_r100.log   # watch one arm
 #
 # Multiscale cache: all 8 arms hash to ONE cache file (none of the swept keys
 # are part of the coarsening signature). An exclusive O_EXCL lock in
@@ -75,7 +75,7 @@
 #
 # Environment overrides:
 #   PYTHON        interpreter (default: python)
-#   LOG_ROOT      transcript directory (default: outputs/saoi_sweep3/run_logs)
+#   LOG_ROOT      transcript directory (default: output/meshgraphnets-v/saoi_sweep3/run_logs)
 #   ARMS          space-separated arm names (default: all 8)
 #   PREFLIGHT     1 = --check every arm before launching any (default); 0 = skip
 #   TRAIN         1 = train (default). 0 = SKIP training and go straight to
@@ -97,6 +97,14 @@
 set -uo pipefail
 
 PYTHON="${PYTHON:-python}"
+
+# Every launch below redirects stdout to a log file, and Python block-buffers
+# (~8 KB) when stdout is not a TTY. The effect is that an arm prints "Starting
+# distributed training ..." and then the log sits dead for many minutes while
+# the workers load the dataset and build the coarsening hierarchy -- it looks
+# hung when it is fine. Unbuffer so `tail -f` reflects real progress; the
+# per-line flush cost is nothing next to an epoch.
+export PYTHONUNBUFFERED=1
 PREFLIGHT="${PREFLIGHT:-1}"
 TRAIN="${TRAIN:-1}"
 WARM_TIMEOUT="${WARM_TIMEOUT:-21600}"
@@ -113,7 +121,7 @@ cd "$REPO_ROOT" || exit 1
 # Absolute, derived from the script itself: the sweep folder can be renamed
 # or copied for a wave 4 without editing anything here.
 CFG_DIR="$SCRIPT_DIR"
-LOG_ROOT="${LOG_ROOT:-outputs/saoi_sweep3/run_logs}"
+LOG_ROOT="${LOG_ROOT:-output/meshgraphnets-v/saoi_sweep3/run_logs}"
 CACHE_GLOB="dataset/saoi/saoi_train_bot.mscache.*.h5"
 
 # Must match gen_sweep_configs.arms() exactly -- it prints this line, so if the
@@ -324,7 +332,7 @@ fi
 # uses, so the sweep is decided by CRPS + wild rate + rank calibration. Runs
 # even when rc != 0 so a partially-failed batch still yields a report for the
 # arms that did finish (score_sweep.py skips arms with no checkpoint).
-REPORT="outputs/saoi_sweep3/sweep_results.md"
+REPORT="output/meshgraphnets-v/saoi_sweep3/sweep_results.md"
 if [ "$SCORE" = "1" ]; then
     echo "Scoring the grid (this runs eval_distribution.py per arm, both samplers)..."
     if "$PYTHON" "$CFG_DIR/score_sweep.py" \
@@ -332,7 +340,7 @@ if [ "$SCORE" = "1" ]; then
             --split "$SCORE_SPLIT" \
             --k "$SCORE_K" \
             --python "$PYTHON" \
-            --out-dir outputs/saoi_sweep3 \
+            --out-dir output/meshgraphnets-v/saoi_sweep3 \
             --run-logs "$LOG_ROOT" \
             > "$LOG_ROOT/score_sweep.log" 2>&1; then
         echo "Scoring complete."
@@ -347,7 +355,7 @@ if [ "$SCORE" = "1" ]; then
         echo "==========================================="
         echo ""
         echo "Report   : $REPORT      <-- paste this file to Claude"
-        echo "Raw JSON : outputs/saoi_sweep3/sweep_results.json"
+        echo "Raw JSON : output/meshgraphnets-v/saoi_sweep3/sweep_results.json"
     fi
 else
     echo "SCORE=0 -- skipped. Run it later with:"

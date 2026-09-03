@@ -318,7 +318,7 @@ export function renderConfig() {
     !Object.hasOwn(node.config, key) && Object.hasOwn(backendDefaults, key)
   ).length;
   $("#configBadges").innerHTML = `<span class="badge">${model.keys.length} accepted</span><span class="badge warn">${required.size} required</span>${defaultedRequiredCount ? `<span class="badge">${defaultedRequiredCount} backend-defaulted</span>` : ""}${automaticCount ? `<span class="badge auto">${automaticCount} graph-filled</span>` : ""}`;
-  $("#schemaNote").innerHTML = `<strong>${model.keys.length} live keys</strong><br>All MethodSpec keys are present. Closed choices use dropdowns; paths, widths, lists, and open family values remain manual.<br><br>${spec.modelId === "simulgenvae" ? "The live SimulGen route has separate VAE, LC, combined, and reconstruction requirements." : "Shared-family inactive and rejected keys remain visible for diagnostic honesty."}`;
+  $("#schemaNote").innerHTML = `<strong>${model.keys.length} accepted keys</strong><br>All MethodSpec keys are present. Closed choices use dropdowns; paths, widths, lists, and open family values remain manual.<br><br>${spec.modelId === "simulgenvae" ? "The registered SimulGen route has separate VAE, LC, combined, and reconstruction requirements." : "Shared-family inactive and rejected keys remain visible for diagnostic honesty."}`;
 
   $("#configFields").innerHTML = visible.length ? visible.map(key => {
     const accepted = model.keys.includes(key);
@@ -460,7 +460,7 @@ export async function applyPreset() {
   }
   if (preset === "simulgen_vae") values = { mode: "train_vae", training_epochs: model.defaults.vae_training_epochs, batch_size: model.defaults.vae_batch_size, learningr: model.defaults.vae_learningr };
   if (preset === "simulgen_lc") values = { mode: "train_lc", training_epochs: model.defaults.lc_training_epochs, batch_size: model.defaults.lc_batch_size, learningr: model.defaults.lc_learningr };
-  if (preset === "simulgen_reconstruct") values = { mode: "reconstruct", batch_size: "16", output_dir: "../output/simulgenvae/ex1/reconstruct" };
+  if (preset === "simulgen_reconstruct") values = { mode: "reconstruct", batch_size: "16", output_dir: "../../output/simulgenvae/ex1/reconstruct" };
   values = Object.fromEntries(Object.entries(values).filter(([key]) => model.keys.includes(key)));
   const changes = Object.entries(values).filter(([key, value]) => String(node.config[key] ?? "") !== String(value));
   if (!changes.length) {

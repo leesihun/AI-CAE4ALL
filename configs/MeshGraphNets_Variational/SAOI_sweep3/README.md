@@ -125,10 +125,10 @@ then the other 7, then inference, then scoring.
 ## What comes out
 
 ```
-outputs/saoi_sweep3/sweep_results.md      the report — read/paste this
-outputs/saoi_sweep3/sweep_results.json    everything, incl. full rank histograms
-outputs/saoi_sweep3/warpage_<tag>.png     GT + all 8 arms on ONE axis, ranked by W1
-outputs/saoi_sweep3/run_logs/<arm>.log    per-arm transcripts
+output/meshgraphnets-v/saoi_sweep3/sweep_results.md      the report — read/paste this
+output/meshgraphnets-v/saoi_sweep3/sweep_results.json    everything, incl. full rank histograms
+output/meshgraphnets-v/saoi_sweep3/warpage_<tag>.png     GT + all 8 arms on ONE axis, ranked by W1
+output/meshgraphnets-v/saoi_sweep3/run_logs/<arm>.log    per-arm transcripts
 output/meshgraphnets-v/saoi_sweep3/<arm>.pth
 output/meshgraphnets-v/saoi_sweep3/infer/<arm>/<tag>/histogram_compare.png
 output/meshgraphnets-v/saoi_sweep3/infer/<arm>/<tag>/spread_values.npz

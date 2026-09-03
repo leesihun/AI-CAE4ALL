@@ -29,7 +29,7 @@ export function paletteRender(query = "") {
     if (!entries.length) return "";
     return `<section class="palette-group">
       <header class="palette-group-head"><span>${category}</span><span>${entries.length}</span></header>
-      ${entries.map(([type, spec]) => `<button class="palette-item" draggable="true" data-block-type="${type}" style="--accent:${spec.accent}" title="${escapeHtml(spec.label)} — ${escapeHtml(spec.description)}">
+      ${entries.map(([type, spec]) => `<button class="palette-item" draggable="true" data-block-type="${type}" style="--accent:${spec.accent}" title="${escapeHtml(spec.label)} — ${escapeHtml(spec.description)}" aria-label="Add ${escapeHtml(spec.label)} block">
         <span class="palette-icon">${ICONS[spec.icon]}</span>
         <span class="palette-copy">
           <span class="palette-name">${escapeHtml(spec.label)}</span>

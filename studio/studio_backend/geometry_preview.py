@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from threading import Lock
 from typing import Any
 
 from studio_backend.mesh_topology import normalize_edges
@@ -16,6 +17,7 @@ GEOMETRY_SUFFIXES = {
 }
 MESHIO_SUFFIXES = {".vtk", ".vtu", ".vtp", ".msh"}
 CAD_SUFFIXES = {".step", ".stp", ".iges", ".igs", ".brep"}
+CAD_PREVIEW_LOCK = Lock()
 
 
 def _imports():
@@ -117,6 +119,42 @@ def _load_trimesh(path: Path) -> tuple[Any, Any, dict[str, Any]]:
         "file_size": path.stat().st_size,
     }
     return vertices[:, :3], faces, metadata
+
+
+def _load_cad(path: Path) -> tuple[Any, Any, dict[str, Any]]:
+    """Tessellate STEP/IGES/BREP through the owning GeometryIngest reader."""
+    np = _imports()
+    try:
+        from methods.GeometryIngest.readers import read_gmsh
+    except (ImportError, OSError) as exc:
+        raise RuntimeError(
+            "gmsh is required to preview STEP, IGES, and BREP files. "
+            "Install the Studio requirements or ingest the CAD to mesh HDF5 first."
+        ) from exc
+    try:
+        # Gmsh owns process-global state between initialize/finalize. Serialize
+        # concurrent browser previews so two HTTP workers cannot corrupt it.
+        with CAD_PREVIEW_LOCK:
+            raw = read_gmsh(str(path), volume=False)
+    except (ImportError, OSError) as exc:
+        raise RuntimeError(
+            "gmsh is required to preview STEP, IGES, and BREP files. "
+            "Install the Studio requirements or ingest the CAD to mesh HDF5 first."
+        ) from exc
+    except Exception as exc:
+        raise ValueError(f"Could not tessellate {path.name}: {exc}") from exc
+
+    vertices = np.asarray(raw.get("coords", []), dtype=np.float64)
+    faces = np.asarray(raw.get("conn", []), dtype=np.int64)
+    if vertices.ndim != 2 or vertices.shape[1] < 3 or not vertices.size:
+        raise ValueError(f"{path.name} produced no 3D vertices.")
+    if faces.ndim != 2 or faces.shape[1] < 3 or not faces.size:
+        raise ValueError(f"{path.name} produced no surface triangles.")
+    return vertices[:, :3], faces[:, :3], {
+        "watertight": raw.get("watertight"),
+        "file_size": path.stat().st_size,
+        "reader": "gmsh/OpenCASCADE",
+    }
 
 
 def _load_meshio(path: Path) -> tuple[Any, Any, dict[str, Any]]:
@@ -226,6 +264,8 @@ def geometry_sample(
     selected = _selected_file(path, sample_id)
     if selected.suffix.lower() in MESHIO_SUFFIXES:
         vertices, faces, metadata = _load_meshio(selected)
+    elif selected.suffix.lower() in CAD_SUFFIXES:
+        vertices, faces, metadata = _load_cad(selected)
     else:
         vertices, faces, metadata = _load_trimesh(selected)
 

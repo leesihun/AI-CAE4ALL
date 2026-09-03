@@ -147,8 +147,8 @@ export function standaloneInferenceConfig(node, modelId, facts) {
     if (accepted.has(key) && !reserved.has(key) && String(value ?? "").trim()) values[key] = value;
   });
   values.gpu_ids = String(node.config.gpu_ids || "0");
-  values.modelpath = toMethodPath(node.config.checkpoint_path);
-  values.infer_dataset = toMethodPath(node.config.dataset_path);
+  values.modelpath = toMethodPath(node.config.checkpoint_path, modelId);
+  values.infer_dataset = toMethodPath(node.config.dataset_path, modelId);
   // num_timesteps records what the model was TRAINED on; the rollout length is
   // a property of this run. Defaulting it to the trained span minus the given
   // initial condition reproduces what the paired training config would do.
@@ -320,7 +320,8 @@ export function executableSteps(targetId = null) {
       // silently overwriting a configured held-out infer_dataset with the
       // training file is never what anyone means by it. Keep the model's own
       // held-out split in that one case; `inferenceDatasetWarnings` surfaces it.
-      const wired = toMethodPath(node.config.dataset_path);
+      const modelId = BLOCK_SPECS[upstream.type]?.modelId || "";
+      const wired = toMethodPath(node.config.dataset_path, modelId);
       const trainingDataset = upstream.config.dataset_dir;
       const configuredSplit = upstream.config.infer_dataset;
       if (!(configuredSplit && wired === trainingDataset)) overrides.infer_dataset = wired;
@@ -328,13 +329,13 @@ export function executableSteps(targetId = null) {
     if (catalogKeys.includes("modelpath") && node.config.checkpoint_path) {
       // toMethodPath is a no-op on paths already relative to the owning
       // method repo (e.g. a checkpoint fed back from the same model node
-      // that just trained it) and only adds the "../" prefix when the value
+      // that just trained it) and only adds the repository-depth prefix when the value
       // came from a source.checkpoint block's suite-relative browse/upload
       // path, so it is safe to apply unconditionally here.
-      overrides.modelpath = toMethodPath(node.config.checkpoint_path);
+      overrides.modelpath = toMethodPath(node.config.checkpoint_path, BLOCK_SPECS[upstream.type]?.modelId || "");
     }
     ["vae_modelpath", "lc_modelpath", "fm_modelpath"].forEach(key => {
-      if (catalogKeys.includes(key) && node.config[key]) overrides[key] = toMethodPath(node.config[key]);
+      if (catalogKeys.includes(key) && node.config[key]) overrides[key] = toMethodPath(node.config[key], BLOCK_SPECS[upstream.type]?.modelId || "");
     });
     steps.push({
       label: `${BLOCK_SPECS[upstream.type].label} · ${mode}`,
@@ -481,7 +482,7 @@ export function inferenceDatasetWarnings() {
       .find(item => item && BLOCK_SPECS[item.type]?.isModel);
     if (!model) return;
     const training = String(model.config.dataset_dir || "");
-    if (training && toMethodPath(wired) === training) {
+    if (training && toMethodPath(wired, BLOCK_SPECS[model.type]?.modelId || "") === training) {
       warnings.push(`${BLOCK_SPECS[node.type].label} is pointed at the training dataset (${wired}). Connect the held-out inference dataset for a real test.`);
     }
   });

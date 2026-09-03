@@ -31,6 +31,12 @@ export function activateStudioWorkspace(section, nodeId = null) {
   activeStudioWorkspace = request;
   state.studioSection = section;
   state.studioNode = nodeId;
+  $$(".nav-item").forEach(item => {
+    const active = item.dataset.section === section;
+    item.classList.toggle("active", active);
+    if (active) item.setAttribute("aria-current", "page");
+    else item.removeAttribute("aria-current");
+  });
   $("#studioOverlay").classList.add("open");
   renderStudio();
   return request;
@@ -129,7 +135,7 @@ export function studioCards(section) {
 function sidebarCounts(item) {
   if (item.modelCards && state.api.models.length) {
     const routes = state.api.models.length;
-    return { badge: routes, note: `${routes} live model routes` };
+    return { badge: routes, note: `${routes} registered model routes` };
   }
   return { badge: studioCards(item).length, note: item.note };
 }
@@ -219,13 +225,13 @@ export async function renderModelsWorkspace(container) {
   if (!isCurrentStudioRender(container, request)) return;
   container.innerHTML = `<div class="live-summary">
     <span><strong>${models.length}</strong><small>registered routes</small></span>
-    <span><strong>${models.filter(model => model.healthy).length}</strong><small>healthy installations</small></span>
+    <span><strong>${models.filter(model => model.healthy).length}</strong><small>entrypoints found</small></span>
     <span><strong>${models.reduce((sum, model) => sum + model.modes.length, 0)}</strong><small>actual route modes</small></span>
     <span><strong>${models.reduce((sum, model) => sum + model.known_keys.length, 0)}</strong><small>accepted-key entries</small></span>
   </div><div class="config-help catalog-status" role="status">Showing all ${models.length} registered model routes. The model registry is not truncated in this view.</div><div class="live-list">${models.map(model => `<article class="live-row" data-model-row="${escapeHtml(model.model)}">
     <span><strong>${escapeHtml(model.model)} · ${escapeHtml(model.method)}</strong><small>${escapeHtml(model.repository)} → ${escapeHtml(model.entrypoint)}</small></span>
     <span class="chip-row">${model.modes.map(mode => `<span class="chip">${escapeHtml(mode)}</span>`).join("")}</span>
-    <span><strong>${model.known_keys.length} keys</strong><small>${escapeHtml(model.dataset_kind || "no dataset contract")} · ${model.healthy ? "healthy" : "broken"}</small></span>
+    <span><strong>${model.known_keys.length} keys</strong><small>${escapeHtml(model.dataset_kind || "no dataset contract")} · ${model.healthy ? "entrypoint found" : "entrypoint missing"}</small></span>
     <span class="live-actions"><button class="button small" data-model-details="${escapeHtml(model.model)}">Details</button><button class="button small" data-live-configs="${escapeHtml(model.model)}">Examples</button>${BLOCK_SPECS[`model.${model.model}`] ? `<button class="button small primary" data-live-model="${escapeHtml(model.model)}">Open block</button>` : ""}</span>
   </article>`).join("")}</div>`;
   $$("[data-live-model]", container).forEach(button => button.addEventListener("click", event => {
@@ -823,7 +829,7 @@ export async function renderSystemWorkspace(container) {
   if (!isCurrentStudioRender(container, request)) return;
   container.innerHTML = `<div class="live-summary">
     <span><strong>${health.ok ? "Connected" : "Failed"}</strong><small>suite runtime</small></span>
-    <span><strong>${health.healthy_models}/${health.models}</strong><small>healthy routes</small></span>
+    <span><strong>${health.healthy_models}/${health.models}</strong><small>entrypoints found</small></span>
     <span><strong>${health.gpus.length}</strong><small>visible NVIDIA GPUs</small></span>
     <span><strong>${escapeHtml(health.python_version)}</strong><small>${escapeHtml(health.python)}</small></span>
   </div><div class="live-list">${health.gpus.map(gpu => `<article class="live-row">

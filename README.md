@@ -96,7 +96,7 @@ inactive, and checkpoint-owned — with the flat `.txt` rendered side-by-side an
 synchronized in both directions. **Run preflight** and **Explain config** call the
 authoritative launcher, not a reimplementation.
 
-![SimulGen-VAE full configuration workspace — 67 live keys](docs/images/studio-config-workspace.png)
+![SimulGen-VAE full configuration workspace](docs/images/studio-config-workspace.png)
 
 **A real 3D viewer for real artifacts.** An opaque, depth-buffered WebGL viewport
 (with a Canvas 2D fallback) renders *actual repository data* — never a substituted
@@ -140,7 +140,7 @@ config for a method whose environment it does not share.
 
 ```bash
 python -m pip install -e .                # optional; also provides the `ai-cae4all` command
-python AI_CAE4ALL_main.py --list-models   # confirms which method repos are installable
+python AI_CAE4ALL_main.py --list-models   # confirms registered repos and entrypoints
 ```
 
 Each method brings its own dependencies, installed into that method's venv —
@@ -158,7 +158,9 @@ uses `torch_cluster` for neighbor search and falls back to a scipy `cKDTree` pat
 without it. `geometry_ingest` needs `trimesh` for surface meshes and `gmsh` for
 volume tet meshes. `--list-models` reports install health per route, and
 preflight's environment layer tells you what a specific config is missing before
-it launches. The Studio needs nothing beyond a browser and the launcher's Python.
+it launches. The Studio shell needs a browser and the launcher's Python; its
+HDF5, CAD/mesh, and VTK viewers use the dependencies listed in
+`studio/requirements.txt`.
 
 To give each method its own interpreter, copy
 [ai_cae4all.local.example.toml](ai_cae4all.local.example.toml) to
@@ -196,8 +198,9 @@ python studio\start_studio.py 8080
 
 Do **not** use `python -m http.server` — it will display the HTML but provide no
 model execution, preflight, repository browsing, or artifact APIs. The correct
-console prints `AI-CAE4ALL Studio is ready` and the badge in the browser reads
-`12 routes healthy`.
+console prints `AI-CAE4ALL Studio is ready` and the badge in the browser reports
+the registered repositories and entrypoints it found. Run Preflight to verify
+the dependencies, paths, data, and native probe for a concrete configuration.
 
 ### Geometry generation and CAD ingest
 

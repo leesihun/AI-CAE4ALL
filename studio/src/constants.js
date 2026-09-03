@@ -68,15 +68,15 @@ export const MODEL_CATALOG = {
     dataset: "fixed-geometry mesh HDF5",
     defaults: {
       model: "simulgenvae", mode: "train", gpu_ids: "0", parallel_mode: "single",
-      dataset_dir: "../dataset/ex1.h5", split_seed: "42", output_dir: "../output/simulgenvae/ex1",
-      vae_modelpath: "../output/simulgenvae/ex1/simulgenvae_vae.pth",
-      lc_modelpath: "../output/simulgenvae/ex1/simulgenvae_lc.pth",
+      dataset_dir: "../../dataset/ex1.h5", split_seed: "42", output_dir: "../../output/simulgenvae/ex1",
+      vae_modelpath: "../../output/simulgenvae/ex1/simulgenvae_vae.pth",
+      lc_modelpath: "../../output/simulgenvae/ex1/simulgenvae_lc.pth",
       num_var: "1", field_start_row: "3", node_start: "0", node_end: "0", timesteps_reduced: "0",
       latent_dim: "8", latent_dim_end: "32", num_filter_enc: "1024 512 256 128",
       network_size: "small", loss_type: "1", alpha: "1000000", init_beta_divisor: "4",
       vae_training_epochs: "2000", vae_batch_size: "16", vae_learningr: "0.001",
       lc_filter: "32 64 128 256 512 1024", lc_data_type: "csv",
-      param_dir: "../dataset/ex1_conditions.csv", lc_dropout: "0.2", use_spatial_attention: "1",
+      param_dir: "../../dataset/ex1_conditions.csv", lc_dropout: "0.2", use_spatial_attention: "1",
       lc_training_epochs: "5000", lc_batch_size: "64", lc_learningr: "0.001",
       // train_vae / train_lc use the generic trio rather than the vae_*/lc_*
       // variants, so without these a block switched to either mode reported three
@@ -88,26 +88,26 @@ export const MODEL_CATALOG = {
   mlp: {
     label: "Simple MLP", short: "MLP", accent: "#a66a45", modes: ["train", "inference"], keys: KEY_CATALOGS.mlp,
     description: "Tabular X[S,N] to Y[S,M] regression for global engineering responses.", dataset: "table HDF5",
-    defaults: { model: "mlp", mode: "train", gpu_ids: "0", modelpath: "../output/mlp/studio/mlp.pth", hidden_layers: "256,256,128", activation: "gelu", training_epochs: "200", batch_size: "32", learningr: "0.001" }
+    defaults: { model: "mlp", mode: "train", gpu_ids: "0", modelpath: "../../output/mlp/studio/mlp.pth", hidden_layers: "256,256,128", activation: "gelu", training_epochs: "200", batch_size: "32", learningr: "0.001" }
   },
   meshgraphnets: {
     label: "MeshGraphNets", short: "MGN", accent: "#19715e", modes: ["train", "inference"], keys: KEY_CATALOGS.meshgraphnets,
     description: "Deterministic graph-network simulator with Flat, HI-MGN, and BSMS-GNN presets.", dataset: "mesh HDF5",
     // edge_var is required and MGN-EDGE-001 rejects anything but 8, so leaving it
     // unset only ever produced a required-field error the user had to guess at.
-    defaults: { model: "meshgraphnets", mode: "train", gpu_ids: "0", modelpath: "../output/meshgraphnets/studio/meshgraphnets.pth", message_passing_num: "15", latent_dim: "128", edge_var: "8", use_multiscale: "False", training_epochs: "500", batch_size: "4", learningr: "0.0001" }
+    defaults: { model: "meshgraphnets", mode: "train", gpu_ids: "0", modelpath: "../../output/meshgraphnets/studio/meshgraphnets.pth", message_passing_num: "15", latent_dim: "128", edge_var: "8", use_multiscale: "False", training_epochs: "500", batch_size: "4", learningr: "0.0001" }
   },
   "meshgraphnets-v": {
     label: "MeshGraphNets-V", short: "MGN-V", accent: "#407d69", modes: ["train", "inference"], keys: KEY_CATALOGS.meshgraphnetsV,
     description: "Variational mesh simulator with conditional priors and stochastic trajectories.", dataset: "mesh HDF5",
-    defaults: { model: "meshgraphnets-v", mode: "train", gpu_ids: "0", modelpath: "../output/meshgraphnets_v/studio/meshgraphnets_v.pth", latent_dim: "128", edge_var: "8", vae_latent_dim: "256", num_vae_samples: "32", training_epochs: "500", batch_size: "4", learningr: "0.0001" }
+    defaults: { model: "meshgraphnets-v", mode: "train", gpu_ids: "0", modelpath: "../../output/meshgraphnets_v/studio/meshgraphnets_v.pth", latent_dim: "128", edge_var: "8", vae_latent_dim: "256", num_vae_samples: "32", training_epochs: "500", batch_size: "4", learningr: "0.0001" }
   },
   "chi-mgnflow": {
     label: "cHI-MGNflow", short: "cHI-FM", accent: "#286d7a", modes: ["train", "inference"], keys: KEY_CATALOGS.chiMgnflow,
     description: "Conditional hierarchical MeshGraphNet with flow-matching field generation and deterministic or ensemble readout.", dataset: "mesh HDF5",
     defaults: {
       model: "chi-mgnflow", mode: "train", gpu_ids: "0", parallel_mode: "ddp",
-      modelpath: "../output/chi-mgnflow/studio/chi_mgnflow.pth",
+      modelpath: "../../output/chi-mgnflow/studio/chi_mgnflow.pth",
       latent_dim: "128", edge_var: "8", use_multiscale: "True",
       message_passing_num: "15", coarsening_type: "voronoi_seedmean",
       multiscale_levels: "2", voronoi_clusters: "500,100", mp_per_level: "3,4,6,4,3",
@@ -121,27 +121,27 @@ export const MODEL_CATALOG = {
   point_deeponet: {
     label: "Point-DeepONet", short: "P-DON", accent: "#3d718d", modes: ["train", "inference"], keys: KEY_CATALOGS.operator,
     description: "Point-conditioned operator for arbitrary-query field prediction.", dataset: "mesh HDF5",
-    defaults: { model: "point_deeponet", mode: "train", gpu_ids: "0", modelpath: "../output/point_deeponet/studio/point_deeponet.pth", coordinate_normalization: "centered_isotropic", point_sensor_count: "1024", point_hidden_channels: "256", training_epochs: "500", batch_size: "4", learningr: "0.0001" }
+    defaults: { model: "point_deeponet", mode: "train", gpu_ids: "0", modelpath: "../../output/point_deeponet/studio/point_deeponet.pth", coordinate_normalization: "centered_isotropic", point_sensor_count: "1024", point_hidden_channels: "256", training_epochs: "500", batch_size: "4", learningr: "0.0001" }
   },
   deeponet: {
     label: "DeepONet", short: "DON", accent: "#526f9d", modes: ["train", "inference"], keys: KEY_CATALOGS.operator,
     description: "Branch/trunk neural operator on the shared mesh dataset contract.", dataset: "mesh HDF5",
-    defaults: { model: "deeponet", mode: "train", gpu_ids: "0", modelpath: "../output/deeponet/studio/deeponet.pth", coordinate_normalization: "centered_isotropic", deeponet_hidden_channels: "256", deeponet_branch_depth: "4", deeponet_trunk_depth: "4", training_epochs: "500", batch_size: "4", learningr: "0.0001" }
+    defaults: { model: "deeponet", mode: "train", gpu_ids: "0", modelpath: "../../output/deeponet/studio/deeponet.pth", coordinate_normalization: "centered_isotropic", deeponet_hidden_channels: "256", deeponet_branch_depth: "4", deeponet_trunk_depth: "4", training_epochs: "500", batch_size: "4", learningr: "0.0001" }
   },
   fno: {
     label: "FNO", short: "FNO", accent: "#6561a3", modes: ["train", "inference"], keys: KEY_CATALOGS.operator,
     description: "Fourier Neural Operator with explicit grid and spectral-mode controls.", dataset: "mesh HDF5",
-    defaults: { model: "fno", mode: "train", gpu_ids: "0", modelpath: "../output/fno/studio/fno.pth", coordinate_normalization: "centered_isotropic", fno_grid_resolution: "64,64,64", fno_modes: "16,16,16", fno_hidden_channels: "64", fno_layers: "4", training_epochs: "500", batch_size: "4", learningr: "0.0001" }
+    defaults: { model: "fno", mode: "train", gpu_ids: "0", modelpath: "../../output/fno/studio/fno.pth", coordinate_normalization: "centered_isotropic", fno_grid_resolution: "64,64,64", fno_modes: "16,16,16", fno_hidden_channels: "64", fno_layers: "4", training_epochs: "500", batch_size: "4", learningr: "0.0001" }
   },
   gino: {
     label: "GINO", short: "GINO", accent: "#7d5c99", modes: ["train", "inference"], keys: KEY_CATALOGS.operator,
     description: "Geometry-informed neural operator for irregular domains.", dataset: "mesh HDF5",
-    defaults: { model: "gino", mode: "train", gpu_ids: "0", modelpath: "../output/gino/studio/gino.pth", coordinate_normalization: "centered_isotropic", gino_grid_resolution: "64,64,64", gino_fno_modes: "16,16,16", gino_in_radius: "0.05", gino_out_radius: "0.05", training_epochs: "500", batch_size: "2", learningr: "0.0001" }
+    defaults: { model: "gino", mode: "train", gpu_ids: "0", modelpath: "../../output/gino/studio/gino.pth", coordinate_normalization: "centered_isotropic", gino_grid_resolution: "64,64,64", gino_fno_modes: "16,16,16", gino_in_radius: "0.05", gino_out_radius: "0.05", training_epochs: "500", batch_size: "2", learningr: "0.0001" }
   },
   transolver: {
     label: "Transolver3", short: "TR3", accent: "#9a5e55", modes: ["train", "inference"], keys: KEY_CATALOGS.transolver,
     description: "Physics-Attention with slice-space and node-sharded execution controls.", dataset: "mesh HDF5",
-    defaults: { model: "transolver", mode: "train", gpu_ids: "0", modelpath: "../output/transolver/studio/transolver.pth", coordinate_normalization: "centered_isotropic", latent_dim: "256", num_layers: "10", num_heads: "8", slice_num: "128", attention_kernel: "slice_space", use_checkpointing: "True", training_epochs: "500", batch_size: "1", grad_accum_steps: "4", learningr: "0.0001" }
+    defaults: { model: "transolver", mode: "train", gpu_ids: "0", modelpath: "../../output/transolver/studio/transolver.pth", coordinate_normalization: "centered_isotropic", latent_dim: "256", num_layers: "10", num_heads: "8", slice_num: "128", attention_kernel: "slice_space", use_checkpointing: "True", training_epochs: "500", batch_size: "1", grad_accum_steps: "4", learningr: "0.0001" }
   },
   sdfflow: {
     label: "SDFFlow", short: "SDF", accent: "#8b7837", modes: ["train", "train_vae", "train_fm", "sample", "reconstruct", "interpolate", "optimize"], keys: KEY_CATALOGS.sdfflow,
@@ -153,9 +153,9 @@ export const MODEL_CATALOG = {
     defaults: {
       model: "sdfflow", mode: "train", gpu_ids: "0", latent_dim: "256", latent_tokens: "32",
       condition_names: "bbox_x,bbox_y,bbox_z,volume,area",
-      output_dir: "../output/geometry_generation/studio",
-      vae_modelpath: "../output/geometry_generation/studio/sdfflow_vae.pth",
-      fm_modelpath: "../output/geometry_generation/studio/sdfflow_fm.pth",
+      output_dir: "../../output/geometry_generation/studio",
+      vae_modelpath: "../../output/geometry_generation/studio/sdfflow_vae.pth",
+      fm_modelpath: "../../output/geometry_generation/studio/sdfflow_fm.pth",
       num_encoder_points: "4096", num_query_points: "4096",
       decoder_type: "attention", decoder_hidden: "512", decoder_layers: "8",
       encoder_dim: "256", encoder_heads: "4", encoder_blocks: "2",
@@ -508,8 +508,8 @@ export function registerLiveModel(model) {
  * the loss would sit on constant targets.
  */
 const EX9_MESH = {
-  dataset_dir: "../dataset/ex9.h5",
-  infer_dataset: "../dataset/ex9_infer.h5",
+  dataset_dir: "../../dataset/ex9.h5",
+  infer_dataset: "../../dataset/ex9_infer.h5",
   input_var: "2", output_var: "2", cond_var: "2",
   feature_loss_weights: "1.0, 1.0", positional_features: "4",
   use_node_types: "False", infer_timesteps: "19", split_seed: "42"

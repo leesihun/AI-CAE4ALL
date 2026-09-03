@@ -62,9 +62,9 @@ export async function connectRuntime(onConnected) {
     state.api.models.forEach(registerLiveModel);
     const healthy = state.api.models.filter(model => model.healthy).length;
     badge.classList.remove("offline");
-    badge.innerHTML = `<i></i> ${healthy}/${state.api.models.length} routes live`;
-    badge.title = `Connected to ${health.python} · ${health.gpus?.length || 0} GPU(s)`;
-    $(".coverage-pill").textContent = `${state.api.models.length} live routes · ${state.api.models.reduce((sum, model) => sum + model.modes.length, 0)} route modes`;
+    badge.innerHTML = `<i></i> ${healthy}/${state.api.models.length} entrypoints found`;
+    badge.title = `Connected to ${health.python} · ${health.gpus?.length || 0} GPU(s). Route checks cover repository and entrypoint presence; use Preflight to verify a concrete run.`;
+    $(".coverage-pill").textContent = `${state.api.models.length} registered routes · ${state.api.models.reduce((sum, model) => sum + model.modes.length, 0)} route modes`;
     refreshNavCounts(jobs);
     onConnected?.();
     // Rejoin every job still in flight, not just the first — several pipelines

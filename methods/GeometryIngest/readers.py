@@ -20,6 +20,7 @@ Returned dict (a "raw mesh"):
 from __future__ import annotations
 
 import numpy as np
+import threading
 
 from .deps import ensure
 
@@ -54,7 +55,11 @@ def read_gmsh(path: str, volume: bool = True,
     """
     gmsh = ensure("gmsh")  # installs from bundled wheels/ if missing
 
-    gmsh.initialize()
+    # The Studio serves previews from ThreadingHTTPServer workers. Gmsh's
+    # default Python interrupt hook installs a signal handler, which is legal
+    # only on the interpreter's main thread. Native CLI runs keep the hook;
+    # worker calls disable only that hook while using the same mesher.
+    gmsh.initialize(interruptible=threading.current_thread() is threading.main_thread())
     try:
         gmsh.option.setNumber("General.Terminal", 0)
         gmsh.option.setNumber("General.NumThreads", 1)  # reproducible meshing

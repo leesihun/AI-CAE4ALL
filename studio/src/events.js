@@ -118,7 +118,12 @@ export function bindEvents() {
     }
   });
   $$(".nav-item").forEach(button => button.addEventListener("click", () => {
-    $$(".nav-item").forEach(item => item.classList.toggle("active", item === button));
+    $$(".nav-item").forEach(item => {
+      const active = item === button;
+      item.classList.toggle("active", active);
+      if (active) item.setAttribute("aria-current", "page");
+      else item.removeAttribute("aria-current");
+    });
     if (button.dataset.section === "pipeline") closeOverlay("studioOverlay");
     else openStudio(button.dataset.section);
   }));
@@ -280,6 +285,7 @@ export function bindEvents() {
     const node = state.nodes.find(item => item.id === state.configNode);
     if (!node) return;
     const modelId = BLOCK_SPECS[node.type].modelId;
+    let savedMessage = "Saved in browser only · runtime offline";
     if (state.api.connected) {
       try {
         const result = await apiRequest("/api/config/save", {
@@ -291,16 +297,23 @@ export function bindEvents() {
         });
         snapshot();
         node.savedConfigPath = result.path;
-        $("#savedState").textContent = `Saved · ${result.path}`;
+        savedMessage = `Config saved · ${result.path}`;
       } catch (error) {
         toast(`Could not persist config: ${error.message}`, "error");
         return;
       }
-    } else {
-      $("#savedState").textContent = "Saved in browser only · runtime offline";
     }
     closeOverlay("configOverlay");
     render();
+    // snapshot() deliberately marks the pipeline dirty in a microtask. Persist
+    // after that hook has run so the newly assigned savedConfigPath is included
+    // and the toolbar does not misleadingly fall back to "Unsaved changes".
+    queueMicrotask(() => {
+      try {
+        savePipelineState();
+        $("#savedState").textContent = savedMessage;
+      } catch { /* savePipelineState already exposes the local-save failure. */ }
+    });
     toast(node.savedConfigPath ? `Configuration saved to ${node.savedConfigPath}.` : "Configuration retained in this browser session.");
   });
 

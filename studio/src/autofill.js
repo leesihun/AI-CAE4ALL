@@ -9,17 +9,31 @@ function text(value) {
   return String(value ?? "").trim();
 }
 
-export function toMethodPath(value) {
+export function toMethodPath(value, modelId = "") {
   const normalized = text(value).replaceAll("\\", "/");
   if (!normalized || normalized.startsWith("../") || /^[A-Za-z]:\//.test(normalized)) return normalized;
-  return `../${normalized.replace(/^\.\//, "")}`;
+  const live = state.api.models.find(item => item.model === modelId);
+  const depth = text(live?.repository).split("/").filter(Boolean).length || 2;
+  return `${"../".repeat(depth)}${normalized.replace(/^\.\//, "")}`;
 }
 
 export function toGeometryPath(value) {
   const normalized = text(value).replaceAll("\\", "/");
   if (!normalized || normalized.startsWith("../") || /^[A-Za-z]:\//.test(normalized)) return normalized;
-  if (normalized.startsWith("dataset/")) return `../${normalized.slice("dataset/".length)}`;
   return `../../${normalized.replace(/^\.\//, "")}`;
+}
+
+function resolveMethodRelative(value, repository) {
+  const normalized = text(value).replaceAll("\\", "/");
+  if (!normalized || /^[A-Za-z]:\//.test(normalized)) return normalized;
+  const parts = `${repository}/${normalized}`.split("/");
+  const resolved = [];
+  parts.forEach(part => {
+    if (!part || part === ".") return;
+    if (part === "..") resolved.pop();
+    else resolved.push(part);
+  });
+  return resolved.join("/");
 }
 
 /** Convert a path stored relative to a method repository back to the suite
@@ -29,13 +43,11 @@ export function toGeometryPath(value) {
 export function fromMethodPath(value, modelId) {
   const normalized = text(value).replaceAll("\\", "/");
   if (!normalized || /^[A-Za-z]:\//.test(normalized)) return normalized;
-  if (normalized.startsWith("../") && !normalized.startsWith("../../")) {
-    return normalized.slice("../".length);
-  }
   const live = state.api.models.find(item => item.model === modelId);
   const repository = text(live?.repository).replaceAll("\\", "/").replace(/^\.\//, "").replace(/\/$/, "");
-  const local = normalized.replace(/^\.\//, "");
-  return repository ? `${repository}/${local}` : local;
+  return repository
+    ? resolveMethodRelative(normalized, repository)
+    : normalized.replace(/^(?:\.\.\/){2}/, "").replace(/^\.\//, "");
 }
 
 /** Inverse of toGeometryPath: geometry_ingest's own output_dataset default is
@@ -46,9 +58,7 @@ export function fromMethodPath(value, modelId) {
 export function fromGeometryPath(value) {
   const normalized = text(value).replaceAll("\\", "/");
   if (!normalized || /^[A-Za-z]:\//.test(normalized)) return normalized;
-  if (normalized.startsWith("../../")) return normalized.slice("../../".length);
-  if (normalized.startsWith("../")) return `dataset/${normalized.slice("../".length)}`;
-  return normalized;
+  return resolveMethodRelative(normalized, "methods/GeometryIngest");
 }
 
 function configPath(node, keys) {
@@ -272,7 +282,7 @@ function modelAutofill(desired, node) {
   if (dataLink) {
     const path = datasetPath(dataLink.node);
     const key = mode === "inference" && accepted.has("infer_dataset") ? "infer_dataset" : accepted.has("dataset_dir") ? "dataset_dir" : "";
-    if (key && path) put(desired, node, key, candidate(toMethodPath(path), dataLink.node, `${mode} dataset from graph`, dataLink.edge.fromPort));
+    if (key && path) put(desired, node, key, candidate(toMethodPath(path, spec.modelId), dataLink.node, `${mode} dataset from graph`, dataLink.edge.fromPort));
 
     const featureNames = commaNames(dataLink.node, "feature_names");
     if (spec.modelId === "simulgenvae" && accepted.has("num_var") && featureNames.length) {
@@ -294,7 +304,7 @@ function modelAutofill(desired, node) {
     const features = outputNames.length ? outputNames : commaNames(source, "feature_names");
 
     if (accepted.has("param_dir") && binding) {
-      put(desired, node, "param_dir", candidate(toMethodPath(binding), source, "condition data from graph", parameterLink.edge.fromPort));
+      put(desired, node, "param_dir", candidate(toMethodPath(binding, spec.modelId), source, "condition data from graph", parameterLink.edge.fromPort));
     }
     if (accepted.has("lc_data_type") && binding) {
       const kind = CSV_EXT.test(binding) ? "csv" : IMAGE_EXT.test(binding) || !/\.[a-z0-9]{2,6}$/i.test(binding) ? "image" : "";
@@ -317,17 +327,17 @@ function modelAutofill(desired, node) {
     const path = checkpointPaths(source).checkpoint_path;
     const filename = path.split(/[\\/]/).at(-1)?.toLowerCase() || "";
     if (path && accepted.has("modelpath")) {
-      put(desired, node, "modelpath", candidate(toMethodPath(path), source, "resume checkpoint from graph", checkpointLink.edge.fromPort));
+      put(desired, node, "modelpath", candidate(toMethodPath(path, spec.modelId), source, "resume checkpoint from graph", checkpointLink.edge.fromPort));
     } else if (path && spec.modelId === "simulgenvae") {
       const key = /(?:^|[_-])lc(?:[_-]|\.)|condition/.test(filename)
         ? "lc_modelpath"
         : /vae/.test(filename) || mode === "train_lc" ? "vae_modelpath" : "";
-      if (key) put(desired, node, key, candidate(toMethodPath(path), source, `${key === "vae_modelpath" ? "VAE" : "conditioner"} checkpoint from graph`, checkpointLink.edge.fromPort));
+      if (key) put(desired, node, key, candidate(toMethodPath(path, spec.modelId), source, `${key === "vae_modelpath" ? "VAE" : "conditioner"} checkpoint from graph`, checkpointLink.edge.fromPort));
     } else if (path && spec.modelId === "sdfflow") {
       const key = /(?:^|[_-])fm(?:[_-]|\.)|flow/.test(filename)
         ? "fm_modelpath"
         : /vae/.test(filename) || ["train_fm", "reconstruct"].includes(mode) ? "vae_modelpath" : "";
-      if (key) put(desired, node, key, candidate(toMethodPath(path), source, `${key === "vae_modelpath" ? "VAE" : "flow"} checkpoint from graph`, checkpointLink.edge.fromPort));
+      if (key) put(desired, node, key, candidate(toMethodPath(path, spec.modelId), source, `${key === "vae_modelpath" ? "VAE" : "flow"} checkpoint from graph`, checkpointLink.edge.fromPort));
     }
   }
 }

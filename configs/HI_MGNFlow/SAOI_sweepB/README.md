@@ -107,10 +107,10 @@ days), then the other 7, then inference, then scoring.
 ## What comes out
 
 ```
-outputs/saoi_sweepB/sweep_results.md      the report — read/paste this
-outputs/saoi_sweepB/sweep_results.json    everything, incl. per-arm log detail
-outputs/saoi_sweepB/warpage_<tag>.png     GT + all 8 arms on ONE axis, ranked by W1
-outputs/saoi_sweepB/run_logs/<arm>.log    per-arm transcripts
+output/chi-mgnflow/saoi_sweepB/sweep_results.md      the report — read/paste this
+output/chi-mgnflow/saoi_sweepB/sweep_results.json    everything, incl. per-arm log detail
+output/chi-mgnflow/saoi_sweepB/warpage_<tag>.png     GT + all 8 arms on ONE axis, ranked by W1
+output/chi-mgnflow/saoi_sweepB/run_logs/<arm>.log    per-arm transcripts
 output/chi-mgnflow/saoi_sweepB/<arm>.pth
 output/chi-mgnflow/saoi_sweepB/infer/<arm>/<tag>/histogram_compare.png
 output/chi-mgnflow/saoi_sweepB/infer/<arm>/<tag>/spread_values.npz

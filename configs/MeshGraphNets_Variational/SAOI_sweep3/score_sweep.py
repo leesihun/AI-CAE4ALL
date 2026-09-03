@@ -18,7 +18,7 @@ eval_distribution.py batches the whole split at once, so on large SAOI meshes
 `--n-graphs 0` can OOM. This script retries with progressively fewer graphs and
 records which count actually ran, rather than silently reporting nothing.
 
-Outputs (into --out-dir, default outputs/saoi_sweep3):
+Outputs (into --out-dir, default output/meshgraphnets-v/saoi_sweep3):
     sweep_results.md    compact table -- this is the file to read/paste
     sweep_results.json  everything, including full rank histograms
 
@@ -341,9 +341,9 @@ def main():
     ap.add_argument("--split", default="test", choices=["train", "val", "test"])
     ap.add_argument("--k", type=int, default=50)
     ap.add_argument("--python", default=sys.executable)
-    ap.add_argument("--out-dir", default=str(REPO_ROOT / "outputs" / "saoi_sweep3"))
+    ap.add_argument("--out-dir", default=str(REPO_ROOT / "output" / "meshgraphnets-v" / "saoi_sweep3"))
     ap.add_argument("--run-logs",
-                    default=str(REPO_ROOT / "outputs" / "saoi_sweep3" / "run_logs"),
+                    default=str(REPO_ROOT / "output" / "meshgraphnets-v" / "saoi_sweep3" / "run_logs"),
                     help="run_sweep.sh's per-arm stdout transcripts; the only "
                          "place [PriorDiag]/[PriorTail] are recorded")
     ap.add_argument("--timeout", type=int, default=3600,
@@ -406,13 +406,14 @@ def main():
             print(f"[{arm}] SKIP: no checkpoint at {ckpt}", flush=True)
             continue
 
-        # The trainer writes the epoch log to `outputs/<log_file_dir>` relative
-        # to the method repo (training_profiles/setup.py::init_log_file), which
-        # is exactly why the configs' log_file_dir carries a leading '../..'
-        # that `modelpath` does not. Resolving it without that 'outputs/' prefix
-        # lands one directory ABOVE the monorepo, and every training-log column
-        # then renders as '-' with no error anywhere.
-        log_path = (METHOD_REPO / "outputs" / cfg.get("log_file_dir", "")).resolve()
+        # log_file_dir is a plain cwd-relative path like every other path key
+        # (training_profiles/setup.py::init_log_file), so it resolves against
+        # the method repo directly. It used to be relative to <method>/outputs/,
+        # and prepending that segment here made the lookup land in
+        # methods/output/... -- the epoch log was never found and this silently
+        # fell back to run_sweep.sh's transcript, which carries the same numbers
+        # at lower precision. Keep the two in sync if init_log_file changes.
+        log_path = (METHOD_REPO / cfg.get("log_file_dir", "")).resolve()
         transcript = run_logs / f"{arm}.log"
         row["train_log"] = parse_training_log(log_path, transcript)
 

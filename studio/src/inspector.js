@@ -238,6 +238,27 @@ const FIXED_BEHAVIOUR_KEYS = new Set([
   "error_view", "qualification", "selection"
 ]);
 
+const WORKSPACE_ACTION_LABELS = {
+  comparison: "Open comparison",
+  deploy: "Open deployment",
+  evaluation: "Open evaluation",
+  export: "Open export",
+  optimization: "Open optimization"
+};
+
+/** Keep the prominent actions truthful and avoid duplicate destinations. */
+function inspectorActions(node, spec) {
+  if (spec.isModel) return { primary: "Start / resume", secondary: "Model details" };
+  if (spec.isMetricsViewer) return { primary: "Open metrics" };
+  if (spec.workspace) {
+    return { primary: WORKSPACE_ACTION_LABELS[spec.workspace] || "Open workspace" };
+  }
+  if (node.type === "source.hdf5") return { primary: "Open samples" };
+  if (node.type === "source.cad") return { primary: "Browse files", secondary: "Open geometry" };
+  if (node.type === "source.parameters") return { primary: "Browse files", secondary: "Open spreadsheet" };
+  return { primary: "Run selected", secondary: "Open samples" };
+}
+
 export function renderInspector() {
   applyGraphAutofill();
   const node = state.nodes.find(item => item.id === state.selectedNode);
@@ -307,16 +328,17 @@ export function renderInspector() {
     ...spec.inputs.map(port => ({ ...port, direction: "in" })),
     ...spec.outputs.map(port => ({ ...port, direction: "out" }))
   ];
+  const actions = inspectorActions(node, spec);
   $("#inspectorContent").innerHTML = `
     <section class="inspect-hero">
       <div class="inspect-meta"><span class="type-chip">${escapeHtml(node.type)}</span><span class="status"><i></i>${node.status === "idle" ? "Ready" : node.status}</span></div>
       <h2>${escapeHtml(spec.label)}</h2>
       <p>${escapeHtml(spec.description)}</p>
-      <div class="inspect-actions"><button class="button primary" id="inspectorRun">▶ ${spec.isModel ? "Start / resume" : spec.isMetricsViewer ? "Open metrics" : "Run selected"}</button><button class="button" id="inspectorSamples">${spec.isModel ? "Model details" : spec.isMetricsViewer ? "Metric plots" : node.type === "source.parameters" ? "▦ Spreadsheet" : "⌾ Samples"}</button></div>
+      <div class="inspect-actions"><button class="button primary" id="inspectorRun">${escapeHtml(actions.primary)}</button>${actions.secondary ? `<button class="button" id="inspectorSamples">${escapeHtml(actions.secondary)}</button>` : ""}</div>
     </section>
     <section class="inspect-section">
       <div class="section-title">${spec.isModel ? "ML configuration" : "Configuration"}</div>
-      ${spec.isModel ? `<div class="config-summary"><span><strong>${MODEL_CATALOG[spec.modelId].keys.length} live keys</strong><small>${MODEL_CATALOG[spec.modelId].modes.length} modes · ${escapeHtml(MODEL_CATALOG[spec.modelId].dataset)}${autoFillCount(node) ? ` · ${autoFillCount(node)} graph-filled` : ""}</small></span><button class="button small primary" id="openFullConfig">Full config</button></div>` : ""}
+      ${spec.isModel ? `<div class="config-summary"><span><strong>${MODEL_CATALOG[spec.modelId].keys.length} accepted keys</strong><small>${MODEL_CATALOG[spec.modelId].modes.length} modes · ${escapeHtml(MODEL_CATALOG[spec.modelId].dataset)}${autoFillCount(node) ? ` · ${autoFillCount(node)} graph-filled` : ""}</small></span><button class="button small primary" id="openFullConfig">Full config</button></div>` : ""}
       <div style="margin-top:${spec.isModel ? 9 : 0}px">${configEntries.map(([key, value]) => {
         if (spec.isModel && key === "mode") {
           return `<div class="form-row"><label>${escapeHtml(key.replaceAll("_", " "))}</label><select class="field inspector-config" data-key="${key}">${MODEL_CATALOG[spec.modelId].modes.map(mode => `<option value="${mode}"${String(value) === mode ? " selected" : ""}>${mode}</option>`).join("")}</select></div>`;
@@ -349,7 +371,7 @@ export function renderInspector() {
     <section class="inspect-section"><div class="section-title">Typed ports</div><div class="port-list">
       ${ports.map(port => `<div class="port-row"><i style="--port:${typeColor(port.type)}"></i><span>${port.direction === "in" ? "←" : "→"} ${escapeHtml(port.label)}${port.required ? " *" : ""}</span><small>${escapeHtml(TYPE_META[port.type]?.label || port.type)}</small></div>`).join("")}
     </div></section>
-    ${node.type === "source.parameters" ? "" : `<section class="inspect-section"><div class="section-title">${spec.workspace || spec.isMetricsViewer || spec.isModel ? "Primary workspace" : "Latest artifact"}</div><article class="artifact-strip"><div class="artifact-strip-visual" id="artifactStrip">${previewGraphic(spec.visual, node.id.length + 3)}</div><footer><span><strong>${escapeHtml(nodeEvidenceLabel(node, spec))}</strong><small>${escapeHtml(spec.workspace ? `${spec.workspace} evidence + controls` : nodeVisualLabel(spec))}</small></span><button class="button small" id="artifactMini">Open</button></footer></article></section>`}
+    ${node.type === "source.parameters" ? "" : `<section class="inspect-section"><div class="section-title">Evidence preview</div><article class="artifact-strip"><div class="artifact-strip-visual">${previewGraphic(spec.visual, node.id.length + 3)}</div><footer><span><strong>${escapeHtml(nodeEvidenceLabel(node, spec))}</strong><small>${escapeHtml(spec.workspace ? `${spec.workspace} workspace status` : nodeVisualLabel(spec))}</small></span></footer></article></section>`}
     <section class="inspect-section"><div style="display:grid;grid-template-columns:1fr 1fr;gap:6px"><button class="button" id="duplicateNode">Duplicate</button><button class="button danger" id="deleteNode">Delete block</button></div></section>
   `;
   $$(".inspector-config").forEach(control => control.addEventListener("change", () => {
@@ -380,8 +402,6 @@ export function renderInspector() {
         ? openStudio(spec.workspace, node.id)
       : openArtifact(node.id);
   on("#inspectorSamples", "click", openPrimaryDetails);
-  $("#artifactStrip")?.addEventListener("click", openPrimaryDetails);
-  $("#artifactMini")?.addEventListener("click", openPrimaryDetails);
   on("#duplicateNode", "click", () => duplicateNode(node.id));
   on("#deleteNode", "click", deleteSelected);
   $("#openFullConfig")?.addEventListener("click", () => openConfig(node.id));

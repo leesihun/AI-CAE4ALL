@@ -850,17 +850,6 @@ function configuredPreviewPath(node, spec) {
   return hasPreviewExtension(candidate) ? candidate : "";
 }
 
-function catalogKind(node, spec) {
-  if (node.type === "source.cad" || node.type === "prep.geometry" || node.type === "run.cad_generator") {
-    return "geometry";
-  }
-  if (node.type === "source.hdf5" || spec.isModel) return "dataset";
-  if (["run.inference", "evaluate.predictions", "evaluate.compare", "output.export"].includes(node.type)) {
-    return "artifact";
-  }
-  return "";
-}
-
 /**
  * The dataset an Inference block predicted from, if the graph knows it.
  *
@@ -887,7 +876,10 @@ async function resolvePreview(node, spec) {
     try {
       return await loadPreviewCatalog(configured, null, truthForNode(node));
     } catch (error) {
-      if (node.type === "source.cad" || node.type === "source.hdf5") throw error;
+      // Never replace a broken or moved block artifact with the first unrelated
+      // file found elsewhere in the repository. The explicit "+ Add dataset"
+      // picker remains available when the user really wants to browse.
+      throw error;
     }
   }
 
@@ -901,20 +893,19 @@ async function resolvePreview(node, spec) {
     }
     throw new Error("No results yet. Run this Inference block to predict with the connected dataset and checkpoint; its results then open here.");
   }
-
-  const kind = catalogKind(node, spec);
-  if (!kind) {
-    throw new Error(`${spec.label} does not expose geometry or HDF5 samples. Use its dedicated workspace instead.`);
+  if (node.type === "source.cad") {
+    throw new Error("No CAD or mesh input is selected. Browse or upload a file in this block first.");
   }
-  const files = await apiRequest(`/api/files?kind=${kind}`);
-  const supported = files.items.filter(item =>
-    kind === "geometry"
-      ? GEOMETRY_EXTENSIONS.includes(item.extension)
-      : PREVIEW_EXTENSIONS.includes(item.extension)
-  );
-  const preferred = supported.find(item => configured && item.path.endsWith(configured)) || supported[0];
-  if (!preferred) throw new Error(`No visualizable ${kind} artifact is currently present in the repository.`);
-  return loadPreviewCatalog(preferred.path);
+  if (node.type === "source.hdf5") {
+    throw new Error("No HDF5 input is selected. Browse or upload a dataset in this block first.");
+  }
+  if (node.type === "prep.geometry") {
+    throw new Error("No geometry input is connected. Connect a CAD block, then inspect or run this block.");
+  }
+  if (node.type === "run.cad_generator") {
+    throw new Error("No generated candidates yet. Run this CAD Generator block before opening its samples.");
+  }
+  throw new Error(`${spec.label} has no configured preview artifact. Use + Add dataset to browse a repository file explicitly.`);
 }
 
 function formatBytes(value) {
@@ -954,7 +945,7 @@ async function loadArtifactPath(path, showToast = true) {
   state.viewerMode = catalog.default_mode || "field";
   resetViewerCamera(false);
   const spec = BLOCK_SPECS[node.type];
-  $("#artifactTitle").textContent = `${spec.label} · repository samples`;
+  $("#artifactTitle").textContent = `${spec.label} · sample viewer`;
   $("#artifactSubtitle").textContent = `${catalog.path} · choose a sample to visualize`;
   $("#artifactSampleSearch").value = "";
   renderArtifactCatalog();
@@ -1133,7 +1124,7 @@ export async function openArtifact(nodeId) {
   $("#artifactAddDataset").title = spec.isModel
     ? "Set this model's dataset_dir/infer_dataset in its configuration instead."
     : "";
-  $("#artifactTitle").textContent = `${spec.label} · repository samples`;
+  $("#artifactTitle").textContent = `${spec.label} · sample viewer`;
   $("#artifactSubtitle").textContent = "Resolving the configured artifact…";
   $("#artifactOverlay").classList.add("open");
   $("#sampleList").innerHTML = `<div class="live-empty">Scanning the configured source…</div>`;
@@ -1145,7 +1136,7 @@ export async function openArtifact(nodeId) {
     if (!isCurrentArtifactLoad(requestGeneration)) return;
     state.realArtifact = { ...catalog, node, currentSample: null };
     state.viewerMode = catalog.default_mode || "field";
-    $("#artifactTitle").textContent = `${spec.label} · repository samples`;
+    $("#artifactTitle").textContent = `${spec.label} · sample viewer`;
     $("#artifactSubtitle").textContent = `${catalog.path} · choose a sample to visualize`;
     renderArtifactCatalog();
     renderEmptyViewer();
