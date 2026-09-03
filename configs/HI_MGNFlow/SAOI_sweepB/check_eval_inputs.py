@@ -78,12 +78,56 @@ def spread_stats(h5_path, max_samples):
     return n, degenerate, example
 
 
+def inspect(h5_path, max_samples):
+    """Print what the file actually holds: sample count, shape, and which rows
+    carry variation at the last timestep.
+
+    The checker asserts row Z_DISP_CHANNEL is non-constant. If that assertion
+    fires, the cause is one of: the file is the answer-stripped twin, the row
+    layout differs here, or the part really is flat. Only the data separates
+    those, hence this.
+    """
+    import h5py
+    import numpy as np
+
+    with h5py.File(h5_path, "r") as f:
+        if "data" not in f:
+            print(f"    no /data group; top level = {list(f.keys())[:10]}")
+            return
+        keys = list(f["data"].keys())
+        print(f"    samples: {len(keys)}   first: {keys[:4]}")
+        for sample_id in keys[:max_samples]:
+            grp = f[f"data/{sample_id}"]
+            members = list(grp.keys())
+            nd = grp["nodal_data"]
+            print(f"    [{sample_id}] nodal_data {nd.shape} "
+                  f"(rows, timesteps, nodes)  members={members}")
+            block = nd[:, -1, :]          # every row, last timestep
+            print("      row  min           max           spread        allzero")
+            for r in range(block.shape[0]):
+                row = np.asarray(block[r], dtype=np.float64)
+                spread = float(row.max() - row.min())
+                flag = "  <-- Z_DISP_CHANNEL" if r == Z_DISP_CHANNEL else ""
+                print(f"      {r:>3}  {row.min():<12.5g}  {row.max():<12.5g}  "
+                      f"{spread:<12.5g}  {bool(np.all(row == 0.0))!s:<5}{flag}")
+            if nd.shape[1] > 1:
+                first = np.asarray(nd[Z_DISP_CHANNEL, 0, :], dtype=np.float64)
+                last = np.asarray(nd[Z_DISP_CHANNEL, -1, :], dtype=np.float64)
+                print(f"      row {Z_DISP_CHANNEL} timestep 0 spread = "
+                      f"{first.max() - first.min():.5g}, "
+                      f"timestep -1 spread = {last.max() - last.min():.5g}")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--config-dir", default=str(HERE))
     ap.add_argument("--max-samples", type=int, default=8,
                     help="samples read per eval file for the degeneracy check")
+    ap.add_argument("--inspect", action="store_true",
+                    help="dump each distinct dataset's structure instead of "
+                         "checking -- use when a check fires and you need to "
+                         "know whether the file or the assumption is wrong")
     args = ap.parse_args()
 
     cfg_dir = pathlib.Path(args.config_dir)
@@ -92,6 +136,32 @@ def main():
         print(f"FAIL: no config_infer_*.txt in {cfg_dir}", file=sys.stderr)
         print("      Generate them first:  python gen_sweep_configs.py", file=sys.stderr)
         return 1
+
+    if args.inspect:
+        seen = []
+        for cfg_path in configs:
+            cfg = parse_config(cfg_path)
+            # dataset_dir first: the training file definitely carries
+            # answers, so it is the reference for what a healthy row
+            # layout looks like here.
+            for key in ("dataset_dir", "infer_dataset", "eval_dataset"):
+                val = cfg.get(key)
+                if not val:
+                    continue
+                resolved = (METHOD_REPO / val).resolve()
+                if resolved in [r for _, r in seen]:
+                    continue
+                seen.append((key, resolved))
+        for key, resolved in seen:
+            print(f"\n{key}: {resolved}")
+            if not resolved.exists():
+                print("    MISSING")
+                continue
+            try:
+                inspect(resolved, args.max_samples)
+            except Exception as exc:
+                print(f"    unreadable: {exc}")
+        return 0
 
     print(f"Checking the eval/histogram inputs of {len(configs)} inference configs")
     print(f"  method repo = {METHOD_REPO}")
