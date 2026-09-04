@@ -28,7 +28,7 @@ Reading the result:
            the regime where field-space flow matching wins outright.
 
 Usage:
-    python misc/field_intrinsic_dim.py ../dataset/saoi/saoi_train_bot.h5 \
+    python misc/field_intrinsic_dim.py ../../dataset/SAOI/saoi_train_bot.h5 \
         --feature 2 --input-var 3
 """
 import argparse

@@ -85,7 +85,7 @@ is fixed, not an axis here), so all 8 arms share **ONE** `*.mscache.*.h5`.
 ## Running it
 
 ```bash
-rm -f dataset/saoi/saoi_train_bot.mscache.*.h5
+rm -f dataset/SAOI/saoi_train_bot.mscache.*.h5
 nohup bash configs/HI_MGNFlow/SAOI_sweepB/run_sweep.sh > sweep.out 2>&1 &
 tail -f sweep.out
 ```

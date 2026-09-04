@@ -101,7 +101,7 @@ share ONE `*.mscache.*.h5`.
 ```bash
 # Delete any leftover cache FIRST: cache_ready() only globs the filename, so a
 # stale one makes the script skip the warm-up and launch all 8 into a MISS.
-rm -f dataset/saoi/saoi_train_bot.mscache.*.h5
+rm -f dataset/SAOI/saoi_train_bot.mscache.*.h5
 
 nohup bash configs/MeshGraphNets_Variational/SAOI_sweep3/run_sweep.sh > sweep.out 2>&1 &
 tail -f sweep.out

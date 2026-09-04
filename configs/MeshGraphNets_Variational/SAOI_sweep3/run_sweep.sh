@@ -60,7 +60,7 @@
 #
 # The configs set hierarchy_cache_keep True so no finishing arm deletes the
 # cache out from under the others. DELETE IT MANUALLY when the sweep is done:
-#   rm dataset/saoi/saoi_train_bot.mscache.*.h5
+#   rm dataset/SAOI/saoi_train_bot.mscache.*.h5
 #
 # NOTE ON THE SHARED DATASET FILE: every arm's setup phase re-derives and
 # rewrites normalization stats into saoi_train_bot.h5 itself (unconditionally,
@@ -122,7 +122,24 @@ cd "$REPO_ROOT" || exit 1
 # or copied for a wave 4 without editing anything here.
 CFG_DIR="$SCRIPT_DIR"
 LOG_ROOT="${LOG_ROOT:-output/meshgraphnets-v/saoi_sweep3/run_logs}"
-CACHE_GLOB="dataset/saoi/saoi_train_bot.mscache.*.h5"
+# Derived from the configs, NOT hardcoded. multiscale_cache.py writes the cache
+# beside the dataset file as "<stem>.mscache.<digest>.h5", so the config's own
+# dataset_dir is the only correct source. This was hardcoded once, and when the
+# configs moved from dataset/saoi/ to dataset/SAOI/ it kept the old spelling --
+# on Linux those are different directories, so cache_ready() stayed false, the
+# warm-up never released, and seven of the eight arms never launched.
+_first_cfg="$(ls "$CFG_DIR"/config_train_*.txt 2>/dev/null | head -1)"
+if [ -n "$_first_cfg" ]; then
+    # Config paths are relative to the method repo, i.e. '../../' reaches
+    # REPO_ROOT -- which is already this script's cwd.
+    _ds="$(sed -n 's/^dataset_dir[[:space:]]\{1,\}//p' "$_first_cfg" | head -1)"
+    _ds="${_ds%%#*}"
+    _ds="$(echo "$_ds" | sed 's/[[:space:]]*$//')"
+    _ds="${_ds#../../}"
+    CACHE_GLOB="${_ds%.h5}.mscache.*.h5"
+else
+    CACHE_GLOB="dataset/SAOI/saoi_train_bot.mscache.*.h5"
+fi
 
 # Must match gen_sweep_configs.arms() exactly -- it prints this line, so if the
 # generator changes, re-paste its ARMS= output here rather than hand-editing.
