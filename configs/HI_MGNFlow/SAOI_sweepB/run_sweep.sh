@@ -42,15 +42,17 @@
 # signature (voronoi_clusters is fixed, not an axis here), so all 8 arms hash
 # to ONE cache file. An exclusive O_EXCL lock in
 # general_modules/multiscale_cache.py lets exactly one process build it while
-# the rest poll. Rather than have 7 jobs idle through a potentially hours-long
-# build, this script launches ONE arm first and waits for the cache to appear
-# before launching the rest -- and aborts the whole batch if that first arm
-# dies, so a config error costs minutes, not days.
+# the rest poll every 3 s, returning the instant the file is valid (default wait
+# 10 h, stale lock reclaimed at 6 h). Every arm is therefore launched straight
+# away and coordination is left entirely to that lock.
 #
-# DELETE ANY LEFTOVER CACHE BEFORE STARTING: cache_ready() only globs the file
-# name, so a stale cache from a previous run makes this script skip the warm-up
-# and launch all 8 straight into a cache MISS (the signature pins the source
-# HDF5's mtime, which write_preprocessing_to_hdf5 bumps every run).
+# This script used to gate the other 7 behind a warm-up arm, which meant
+# GUESSING the cache file's path from the shell. It guessed wrong twice -- the
+# dataset directory's case (invisible on Windows, fatal on Linux) and the
+# digest, which changes on nearly every run because the signature hashes the
+# source HDF5's mtime and write_preprocessing_to_hdf5 bumps it. Either way the
+# gate never released and 7 of 8 GPUs idled to the timeout. Idle GPU time is the
+# same either way; the difference is that nothing can strand them now.
 #
 # The configs set hierarchy_cache_keep True so no finishing arm deletes the
 # cache out from under the others. DELETE IT MANUALLY when the sweep is done:
@@ -63,7 +65,7 @@
 #   PREFLIGHT     1 = --check every arm before launching any (default); 0 = skip
 #   TRAIN         1 = train (default). 0 = SKIP training and go straight to
 #                 inference + scoring on checkpoints that already exist.
-#   WARM_TIMEOUT  seconds to wait for the shared cache (default: 21600 = 6h)
+#   STAGGER       seconds between arm launches (default: 10)
 #   INFER         1 = run each arm's inference configs after training (default)
 #   INFER_TAGS    eval sets to infer (default: s26fe_main s26fe_sec sm_l345u_main)
 #   SCORE         1 = run score_sweep.py when training ends (default); 0 = skip
@@ -88,7 +90,6 @@ PYTHON="${PYTHON:-python}"
 export PYTHONUNBUFFERED=1
 PREFLIGHT="${PREFLIGHT:-1}"
 TRAIN="${TRAIN:-1}"
-WARM_TIMEOUT="${WARM_TIMEOUT:-21600}"
 INFER="${INFER:-1}"
 INFER_TAGS="${INFER_TAGS:-s26fe_main s26fe_sec sm_l345u_main}"
 SCORE="${SCORE:-1}"
@@ -113,30 +114,6 @@ mkdir -p "$LOG_ROOT"
 cfg_for()     { echo "$CFG_DIR/config_train_${1}.txt"; }
 inf_cfg_for() { echo "$CFG_DIR/config_infer_${1}_${2}.txt"; }
 log_for()     { echo "$LOG_ROOT/${1}.log"; }
-# The warm-up arm reports cache readiness itself. Do NOT glob for the file:
-# the path has to be guessed, and the digest in its name changes on nearly
-# every run (multiscale_cache._signature hashes the dataset's size and mtime,
-# and training writes normalization stats back into that same HDF5). A glob
-# therefore matches a STALE cache and releases the other arms into a miss --
-# all of them then serialize on the build lock, which is the exact failure the
-# warm-up exists to prevent. These three lines are printed the moment the cache
-# this run needs is usable.
-CACHE_READY_RE='\[mscache\] (Done in|Using existing hierarchy cache|Cache built by another job)'
-cache_ready() {
-    local log="$1"
-    [ -f "$log" ] && grep -Eq "$CACHE_READY_RE" "$log"
-}
-
-# Last few [mscache] lines, for when the wait fails and the question is why.
-cache_trace() {
-    local log="$1"
-    if [ -f "$log" ]; then
-        echo "  last [mscache] lines from $log:" >&2
-        grep -E '\[mscache\]' "$log" | tail -8 | sed 's/^/    /' >&2 || true
-    else
-        echo "  no log yet at $log" >&2
-    fi
-}
 
 run_arm() {
     local arm=$1 cfg log rc
@@ -381,5 +358,12 @@ fi
 
 echo ""
 echo "THEN DELETE THE SHARED CACHE (configs set hierarchy_cache_keep True):"
-echo "  rm $CACHE_GLOB"
+# Derived from the config rather than hardcoded: the cache lives beside the
+# dataset file (multiscale_cache.cache_path_for), and a hardcoded copy of that
+# path is what drifted out of sync before.
+_ds_hint="$(sed -n 's/^dataset_dir[[:space:]]\{1,\}//p' "$(cfg_for "$(echo "$ARMS" | awk '{print $1}')")" 2>/dev/null | head -1)"
+_ds_hint="${_ds_hint%%#*}"
+_ds_hint="$(echo "$_ds_hint" | sed 's/[[:space:]]*$//')"
+_ds_hint="${_ds_hint#../../}"
+echo "  rm ${_ds_hint%.h5}.mscache.*.h5"
 exit $rc
