@@ -101,36 +101,42 @@ cd "$REPO_ROOT" || exit 1
 # copied for a wave C without editing anything here.
 CFG_DIR="$SCRIPT_DIR"
 LOG_ROOT="${LOG_ROOT:-output/chi-mgnflow/saoi_sweepB/run_logs}"
-# Derived from the configs, NOT hardcoded. multiscale_cache.py writes the cache
-# beside the dataset file as "<stem>.mscache.<digest>.h5", so the config's own
-# dataset_dir is the only correct source. This was hardcoded once, and when the
-# configs moved from dataset/saoi/ to dataset/SAOI/ it kept the old spelling --
-# on Linux those are different directories, so cache_ready() stayed false, the
-# warm-up never released, and seven of the eight arms never launched.
-_first_cfg="$(ls "$CFG_DIR"/config_train_*.txt 2>/dev/null | head -1)"
-if [ -n "$_first_cfg" ]; then
-    # Config paths are relative to the method repo, i.e. '../../' reaches
-    # REPO_ROOT -- which is already this script's cwd.
-    _ds="$(sed -n 's/^dataset_dir[[:space:]]\{1,\}//p' "$_first_cfg" | head -1)"
-    _ds="${_ds%%#*}"
-    _ds="$(echo "$_ds" | sed 's/[[:space:]]*$//')"
-    _ds="${_ds#../../}"
-    CACHE_GLOB="${_ds%.h5}.mscache.*.h5"
-else
-    CACHE_GLOB="dataset/SAOI/saoi_train_bot.mscache.*.h5"
-fi
 
 # Must match gen_sweep_configs.arms() exactly -- it prints this line, so if the
 # generator changes, re-paste its ARMS= output here rather than hand-editing.
 DEFAULT_ARMS="1 2 3 4 5 6 7 8"
 ARMS="${ARMS:-$DEFAULT_ARMS}"
+STAGGER="${STAGGER:-10}"   # seconds between arm launches
 
 mkdir -p "$LOG_ROOT"
 
 cfg_for()     { echo "$CFG_DIR/config_train_${1}.txt"; }
 inf_cfg_for() { echo "$CFG_DIR/config_infer_${1}_${2}.txt"; }
 log_for()     { echo "$LOG_ROOT/${1}.log"; }
-cache_ready() { compgen -G "$CACHE_GLOB" > /dev/null 2>&1; }
+# The warm-up arm reports cache readiness itself. Do NOT glob for the file:
+# the path has to be guessed, and the digest in its name changes on nearly
+# every run (multiscale_cache._signature hashes the dataset's size and mtime,
+# and training writes normalization stats back into that same HDF5). A glob
+# therefore matches a STALE cache and releases the other arms into a miss --
+# all of them then serialize on the build lock, which is the exact failure the
+# warm-up exists to prevent. These three lines are printed the moment the cache
+# this run needs is usable.
+CACHE_READY_RE='\[mscache\] (Done in|Using existing hierarchy cache|Cache built by another job)'
+cache_ready() {
+    local log="$1"
+    [ -f "$log" ] && grep -Eq "$CACHE_READY_RE" "$log"
+}
+
+# Last few [mscache] lines, for when the wait fails and the question is why.
+cache_trace() {
+    local log="$1"
+    if [ -f "$log" ]; then
+        echo "  last [mscache] lines from $log:" >&2
+        grep -E '\[mscache\]' "$log" | tail -8 | sed 's/^/    /' >&2 || true
+    else
+        echo "  no log yet at $log" >&2
+    fi
+}
 
 run_arm() {
     local arm=$1 cfg log rc
@@ -212,50 +218,25 @@ if [ "$TRAIN" != "1" ]; then
     echo ""
 else
 
-# ---- Warm the shared multiscale cache with a single arm --------------------
-# Word-split into an array: `cut -d' ' -f2-` echoes the WHOLE line back when it
-# finds no delimiter, so a single-arm ARMS would have launched that one arm
-# twice -- two jobs writing the same checkpoint and log.
-read -r -a arm_list <<< "$ARMS"
-first_arm="${arm_list[0]}"
-rest_arms="${arm_list[*]:1}"
-
-if cache_ready; then
-    echo "Multiscale cache already present -- launching all arms at once."
-    rest_arms="$ARMS"
-else
-    echo "Cold cache. Launching $first_arm alone to build it (timeout ${WARM_TIMEOUT}s)..."
-    run_arm "$first_arm" & warm_pid=$!
-    pids+=("$warm_pid"); names+=("$first_arm")
-
-    deadline=$(( $(date +%s) + WARM_TIMEOUT ))
-    while :; do
-        if cache_ready; then
-            echo "Cache is ready after $(( $(date +%s) - started ))s."
-            break
-        fi
-        if ! kill -0 "$warm_pid" 2>/dev/null; then
-            echo "" >&2
-            echo "$first_arm exited before the cache appeared -- aborting the batch." >&2
-            echo "See $(log_for "$first_arm")" >&2
-            exit 3
-        fi
-        if [ "$(date +%s)" -ge "$deadline" ]; then
-            echo "" >&2
-            echo "Timed out waiting ${WARM_TIMEOUT}s for the cache. $first_arm is still" >&2
-            echo "running (pid $warm_pid); raise WARM_TIMEOUT or launch the rest by hand." >&2
-            exit 4
-        fi
-        sleep 30
-    done
-fi
-
-# ---- Launch the remaining arms ---------------------------------------------
-for arm in $rest_arms; do
+# ---- Launch every arm, staggered -------------------------------------------
+# All arms go up together even on a cold cache. multiscale_cache.ensure_cache
+# already coordinates the build across processes -- an exclusive O_CREAT|O_EXCL
+# lock means exactly one builds while the rest poll every 3 s and return the
+# instant it is valid (default wait 10 h, stale lock reclaimed at 6 h). A
+# shell-level gate added nothing on top of that and was the fragile half: it had
+# to guess the cache file's path, and it guessed wrong twice -- the dataset
+# directory's case, and the digest, which changes on nearly every run because
+# the signature hashes the dataset's mtime and training writes normalization
+# stats back into that same file. Either way it never released and seven of
+# eight GPUs idled to the timeout.
+#
+# STAGGER seconds apart so eight processes do not open the same HDF5 and claim
+# GPU memory in the same instant.
+for arm in $ARMS; do
     run_arm "$arm" &
     pids+=("$!"); names+=("$arm")
     echo "  launched $arm (pid $!)"
-    sleep 3
+    sleep "$STAGGER"
 done
 
 echo ""

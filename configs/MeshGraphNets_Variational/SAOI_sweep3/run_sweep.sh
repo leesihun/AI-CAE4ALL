@@ -46,17 +46,20 @@
 #   tail -f output/meshgraphnets-v/saoi_sweep3/run_logs/3.log   # watch one arm
 #
 # Multiscale cache: all 8 arms hash to ONE cache file (none of the swept keys
-# are part of the coarsening signature). An exclusive O_EXCL lock in
-# general_modules/multiscale_cache.py lets exactly one process build it while
-# the rest poll. Rather than have 7 jobs idle through a potentially hours-long
-# build, this script launches ONE arm first and waits for the cache to appear
-# before launching the other 7 -- and aborts the whole batch if that first arm
-# dies, so a config error costs minutes, not days.
+# are part of the coarsening signature), and every arm is launched straight
+# away. Coordination is left entirely to general_modules/multiscale_cache.py,
+# which does it in the process that can actually see the answer: an exclusive
+# O_CREAT|O_EXCL lock means exactly one builds while the rest poll every 3 s and
+# return the instant the file is valid (default wait 10 h, stale lock reclaimed
+# at 6 h).
 #
-# DELETE ANY LEFTOVER CACHE BEFORE STARTING: cache_ready() only globs the file
-# name, so a stale cache from a previous run makes this script skip the warm-up
-# and launch all 8 straight into a cache MISS (the signature pins the source
-# HDF5's mtime, which write_preprocessing_to_hdf5 bumps every run).
+# This script used to gate the other 7 behind a warm-up arm, which meant
+# GUESSING the cache file's path from the shell. It guessed wrong twice -- the
+# dataset directory's case (invisible on Windows, fatal on Linux) and the
+# digest, which changes on nearly every run because the signature hashes the
+# source HDF5's mtime and write_preprocessing_to_hdf5 bumps it. Either way the
+# gate never released and 7 of 8 GPUs idled to the timeout. Idle GPU time is the
+# same either way; the difference is that nothing can strand them now.
 #
 # The configs set hierarchy_cache_keep True so no finishing arm deletes the
 # cache out from under the others. DELETE IT MANUALLY when the sweep is done:
@@ -80,7 +83,7 @@
 #   PREFLIGHT     1 = --check every arm before launching any (default); 0 = skip
 #   TRAIN         1 = train (default). 0 = SKIP training and go straight to
 #                 inference + scoring on checkpoints that already exist.
-#   WARM_TIMEOUT  seconds to wait for the shared cache (default: 21600 = 6h)
+#   STAGGER       seconds between arm launches (default: 10)
 #   INFER         1 = run each arm's inference configs after training (default)
 #   INFER_TAGS    eval sets to infer (default: s26fe_main s26fe_sec sm_l345u)
 #   SCORE         1 = run score_sweep.py when training ends (default); 0 = skip
@@ -107,7 +110,6 @@ PYTHON="${PYTHON:-python}"
 export PYTHONUNBUFFERED=1
 PREFLIGHT="${PREFLIGHT:-1}"
 TRAIN="${TRAIN:-1}"
-WARM_TIMEOUT="${WARM_TIMEOUT:-21600}"
 INFER="${INFER:-1}"
 INFER_TAGS="${INFER_TAGS:-s26fe_main s26fe_sec sm_l345u}"
 SCORE="${SCORE:-1}"
@@ -122,36 +124,18 @@ cd "$REPO_ROOT" || exit 1
 # or copied for a wave 4 without editing anything here.
 CFG_DIR="$SCRIPT_DIR"
 LOG_ROOT="${LOG_ROOT:-output/meshgraphnets-v/saoi_sweep3/run_logs}"
-# Derived from the configs, NOT hardcoded. multiscale_cache.py writes the cache
-# beside the dataset file as "<stem>.mscache.<digest>.h5", so the config's own
-# dataset_dir is the only correct source. This was hardcoded once, and when the
-# configs moved from dataset/saoi/ to dataset/SAOI/ it kept the old spelling --
-# on Linux those are different directories, so cache_ready() stayed false, the
-# warm-up never released, and seven of the eight arms never launched.
-_first_cfg="$(ls "$CFG_DIR"/config_train_*.txt 2>/dev/null | head -1)"
-if [ -n "$_first_cfg" ]; then
-    # Config paths are relative to the method repo, i.e. '../../' reaches
-    # REPO_ROOT -- which is already this script's cwd.
-    _ds="$(sed -n 's/^dataset_dir[[:space:]]\{1,\}//p' "$_first_cfg" | head -1)"
-    _ds="${_ds%%#*}"
-    _ds="$(echo "$_ds" | sed 's/[[:space:]]*$//')"
-    _ds="${_ds#../../}"
-    CACHE_GLOB="${_ds%.h5}.mscache.*.h5"
-else
-    CACHE_GLOB="dataset/SAOI/saoi_train_bot.mscache.*.h5"
-fi
 
 # Must match gen_sweep_configs.arms() exactly -- it prints this line, so if the
 # generator changes, re-paste its ARMS= output here rather than hand-editing.
 DEFAULT_ARMS="1 2 3 4 5 6 7 8"
 ARMS="${ARMS:-$DEFAULT_ARMS}"
+STAGGER="${STAGGER:-10}"   # seconds between arm launches
 
 mkdir -p "$LOG_ROOT"
 
 cfg_for()  { echo "$CFG_DIR/config_train_${1}.txt"; }
 inf_cfg_for() { echo "$CFG_DIR/config_infer_${1}_${2}.txt"; }
 log_for()  { echo "$LOG_ROOT/${1}.log"; }
-cache_ready() { compgen -G "$CACHE_GLOB" > /dev/null 2>&1; }
 
 run_arm() {
     local arm=$1 cfg log rc
@@ -233,50 +217,25 @@ if [ "$TRAIN" != "1" ]; then
     echo ""
 else
 
-# ---- Warm the shared multiscale cache with a single arm --------------------
-# Word-split into an array: `cut -d' ' -f2-` echoes the WHOLE line back when it
-# finds no delimiter, so a single-arm ARMS would have launched that one arm
-# twice -- two jobs writing the same checkpoint and log.
-read -r -a arm_list <<< "$ARMS"
-first_arm="${arm_list[0]}"
-rest_arms="${arm_list[*]:1}"
-
-if cache_ready; then
-    echo "Multiscale cache already present -- launching all arms at once."
-    rest_arms="$ARMS"
-else
-    echo "Cold cache. Launching $first_arm alone to build it (timeout ${WARM_TIMEOUT}s)..."
-    run_arm "$first_arm" & warm_pid=$!
-    pids+=("$warm_pid"); names+=("$first_arm")
-
-    deadline=$(( $(date +%s) + WARM_TIMEOUT ))
-    while :; do
-        if cache_ready; then
-            echo "Cache is ready after $(( $(date +%s) - started ))s."
-            break
-        fi
-        if ! kill -0 "$warm_pid" 2>/dev/null; then
-            echo "" >&2
-            echo "$first_arm exited before the cache appeared -- aborting the batch." >&2
-            echo "See $(log_for "$first_arm")" >&2
-            exit 3
-        fi
-        if [ "$(date +%s)" -ge "$deadline" ]; then
-            echo "" >&2
-            echo "Timed out waiting ${WARM_TIMEOUT}s for the cache. $first_arm is still" >&2
-            echo "running (pid $warm_pid); raise WARM_TIMEOUT or launch the rest by hand." >&2
-            exit 4
-        fi
-        sleep 30
-    done
-fi
-
-# ---- Launch the remaining arms ---------------------------------------------
-for arm in $rest_arms; do
+# ---- Launch every arm, staggered -------------------------------------------
+# All arms go up together even on a cold cache. multiscale_cache.ensure_cache
+# already coordinates the build across processes -- an exclusive O_CREAT|O_EXCL
+# lock means exactly one builds while the rest poll every 3 s and return the
+# instant it is valid (default wait 10 h, stale lock reclaimed at 6 h). A
+# shell-level gate added nothing on top of that and was the fragile half: it had
+# to guess the cache file's path, and it guessed wrong twice -- the dataset
+# directory's case, and the digest, which changes on nearly every run because
+# the signature hashes the dataset's mtime and training writes normalization
+# stats back into that same file. Either way it never released and seven of
+# eight GPUs idled to the timeout.
+#
+# STAGGER seconds apart so eight processes do not open the same HDF5 and claim
+# GPU memory in the same instant.
+for arm in $ARMS; do
     run_arm "$arm" &
     pids+=("$!"); names+=("$arm")
     echo "  launched $arm (pid $!)"
-    sleep 3
+    sleep "$STAGGER"
 done
 
 echo ""
@@ -422,5 +381,12 @@ fi
 
 echo ""
 echo "THEN DELETE THE SHARED CACHE (configs set hierarchy_cache_keep True):"
-echo "  rm $CACHE_GLOB"
+# Derived from the config rather than hardcoded: the cache lives beside the
+# dataset file (multiscale_cache.cache_path_for), and a hardcoded copy of that
+# path is what drifted out of sync before.
+_ds_hint="$(sed -n 's/^dataset_dir[[:space:]]\{1,\}//p' "$(cfg_for "$(echo "$ARMS" | awk '{print $1}')")" 2>/dev/null | head -1)"
+_ds_hint="${_ds_hint%%#*}"
+_ds_hint="$(echo "$_ds_hint" | sed 's/[[:space:]]*$//')"
+_ds_hint="${_ds_hint#../../}"
+echo "  rm ${_ds_hint%.h5}.mscache.*.h5"
 exit $rc
