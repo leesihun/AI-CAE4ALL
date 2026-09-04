@@ -436,9 +436,9 @@ classic Darcy-GRF sets) does **not** qualify no matter how big it is.
 
 | Output (`X.h5` + `X_infer.h5`) | Source | License | What is stochastic | train + infer | Shape / size |
 | --- | --- | --- | --- | --- | --- |
-| `dataset/prob_turb_radiative_layer_2d.h5` | [The Well](https://polymathic-ai.org/the_well/) `turbulent_radiative_layer_2D` (Polymathic AI, NeurIPS 2024 D&B) | CC-BY-4.0 | 9 `t_cool` values x 10 random seeds; the paper itself cites seed sensitivity as motivating a probabilistic treatment | 72 + 18 | `[8, 101, 49152]`, 4.7 + 1.2 GB |
-| `dataset/prob_grainpaint_spparks.h5` | [ASME 2023 Hackathon SPPARKS dataset](https://zenodo.org/record/8241535) (Sandia, GrainPaint) | CC-BY-4.0 | 1000 Potts Monte Carlo runs, one random seed each, explicitly built to capture microstructure-induced aleatory uncertainty | 900 + 100 | `[4, 1, 1000000]`, 434 + 62 MB |
-| `dataset/prob_crack_path.h5` | [Mechanical MNIST Crack Path, extended](https://zenodo.org/records/5149019) (Lejeune Lab, Boston University) | CC0 | identical loading protocol for every case; only the random rigid-inclusion placement differs, so the crack path is the stochastic outcome | 1750 + 250 | `[6, 20, 65536]`, 9.6 + 1.4 GB |
+| `dataset/ex10.h5` | [The Well](https://polymathic-ai.org/the_well/) `turbulent_radiative_layer_2D` (Polymathic AI, NeurIPS 2024 D&B) | CC-BY-4.0 | 9 `t_cool` values x 10 random seeds; the paper itself cites seed sensitivity as motivating a probabilistic treatment | 72 + 18 | `[8, 101, 49152]`, 4.7 + 1.2 GB |
+| `dataset/ex12.h5` | [ASME 2023 Hackathon SPPARKS dataset](https://zenodo.org/record/8241535) (Sandia, GrainPaint) | CC-BY-4.0 | 1000 Potts Monte Carlo runs, one random seed each, explicitly built to capture microstructure-induced aleatory uncertainty | 900 + 100 | `[4, 1, 125000]`, 56 + 7 MB |
+| `dataset/ex11.h5` | [Mechanical MNIST Crack Path, extended](https://zenodo.org/records/5149019) (Lejeune Lab, Boston University) | CC0 | identical loading protocol for every case; only the random rigid-inclusion placement differs, so the crack path is the stochastic outcome | 1750 + 250 | `[6, 20, 65536]`, 9.6 + 1.4 GB |
 
 Raw downloads live on `D:/CAE_datasets_raw/probabilistic/`; the one-off downloader and the three
 converters are in `junk/` (gitignored).
@@ -446,11 +446,11 @@ converters are in `junk/` (gitignored).
 ### Channel layouts
 
 ```text
-prob_turb_radiative_layer_2d   rows 0:3 x,y,z   3:7 density,pressure,vx,vy   7 tcool
+ex10   rows 0:3 x,y,z   3:7 density,pressure,vx,vy   7 tcool
                                input_var 4, output_var 4, cond_var 1, T=101
-prob_grainpaint_spparks        rows 0:3 x,y,z   3   grain_id
+ex12        rows 0:3 x,y,z   3   grain_id
                                input_var 1, output_var 1, cond_var 0, T=1 (static)
-prob_crack_path                rows 0:3 x,y,z   3:6 damage,x_disp,y_disp
+ex11                rows 0:3 x,y,z   3:6 damage,x_disp,y_disp
                                input_var 3, output_var 3, cond_var 0, T=20
 ```
 
@@ -485,6 +485,26 @@ h5py hard links are transparent to readers -- `f["data"]["500"]["mesh_edge"][:]`
 - **One-to-many actually holds**: crack overlap IoU between cases is 0.09-0.25 (same loading,
   genuinely different paths); grainpaint seeds give different grain counts (924 vs 921) and
   non-identical fields.
+
+
+### Slots
+
+These occupy `ex10` (turbulent radiative layer), `ex11` (crack path) and `ex12`
+(grainpaint), two files each -- `exN.h5` + `exN_infer.h5` -- and **every mesh
+method reads the same file**; only `mlp` (tabular X/Y) sits outside that contract.
+Concurrent arms against one file are already handled: `write_preprocessing_to_hdf5`
+is the sole writer and retries its `r+` open eight times with backoff, exactly
+because a sweep launches several arms against one shared dataset seconds apart.
+
+`ex12` is the faithful 100^3 conversion (1,000,000 nodes, 3,000,000 undirected
+edges, `grain_id` as the field). Two things to know before training on it:
+one graph does not fit a graph-net block on a 24 GB card (a single edge-latent
+tensor at width 128 is 6e6*128*4 B = 3.1 GB and a block needs several live), and
+`grain_id` is an arbitrary label, so an L2 loss on it punishes a correct
+microstructure that merely permutes ids. `junk/crop_grainpaint.py` produces the
+trainable variant -- a centre 50^3 crop at native resolution with a
+permutation-invariant grain-boundary target -- at
+`D:/CAE_datasets_raw/probabilistic/grainpaint_spparks/crop50*.h5`.
 
 ### Splits: same-condition holdout, not extrapolation
 

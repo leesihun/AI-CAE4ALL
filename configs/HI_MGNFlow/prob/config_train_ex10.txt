@@ -1,26 +1,29 @@
 %   ============================================================
 %   turbulent_radiative_layer_2D  (The Well, CC-BY-4.0)
-%   arm: MeshGraphNets-V (VAE + FM prior)
+%   arm: cHI-MGNflow (flow matching)
 %
 %   49,152 nodes / 98,176 edges, T=101, 72 train + 18 infer.
 %   9 tcool values x 10 seeds; tcool is the one conditioning channel in the
 %   set, so this is the only arm where the prior has something to condition on.
-%   7,200 items/epoch (72 samples x 100 AR-OT pairs) -> 10 epochs ~ 72k steps.
+%   7,200 items/epoch (72 samples x 100 AR-OT pairs); at batch 16 that is
+%   450 steps/epoch, so 50 epochs ~ 22.5k steps.
 %
 %   Everything outside the arm-specific block below is identical between the two
 %   arms so the comparison isolates the stochastic head. Both select on CRPS.
-%   Sized for one 8 GB RTX 2080 SUPER: batch 1, checkpointing on, AMP (fp16 on sm_75).
+%   4 GPUs, 2 per arm: flow on 0,1 and mgnv on 2,3, so both arms train at once.
+%   Batch 8 per process x 2 ranks = global 16 per arm; MGN-V's mmd_loss
+%   all-gathers z across ranks, so its estimator sees all 16.
 %   ============================================================
-model	meshgraphnets-v
+model	chi-mgnflow
 mode	train
-gpu_ids	0
+gpu_ids	0, 1
 parallel_mode	ddp
-log_file_dir	../../output/prob_turb_mgnv/train.log
-modelpath	../../output/prob_turb_mgnv/model.pth
+log_file_dir	../../output/ex10_flow/train.log
+modelpath	../../output/ex10_flow/model.pth
 
 %   Data
-dataset_dir	../../dataset/prob_turb_radiative_layer_2d.h5
-infer_dataset	../../dataset/prob_turb_radiative_layer_2d_infer.h5
+dataset_dir	../../dataset/ex10.h5
+infer_dataset	../../dataset/ex10_infer.h5
 infer_timesteps	100
 split_seed	42
 
@@ -33,11 +36,11 @@ positional_features	4
 
 %   Optimisation (identical across arms)
 message_passing_num	15
-Training_epochs	10
-Batch_size	1
+Training_epochs	50
+Batch_size	8
 LearningR	0.0003
-Latent_dim	96
-num_workers	2
+Latent_dim	128
+num_workers	4
 augment_geometry	False
 grad_accum_steps	1
 
@@ -60,30 +63,19 @@ use_multiscale	True
 coarsening_type	voronoi_seedmean
 voronoi_clusters	4000, 800
 multiscale_levels	2
-mp_per_level	3, 4, 6, 4, 3
+mp_per_level	4, 6, 8, 6, 4
 hierarchy_variants	1
 hierarchy_seed	1234
 hierarchy_cache_keep	True
 time_integration	ar_ot
 best_by	crps
 
-%   ---- arm-specific: MMD-InfoVAE latent + jointly trained conditional FM prior ----
-std_noise	0.0
-use_vae	True
-vae_latent_dim	128
-vae_mp_layers	5
-vae_graph_aware	True
-recon_loss	mse
-alpha_recon	1000
-lambda_mmd	0.2
-mmd_bandwidth	median
-beta_aux	1.0
-posterior_min_std	0.05
-prior_type	gnn_e2e
-use_conditional_prior	True
-prior_family	fm
-prior_nll_weight	1.0
-prior_fm_steps	40
-prior_mp_layers	5
-prior_hidden_dim	256
-prior_temperature	1.0
+%   ---- arm-specific: conditional flow matching in state space ----
+flow_steps	20
+flow_solver	heun
+flow_time_freqs	16
+flow_t_sampling	uniform
+flow_loss_weighting	uniform
+flow_det_prob	0.0
+val_flow_steps	8
+val_num_samples	4

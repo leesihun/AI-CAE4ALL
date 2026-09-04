@@ -5,22 +5,25 @@
 %   49,152 nodes / 98,176 edges, T=101, 72 train + 18 infer.
 %   9 tcool values x 10 seeds; tcool is the one conditioning channel in the
 %   set, so this is the only arm where the prior has something to condition on.
-%   7,200 items/epoch (72 samples x 100 AR-OT pairs) -> 10 epochs ~ 72k steps.
+%   7,200 items/epoch (72 samples x 100 AR-OT pairs); at batch 16 that is
+%   450 steps/epoch, so 50 epochs ~ 22.5k steps.
 %
 %   Everything outside the arm-specific block below is identical between the two
 %   arms so the comparison isolates the stochastic head. Both select on CRPS.
-%   Sized for one 8 GB RTX 2080 SUPER: batch 1, checkpointing on, AMP (fp16 on sm_75).
+%   4 GPUs, 2 per arm: flow on 0,1 and mgnv on 2,3, so both arms train at once.
+%   Batch 8 per process x 2 ranks = global 16 per arm; MGN-V's mmd_loss
+%   all-gathers z across ranks, so its estimator sees all 16.
 %   ============================================================
 model	chi-mgnflow
-mode	train
+mode	inference
 gpu_ids	0
 parallel_mode	ddp
-log_file_dir	../../output/prob_turb_flow/train.log
-modelpath	../../output/prob_turb_flow/model.pth
+log_file_dir	../../output/ex10_flow/rollout.log
+modelpath	../../output/ex10_flow/model.pth
 
 %   Data
-dataset_dir	../../dataset/prob_turb_radiative_layer_2d.h5
-infer_dataset	../../dataset/prob_turb_radiative_layer_2d_infer.h5
+dataset_dir	../../dataset/ex10.h5
+infer_dataset	../../dataset/ex10_infer.h5
 infer_timesteps	100
 split_seed	42
 
@@ -33,11 +36,11 @@ positional_features	4
 
 %   Optimisation (identical across arms)
 message_passing_num	15
-Training_epochs	10
-Batch_size	1
+Training_epochs	50
+Batch_size	8
 LearningR	0.0003
-Latent_dim	96
-num_workers	2
+Latent_dim	128
+num_workers	4
 augment_geometry	False
 grad_accum_steps	1
 
@@ -60,7 +63,7 @@ use_multiscale	True
 coarsening_type	voronoi_seedmean
 voronoi_clusters	4000, 800
 multiscale_levels	2
-mp_per_level	3, 4, 6, 4, 3
+mp_per_level	4, 6, 8, 6, 4
 hierarchy_variants	1
 hierarchy_seed	1234
 hierarchy_cache_keep	True
@@ -76,3 +79,10 @@ flow_loss_weighting	uniform
 flow_det_prob	0.0
 val_flow_steps	8
 val_num_samples	4
+
+%   ---- rollout: draw samples, do not collapse to the mean ----
+inference_output_dir	../../output/ex10_flow/rollout
+save_rollouts	True
+make_histogram	False
+num_vae_samples	16
+flow_predict	sample

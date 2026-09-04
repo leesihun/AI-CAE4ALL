@@ -1,43 +1,46 @@
 %   ============================================================
-%   Mechanical MNIST Crack Path  (Boston University, CC0)
+%   turbulent_radiative_layer_2D  (The Well, CC-BY-4.0)
 %   arm: MeshGraphNets-V (VAE + FM prior)
 %
-%   65,536 nodes / 130,560 edges, T=20, 1750 train + 250 infer.
-%   Identical loading for every case; the crack path is the stochastic outcome.
-%   Centreline spread grows from 0.1 px at the seeded crack to ~17 px at x=0.75.
-%   33,250 items/epoch (1750 x 19 pairs) -> 3 epochs ~ 100k steps.
+%   49,152 nodes / 98,176 edges, T=101, 72 train + 18 infer.
+%   9 tcool values x 10 seeds; tcool is the one conditioning channel in the
+%   set, so this is the only arm where the prior has something to condition on.
+%   7,200 items/epoch (72 samples x 100 AR-OT pairs); at batch 16 that is
+%   450 steps/epoch, so 50 epochs ~ 22.5k steps.
 %
 %   Everything outside the arm-specific block below is identical between the two
 %   arms so the comparison isolates the stochastic head. Both select on CRPS.
-%   Sized for one 8 GB RTX 2080 SUPER: batch 1, checkpointing on, AMP (fp16 on sm_75).
+%   4 GPUs, 2 per arm: flow on 0,1 and mgnv on 2,3, so both arms train at once.
+%   Batch 8 per process x 2 ranks = global 16 per arm; MGN-V's mmd_loss
+%   all-gathers z across ranks, so its estimator sees all 16.
 %   ============================================================
 model	meshgraphnets-v
-mode	train
-gpu_ids	0
+mode	inference
+gpu_ids	2
 parallel_mode	ddp
-log_file_dir	../../output/prob_crack_mgnv/train.log
-modelpath	../../output/prob_crack_mgnv/model.pth
+log_file_dir	../../output/ex10_mgnv/rollout.log
+modelpath	../../output/ex10_mgnv/model.pth
 
 %   Data
-dataset_dir	../../dataset/prob_crack_path.h5
-infer_dataset	../../dataset/prob_crack_path_infer.h5
-infer_timesteps	19
+dataset_dir	../../dataset/ex10.h5
+infer_dataset	../../dataset/ex10_infer.h5
+infer_timesteps	100
 split_seed	42
 
-input_var	3
-output_var	3
-cond_var	0
-feature_loss_weights	1.0, 1.0, 1.0
+input_var	4
+output_var	4
+cond_var	1
+feature_loss_weights	1.0, 1.0, 1.0, 1.0
 edge_var	8
 positional_features	4
 
 %   Optimisation (identical across arms)
 message_passing_num	15
-Training_epochs	3
-Batch_size	1
+Training_epochs	50
+Batch_size	8
 LearningR	0.0003
-Latent_dim	96
-num_workers	2
+Latent_dim	128
+num_workers	4
 augment_geometry	False
 grad_accum_steps	1
 
@@ -58,9 +61,9 @@ display_trainset	False
 %   Multiscale hierarchy (identical across arms)
 use_multiscale	True
 coarsening_type	voronoi_seedmean
-voronoi_clusters	5000, 1000
+voronoi_clusters	4000, 800
 multiscale_levels	2
-mp_per_level	3, 4, 6, 4, 3
+mp_per_level	4, 6, 8, 6, 4
 hierarchy_variants	1
 hierarchy_seed	1234
 hierarchy_cache_keep	True
@@ -87,3 +90,10 @@ prior_fm_steps	40
 prior_mp_layers	5
 prior_hidden_dim	256
 prior_temperature	1.0
+
+%   ---- rollout: draw samples from the conditional prior ----
+inference_output_dir	../../output/ex10_mgnv/rollout
+save_rollouts	True
+make_histogram	False
+num_vae_samples	16
+vae_batch_size	4
