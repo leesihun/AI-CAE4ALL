@@ -15,7 +15,7 @@ from scipy.spatial import cKDTree
 try:
     from torch_cluster import radius as _tc_radius
     HAS_TORCH_CLUSTER = True
-except ImportError:
+except (ImportError, OSError):
     HAS_TORCH_CLUSTER = False
 
 
