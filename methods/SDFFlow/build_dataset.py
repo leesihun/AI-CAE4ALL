@@ -12,7 +12,12 @@ HDF5 layout (one group per shape):
     shapes/00000/sdf_points       (Q, 3) float32   near-surface + uniform queries
     shapes/00000/sdf_values       (Q,)   float32   negative inside, positive outside
     shapes/00000/cond             (C,)   float32   geometric descriptors
-    root attrs: num_shapes, cond_names, num_near, num_uniform
+    shapes/00000 attrs: source (+ center, scale, original_faces, processed_faces
+                        for real meshes)
+    root attrs: num_shapes, cond_names, num_near, num_uniform, and builder
+                provenance num_surface, max_faces, sharp_edge_fraction,
+                sharp_edge_angle, near_sigmas (float array), seed, sdf_backend
+                ('igl' | 'open3d' | 'trimesh' | 'analytic' for --synthetic)
 """
 
 import os
@@ -32,10 +37,28 @@ from general_modules.sdf_sampling import (
     mesh_descriptors,
     normalize_mesh,
     sample_mesh_sdf,
+    sdf_backend_name,
     synthetic_sample,
 )
 
 MESH_EXTENSIONS = ('*.stl', '*.obj', '*.ply', '*.off')
+DEFAULT_NEAR_SIGMAS = '0.01,0.05'
+
+
+def parse_near_sigmas(text):
+    """'0.01,0.05' -> (0.01, 0.05); any length >= 1 of positive floats."""
+    parts = [p.strip() for p in str(text).replace(';', ',').split(',') if p.strip()]
+    if not parts:
+        raise argparse.ArgumentTypeError('--near_sigmas needs at least one value')
+    try:
+        values = tuple(float(p) for p in parts)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            f'--near_sigmas must be comma-separated floats: {text!r}') from exc
+    if any(not np.isfinite(v) or v <= 0 for v in values):
+        raise argparse.ArgumentTypeError(
+            f'--near_sigmas values must be positive and finite: {text!r}')
+    return values
 
 
 def main():
@@ -46,6 +69,10 @@ def main():
     parser.add_argument('--num_surface', type=int, default=16384)
     parser.add_argument('--num_near', type=int, default=65536)
     parser.add_argument('--num_uniform', type=int, default=16384)
+    parser.add_argument('--near_sigmas', type=parse_near_sigmas, default=DEFAULT_NEAR_SIGMAS,
+                        help='Comma-separated Gaussian scales for near-surface queries; '
+                             'each near point picks one uniformly at random '
+                             f'(default {DEFAULT_NEAR_SIGMAS})')
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--repair', action='store_true',
                         help='Conservatively repair small holes before watertightness validation')
@@ -66,6 +93,13 @@ def main():
     if (args.mesh_dir is None) == (args.synthetic == 0):
         raise SystemExit('Specify exactly one of --mesh_dir or --synthetic N')
 
+    # argparse applies `type` to string defaults, but be explicit in case the
+    # default is ever handed in as a tuple.
+    near_sigmas = args.near_sigmas
+    if isinstance(near_sigmas, str):
+        near_sigmas = parse_near_sigmas(near_sigmas)
+    near_sigmas = tuple(float(s) for s in near_sigmas)
+
     rng = np.random.default_rng(args.seed)
     out_dir = os.path.dirname(args.output)
     if out_dir:
@@ -73,6 +107,11 @@ def main():
 
     if args.append_missing and args.synthetic > 0:
         raise SystemExit('--append_missing is supported only with --mesh_dir')
+
+    # Provenance: which signed-distance backend labels the real meshes. The
+    # synthetic family uses the exact analytic SDF instead.
+    sdf_backend = 'analytic' if args.synthetic > 0 else sdf_backend_name()
+    print(f'near_sigmas: {list(near_sigmas)}  sdf_backend: {sdf_backend}')
 
     h5_mode = 'a' if args.append_missing and os.path.exists(args.output) else 'w'
     with h5py.File(args.output, h5_mode) as h5:
@@ -82,7 +121,8 @@ def main():
         if args.synthetic > 0:
             for i in tqdm(range(args.synthetic), desc='Synthetic shapes'):
                 sample, cond = synthetic_sample(
-                    rng, args.num_surface, args.num_near, args.num_uniform)
+                    rng, args.num_surface, args.num_near, args.num_uniform,
+                    near_sigmas=near_sigmas)
                 _write_shape(shapes_grp, written, sample, cond, source=f'synthetic_{i}')
                 written += 1
         else:
@@ -104,7 +144,7 @@ def main():
             tasks = [
                 (path, args.num_surface, args.num_near, args.num_uniform,
                  args.seed + i, args.repair, args.max_faces,
-                 args.sharp_edge_fraction, args.sharp_edge_angle)
+                 args.sharp_edge_fraction, args.sharp_edge_angle, near_sigmas)
                 for i, path in enumerate(paths)
             ]
             if args.workers > 1:
@@ -121,6 +161,15 @@ def main():
         h5.attrs['cond_names'] = COND_NAMES
         h5.attrs['num_near'] = args.num_near
         h5.attrs['num_uniform'] = args.num_uniform
+        # Builder provenance (all of the run's sampling knobs, so a dataset can
+        # be rebuilt or audited without the shell history).
+        h5.attrs['num_surface'] = int(args.num_surface)
+        h5.attrs['max_faces'] = int(args.max_faces)
+        h5.attrs['sharp_edge_fraction'] = float(args.sharp_edge_fraction)
+        h5.attrs['sharp_edge_angle'] = float(args.sharp_edge_angle)
+        h5.attrs['near_sigmas'] = np.asarray(near_sigmas, dtype=np.float64)
+        h5.attrs['seed'] = int(args.seed)
+        h5.attrs['sdf_backend'] = str(sdf_backend)
 
     print(f'\nWrote {written} shapes to {args.output}')
     if written == 0:
@@ -136,7 +185,7 @@ def _process_mesh(task):
     import trimesh
 
     (path, num_surface, num_near, num_uniform, seed, repair, max_faces,
-     sharp_edge_fraction, sharp_edge_angle) = task
+     sharp_edge_fraction, sharp_edge_angle, near_sigmas) = task
     try:
         mesh = trimesh.load(path, force='mesh')
         if repair and mesh.is_empty:
@@ -177,6 +226,7 @@ def _process_mesh(task):
         mesh, center, scale = normalize_mesh(mesh)
         sample = sample_mesh_sdf(
             mesh, num_surface, num_near, num_uniform,
+            near_sigmas=near_sigmas,
             rng=np.random.default_rng(seed),
             sharp_edge_fraction=sharp_edge_fraction,
             sharp_edge_angle=sharp_edge_angle)

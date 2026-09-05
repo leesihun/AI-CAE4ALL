@@ -69,10 +69,33 @@ export function parametersTableGraphic(node, compact = false) {
   return `<table class="parameters-table" aria-label="Design parameters input/output"><thead><tr><th>Input</th><th>Output</th></tr></thead><tbody>${rows}${overflow}</tbody></table>`;
 }
 
-export function previewGraphic(kind, seed = 0, large = false) {
+/**
+ * The placeholder a block shows before it has produced anything.
+ *
+ * Deliberately not a chart: empty axes plus one line of text, so it cannot be
+ * mistaken for a measurement at a glance the way a drawn curve can.
+ */
+function emptyPreview(width, height, large, message) {
+  const pad = large ? 46 : 16;
+  return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="No result yet: ${message}">
+    <rect width="${width}" height="${height}" fill="${large ? "#fbfcfa" : "#f4f6f2"}"/>
+    <path d="M${pad} ${pad * 0.5}V${height - pad * 0.7}H${width - pad}" fill="none" stroke="#dfe4dd" stroke-width="${large ? 1.6 : 1}"/>
+    <text x="${width / 2}" y="${height / 2 + (large ? 6 : 3)}" text-anchor="middle" fill="#9aa8a1"
+          font-size="${large ? 17 : 10}" font-style="italic">${message}</text>
+  </svg>`;
+}
+
+export function previewGraphic(kind, seed = 0, large = false, hasEvidence = true) {
   const width = large ? 680 : 220;
   const height = large ? 410 : 80;
   const offset = Number(seed) % 5;
+  // A block with no run behind it must not show a curve that looks like its
+  // result. The training and latent previews are illustrations of what the block
+  // produces; drawn on a card whose own evidence line reads "No run linked",
+  // they were indistinguishable from a finished training run.
+  if (!hasEvidence && (kind === "training" || kind === "latent")) {
+    return emptyPreview(width, height, large, kind === "latent" ? "no reconstruction yet" : "no run yet");
+  }
   if (kind === "field") {
     // A real ex9 plasticity field rasterised through the Studio ramp, plus the
     // colour bar that makes it readable as a contour plot instead of decoration.

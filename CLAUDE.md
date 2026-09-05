@@ -270,6 +270,63 @@ SimulGenVAE reads the same rows as a per-sample parameter vector via
 `lc_data_type hdf5` + `cond_var`. MLP needs nothing: its tabular `X`/`Y`
 contract already separates inputs from outputs.
 
+## The Studio (`studio/`)
+
+A browser front end over the *same* launcher: it builds a native flat-text
+config per executable block, runs `cae_suite`'s real preflight on it, and
+subprocess-launches the same command the CLI would. It imports no ML code and
+reimplements no model. **When the GUI and the launcher disagree, the launcher is
+right and the GUI has a bug** — see [docs/GUI.md](docs/GUI.md) for the manual.
+
+```bash
+cd studio && python start_studio.py        # http://127.0.0.1:8123/index.html
+python -m pytest -q studio/studio_backend  # backend tests
+```
+
+Rules that are load-bearing, not style:
+
+- **The live `MethodSpec` owns the config contract.** `/api/models` already
+  publishes `known_keys`, `required`, `defaults`, `defaults_by_mode` and
+  `modes`; `constants.js` holds only presentation (labels, help, opinionated
+  defaults) plus `CHOICES`, which must mirror a spec validator exactly. Never
+  invent a dropdown value — a value the sheet offers and the launcher rejects is
+  the recurring failure mode here.
+- **One server per port.** `allow_reuse_address = False` makes a second instance
+  fail loudly instead of splitting requests. The registry is read once at
+  startup, so after touching `cae_suite/specs/` or `studio_backend/` you must
+  **restart the server** — otherwise the GUI validates against a stale spec and
+  reports failures that do not exist.
+- **Never import `studio_backend.state` from a helper script**; constructing
+  `StudioState()` runs job recovery and can rewrite a live server's records.
+- **Templates are default profiles, not demos.** Every live route has one in
+  `TEMPLATES`, each mirroring a checked-in config, and each must pass Validate
+  on a fresh checkout. A new route needs a template too — a spec added after the
+  last GUI audit is invisible to it (this is exactly how `chi-mgnflow` shipped
+  with none).
+- **The held-out split is its own source block.** Wiring the training dataset
+  into an Inference block makes the graph say "predict what you trained on", and
+  the graph wins over the trainer's `infer_dataset`.
+- **Coordinates are never a prediction, and neither is the node-type row.** Rows
+  0:3 of `nodal_data` are copied verbatim into every rollout, so scoring them
+  yields R² = 1 for any model, and the trailing part/`node_type` label is copied
+  through the same way. The evaluator refuses a coordinate-only mapping;
+  `nodal_field` (SimulGen-VAE reconstruct) carries physical rows only and is
+  scored in full. The five rollout writers record `output_var` beside
+  `num_features` so the scoreable rows are **read**, not inferred — keep that
+  attribute when you touch `inference_profiles/rollout.py`.
+- **A control the user cannot act on does not ship.** A port that nothing reads,
+  a field a workspace overwrites, a preset that duplicates another, a preview
+  drawn from invented numbers: each one asserts something the code does not do.
+  Prefer removing it, or rendering it read-only with the source of its value
+  named ("set in Evaluation"), over leaving it editable.
+- **Check the precondition you state.** Compare Models tells the user to pick
+  runs from one held-out set; it now cross-checks the `contract` and sample IDs
+  in each CSV and reports a mismatch. The same applies to the Optimization
+  constraint box, validated against the selected CSV before the run.
+- **`input_var`/`output_var` stay the user's to set** on mesh routes. With
+  `cond_var` rows present they are not the feature-row count, and deriving them
+  reproduces the constant-target class of bug.
+
 ## Documentation
 
 All documentation lives under [docs/](docs/) — see [docs/README.md](docs/README.md)
@@ -279,6 +336,8 @@ for the index. Method directories keep only their own `CLAUDE.md`/`README.md`.
   section per method, plus the honest known-gaps list.
 - [docs/CONFIGURATION.md](docs/CONFIGURATION.md) — config grammar, routes, and
   pointers to the executable key/default contracts.
+- [docs/GUI.md](docs/GUI.md) — the Studio manual: blocks, templates, the config
+  sheet, validation, evaluation rules, and how to extend it.
 - [docs/reference/](docs/reference/) — dataset format, public dataset
   provenance, per-method config key references.
 - [docs/research/](docs/research/) — design notes grouped by method. These are
@@ -297,3 +356,11 @@ for the index. Method directories keep only their own `CLAUDE.md`/`README.md`.
   `methods/`.
 - **Changing behavior inside a method repo** → follow that repo's `CLAUDE.md`
   and run its own tests; the launcher change (if any) is usually just the spec.
+- **New model route** → the Studio installs a block for it automatically from
+  the live spec, but add a `TEMPLATES` entry (a default profile that passes
+  Validate) and `HELP` text for its route-specific keys, or it arrives in the
+  GUI as an unwired block with undocumented fields. Restart the Studio server so
+  its registry picks the route up.
+- **New enum in a spec validator** → mirror it in `CHOICES`
+  (`studio/src/constants.js`), or the config sheet renders free text and accepts
+  values the launcher rejects.

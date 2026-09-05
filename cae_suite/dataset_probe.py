@@ -57,6 +57,13 @@ def _table_report(handle):
     return {"errors": errors, "warnings": warnings, "metadata": metadata}
 
 
+def _as_text(value):
+    """HDF5 attr entry (bytes or str, possibly numpy) as a plain str."""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", "replace")
+    return str(value)
+
+
 def _sdf_report(handle):
     errors = []
     warnings = []
@@ -78,6 +85,15 @@ def _sdf_report(handle):
         normals = metadata["arrays"]["surface_normals"]
         if points != normals:
             errors.append(f"surface_points and surface_normals shapes differ: {points} vs {normals}.")
+        # The condition VOCABULARY, so the spec can cross-check `condition_names`
+        # before a training run starts. `cond_names` is the built-in geometric
+        # list; `cond_extra_names` names the optional FEA sidecar that
+        # methods/SDFFlow/add_fea_conditions.py appends. Without these, an ex5
+        # config naming FEA conditions against a sidecar-free dataset preflights
+        # clean and then dies after the whole VAE stage has been trained.
+        metadata["cond_names"] = [_as_text(name) for name in handle.attrs.get("cond_names", [])]
+        metadata["cond_extra_names"] = [_as_text(name) for name in handle.attrs.get("cond_extra_names", [])]
+        metadata["has_cond_extra"] = "cond_extra" in handle
     return {"errors": errors, "warnings": warnings, "metadata": metadata}
 
 

@@ -4,9 +4,11 @@ The solver in `design_loop/fea.py` is written from scratch, so it is checked
 against things with known answers rather than against plausibility: the
 constant-strain patch test (exact to machine precision for a correct element),
 rigid-body motion producing zero strain energy, and a cantilever converging
-toward beam theory from the stiff side as tet4 must.
+toward beam theory from the stiff side as tet4 must. The load table is pinned
+to the GE challenge values in SI, because DeepJEB's labels were produced with
+them and the solver works in N, m, Pa.
 
-Run from `Geometry_generation`:  python -m pytest -q tests/test_design_loop.py
+Run from `methods/SDFFlow`:  python -m pytest -q tests/test_design_loop.py
 """
 
 import os
@@ -20,7 +22,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from design_loop import fea                                          # noqa: E402
 from design_loop.mesher import tet_mesh_from_surface                 # noqa: E402
-from design_loop.problem import Bracket                              # noqa: E402
+from design_loop.problem import LBF_TO_N, LBIN_TO_NM, Bracket           # noqa: E402
 
 
 def box_mesh(extents, divisions):
@@ -154,8 +156,75 @@ def test_interface_detection_rejects_geometry_without_both_pads():
         Bracket().interfaces(nodes, faces)
 
 
+def test_load_cases_are_the_ge_challenge_loads_in_si():
+    """Magnitudes must be the challenge's imperial loads converted to N / N*m.
+
+    DeepJEB's FEA labels were produced with the SI values of the GE bracket
+    challenge (arXiv 2406.09047: 35.6 / 37.8 / 42.3 kN and 565 N*m). The FEA
+    path works in N, m, Pa, so the bare imperial numbers this table used to
+    hold (8000 / 8500 / 9500 read as N, 5000 read as N*m) understated the
+    forces 4.448x and overstated the torsion 8.85x relative to one another.
+    """
+    assert LBF_TO_N == 4.4482216152605
+    assert LBIN_TO_NM == 0.1129848290276167
+    assert np.isclose(LBIN_TO_NM, LBF_TO_N * 0.0254, rtol=0.0, atol=1e-15)
+
+    cases = Bracket.LOAD_CASES
+    magnitude = {name: float(np.linalg.norm(cases[name]['vector']))
+                 for name in ('vertical', 'horizontal', 'diagonal')}
+    assert np.isclose(magnitude['vertical'], 8000.0 * LBF_TO_N, rtol=1e-12)
+    assert np.isclose(magnitude['horizontal'], 8500.0 * LBF_TO_N, rtol=1e-12)
+    assert np.isclose(magnitude['diagonal'], 9500.0 * LBF_TO_N, rtol=1e-12)
+    assert np.isclose(cases['torsion']['magnitude'], 5000.0 * LBIN_TO_NM, rtol=1e-12)
+
+    # The paper's figures are these conversions rounded to three significant digits.
+    assert round(magnitude['vertical'] / 1e3, 1) == 35.6
+    assert round(magnitude['horizontal'] / 1e3, 1) == 37.8
+    assert round(magnitude['diagonal'] / 1e3, 1) == 42.3
+    assert round(cases['torsion']['magnitude']) == 565
+
+    # A bare imperial number would sit an order of magnitude off on either side.
+    assert all(m > 3.0e4 for m in magnitude.values()), magnitude
+    assert 5.0e2 < cases['torsion']['magnitude'] < 6.0e2
+
+    # Axes are this repo's occupancy-derived frame and must not move: vertical
+    # +z, horizontal +y, torsion about y, and the diagonal in the y-z plane with
+    # its historical (cos 42 along y, sin 42 along z) decomposition.
+    unit = {name: np.asarray(cases[name]['vector']) / magnitude[name] for name in magnitude}
+    assert np.allclose(unit['vertical'], (0.0, 0.0, 1.0), atol=1e-12)
+    assert np.allclose(unit['horizontal'], (0.0, 1.0, 0.0), atol=1e-12)
+    assert np.allclose(unit['diagonal'],
+                       (0.0, np.cos(np.deg2rad(42.0)), np.sin(np.deg2rad(42.0))), atol=1e-12)
+    assert np.allclose(cases['torsion']['axis'], (0.0, 1.0, 0.0), atol=1e-12)
+
+
+def test_si_conversion_is_a_pure_rescaling_of_the_legacy_loads():
+    """Linear statics: the SI fix must scale the vertical case by exactly LBF_TO_N.
+
+    Guards that the unit conversion is the *only* change to load assembly --
+    same interface nodes, same area weights, same direction -- so the ratio
+    between stresses recorded before and after the change is the conversion
+    factor and nothing else (compliance f.u scales by its square).
+    """
+    class LegacyBracket(Bracket):
+        LOAD_CASES = dict(Bracket.LOAD_CASES,
+                          vertical=dict(kind='force', vector=(0.0, 0.0, 8000.0)))
+
+    nodes, tets = box_mesh((1.0, 1.8, 0.6), (6, 12, 4))
+    nodes = nodes - nodes.mean(axis=0)
+    nodes[:, 1] *= 1.8 / (nodes[:, 1].max() - nodes[:, 1].min())
+
+    new = Bracket(load_cases=('vertical',)).analyze(nodes, tets)['cases']['vertical']
+    old = LegacyBracket(load_cases=('vertical',)).analyze(nodes, tets)['cases']['vertical']
+    for key in ('max_von_mises', 'peak_von_mises', 'max_displacement'):
+        ratio = new[key] / old[key]
+        assert np.isclose(ratio, LBF_TO_N, rtol=1e-8), f'{key}: ratio {ratio} != {LBF_TO_N}'
+    ratio = new['compliance'] / old['compliance']
+    assert np.isclose(ratio, LBF_TO_N ** 2, rtol=1e-8), f'compliance: ratio {ratio}'
+
+
 def test_load_cases_apply_the_requested_resultant():
-    """Force load cases must sum to the specified vector on the lug."""
+    """Force load cases must sum to the specified SI vector on the lug."""
     nodes, tets = box_mesh((1.0, 1.8, 0.6), (6, 12, 4))
     nodes = nodes - nodes.mean(axis=0)
     nodes[:, 1] *= 1.8 / (nodes[:, 1].max() - nodes[:, 1].min())

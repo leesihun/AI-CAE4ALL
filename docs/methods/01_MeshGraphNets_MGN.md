@@ -146,7 +146,7 @@ When training, Gaussian noise of std `std_noise` is added to the leading
 
 Canonical example: [`configs/MeshGraphNets/ex1/config_train_meshgraphnets.txt`](../../configs/MeshGraphNets/ex1/config_train_meshgraphnets.txt).
 The exhaustive, live-code-backed catalog is
-[`CONFIGURATION_REFERENCE.md`](../CONFIGURATION.md).
+[`CONFIGURATION.md`](../CONFIGURATION.md).
 
 ### Execution & routing
 

@@ -258,6 +258,23 @@ class StudioRequestHandler(SimpleHTTPRequestHandler):
                 if path.suffix.lower() != ".md":
                     raise ValueError("Only Markdown documents can be opened here.")
                 self.send_json({"path": relative(path), "text": path.read_text(encoding="utf-8")[:MAX_TEXT]})
+            elif parsed.path == "/api/text":
+                # Plain-text result artifacts (an optimization report, a selected
+                # designs table, a metrics CSV). The Studio wrote these paths into
+                # blocks and printed them as evidence with no way to open them.
+                # Same path guard as every other reader, restricted to result
+                # roots and to formats that are text by definition.
+                path = safe_repo_path(query.get("path", [""])[0], result_roots())
+                if path.suffix.lower() not in {".csv", ".json", ".txt", ".log", ".tsv"}:
+                    raise ValueError("Only .csv, .tsv, .json, .txt and .log files can be opened here.")
+                if not path.is_file():
+                    raise ValueError(f"{query.get('path', [''])[0]!r} does not exist.")
+                self.send_json({
+                    "path": relative(path),
+                    "size": path.stat().st_size,
+                    "text": path.read_text(encoding="utf-8", errors="replace")[:MAX_TEXT],
+                    "truncated": path.stat().st_size > MAX_TEXT,
+                })
             elif parsed.path == "/api/files":
                 self.send_json(file_catalog(query.get("kind", ["artifact"])[0]))
             elif parsed.path == "/api/hdf5":

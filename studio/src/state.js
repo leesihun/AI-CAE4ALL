@@ -59,7 +59,10 @@ export const state = {
     activeJob: null,
     trackedJobs: new Map(),
     pollTimer: null,
-    lastPreflight: null
+    lastPreflight: null,
+    // Cached by renderDocsWorkspace so the Docs sidebar badge can report the
+    // live document count instead of the offline card count.
+    docCount: 0
   }
 };
 

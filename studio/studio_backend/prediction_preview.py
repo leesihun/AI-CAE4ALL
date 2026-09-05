@@ -565,16 +565,29 @@ def scan_output_dir(directory: Path, limit: int = 12) -> list[dict[str, Any]]:
 
 
 def outputs_since(repository: Path, since: float, limit: int = 12) -> list[dict[str, Any]]:
-    """Prediction directories a just-finished run wrote inside `repository`.
+    """Prediction directories a just-finished run wrote, for a step in `repository`.
 
-    Used to pin a completed inference job to its own results. Matching on
-    "written after this step started, under this step's repository" is what
-    makes the link exact -- guessing the path from config keys cannot work,
-    because the epoch number in `outputs/<split>/<gpu>/<epoch>/` is only known
-    to the training loop.
+    Used to pin a completed inference job to its own results when its config
+    did not name `inference_output_dir`. Matching on "written after this step
+    started" is what makes the link exact -- guessing the path from config keys
+    cannot work, because a training loop's periodic dump directory carries the
+    epoch number, which only the loop knows.
+
+    Two sets of roots are scanned. The method repository's own `outputs/` and
+    `output/` are the pre-2026-09 layout. Since the reorganisation every native
+    default is spelled `../../output/<slug>/...`, i.e. the suite-wide output
+    root -- so a scan confined to the repository found nothing, every analysis
+    step downstream was skipped for "no output", and a pipeline that had trained
+    for hours and inferred 87 scenes was reported failed. The `since` filter is
+    what keeps the wider scan exact.
     """
     roots = [repository / name for name in ("outputs", "output")]
-    return _scan_roots([root for root in roots if root.is_dir()], limit, since=since)
+    roots += [SUITE_ROOT / "output", SUITE_ROOT / "outputs"]
+    unique = []
+    for root in roots:
+        if root.is_dir() and root not in unique:
+            unique.append(root)
+    return _scan_roots(unique, limit, since=since)
 
 
 # A full scan walks every output tree in the suite and opens one HDF5 per

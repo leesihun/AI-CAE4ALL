@@ -1,10 +1,13 @@
 """Stage 2: flow matching over frozen-VAE latents (optionally conditional + CFG).
 
 Runs single-process or, under `parallel_mode` ddp/fsdp, as one rank of a spawned
-distributed job. Each rank deterministically encodes the dataset to the same
-frozen latents (identical normalization), shards the latent batch, and shares
-gradients. Rank 0 owns validation, the generation test, and checkpoints. FSDP is
-the intended "model split" for a large velocity DiT.
+distributed job. Every rank encodes the full train/val splits itself; the
+dataset is switched to deterministic (seeded per-shape) encoder subsampling for
+that pass, so all ranks -- and repeated runs of the same checkpoint and seed --
+hold bit-identical frozen latents and normalization statistics. The latent batch
+is then sharded and gradients are shared. Rank 0 owns validation, the generation
+test, and checkpoints. FSDP is the intended "model split" for a large velocity
+DiT.
 """
 
 import os
@@ -23,11 +26,15 @@ from training_profiles.setup import (
     append_log,
     build_ema_model,
     build_optimizer_scheduler,
+    ema_horizon_warning,
+    identical_across_ranks,
     init_log_file,
     load_checkpoint,
     log_model_summary,
     resolve_device,
     save_checkpoint,
+    seed_stage,
+    seeded_generator,
 )
 from training_profiles.train_vae import _clip_grads
 
@@ -46,6 +53,10 @@ def fm_worker(config, config_filename='config.txt'):
     split_seed = int(config.get('split_seed', 42))
     rank0 = D.is_main_process()
     world_size = D.get_world_size()
+    # Optional global seeding (model init, shuffle order, flow-matching noise),
+    # offset by the rank so no two ranks draw the same t / noise pairs; model
+    # construction is put back on the rank-independent base seed below.
+    run_seed = seed_stage(config, stage='FM', offset=D.get_rank(), verbose=rank0)
 
     # ---- Frozen VAE (loaded identically on every rank) ----
     vae_path = config.get('vae_modelpath', '../../output/geometry_generation/sdfflow_vae.pth')
@@ -98,11 +109,37 @@ def fm_worker(config, config_filename='config.txt'):
         if cond_dim == 0:
             raise ValueError('use_conditions True requires at least one condition_name')
 
+        # Finiteness FIRST: `add_fea_conditions.py --allow_missing` writes NaN
+        # rows by design (an unmatched shape, or a non-positive value under a
+        # log transform), and NaN is invisible to the near-zero-variance guard
+        # below -- `float('nan') < 1e-5` is False. One NaN row makes cond_mean
+        # and cond_std NaN for that column, which makes the normalized column
+        # NaN for EVERY sample, which makes the loss and then every weight NaN
+        # from the first optimizer step. The run then "completes" and writes a
+        # checkpoint that decodes nothing.
+        nonfinite = []
+        for split_name, tensor in (('train', c_train), ('val', c_val)):
+            if tensor.numel() == 0:
+                continue
+            finite = torch.isfinite(tensor)
+            for i in range(cond_dim):
+                bad = int((~finite[:, i]).sum())
+                if bad:
+                    nonfinite.append(f'{cond_names[i]} ({bad} non-finite {split_name} row(s))')
+        if nonfinite:
+            raise ValueError(
+                f'Condition values are not finite: {nonfinite}. The usual source is '
+                'add_fea_conditions.py --allow_missing, which writes NaN rows for shapes the '
+                'CSV does not cover and for non-positive values under a log transform. Rebuild '
+                'the cond_extra sidecar without --allow_missing, or drop those names from '
+                'condition_names.')
         cond_mean = c_train.mean(dim=0, keepdim=True)
         raw_cond_std = c_train.std(dim=0, keepdim=True)
         min_condition_std = float(config.get('min_condition_std', 1e-5))
+        # `not (value >= min)` rather than `value < min` so a NaN that somehow
+        # survives the check above is still reported instead of passing.
         constant = [cond_names[i] for i, value in enumerate(raw_cond_std.squeeze(0))
-                    if float(value) < min_condition_std]
+                    if not (float(value) >= min_condition_std)]
         if constant:
             raise ValueError(
                 f'Condition descriptors have near-zero training variance: {constant}. '
@@ -135,12 +172,14 @@ def fm_worker(config, config_filename='config.txt'):
         train_loader = DataLoader(train_ds, batch_size=batch_size, sampler=train_sampler)
     else:
         train_sampler = None
-        train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
+        train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True,
+                                  generator=seeded_generator(run_seed))
 
     # ---- Model ----
     if rank0:
         print('\nInitializing velocity network...')
-    model = VelocityNet(config, latent_flat_dim, cond_dim=cond_dim).to(device)
+    with identical_across_ranks(run_seed, D.get_rank()):
+        model = VelocityNet(config, latent_flat_dim, cond_dim=cond_dim).to(device)
 
     is_fsdp = D.is_dist() and D.parallel_mode(config) == 'fsdp'
     ema_config = config
@@ -158,8 +197,23 @@ def fm_worker(config, config_filename='config.txt'):
 
     total_epochs = int(config.get('training_epochs', 2000))
     optimizer, scheduler = build_optimizer_scheduler(config, train_model.parameters(), total_epochs)
+    if rank0:
+        ema_warning = ema_horizon_warning(ema_config, len(train_loader), total_epochs, stage='FM')
+        if ema_warning:
+            print(ema_warning)
 
     cond_dropout = float(config.get('cond_dropout', 0.1))
+    cond_dropout_mode = str(config.get('cond_dropout_mode', 'all')).lower()
+    cond_dropout_all_prob = float(config.get('cond_dropout_all_prob', 0.1))
+    if not 0.0 <= cond_dropout_all_prob < 1.0:
+        raise ValueError('cond_dropout_all_prob must lie in [0, 1)')
+    if rank0 and cond_dim > 0 and cond_dropout > 0 and cond_dropout_mode == 'per_dim':
+        implicit = cond_dropout ** cond_dim
+        print(f'Condition dropout: per_dim p={cond_dropout:g} over {cond_dim} conditions -> the '
+              f'all-masked (unconditional) row would appear with probability {implicit:.2g} by '
+              f'chance alone; cond_dropout_all_prob={cond_dropout_all_prob:g} draws it '
+              'explicitly so the CFG branch is trained. At 0 the branch is starved and '
+              'cfg_scale must stay 1.0.')
     time_sampling = str(config.get('fm_time_sampling', 'uniform')).lower()
     if time_sampling not in ('uniform', 'logit_normal'):
         raise ValueError("fm_time_sampling must be 'uniform' or 'logit_normal'")
@@ -240,7 +294,7 @@ def fm_worker(config, config_filename='config.txt'):
                     loss = flow_matching_loss(
                         train_model, z_batch, cond=cond, cond_dropout=cond_dropout,
                         time_sampling=time_sampling, logit_mean=logit_mean,
-                        logit_std=logit_std)
+                        logit_std=logit_std, cond_dropout_all_prob=cond_dropout_all_prob)
                 scaler.scale(loss).backward()
                 if amp_enabled and amp_dtype == torch.float16:
                     scaler.unscale_(optimizer)
@@ -290,7 +344,14 @@ def fm_worker(config, config_filename='config.txt'):
 
 @torch.no_grad()
 def _encode_split(vae, dataset, device, config):
-    """Encode every shape in a split to (mu latents, conditions)."""
+    """Encode every shape in a split to (mu latents, conditions).
+
+    The dataset is switched to deterministic subsampling for the duration of
+    the pass (and restored afterwards): `SDFShapeDataset.__getitem__` then seeds
+    its rng from (split seed, shape index), so every rank -- and every run of
+    the same checkpoint and seed -- caches bit-identical latents. Without this,
+    each rank would normalize by its own private latent statistics.
+    """
     latents, conds = [], []
     batch, batch_c = [], []
     batch_size = int(config.get('encode_batch_size', 16))
@@ -306,13 +367,18 @@ def _encode_split(vae, dataset, device, config):
         batch.clear()
         batch_c.clear()
 
-    for i in range(len(dataset)):
-        item = dataset[i]
-        batch.append((item['surface_points'], item['surface_normals']))
-        batch_c.append(item['cond'])
-        if len(batch) == batch_size:
-            flush()
-    flush()
+    previous_deterministic = getattr(dataset, 'deterministic', False)
+    dataset.deterministic = True
+    try:
+        for i in range(len(dataset)):
+            item = dataset[i]
+            batch.append((item['surface_points'], item['surface_normals']))
+            batch_c.append(item['cond'])
+            if len(batch) == batch_size:
+                flush()
+        flush()
+    finally:
+        dataset.deterministic = previous_deterministic
     return torch.cat(latents, dim=0), torch.stack(conds, dim=0)
 
 

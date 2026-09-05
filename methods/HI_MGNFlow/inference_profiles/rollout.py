@@ -368,9 +368,37 @@ class _SampleContext:
         return graph
 
 
+
+def _rollout_feature_names(dataset_dir, output_dim):
+    """Channel names written into each rollout file.
+
+    Prefer the inference dataset's own declared names (metadata/feature_names)
+    for the coordinate and state rows, so an evaluator can pair prediction and
+    truth channels by name. The legacy NASA-CRM list below used to be written
+    for *every* dataset, so ex9's ux/uy came out labelled x_disp(mm)/y_disp(mm),
+    matched nothing but x/y/z_coord in the truth file, and the Studio scored the
+    coordinates as a perfect model. The trailing row is the node-type/part id.
+    """
+    legacy = [b'x_coord', b'y_coord', b'z_coord',
+              b'x_disp(mm)', b'y_disp(mm)', b'z_disp(mm)',
+              b'stress(MPa)', b'Part No.']
+    keep = 3 + int(output_dim)
+    names = None
+    try:
+        with h5py.File(dataset_dir, 'r') as f:
+            if 'metadata/feature_names' in f:
+                raw = f['metadata/feature_names'][()]
+                names = [n if isinstance(n, bytes) else str(n).encode('utf-8') for n in raw]
+    except Exception:
+        names = None
+    if names and len(names) >= keep:
+        return np.array(names[:keep] + [b'Part No.'])
+    return np.array(legacy[:keep] + [b'Part No.'])
+
 def _save_rollout_h5(output_path, sample_id, all_states, ctx, part_ids, output_dim,
                      num_steps, model_path, config_filename, rollout_time_s,
-                     vae_sample_idx=None, hierarchy_seed=None, hierarchy_idx=None):
+                     vae_sample_idx=None, hierarchy_seed=None, hierarchy_idx=None,
+                     feature_names=None):
     """Write one trajectory to HDF5 following DATASET_FORMAT.md.
 
     all_states: [num_steps + 1, N, output_dim] predicted physical states.
@@ -395,6 +423,10 @@ def _save_rollout_h5(output_path, sample_id, all_states, ctx, part_ids, output_d
         f.attrs['num_samples'] = 1
         f.attrs['num_features'] = num_save_features
         f.attrs['num_timesteps'] = num_steps + 1
+        # The evaluator has to know how many of these rows are PREDICTIONS.
+        # With only num_features it had to infer them, which is how the
+        # coordinate rows and the trailing node-type row reached a score.
+        f.attrs['output_var'] = int(output_dim)
 
         sample_grp = f.create_group('data').create_group(str(sample_id))
         sample_grp.create_dataset('nodal_data', data=nodal_data,
@@ -418,12 +450,8 @@ def _save_rollout_h5(output_path, sample_id, all_states, ctx, part_ids, output_d
         meta_grp.attrs['hierarchy_seed'] = (
             -1 if hierarchy_seed is None else int(hierarchy_seed))
 
-        _all_feature_names = [
-            b'x_coord', b'y_coord', b'z_coord',
-            b'x_disp(mm)', b'y_disp(mm)', b'z_disp(mm)',
-            b'stress(MPa)', b'Part No.'
-        ]
-        feature_names = np.array(_all_feature_names[:3 + output_dim] + [b'Part No.'])
+        if feature_names is None:
+            feature_names = _rollout_feature_names(None, output_dim)
         meta_grp.create_dataset('feature_min',  data=np.array([nodal_data[i].min()  for i in range(num_save_features)], dtype=np.float32))
         meta_grp.create_dataset('feature_max',  data=np.array([nodal_data[i].max()  for i in range(num_save_features)], dtype=np.float32))
         meta_grp.create_dataset('feature_mean', data=np.array([nodal_data[i].mean() for i in range(num_save_features)], dtype=np.float32))
@@ -599,6 +627,8 @@ def run_rollout(config, config_filename='config.txt'):
     input_dim = config.get('input_var')
     output_dim = config.get('output_var')
     cond_dim = int(config.get('cond_var', 0) or 0)
+    # Resolved once, not per sample: names come from the inference dataset.
+    rollout_feature_names = _rollout_feature_names(dataset_dir, output_dim)
     trained_timesteps = config.get('num_timesteps')
     static_training = trained_timesteps is not None and int(trained_timesteps) == 1
 
@@ -765,6 +795,7 @@ def run_rollout(config, config_filename='config.txt'):
                     vae_sample_idx=vae_idx if use_vae else None,
                     hierarchy_seed=ctx.active_hierarchy_seed(),
                     hierarchy_idx=getattr(ctx, 'active_hierarchy_idx', 0),
+                    feature_names=rollout_feature_names,
                 )
                 if b == B - 1 or B <= 4:
                     size_mb = os.path.getsize(output_path) / (1024 * 1024)

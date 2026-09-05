@@ -60,7 +60,7 @@ want; surface triangles match the datasets shipped today.
 
 ## Config keys
 
-See [CONFIGURATION_REFERENCE.md §9.9](../CONFIGURATION.md) for the
+See [CONFIGURATION.md §9.9](../CONFIGURATION.md) for the
 full catalog. Minimal volume example:
 
 ```

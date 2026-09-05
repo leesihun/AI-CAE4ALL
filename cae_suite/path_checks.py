@@ -89,9 +89,17 @@ def validate_paths(
                 promote_in_strict=True,
             )
 
-        if rule.kind in {PathKind.INPUT_FILE, PathKind.INPUT_DIR}:
-            expected = "file" if rule.kind is PathKind.INPUT_FILE else "directory"
-            valid = path.is_file() if rule.kind is PathKind.INPUT_FILE else path.is_dir()
+        if rule.kind in {PathKind.INPUT_FILE, PathKind.INPUT_DIR, PathKind.INPUT_PATH}:
+            expected = {
+                PathKind.INPUT_FILE: "file",
+                PathKind.INPUT_DIR: "directory",
+                PathKind.INPUT_PATH: "file or directory",
+            }[rule.kind]
+            valid = (
+                path.is_file() if rule.kind is PathKind.INPUT_FILE
+                else path.is_dir() if rule.kind is PathKind.INPUT_DIR
+                else path.exists()
+            )
             if not valid:
                 report.add(
                     "PATH-INPUT-001",

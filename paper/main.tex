@@ -1,0 +1,54 @@
+% =====================================================================
+%  HI-MGN-V / cHI-MGNflow -- paper skeleton
+%
+%  Build:  pdflatex main && bibtex main && pdflatex main && pdflatex main
+%  (or:    latexmk -pdf main.tex)
+%
+%  Swap \documentclass for the venue style when you pick one; nothing
+%  below depends on the article class beyond the packages loaded here.
+% =====================================================================
+\documentclass[11pt]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{microtype}
+\usepackage[numbers,sort&compress]{natbib}
+\usepackage[hidelinks]{hyperref}
+
+\title{Probabilistic Hierarchical Mesh Graph Networks for\\
+       One-to-Many Engineering Simulation}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Learned mesh-based simulators are trained with a pointwise regression loss and
+therefore estimate a conditional mean. Whenever the conditional law of the
+field given the model's observable inputs is broad---because the dynamics are
+chaotic, because the forcing is stochastic, or, in the case we
+emphasise, because a latent field governing the response is not visible to the
+model at all---that mean is not a physically realisable state. We introduce two
+mesh-native probabilistic hierarchical simulators, HI-MGN-V and cHI-MGNflow,
+audit the benchmark landscape available to validate such models, and report
+under a scoring protocol that is proper by construction.
+\end{abstract}
+
+\input{introduction}
+
+\input{benchmarks}
+
+% \input{method}        % HI-MGN-V and cHI-MGNflow
+% \input{protocol}      % fair CRPS, variogram score, spread--skill, rank histograms
+% \input{experiments}
+% \input{conclusion}
+
+\bibliographystyle{plainnat}
+\bibliography{references}
+
+\end{document}

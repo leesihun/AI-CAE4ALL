@@ -119,19 +119,126 @@ def _sample_aliases(path: Path, sample_id: str, handle: Any) -> list[str]:
     return list(dict.fromkeys(alias for alias in aliases if alias))
 
 
-def _mesh_target_indices(handle: Any, field_count: int) -> tuple[list[int], str]:
-    """Use builder metadata when available; never guess condition rows as targets."""
+# The shared mesh HDF5 contract (docs/reference/DATASET_FORMAT.md): rows 0:3 of
+# nodal_data are the reference coordinates, rows 3:3+input_var the state the
+# model predicts, and any cond_var rows follow.
+MESH_COORDINATE_ROWS = 3
 
+
+# The trailing row every mesh rollout writer appends: a per-node integer part /
+# node-type label, copied through unchanged exactly like the coordinates. It is
+# categorical, it is never predicted, and pairing it against a displacement field
+# is meaningless -- but with no declared output_var it looked like just another
+# state row and was offered for scoring.
+_NODE_TYPE_NAMES = frozenset({"part no.", "part_no", "part", "node_type", "nodetype", "node type", "part id", "part_id"})
+
+
+def _is_node_type_name(name: str) -> bool:
+    return str(name).strip().lower() in _NODE_TYPE_NAMES
+
+
+def _mesh_target_indices(
+    handle: Any,
+    field_count: int,
+    row_source: str = "nodal_data",
+    names: list[str] | None = None,
+) -> tuple[list[int], str]:
+    """Rows a mesh prediction may be scored on, per the suite's HDF5 contract.
+
+    The state rows are what a model predicts, so they are the targets; the
+    reference coordinates never are -- every rollout copies them in verbatim,
+    so scoring them yields zero error and R^2 = 1 for any model whatsoever.
+
+    The previous derivation assumed an [inputs | conditions | outputs] layout,
+    which is not the suite's. On ex9 (builder_input_var 4, builder_output_var 4,
+    seven rows) it computed rows 4:8, overflowed, returned nothing, and left
+    every row -- coordinates included -- as a candidate. That is how a pipeline
+    came to report every metric exactly 0.0 on 87 held-out samples.
+    """
+    # `nodal_field` is SimulGen-VAE's reconstruct output: num_var physical rows,
+    # no coordinates, whatever num_var happens to be (ex3 uses 4). Only
+    # `nodal_data` follows the coordinates-first contract, so the array name --
+    # not the row count -- is what decides. A row-count guess silently dropped
+    # three of four channels on any 4-row coordinate-less file.
+    if row_source == "nodal_field" or field_count <= MESH_COORDINATE_ROWS:
+        return list(range(field_count)), "every row (no reference-coordinate rows)"
     try:
-        input_count = int(handle.attrs.get("builder_input_var", handle.attrs.get("input_var", 0)) or 0)
-        condition_count = int(handle.attrs.get("builder_cond_var", handle.attrs.get("cond_var", 0)) or 0)
         output_count = int(handle.attrs.get("builder_output_var", handle.attrs.get("output_var", 0)) or 0)
+        input_count = int(handle.attrs.get("builder_input_var", handle.attrs.get("input_var", 0)) or 0)
     except (TypeError, ValueError):
-        return [], ""
-    start = input_count + condition_count
-    if output_count > 0 and start >= 0 and start + output_count <= field_count:
-        return list(range(start, start + output_count)), "builder input/condition/output metadata"
-    return [], ""
+        output_count = input_count = 0
+    state_count = output_count or input_count
+    if state_count > 0 and MESH_COORDINATE_ROWS + state_count <= field_count:
+        return (
+            list(range(MESH_COORDINATE_ROWS, MESH_COORDINATE_ROWS + state_count)),
+            "state rows after the reference coordinates (builder output_var)",
+        )
+    tail = list(range(MESH_COORDINATE_ROWS, field_count))
+    if names and tail and _is_node_type_name(names[tail[-1]]):
+        return tail[:-1], "state rows after the reference coordinates, minus the node-type row"
+    return tail, "all rows after the reference coordinates"
+
+
+def _carries_coordinate_rows(source: dict[str, Any]) -> bool:
+    """Whether this mesh source's rows begin with the reference coordinates.
+
+    Not every mesh-shaped file does. SimulGen-VAE's `reconstruct` writes only the
+    `num_var` physical channels to `data/{id}/nodal_field` -- two rows on ex9, no
+    coordinates at all -- so a blanket "rows 0:3 are coordinates" rule would
+    discard the only channels it produces and report "no safe field mapping" for
+    a perfectly scoreable reconstruction.
+
+    Declared names settle it when present. Otherwise the array name does: only
+    `nodal_data` follows the coordinates-first contract, while `nodal_field`
+    carries physical rows alone. Falling back to a row count instead was wrong
+    for any coordinate-less file with more than three rows -- SimulGen-VAE's ex3
+    reconstruct writes four.
+    """
+    names = [str(name).strip().lower() for name in (source.get("field_names") or [])]
+    declared = bool(source.get("declared_field_names")) and len(names) >= MESH_COORDINATE_ROWS
+    if declared:
+        if all(_is_coordinate_name(name) for name in names[:MESH_COORDINATE_ROWS]):
+            return True
+        # Declared names that are NOT recognisable coordinates do not prove the
+        # rows are physical: a writer free to name a row "x" is equally free to
+        # name it "disp_1". Fall through to the array-name contract rather than
+        # concluding there are no coordinate rows -- concluding wrongly here is
+        # what puts a row scoring R2 = 1 into the report.
+        if source.get("row_source") == "nodal_field":
+            return False
+        return int(source.get("field_count") or 0) > MESH_COORDINATE_ROWS
+    if source.get("row_source") == "nodal_field":
+        return False
+    return int(source.get("field_count") or 0) > MESH_COORDINATE_ROWS
+
+
+# Reference-coordinate row names seen across the suite's writers. The check used
+# to be `name.endswith("_coord")` alone, so a file naming its rows x/y/z -- the
+# obvious spelling, and what several exporters emit -- disabled both the filter
+# and the coordinate-only guard, and the coordinates were scored.
+_COORDINATE_NAMES = frozenset({
+    "x", "y", "z",
+    "x_coord", "y_coord", "z_coord",
+    "coord_x", "coord_y", "coord_z",
+    "node_x", "node_y", "node_z",
+    "pos_x", "pos_y", "pos_z",
+    "mesh_x", "mesh_y", "mesh_z",
+})
+
+
+def _is_coordinate_name(name: str) -> bool:
+    clean = str(name).strip().lower()
+    return clean.endswith("_coord") or clean in _COORDINATE_NAMES
+
+
+def _is_coordinate_row(source: dict[str, Any], index: int) -> bool:
+    """True for a mesh source's reference-coordinate rows, by name or position."""
+    if source.get("kind") != "mesh":
+        return False
+    names = source.get("field_names") or []
+    if index < len(names) and _is_coordinate_name(names[index]):
+        return True
+    return index < MESH_COORDINATE_ROWS and _carries_coordinate_rows(source)
 
 
 def _inspect_hdf5_file(path: Path, role: str) -> dict[str, Any]:
@@ -160,8 +267,11 @@ def _inspect_hdf5_file(path: Path, role: str) -> dict[str, Any]:
                     "explicit_id": True,
                 })
             count = counts[0] if counts else 0
+            # Every record in one file uses the same array name; `name` still
+            # holds the last one seen and they cannot differ within a contract.
+            row_source = name
             names = _field_names(_hdf5_names(handle, "feature_names"), count)
-            target_indices, target_basis = _mesh_target_indices(handle, count)
+            target_indices, target_basis = _mesh_target_indices(handle, count, row_source, names)
             return {
                 "contract": "mesh_state",
                 "kind": "mesh",
@@ -169,6 +279,7 @@ def _inspect_hdf5_file(path: Path, role: str) -> dict[str, Any]:
                 "field_count": count,
                 "field_names": names,
                 "declared_field_names": bool(_hdf5_names(handle, "feature_names")),
+                "row_source": row_source,
                 "target_indices": target_indices,
                 "target_basis": target_basis,
                 "arrays": [{"path": "data/{sample}/nodal_data", "shape": records[0]["shape"] if records else []}],
@@ -295,7 +406,7 @@ def _inspect_hdf5_source(path: Path, files: list[Path], truncated: bool, role: s
     contracts = {item["contract"] for item in inspections}
     primary = inspections[0] if inspections else {
         "contract": "unsupported", "kind": "unsupported", "field_count": 0,
-        "field_names": [], "declared_field_names": False, "target_indices": [],
+        "field_names": [], "declared_field_names": False, "row_source": "", "target_indices": [],
         "target_basis": "", "embedded_truth": False,
     }
     records = [record for item in inspections for record in item["records"]]
@@ -315,6 +426,9 @@ def _inspect_hdf5_source(path: Path, files: list[Path], truncated: bool, role: s
         "field_count": int(primary["field_count"]),
         "field_names": list(primary["field_names"]),
         "declared_field_names": bool(primary["declared_field_names"]),
+        # Carried through so the coordinate rules see which array the rows came
+        # from; without it they fell back to the row-count guess again.
+        "row_source": primary.get("row_source", ""),
         "target_indices": list(primary["target_indices"]),
         "target_basis": primary["target_basis"],
         "arrays": arrays,
@@ -360,6 +474,12 @@ def _recommended_field_pairs(prediction: dict[str, Any], truth: dict[str, Any]) 
     warnings: list[str] = []
     prediction_indices = prediction["target_indices"] or list(range(prediction["field_count"]))
     truth_indices = truth["target_indices"] or list(range(truth["field_count"]))
+    # Coordinates are never a prediction. Without this, a rollout whose physical
+    # channels were named differently from the truth file's (the native writers
+    # used to hardcode NASA-CRM names) matched *only* x/y/z_coord by name and
+    # scored a perfect model.
+    prediction_indices = [index for index in prediction_indices if not _is_coordinate_row(prediction, index)]
+    truth_indices = [index for index in truth_indices if not _is_coordinate_row(truth, index)]
     prediction_names = prediction["field_names"]
     truth_names = truth["field_names"]
     if prediction["declared_field_names"] and truth["declared_field_names"]:
@@ -779,6 +899,26 @@ def run_field_evaluation(payload: dict[str, Any]) -> dict[str, Any]:
     prediction_start = max(0, int(payload.get("prediction_start", 3)))
     truth_start = max(0, int(payload.get("truth_start", 3)))
     num_fields = max(1, int(payload.get("num_fields", 1)))
+    # Last line of defence, independent of how the pairs were chosen (recommended,
+    # explicit, or legacy rows): a score computed only on reference-coordinate
+    # rows is not a score of the model. Refuse rather than report R^2 = 1.
+    if mode == "mesh":
+        only_coordinates = (
+            (prediction_start + num_fields <= MESH_COORDINATE_ROWS and truth_start + num_fields <= MESH_COORDINATE_ROWS)
+            if use_legacy_rows
+            else bool(field_pairs) and all(
+                _is_coordinate_row(schema["prediction"], int(pair["prediction_index"]))
+                and _is_coordinate_row(schema["truth"], int(pair["truth_index"]))
+                for pair in field_pairs
+            )
+        )
+        if only_coordinates:
+            raise ValueError(
+                "Every paired field is a reference-coordinate row (nodal_data rows 0:3). Coordinates are copied "
+                "into every rollout unchanged, so scoring them reports zero error for any model. Pair the physical "
+                "state rows (3 onwards) instead -- if the prediction and truth files name them differently, "
+                "select the pairs explicitly in the Evaluation workspace."
+            )
     if mode == "embedded":
         rows, skipped = _evaluate_embedded(schema, field_pairs)
         truth_source = "embedded"
@@ -845,6 +985,16 @@ def run_field_evaluation(payload: dict[str, Any]) -> dict[str, Any]:
     return report
 
 
+# Numeric columns that describe the shape of a row rather than a model's
+# quality. Shared by the comparison and optimization schemas.
+NON_METRIC_COLUMNS = frozenset({
+    "fields", "timesteps", "nodes", "points", "elements", "values", "count",
+    "rows", "columns", "batch", "batch_size", "index", "row", "step", "epoch",
+    "iteration", "seed", "fold", "prediction_sample", "truth_sample",
+    "sample", "sample_id", "candidate_id", "case_id",
+})
+
+
 def comparison_schema(payload: dict[str, Any]) -> dict[str, Any]:
     """Inspect selected comparison CSVs so the UI never guesses columns."""
 
@@ -874,15 +1024,82 @@ def comparison_schema(payload: dict[str, Any]) -> dict[str, Any]:
             if any(_finite_float(row.get(column)) is not None for row in rows)
         }
         numeric_by_source.append(numeric)
-        sources.append({"path": relative(csv_path), "columns": columns, "rows_sampled": len(rows)})
+        sources.append({
+            "path": relative(csv_path),
+            "columns": columns,
+            "rows_sampled": len(rows),
+            # Both are written by run_field_evaluation into every per-sample CSV,
+            # and together they are the only evidence available here about WHAT
+            # was scored: the array contract, and which held-out samples.
+            "contract": next(
+                (str(row.get("contract")) for row in rows if str(row.get("contract", "")).strip()),
+                "",
+            ),
+            "samples": sorted({
+                str(row.get("truth_sample") or row.get("prediction_sample") or "").strip()
+                for row in rows
+                if str(row.get("truth_sample") or row.get("prediction_sample") or "").strip()
+            }),
+        })
     common = common_columns or []
-    numeric_columns = [column for column in common if all(column in numeric for numeric in numeric_by_source)]
+    # Studio writes the row's shape bookkeeping (fields/timesteps/nodes/values)
+    # into every per_sample_metrics.csv. They are numeric, so they were offered
+    # as rankable metrics -- ranking two models by "nodes" is meaningless and
+    # the run button enabled it happily.
+    numeric_columns = [
+        column for column in common
+        if all(column in numeric for numeric in numeric_by_source)
+        and column.casefold() not in NON_METRIC_COLUMNS
+    ]
+    warnings = _comparison_qualification_warnings(sources)
+    # The per-source sample sets exist only to answer "is this the same held-out
+    # set". Shipping a 900-entry list per run to the browser on every selection
+    # change is not worth the answer.
+    for source in sources:
+        source["sample_count"] = len(source.pop("samples", ()))
     return {
         "sources": sources,
         "common_columns": common,
         "numeric_columns": numeric_columns,
         "group_columns": [column for column in common if column not in numeric_columns],
+        "warnings": warnings,
     }
+
+
+def _comparison_qualification_warnings(sources: list[dict[str, Any]]) -> list[str]:
+    """Check the comparison's own stated precondition instead of asserting it.
+
+    The block shipped a `qualification: same held-out set` row and the workspace
+    told the user to "select outputs from the same held-out dataset" -- then
+    ranked whatever was selected, across different array contracts and disjoint
+    sample sets, without a word. Ranking a mean over two different test sets is
+    not a comparison, so say so when the evidence in the CSVs disagrees.
+    """
+    warnings: list[str] = []
+    if len(sources) < 2:
+        return warnings
+    contracts = {source["contract"] for source in sources if source.get("contract")}
+    if len(contracts) > 1:
+        warnings.append(
+            "These runs were scored under different array contracts "
+            f"({', '.join(sorted(contracts))}); their metrics are not directly comparable."
+        )
+    sample_sets = [set(source.get("samples") or ()) for source in sources]
+    known = [item for item in sample_sets if item]
+    if len(known) >= 2:
+        shared = set.intersection(*known)
+        union = set.union(*known)
+        if not shared:
+            warnings.append(
+                "The selected runs share no sample IDs, so they were evaluated on "
+                "different held-out sets. A mean-vs-mean ranking is not meaningful here."
+            )
+        elif len(shared) < len(union):
+            warnings.append(
+                f"Only {len(shared)} of {len(union)} sample IDs are common to every "
+                "selected run; the means below are taken over different sample sets."
+            )
+    return warnings
 
 
 def optimization_schema(payload: dict[str, Any]) -> dict[str, Any]:
@@ -1028,6 +1245,17 @@ def run_model_comparison(payload: dict[str, Any]) -> dict[str, Any]:
             "numeric_rows": numeric_in_source,
             "has_group_column": has_group_column,
             "groups": len(grouped),
+            # Same two fields the schema inspects, so the saved report records
+            # the comparability caveat rather than only the live panel showing it.
+            "contract": next(
+                (str(row.get("contract")) for row in raw_rows if str(row.get("contract", "")).strip()),
+                "",
+            ),
+            "samples": sorted({
+                str(row.get("truth_sample") or row.get("prediction_sample") or "").strip()
+                for row in raw_rows
+                if str(row.get("truth_sample") or row.get("prediction_sample") or "").strip()
+            }),
         })
         total_rows += len(raw_rows)
         total_numeric += numeric_in_source
@@ -1036,6 +1264,9 @@ def run_model_comparison(payload: dict[str, Any]) -> dict[str, Any]:
     ranked.sort(key=lambda item: item["value"], reverse=direction == "max")
     for rank, item in enumerate(ranked, 1):
         item["rank"] = rank
+    qualification_warnings = _comparison_qualification_warnings(sources)
+    for source in sources:
+        source["sample_count"] = len(source.pop("samples", ()))
     report_id = uuid.uuid4().hex[:12]
     report = {
         "id": report_id,
@@ -1052,6 +1283,7 @@ def run_model_comparison(payload: dict[str, Any]) -> dict[str, Any]:
         "ranked_groups": len(ranked),
         "best": ranked[0],
         "ranked": ranked[:200],
+        "warnings": qualification_warnings,
     }
     report_dir = RUNTIME_ROOT / "comparison"
     report_dir.mkdir(parents=True, exist_ok=True)
@@ -1210,6 +1442,29 @@ def write_candidate_table(output_dir: Path) -> dict[str, Any] | None:
     return {"path": relative(table), "rows": len(rows)}
 
 
+# Column names that identify a candidate row, most specific first. The old
+# fallback chain (id / sample / candidate / model) never looked at `*_id`
+# columns, so a CSV whose identity lives in `candidate_id` was labelled by its
+# `model` column instead -- four distinct designs reported under two names,
+# while the workspace card promised "source-row provenance".
+_CANDIDATE_ID_COLUMNS = ("candidate_id", "sample_id", "case_id", "design_id", "id", "candidate", "sample", "case", "design", "name", "model")
+
+
+def _candidate_id_column(columns: list[str], requested: str = "") -> str:
+    """Which column names a candidate. Explicit request wins when it exists."""
+    lookup = {str(column).casefold(): str(column) for column in columns}
+    wanted = str(requested or "").strip()
+    if wanted and wanted.casefold() in lookup:
+        return lookup[wanted.casefold()]
+    for candidate in _CANDIDATE_ID_COLUMNS:
+        if candidate in lookup:
+            return lookup[candidate]
+    for column in columns:
+        if str(column).casefold().endswith("_id"):
+            return str(column)
+    return ""
+
+
 def run_optimization(payload: dict[str, Any]) -> dict[str, Any]:
     csv_path = safe_repo_path(
         str(payload.get("csv_path", "")),
@@ -1231,11 +1486,20 @@ def run_optimization(payload: dict[str, Any]) -> dict[str, Any]:
         for item in str(payload.get("constraints", "")).split(";")
         if item.strip()
     ]
-    top_k = max(1, min(int(payload.get("top_k", 10)), 200))
+    # top_k arrives as null from a cleared number input; int(None) is a
+    # TypeError that surfaced as a raw HTTP 500 instead of a usable message.
+    raw_top_k = payload.get("top_k", 10)
+    try:
+        top_k = max(1, min(int(raw_top_k if raw_top_k not in (None, "") else 10), 200))
+    except (TypeError, ValueError):
+        raise ValueError("top_k must be a whole number between 1 and 200.") from None
     with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
-        rows = list(csv.DictReader(handle))
+        reader = csv.DictReader(handle)
+        columns = list(reader.fieldnames or [])
+        rows = list(reader)
     if not rows:
         raise ValueError("Optimization CSV has no data rows.")
+    id_column = _candidate_id_column(columns, str(payload.get("id_column", "")))
     missing = [name for name in objectives if name not in rows[0]]
     missing.extend(name for name, _, _ in constraints if name not in rows[0])
     if missing:
@@ -1263,7 +1527,7 @@ def run_optimization(payload: dict[str, Any]) -> dict[str, Any]:
         candidates.append(
             {
                 "index": index,
-                "id": row.get("id") or row.get("sample") or row.get("candidate") or row.get("model") or str(index),
+                "id": (str(row.get(id_column, "")).strip() if id_column else "") or str(index),
                 "objectives": dict(zip(objectives, objective_values)),
                 "values": objective_values,
                 "feasible": feasible,
@@ -1272,6 +1536,31 @@ def run_optimization(payload: dict[str, Any]) -> dict[str, Any]:
             }
         )
     feasible_candidates = [candidate for candidate in candidates if candidate["feasible"]]
+
+    # Why nothing survived. The per-candidate violations were computed and then
+    # dropped, so an all-infeasible run rendered "0 feasible / 0 Pareto" with an
+    # empty list and no way to tell a typo'd threshold from a genuinely
+    # infeasible batch. Aggregate per constraint: how many rows it rejected and
+    # the closest value observed, which is what tells you where to move it.
+    rejections: list[dict[str, Any]] = []
+    for name, operator, threshold in constraints:
+        blocked = [
+            violation["value"]
+            for candidate in candidates
+            for violation in candidate["violations"]
+            if violation["column"] == name and violation["operator"] == operator
+        ]
+        if not blocked:
+            continue
+        closest = min(blocked, key=lambda value: abs(value - threshold))
+        rejections.append({
+            "column": name,
+            "operator": operator,
+            "threshold": threshold,
+            "rows": len(blocked),
+            "closest_value": closest,
+        })
+    rejections.sort(key=lambda item: item["rows"], reverse=True)
 
     def dominates(left: dict[str, Any], right: dict[str, Any]) -> bool:
         comparisons = []
@@ -1313,7 +1602,12 @@ def run_optimization(payload: dict[str, Any]) -> dict[str, Any]:
         ],
         "rows": len(rows),
         "numeric_candidates": len(candidates),
+        # rows - numeric_candidates was visible as two different numbers with no
+        # explanation; a row is skipped when any objective or constraint cell is
+        # blank or non-numeric.
+        "skipped_rows": len(rows) - len(candidates),
         "feasible": len(feasible_candidates),
+        "rejections": rejections,
         "pareto": len(pareto),
         "selected": [
             {
@@ -1331,4 +1625,39 @@ def run_optimization(payload: dict[str, Any]) -> dict[str, Any]:
     report_path = report_dir / f"{report_id}.json"
     report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
     report["report_path"] = relative(report_path)
+
+    # The block's "selected" port is typed `candidates`, and Export downstream of
+    # it produced a JSON report -- not a candidate table. Write the selected rows
+    # back out in the source CSV's own columns (plus rank and crowding) so the
+    # port delivers what its type promises and the result is openable in a
+    # spreadsheet.
+    selected_path = report_dir / f"{report_id}_selected.csv"
+    # The two added columns must not collide with the source CSV's own headers:
+    # a candidate table that already has a "rank" column would otherwise emit a
+    # duplicate header, and the spread below would silently overwrite the Pareto
+    # rank with the source value.
+    def _free_column(base: str) -> str:
+        taken = {column.casefold() for column in columns}
+        if base.casefold() not in taken:
+            return base
+        for suffix in range(2, 100):
+            candidate_name = f"{base}_{suffix}"
+            if candidate_name.casefold() not in taken:
+                return candidate_name
+        return f"{base}_pareto"
+
+    rank_column = _free_column("pareto_rank")
+    crowding_column = _free_column("pareto_crowding")
+    with selected_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=[rank_column, crowding_column, *columns])
+        writer.writeheader()
+        for rank, candidate in enumerate(selected, start=1):
+            crowding = candidate.get("crowding", 0.0)
+            writer.writerow({
+                **{column: candidate["row"].get(column, "") for column in columns},
+                rank_column: rank,
+                crowding_column: "boundary" if math.isinf(crowding) else f"{crowding:.6g}",
+            })
+    report["selected_csv"] = relative(selected_path)
+    report["path"] = report["selected_csv"]
     return report

@@ -1,7 +1,8 @@
-import { $, $$, on, escapeHtml, toast, formatBytes, closeOverlay } from "./dom.js";
+import { $, $$, on, escapeHtml, toast, formatBytes, formatTimestamp, closeOverlay } from "./dom.js";
 import { applyPipelineDocument, savePipelineState } from "./persistence.js";
 import { state, snapshot } from "./state.js";
 import { ICONS, MODEL_CATALOG, BLOCK_SPECS, STUDIO_SECTIONS } from "./constants.js";
+import { renderMarkdown } from "./markdown.js";
 import { apiRequest, checkpointMetadata } from "./api.js";
 import { addBlock, render, selectNode } from "./graph.js";
 import { configureViaLlm, loadConfigExample, openConfig } from "./config.js";
@@ -115,6 +116,22 @@ export async function openStudio(section, nodeId = null) {
   await renderLiveWorkspace(section, request);
 }
 
+/**
+ * Update the Docs sidebar row once the live document count is known.
+ *
+ * renderStudio() paints the sidebar synchronously, before /api/docs answers, so
+ * the badge fell back to the offline card count (6) beside a list of 67 --
+ * and stayed wrong until the section was opened a second time.
+ */
+function refreshDocsSidebarBadge() {
+  const button = $("[data-studio-id='docs']");
+  if (!button || !state.api.docCount) return;
+  const counts = sidebarCounts(STUDIO_SECTIONS.docs);
+  const note = button.querySelector(".studio-nav-copy small");
+  if (note) note.textContent = counts.note;
+  if (button.lastElementChild) button.lastElementChild.textContent = String(counts.badge);
+}
+
 export function studioCards(section) {
   if (section.modelCards) {
     return Object.entries(MODEL_CATALOG).map(([modelId, model]) => [
@@ -136,6 +153,13 @@ function sidebarCounts(item) {
   if (item.modelCards && state.api.models.length) {
     const routes = state.api.models.length;
     return { badge: routes, note: `${routes} registered model routes` };
+  }
+  // The capability cards only render when the server is unreachable; when it is
+  // up, every one of these sections shows a live workspace instead. Badging the
+  // card count then describes a screen the user is not looking at -- Docs said
+  // "6" over a list of 66 documents.
+  if (item.docCards && state.api.connected && state.api.docCount) {
+    return { badge: state.api.docCount, note: `${state.api.docCount} repository documents` };
   }
   return { badge: studioCards(item).length, note: item.note };
 }
@@ -182,7 +206,13 @@ export function renderStudio() {
 
 export function liveShell(title, description, request = activeStudioWorkspace) {
   if (!isActiveStudioRequest(request)) return null;
-  $("#studioMain").innerHTML = `<section class="studio-hero"><span><span class="studio-kicker">Live repository data</span><h3>${escapeHtml(title)}</h3><p>${escapeHtml(description)}</p></span></section><section class="live-grid"><div class="live-empty">Loading real AI-CAE4ALL state…</div></section>`;
+  // The section's capability cards -- including its honest "roadmap" tags for
+  // what is NOT implemented -- only render in the offline fallback, so when the
+  // server is up the one place that said "iterative search is not implemented"
+  // was invisible. Carry the roadmap items into the live shell as a footnote.
+  const section = STUDIO_SECTIONS[request.section] || {};
+  const roadmap = (section.cards || []).filter(card => card[2] === "roadmap").map(card => card[0]);
+  $("#studioMain").innerHTML = `<section class="studio-hero"><span><span class="studio-kicker">Live repository data</span><h3>${escapeHtml(title)}</h3><p>${escapeHtml(description)}</p>${roadmap.length ? `<p class="studio-roadmap-note">Not implemented here: ${escapeHtml(roadmap.join(", "))}.</p>` : ""}</span></section><section class="live-grid"><div class="live-empty">Loading real AI-CAE4ALL state…</div></section>`;
   const container = $(".live-grid", $("#studioMain"));
   container.dataset.studioWorkspaceRevision = String(request.revision);
   container.dataset.studioRenderRevision = "0";
@@ -639,7 +669,7 @@ export async function renderFilesWorkspace(container, kind) {
   const title = kind === "dataset" ? "Repository datasets and parameter files" : "Output artifacts and checkpoints";
   const serverLimit = Number(result.limit || result.items.length);
   const repositoryMatches = Number(result.matched || result.items.length);
-  container.innerHTML = `<div class="live-toolbar"><span><strong>${title}</strong><small>${result.items.length} loaded${result.truncated ? ` · newest ${serverLimit} only` : " · complete catalog"}</small></span><input id="liveFileSearch" type="search" placeholder="Filter path or extension"></div><div class="config-help catalog-status" id="liveFileCatalogStatus" role="status" aria-live="polite"></div><div class="live-list" id="liveFileList"></div>`;
+  container.innerHTML = `<div class="live-toolbar"><span><strong>${title}</strong><small>${result.items.length} loaded${result.truncated ? ` · newest ${serverLimit} only` : " · complete catalog"}</small></span><input id="liveFileSearch" type="search" placeholder="Filter path or extension" aria-label="Filter files by path or extension"></div><div class="config-help catalog-status" id="liveFileCatalogStatus" role="status" aria-live="polite"></div><div class="live-list" id="liveFileList"></div>`;
   let visibleLimit = 250;
   const renderRows = (query, resetLimit = false) => {
     if (!isCurrentStudioRender(container, request)) return;
@@ -658,7 +688,7 @@ export async function renderFilesWorkspace(container, kind) {
     $("#liveFileList", container).innerHTML = items.map(item => `<article class="live-row">
       <span><strong>${escapeHtml(item.name)}</strong><small>${escapeHtml(item.path)}</small></span>
       <span class="chip-row"><span class="chip">${escapeHtml(item.extension || "file")}</span><span class="chip">${escapeHtml(item.kind)}</span></span>
-      <span><strong>${formatBytes(item.size)}</strong><small>${escapeHtml(item.modified)}</small></span>
+      <span><strong>${formatBytes(item.size)}</strong><small title="${escapeHtml(item.modified)}">${escapeHtml(formatTimestamp(item.modified))}</small></span>
       <span class="live-actions">${[".h5", ".hdf5"].includes(item.extension) ? `<button class="button small" data-inspect-hdf5="${escapeHtml(item.path)}">Inspect HDF5</button>` : ""}${pipelineType(item) ? `<button class="button small primary" data-use-file="${escapeHtml(item.path)}" data-use-type="${pipelineType(item)}">Use in pipeline</button>` : ""}</span>
     </article>`).join("") || `<div class="live-empty">No loaded files match this filter.${result.truncated ? " Older files outside the server catalog limit were not searched." : ""}</div>`;
     if (items.length < matches.length) {
@@ -782,7 +812,23 @@ export async function renderDocsWorkspace(container) {
   if (!isCurrentStudioRender(container, request)) return;
   const serverLimit = Number(result.limit || result.items.length);
   const repositoryMatches = Number(result.matched || result.items.length);
-  container.innerHTML = `<div class="live-toolbar"><span><strong>Repository documentation</strong><small>${result.items.length} loaded${result.truncated ? ` · newest ${serverLimit} only` : " · complete catalog"}</small></span><input id="liveDocSearch" type="search" placeholder="Filter documentation"></div><div class="config-help catalog-status" id="liveDocCatalogStatus" role="status" aria-live="polite"></div><div class="live-list" id="liveDocList"></div>`;
+  // A curated entry point, because "newest first" is not an order anyone reads
+  // documentation in, and the five documents that answer most questions were
+  // scattered through 66 rows by modification date.
+  const START_HERE = [
+    ["docs/README.md", "Documentation index"],
+    ["docs/GUI.md", "This Studio, explained"],
+    ["docs/ARCHITECTURE.md", "Launcher and every method"],
+    ["docs/CONFIGURATION.md", "Config grammar and routes"],
+    ["docs/reference/DATASET_FORMAT.md", "The shared HDF5 contract"]
+  ].filter(([path]) => result.items.some(item => item.path === path));
+  // The sidebar was drawn before this fetch returned, so setting the count here
+  // is not enough on the first open -- refresh that one row in place.
+  state.api.docCount = result.items.length;
+  refreshDocsSidebarBadge();
+  container.innerHTML = `<div class="live-toolbar"><span><strong>Repository documentation</strong><small>${result.items.length} loaded${result.truncated ? ` · newest ${serverLimit} only` : " · complete catalog"}</small></span><input id="liveDocSearch" type="search" placeholder="Filter document path" aria-label="Filter documentation by path"></div>
+    ${START_HERE.length ? `<div class="doc-start-here"><strong>Start here</strong>${START_HERE.map(([path, label]) => `<button class="button small" data-open-doc="${escapeHtml(path)}" title="${escapeHtml(path)}">${escapeHtml(label)}</button>`).join("")}</div>` : ""}
+    <div class="config-help catalog-status" id="liveDocCatalogStatus" role="status" aria-live="polite"></div><div class="live-list" id="liveDocList"></div>`;
   let visibleLimit = 250;
   const renderRows = (query, resetLimit = false) => {
     if (!isCurrentStudioRender(container, request)) return;
@@ -791,12 +837,33 @@ export async function renderDocsWorkspace(container) {
     const matches = result.items.filter(item => !text || item.path.toLowerCase().includes(text));
     const items = matches.slice(0, visibleLimit);
     $("#liveDocCatalogStatus", container).innerHTML = `Showing <strong>${items.length}</strong> of <strong>${matches.length}</strong> loaded matches${text ? ` for <code>${escapeHtml(query)}</code>` : ""}.${result.truncated ? ` The server catalog is capped at the newest ${serverLimit} Markdown files${repositoryMatches > result.items.length ? ` out of ${repositoryMatches}` : ""}; older documents were not searched.` : " The complete documentation catalog is loaded."}`;
-    $("#liveDocList", container).innerHTML = items.map(item => `<article class="live-row">
+    // Grouped by top-level area and alphabetical within a group. The flat
+    // modification-time order put docs/, methods/ and configs/ READMEs in
+    // whatever sequence they were last touched.
+    const AREA_ORDER = ["docs", "methods", "configs", "cae_suite", "studio", "inference", "tests"];
+    const areaOf = path => {
+      const head = String(path).split("/")[0];
+      return String(path).includes("/") ? head : "repository root";
+    };
+    const grouped = new Map();
+    [...items].sort((left, right) => left.path.localeCompare(right.path))
+      .forEach(item => {
+        const area = areaOf(item.path);
+        if (!grouped.has(area)) grouped.set(area, []);
+        grouped.get(area).push(item);
+      });
+    const orderedAreas = [...grouped.keys()].sort((left, right) => {
+      const leftRank = AREA_ORDER.indexOf(left);
+      const rightRank = AREA_ORDER.indexOf(right);
+      return (leftRank < 0 ? AREA_ORDER.length : leftRank) - (rightRank < 0 ? AREA_ORDER.length : rightRank)
+        || left.localeCompare(right);
+    });
+    $("#liveDocList", container).innerHTML = orderedAreas.map(area => `<div class="live-group-head">${escapeHtml(area)}/<small>${grouped.get(area).length}</small></div>${grouped.get(area).map(item => `<article class="live-row">
       <span><strong>${escapeHtml(item.name)}</strong><small>${escapeHtml(item.path)}</small></span>
       <span class="chip-row"><span class="chip">Markdown</span></span>
-      <span><strong>${formatBytes(item.size)}</strong><small>${escapeHtml(item.modified)}</small></span>
+      <span><strong>${formatBytes(item.size)}</strong><small title="${escapeHtml(item.modified)}">${escapeHtml(formatTimestamp(item.modified))}</small></span>
       <span class="live-actions"><button class="button small primary" data-open-doc="${escapeHtml(item.path)}">Read</button></span>
-    </article>`).join("") || `<div class="live-empty">No loaded documents match this filter.${result.truncated ? " Older documents outside the server catalog limit were not searched." : ""}</div>`;
+    </article>`).join("")}`).join("") || `<div class="live-empty">No loaded documents match this filter.${result.truncated ? " Older documents outside the server catalog limit were not searched." : ""}</div>`;
     if (items.length < matches.length) {
       $("#liveDocList", container).insertAdjacentHTML("beforeend", `<div class="live-toolbar"><span><small>${matches.length - items.length} more loaded documents are available.</small></span><button class="button small" id="liveDocShowMore">Show next ${Math.min(250, matches.length - items.length)}</button></div>`);
       onStudio(container, "#liveDocShowMore", "click", () => {
@@ -804,9 +871,15 @@ export async function renderDocsWorkspace(container) {
         renderRows($("#liveDocSearch", container).value);
       });
     }
-    $$("[data-open-doc]", container).forEach(button => button.addEventListener("click", () => openLiveDoc(container, button.dataset.openDoc)));
+    // Scoped to the list: renderRows() runs on every keystroke, and the
+    // Start-here buttons live outside it -- binding them here would stack one
+    // more listener per keystroke and open the document N times per click.
+    $$("[data-open-doc]", $("#liveDocList", container)).forEach(button =>
+      button.addEventListener("click", () => openLiveDoc(container, button.dataset.openDoc)));
   };
   renderRows("");
+  $$("[data-open-doc]", $(".doc-start-here", container) || document.createElement("div")).forEach(button =>
+    button.addEventListener("click", () => openLiveDoc(container, button.dataset.openDoc)));
   onStudio(container, "#liveDocSearch", "input", event => renderRows(event.target.value, true));
 }
 
@@ -815,8 +888,13 @@ export async function openLiveDoc(container, path) {
   if (!request) return;
   const doc = await apiRequest(`/api/doc?path=${encodeURIComponent(path)}`);
   if (!isCurrentStudioRender(container, request)) return;
-  container.innerHTML = `<div class="live-toolbar"><strong>${escapeHtml(doc.path)}</strong><button class="button small" id="liveBackDocs">Back to documents</button></div><pre class="live-document">${escapeHtml(doc.text)}</pre>`;
+  container.innerHTML = `<div class="live-toolbar"><strong>${escapeHtml(doc.path)}</strong><button class="button small" id="liveBackDocs">Back to documents</button></div><article class="live-document">${renderMarkdown(doc.text, doc.path)}</article>`;
   onStudio(container, "#liveBackDocs", "click", () => renderDocsWorkspace(container));
+  // Repository-relative links open in this same pane instead of leaving the app.
+  container.querySelectorAll("[data-doc-link]").forEach(link => link.addEventListener("click", event => {
+    event.preventDefault();
+    openLiveDoc(container, link.dataset.docLink);
+  }));
 }
 
 export async function renderSystemWorkspace(container) {
@@ -1249,15 +1327,38 @@ export async function renderOptimizationWorkspace(container, nodeId = null) {
   if (!isCurrentStudioRender(container, request)) return;
   const q = selector => $(selector, container);
   const csvFiles = artifacts.items.filter(item => item.extension === ".csv");
+  // Every .csv under output/ was listed as a bare path, newest-first, so 40-odd
+  // per-sample metric files buried the two or three candidate tables this
+  // workspace is for -- and the size/date the API already returns were dropped.
+  // Group by role (the names analysis.py writes) and label each option.
+  const csvRole = path => {
+    const name = String(path).replace(/\\/g, "/").split("/").pop().toLowerCase();
+    if (name === "candidates.csv") return "Candidate tables";
+    if (name === "optimize_summary.csv") return "Optimization summaries";
+    if (name.endsWith("_selected.csv")) return "Previously selected designs";
+    if (name === "per_sample_metrics.csv" || name.includes("metric")) return "Evaluation metrics";
+    return "Other CSV outputs";
+  };
+  const CSV_ROLE_ORDER = ["Candidate tables", "Optimization summaries", "Previously selected designs", "Evaluation metrics", "Other CSV outputs"];
+  const csvOptionLabel = item => {
+    const parts = String(item.path).replace(/\\/g, "/").split("/");
+    const short = parts.slice(-2).join("/");
+    return `${short} · ${formatBytes(item.size)}${item.modified ? ` · ${formatTimestamp(item.modified)}` : ""}`;
+  };
+  const csvGroups = CSV_ROLE_ORDER
+    .map(role => [role, csvFiles.filter(item => csvRole(item.path) === role)])
+    .filter(([, items]) => items.length);
   const node = state.nodes.find(item => item.id === nodeId && item.type === "optimize.design")
     || state.nodes.find(item => item.type === "optimize.design");
   const selectedCsv = node?.config.csv_path || connectedOptimizationCsv(node?.id) || "";
   container.innerHTML = `<div class="live-toolbar"><span><strong>Evidence-based Pareto selection</strong><small>Reads actual numeric rows from an output CSV. No surrogate score is invented.</small></span></div>
     <div class="config-card">
-      <label class="config-help">Candidate/evaluation CSV</label><select class="config-control" id="optimizationCsv"><option value="">Select an output CSV…</option>${csvFiles.map(item => `<option value="${escapeHtml(item.path)}"${item.path === selectedCsv ? " selected" : ""}>${escapeHtml(item.path)}</option>`).join("")}</select>
+      <label class="config-help">Candidate/evaluation CSV</label><select class="config-control" id="optimizationCsv"><option value="">Select an output CSV…</option>${csvGroups.map(([role, items]) => `<optgroup label="${escapeHtml(role)}">${items.map(item => `<option value="${escapeHtml(item.path)}"${item.path === selectedCsv ? " selected" : ""} title="${escapeHtml(item.path)}">${escapeHtml(csvOptionLabel(item))}</option>`).join("")}</optgroup>`).join("")}</select>
       <section id="optimizationSchema" class="optimization-schema" aria-live="polite"><div class="live-empty">Select a CSV to inspect its real columns.</div></section>
-      <label class="config-help">Constraints (semicolon-separated)</label><input class="config-control" id="optimizationConstraints" list="optimizationConstraintExamples" value="${escapeHtml(node?.config.constraints || "")}" placeholder="displacement <= 1.0; mass < 20"><datalist id="optimizationConstraintExamples"></datalist>
-      <label class="config-help">Diversity-aware Pareto top-k</label><input class="config-control" id="optimizationTopK" type="number" min="1" max="200" value="${escapeHtml(node?.config.top_k || 10)}">
+      <label class="config-help">Constraints · <code>column &lt;= value</code>, also <code>&lt;</code> <code>&gt;</code> <code>&gt;=</code>, separated by <code>;</code></label><input class="config-control" id="optimizationConstraints" list="optimizationConstraintExamples" value="${escapeHtml(node?.config.constraints || "")}" placeholder="displacement <= 1.0; mass < 20"><datalist id="optimizationConstraintExamples"></datalist>
+      <div class="config-help" id="optimizationConstraintCheck" role="status" aria-live="polite"></div>
+      <label class="config-help">Diversity-aware Pareto top-k</label><input class="config-control" id="optimizationTopK" type="number" min="1" max="200" value="${escapeHtml(node?.config.top_k ?? BLOCK_SPECS["optimize.design"].defaults.top_k)}">
+      <div class="config-help" id="optimizationConstraintStatus" role="status" aria-live="polite"></div>
       <button class="button primary" id="runOptimization" style="margin-top:8px" disabled>Evaluate actual CSV</button>
     </div><div id="optimizationResults"></div>`;
   let schemaRevision = 0;
@@ -1267,12 +1368,56 @@ export async function renderOptimizationWorkspace(container, nodeId = null) {
     return new Map(names.map((name, index) => [name, directions[index] === "max" ? "max" : "min"]));
   };
   const selectedObjectives = () => $$("[data-optimization-objective]:checked", container).map(input => input.value);
+  // The exact grammar parse_constraint() accepts (studio_backend/analysis.py).
+  // Keeping the two in step matters: a clause this passes and the backend
+  // rejects is a run that fails after the user has already committed to it.
+  const CONSTRAINT_GRAMMAR = /^\s*([A-Za-z_][A-Za-z0-9_.-]*)\s*(<=|>=|<|>)\s*(-?[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?)\s*$/;
+  let schemaColumns = [];
+  /**
+   * Check the constraint box while it is being typed, not at run time.
+   *
+   * A constraint naming a column the CSV does not have, or written in a form the
+   * backend cannot parse, used to survive every control on this page and fail
+   * only inside /api/optimization/run -- after the user had pressed the button
+   * and been told the whole request failed.
+   */
+  const constraintProblems = () => {
+    const text = q("#optimizationConstraints").value;
+    const clauses = text.split(";").map(item => item.trim()).filter(Boolean);
+    const unparsed = [];
+    const unknown = [];
+    clauses.forEach(clause => {
+      const match = clause.match(CONSTRAINT_GRAMMAR);
+      if (!match) { unparsed.push(clause); return; }
+      if (schemaColumns.length && !schemaColumns.includes(match[1])) unknown.push(match[1]);
+    });
+    return { clauses, unparsed, unknown };
+  };
+  const renderConstraintCheck = () => {
+    const target = q("#optimizationConstraintCheck");
+    if (!target) return true;
+    const { clauses, unparsed, unknown } = constraintProblems();
+    if (!clauses.length) {
+      target.innerHTML = "";
+      return true;
+    }
+    const problems = [];
+    if (unparsed.length) problems.push(`Cannot parse ${unparsed.map(item => `<code>${escapeHtml(item)}</code>`).join(", ")} — write <code>column &lt;= value</code>.`);
+    if (unknown.length) problems.push(`${unknown.map(item => `<code>${escapeHtml(item)}</code>`).join(", ")} ${unknown.length === 1 ? "is not a column" : "are not columns"} of this CSV.`);
+    target.innerHTML = problems.length
+      ? `<span class="constraint-invalid">${problems.join(" ")}</span>`
+      : `${clauses.length} constraint${clauses.length === 1 ? "" : "s"} check out against this CSV.`;
+    return problems.length === 0;
+  };
   const collectDirections = () => selectedObjectives().map(name => {
     const control = $$("[data-objective-direction]", container).find(item => item.dataset.objectiveDirection === name);
     return control?.value === "max" ? "max" : "min";
   });
   const syncRunState = () => {
-    q("#runOptimization").disabled = !q("#optimizationCsv").value || selectedObjectives().length === 0;
+    const constraintsOk = renderConstraintCheck();
+    q("#runOptimization").disabled = !q("#optimizationCsv").value
+      || selectedObjectives().length === 0
+      || !constraintsOk;
   };
   const persistControls = () => {
     if (!node) return;
@@ -1292,8 +1437,9 @@ export async function renderOptimizationWorkspace(container, nodeId = null) {
     const revision = ++schemaRevision;
     q("#runOptimization").disabled = true;
     if (!csvPath) {
+      schemaColumns = [];
       q("#optimizationSchema").innerHTML = '<div class="live-empty">Select a CSV to inspect its real columns.</div>';
-      persistControls();
+      syncRunState();
       return;
     }
     q("#optimizationSchema").innerHTML = '<div class="live-empty">Inspecting CSV columns…</div>';
@@ -1304,7 +1450,15 @@ export async function renderOptimizationWorkspace(container, nodeId = null) {
       });
       if (revision !== schemaRevision || !isCurrentStudioRender(container, request)) return;
       const saved = objectiveDirections();
+      schemaColumns = schema.columns || [];
+      // Saved objectives that this CSV does not have are REPORTED, not deleted.
+      // persistControls() ran at the end of every schema render, so simply
+      // opening the workspace against a different CSV wrote back the empty
+      // checkbox set and destroyed the block's configured objectives before the
+      // user could see which ones no longer applied.
+      const missingObjectives = [...saved.keys()].filter(name => !schema.objective_columns.includes(name));
       q("#optimizationSchema").innerHTML = `<header><strong>Objectives</strong><small>${schema.rows_sampled} rows sampled · ${schema.numeric_columns.length} numeric columns. Choose explicitly; identifiers are excluded from suggestions.</small></header>
+        ${missingObjectives.length ? `<div class="diagnostic warn"><i></i><span>This block is configured for ${missingObjectives.map(escapeHtml).join(", ")}, which ${missingObjectives.length === 1 ? "is not a column" : "are not columns"} of the selected CSV. The saved setting is kept — pick the objectives you want below.</span></div>` : ""}
         <div class="optimization-objectives">${schema.objective_columns.length ? schema.objective_columns.map(name => `<label class="optimization-objective">
           <input type="checkbox" data-optimization-objective value="${escapeHtml(name)}"${saved.has(name) ? " checked" : ""}>
           <span><strong>${escapeHtml(name)}</strong><small>${schema.numeric_counts[name]} numeric values</small></span>
@@ -1318,7 +1472,8 @@ export async function renderOptimizationWorkspace(container, nodeId = null) {
         persistControls();
         syncRunState();
       }));
-      persistControls();
+      // Only a user action writes back. Rendering the schema is not one.
+      if (!missingObjectives.length) persistControls();
       syncRunState();
     } catch (error) {
       if (revision !== schemaRevision || !isCurrentStudioRender(container, request)) return;
@@ -1326,7 +1481,8 @@ export async function renderOptimizationWorkspace(container, nodeId = null) {
     }
   };
   onStudio(container, "#optimizationCsv", "change", inspectCsv);
-  onStudio(container, "#optimizationConstraints", "change", persistControls);
+  onStudio(container, "#optimizationConstraints", "input", syncRunState);
+  onStudio(container, "#optimizationConstraints", "change", () => { persistControls(); syncRunState(); });
   onStudio(container, "#optimizationTopK", "change", persistControls);
   onStudio(container, "#runOptimization", "click", async () => {
     const actionRequest = currentStudioRender(container);
@@ -1357,16 +1513,7 @@ export async function renderOptimizationWorkspace(container, nodeId = null) {
         node.optimizationReport = report.report_path;
       }
       if (!isCurrentStudioRender(container, actionRequest)) return;
-      q("#optimizationResults").innerHTML = `<div class="live-summary">
-        <span><strong>${report.rows}</strong><small>CSV rows</small></span>
-        <span><strong>${report.numeric_candidates}</strong><small>numeric candidates</small></span>
-        <span><strong>${report.feasible}</strong><small>feasible</small></span>
-        <span><strong>${report.pareto}</strong><small>Pareto designs</small></span>
-      </div><div class="live-list" style="margin-top:8px">${report.selected.map((candidate, index) => `<article class="live-row">
-        <span><strong>#${index + 1} · ${escapeHtml(candidate.id)}</strong><small>row ${candidate.index} · ${escapeHtml(report.report_path)}</small></span>
-        <span class="chip-row">${Object.entries(candidate.objectives).map(([name, value]) => `<span class="chip">${escapeHtml(name)}=${escapeHtml(value)}</span>`).join("")}</span>
-        <span><strong>${candidate.crowding == null ? "boundary" : Number(candidate.crowding).toFixed(4)}</strong><small>Pareto crowding</small></span><span></span>
-      </article>`).join("")}</div>`;
+      renderOptimizationReport(container, report);
       toast(`Optimization complete: ${report.pareto} Pareto candidates, ${report.selected.length} selected.`);
     } catch (error) {
       if (!isCurrentStudioRender(container, actionRequest)) return;
@@ -1374,6 +1521,86 @@ export async function renderOptimizationWorkspace(container, nodeId = null) {
     }
   });
   if (selectedCsv) await inspectCsv();
+  // A result produced here, or by a pipeline run, used to vanish the moment the
+  // workspace was closed: the report path was written into the block and then
+  // never read back.
+  const savedReport = node?.optimizationReport || node?.config.report_path;
+  if (savedReport) {
+    try {
+      const restored = await apiRequest(`/api/text?path=${encodeURIComponent(savedReport)}`);
+      const parsed = JSON.parse(restored.text);
+      if (parsed && isCurrentStudioRender(container, request)) {
+        renderOptimizationReport(container, { ...parsed, report_path: savedReport }, true);
+      }
+    } catch {
+      /* A deleted or unreadable report is not an error worth interrupting for. */
+    }
+  }
+}
+
+/**
+ * The optimization result panel.
+ *
+ * Extracted so a reopened workspace can show a previously produced report, and
+ * so the all-infeasible case has somewhere to explain itself: `feasible 0 /
+ * Pareto 0` above an empty list is not a result, it is a puzzle. The backend now
+ * returns the per-constraint rejection counts it was already computing.
+ */
+function renderOptimizationReport(container, report, restored = false) {
+  const target = $("#optimizationResults", container);
+  if (!target) return;
+  const rejections = Array.isArray(report.rejections) ? report.rejections : [];
+  const explanation = report.feasible === 0
+    ? `<div class="diagnostic error"><i></i><div><strong>No candidate satisfied every constraint, so there is no Pareto set.</strong>${rejections.length ? `<ul style="margin:6px 0 0;padding-left:18px">${rejections.map(item => `<li><code>${escapeHtml(item.column)} ${escapeHtml(item.operator)} ${escapeHtml(item.threshold)}</code> rejected ${item.rows} row${item.rows === 1 ? "" : "s"}; closest observed value ${escapeHtml(item.closest_value)}.</li>`).join("")}</ul>` : "<br>No constraint is set, so every row was skipped for a blank or non-numeric objective value."}</div></div>`
+    : rejections.length
+      ? `<div class="diagnostic warn"><i></i><span>${rejections.map(item => `${escapeHtml(item.column)} ${escapeHtml(item.operator)} ${escapeHtml(item.threshold)} rejected ${item.rows}`).join(" · ")}</span></div>`
+      : "";
+  const skipped = Number(report.skipped_rows || 0);
+  target.innerHTML = `${restored ? `<div class="config-help">Showing the report this block last produced (${escapeHtml(report.report_path)}). Press Evaluate to recompute.</div>` : ""}
+    <div class="live-summary">
+      <span><strong>${report.rows}</strong><small>CSV rows</small></span>
+      <span><strong>${report.numeric_candidates}</strong><small>numeric candidates${skipped ? ` · ${skipped} skipped` : ""}</small></span>
+      <span><strong>${report.feasible}</strong><small>feasible</small></span>
+      <span><strong>${report.pareto}</strong><small>Pareto designs</small></span>
+    </div>
+    ${explanation}
+    ${report.selected_csv ? `<div class="live-toolbar" style="margin-top:8px"><span><strong>Selected designs</strong><small>${escapeHtml(report.selected_csv)}</small></span><span class="live-actions"><button class="button small" data-open-optimization-artifact="${escapeHtml(report.selected_csv)}">Open table</button><button class="button small" data-open-optimization-artifact="${escapeHtml(report.report_path)}">Open report</button></span></div>` : ""}
+    <div class="live-list" style="margin-top:8px">${(report.selected || []).map((candidate, index) => `<article class="live-row">
+      <span><strong>#${index + 1} · ${escapeHtml(candidate.id)}</strong><small>CSV row ${candidate.index}</small></span>
+      <span class="chip-row">${Object.entries(candidate.objectives).map(([name, value]) => `<span class="chip">${escapeHtml(name)}=${escapeHtml(value)}</span>`).join("")}</span>
+      <span><strong>${candidate.crowding == null ? "boundary" : Number(candidate.crowding).toFixed(4)}</strong><small>Pareto crowding</small></span><span></span>
+    </article>`).join("")}</div>`;
+  $$("[data-open-optimization-artifact]", container).forEach(button =>
+    button.addEventListener("click", () => openTextArtifact(container, button.dataset.openOptimizationArtifact)));
+}
+
+/**
+ * Show a text result artifact in the workspace pane.
+ *
+ * Reports, selected-design tables and metric CSVs were printed as paths and
+ * nothing more: correct, and useless without a shell. CSV/TSV renders as a
+ * table, everything else as text.
+ */
+export async function openTextArtifact(container, path, back = null) {
+  const request = beginStudioRender(container);
+  if (!request) return;
+  container.innerHTML = `<div class="live-empty">Reading ${escapeHtml(path)}…</div>`;
+  try {
+    const data = await apiRequest(`/api/text?path=${encodeURIComponent(path)}`);
+    if (!isCurrentStudioRender(container, request)) return;
+    const rows = /\.(csv|tsv)$/i.test(data.path)
+      ? data.text.split(/\r?\n/).filter(line => line.trim()).slice(0, 500)
+        .map(line => line.split(/\.tsv$/i.test(data.path) ? "\t" : ","))
+      : null;
+    const body = rows && rows.length
+      ? `<div style="overflow:auto"><table class="artifact-table"><thead><tr>${rows[0].map(cell => `<th>${escapeHtml(cell)}</th>`).join("")}</tr></thead><tbody>${rows.slice(1).map(row => `<tr>${row.map(cell => `<td>${escapeHtml(cell)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`
+      : `<pre class="doc-code">${escapeHtml(data.text)}</pre>`;
+    container.innerHTML = `<div class="live-toolbar"><span><strong>${escapeHtml(data.path)}</strong><small>${formatBytes(data.size)}${data.truncated ? " · truncated for display" : ""}${rows ? ` · ${rows.length - 1} rows` : ""}</small></span><button class="button small" id="liveBackArtifact">Back</button></div><article class="live-document">${body}</article>`;
+    onStudio(container, "#liveBackArtifact", "click", () => (back ? back() : openStudio(state.studioSection, null)));
+  } catch (error) {
+    if (!isCurrentStudioRender(container, request)) return;
+    container.innerHTML = `<div class="live-empty"><strong>Could not open ${escapeHtml(path)}</strong><br><br>${escapeHtml(error.message)}</div>`;
+  }
 }
 
 export async function renderFieldEvaluationWorkspace(container, nodeId = null) {
@@ -1385,17 +1612,37 @@ export async function renderFieldEvaluationWorkspace(container, nodeId = null) {
   ]);
   if (!isCurrentStudioRender(container, request)) return;
   const q = selector => $(selector, container);
-  const predictions = artifacts.items.filter(item => [".h5", ".hdf5"].includes(item.extension));
+  // Files AND the directories that hold them. `mode inference` writes one HDF5
+  // per sample into inference_output_dir, and run_field_evaluation accepts a
+  // directory -- but only single files were listed, so the thing a shipped
+  // pipeline actually produces could not be selected here.
+  const predictionFiles = artifacts.items.filter(item => [".h5", ".hdf5"].includes(item.extension));
+  const predictionDirCounts = new Map();
+  predictionFiles.forEach(item => {
+    const parent = String(item.path).replace(/\\/g, "/").split("/").slice(0, -1).join("/");
+    if (!parent) return;
+    predictionDirCounts.set(parent, (predictionDirCounts.get(parent) || 0) + 1);
+  });
+  const predictionDirs = [...predictionDirCounts.entries()]
+    .filter(([, count]) => count > 1)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([path, count]) => ({ path, label: `${path}/ (${count} files)`, isDirectory: true }));
+  const predictions = [
+    ...predictionDirs,
+    ...predictionFiles.map(item => ({ path: item.path, label: item.path, isDirectory: false }))
+  ];
   const truthFiles = datasets.items.filter(item => [".h5", ".hdf5"].includes(item.extension));
   const evaluationNode = state.nodes.find(node => node.id === nodeId && node.type === "evaluate.predictions")
     || state.nodes.find(node => node.type === "evaluate.predictions");
   const pendingPrediction = state.pendingEvaluationPrediction;
   state.pendingEvaluationPrediction = "";
+  // No extension filter: a connected Inference Run publishes results_path, the
+  // rollout DIRECTORY, and filtering on .h5 discarded exactly the value a
+  // finished pipeline hands over.
   const selectedPrediction = evaluationNode?.config.prediction_path || pendingPrediction || connectedNodeValue(
     evaluationNode?.id,
     "prediction",
-    ["prediction_path", "output_path", "path"],
-    [".h5", ".hdf5"]
+    ["results_path", "prediction_path", "output_path", "path"]
   ) || "";
   const selectedTruth = evaluationNode?.config.truth_path || connectedNodeValue(
     evaluationNode?.id,
@@ -1404,14 +1651,14 @@ export async function renderFieldEvaluationWorkspace(container, nodeId = null) {
     [".h5", ".hdf5"]
   ) || "";
   if (selectedPrediction && !predictions.some(item => item.path === selectedPrediction)) {
-    predictions.unshift({ path: selectedPrediction });
+    predictions.unshift({ path: selectedPrediction, label: selectedPrediction, isDirectory: false });
   }
   if (selectedTruth && !truthFiles.some(item => item.path === selectedTruth)) {
     truthFiles.unshift({ path: selectedTruth });
   }
   container.innerHTML = `<div class="live-toolbar"><span><strong>Schema-aware prediction evaluation</strong><small>Mesh fields, MLP tables, operator arrays, and native prediction/target pairs are inspected before any metric is computed.</small></span><button class="button small" id="refreshEvaluationSchema">Refresh contract</button></div>
     <div class="config-card">
-      <label class="config-help">Prediction / reconstruction HDF5<select class="config-control" id="evaluationPrediction"><option value="">Select a real HDF5 output…</option>${predictions.map(item => `<option value="${escapeHtml(item.path)}"${item.path === selectedPrediction ? " selected" : ""}>${escapeHtml(item.path)}</option>`).join("")}</select></label>
+      <label class="config-help">Prediction / reconstruction HDF5<select class="config-control" id="evaluationPrediction"><option value="">Select a real HDF5 output…</option>${predictions.map(item => `<option value="${escapeHtml(item.path)}"${item.path === selectedPrediction ? " selected" : ""}>${escapeHtml(item.label || item.path)}</option>`).join("")}</select></label>
       <label class="config-help">Ground-truth HDF5<select class="config-control" id="evaluationTruth"><option value="">Select a real dataset…</option>${truthFiles.map(item => `<option value="${escapeHtml(item.path)}"${item.path === selectedTruth ? " selected" : ""}>${escapeHtml(item.path)}</option>`).join("")}</select></label>
       <section id="evaluationSchema" class="evaluation-schema" aria-live="polite"><div class="live-empty">Select both HDF5 sources to inspect their contracts.</div></section>
       <details class="evaluation-legacy"><summary>Legacy contiguous mesh-row mapping</summary>
@@ -1507,9 +1754,14 @@ export async function renderFieldEvaluationWorkspace(container, nodeId = null) {
     );
     const sourcePairs = savedPairs.length ? savedPairs : mapping.field_pairs;
     const pairByPrediction = new Map(sourcePairs.map(pair => [Number(pair.prediction_index), pair]));
-    const predictionCandidates = (schema.prediction.target_indices?.length
+    // Two different reductions used to be reported as one, and the message
+    // described neither: the schema deliberately excludes non-target rows
+    // (reference coordinates), and only the 512 cap is real truncation.
+    const predictionTargets = schema.prediction.target_indices?.length
       ? schema.prediction.target_indices
-      : Array.from({ length: schema.prediction.field_count }, (unused, index) => index)).slice(0, 512);
+      : Array.from({ length: schema.prediction.field_count }, (unused, index) => index);
+    const predictionCandidates = predictionTargets.slice(0, 512);
+    const predictionExcluded = schema.prediction.field_count - predictionTargets.length;
     const truthNames = mapping.mode === "embedded" ? schema.prediction.field_names : schema.truth.field_names;
     const truthCandidates = (mapping.mode === "embedded"
       ? predictionCandidates
@@ -1522,7 +1774,12 @@ export async function renderFieldEvaluationWorkspace(container, nodeId = null) {
     ];
     const mappingRows = predictionCandidates.map(predictionIndex => {
       const pair = pairByPrediction.get(predictionIndex);
-      const checked = Boolean(pair);
+      // A "confirm" mapping is positional: the backend lined the rows up by
+      // index because no usable names were declared. Pre-ticking every row made
+      // the confirmation checkbox the only thing standing between a categorical
+      // part-index row and a displacement field. Rows the user has already saved
+      // stay ticked; a fresh positional proposal starts unticked.
+      const checked = Boolean(pair) && (savedPairs.length > 0 || mapping.confidence === "exact");
       const selectedTruthIndex = Number(pair?.truth_index ?? truthCandidates[0] ?? 0);
       const predictionName = schema.prediction.field_names[predictionIndex] || `field ${predictionIndex}`;
       return `<label class="evaluation-field-row">
@@ -1536,14 +1793,15 @@ export async function renderFieldEvaluationWorkspace(container, nodeId = null) {
     q("#evaluationSchema").innerHTML = `<div class="live-summary evaluation-contract-summary">
       <span><strong>${escapeHtml(schema.prediction.contract)}</strong><small>prediction contract</small></span>
       <span><strong>${escapeHtml(schema.truth.contract)}</strong><small>truth contract</small></span>
-      <span><strong>${match.overlap_count}</strong><small>${escapeHtml(match.strategy)}-matched samples</small></span>
-      <span><strong>${mapping.field_pairs.length}</strong><small>recommended field pairs</small></span>
+      <span><strong>${match.overlap_count}</strong><small>${escapeHtml(match.strategy)}-matched sample${match.overlap_count === 1 ? "" : "s"}</small></span>
+      <span><strong>${mapping.field_pairs.length} of ${predictionCandidates.length}</strong><small>rows auto-paired</small></span>
     </div>
     <div class="evaluation-array-contract"><span><strong>Prediction array</strong><code>${escapeHtml(mapping.prediction_array || "not detected")}</code></span><span><strong>Truth array</strong><code>${escapeHtml(mapping.truth_array || "not detected")}</code></span><span><strong>Mapping basis</strong><small>${escapeHtml(mapping.basis || "manual mapping required")}</small></span></div>
     ${diagnostics.length ? `<div class="diagnostics">${diagnostics.map(([level, message]) => `<div class="diagnostic ${level}"><i></i><span>${escapeHtml(message)}</span></div>`).join("")}</div>` : ""}
     <section class="evaluation-field-mapping"><header><span><strong>Fields to score</strong><small>Every checked prediction field must map to one unique truth field.</small></span><span class="chip ${mapping.confidence === "exact" ? "" : "warn"}">${escapeHtml(mapping.confidence)} mapping</span></header>
       ${mappingRows || '<div class="live-empty">No numeric fields are available for mapping.</div>'}
-      ${predictionCandidates.length < schema.prediction.field_count ? `<p class="config-help">Showing the first ${predictionCandidates.length} of ${schema.prediction.field_count} prediction fields.</p>` : ""}
+      ${predictionExcluded > 0 ? `<p class="config-help">${predictionExcluded} of ${schema.prediction.field_count} prediction rows are not scoreable targets and are not listed${schema.prediction.target_basis ? ` (${escapeHtml(schema.prediction.target_basis)})` : ""}.</p>` : ""}
+      ${predictionCandidates.length < predictionTargets.length ? `<p class="config-help">Listing the first ${predictionCandidates.length} of ${predictionTargets.length} scoreable prediction fields.</p>` : ""}
       ${mapping.confidence === "confirm" ? `<label class="check-row evaluation-confirm"><input id="evaluationConfirmMapping" type="checkbox"${evaluationNode?.config.mapping_confirmed === "True" && savedPairs.length ? " checked" : ""}> I inspected and confirm this field mapping; positional alignment is not treated as metadata.</label>` : ""}
     </section>`;
     $$("[data-evaluation-field], [data-evaluation-truth]", container).forEach(control => control.addEventListener("change", event => {
@@ -1567,6 +1825,18 @@ export async function renderFieldEvaluationWorkspace(container, nodeId = null) {
     const revision = ++schemaRevision;
     activeSchema = null;
     q("#runFieldEvaluation").disabled = true;
+    // Metrics belong to the pair they were computed from. Changing either path
+    // used to leave the previous run's summary on screen under the new
+    // contract -- including under an error that says the new pair cannot be
+    // scored at all. Mark it as stale rather than deleting the evidence paths.
+    const results = q("#evaluationResults");
+    if (results && results.innerHTML.trim() && results.dataset.pair !== `${predictionPath}|${truthPath}`) {
+      results.classList.add("stale-results");
+      if (!q("#evaluationStaleNote")) {
+        results.insertAdjacentHTML("afterbegin",
+          '<div class="diagnostic warn" id="evaluationStaleNote"><i></i><span>These metrics are from the previous prediction/truth selection. Compute metrics again for the current pair.</span></div>');
+      }
+    }
     if (!predictionPath || !truthPath) {
       q("#evaluationSchema").innerHTML = '<div class="live-empty">Select both HDF5 sources to inspect their contracts.</div>';
       return;
@@ -1653,7 +1923,12 @@ export async function renderFieldEvaluationWorkspace(container, nodeId = null) {
       const mae = report.aggregate.mae || {};
       const rmse = report.aggregate.rmse || {};
       const metricText = metric => Number.isFinite(Number(metric?.mean)) ? Number(metric.mean).toExponential(4) : "n/a";
-      q("#evaluationResults").innerHTML = `<div class="live-summary">
+      const resultsEl = q("#evaluationResults");
+      // Stamp the exact pair these metrics came from, so a later selection
+      // change can tell whether what is on screen still describes it.
+      resultsEl.dataset.pair = `${q("#evaluationPrediction").value}|${q("#evaluationTruth").value}`;
+      resultsEl.classList.remove("stale-results");
+      resultsEl.innerHTML = `<div class="live-summary">
         <span><strong>${report.evaluated_samples}</strong><small>evaluated samples</small></span>
         <span><strong>${metricText(relativeL2)}</strong><small>mean relative L2</small></span>
         <span><strong>${metricText(mae)}</strong><small>mean MAE</small></span>
@@ -1789,11 +2064,11 @@ function renderConnectedRunComparison(container, compareNode, resolved) {
   const target = $("#connectedComparison", container);
   if (!target) return;
   if (!compareNode) {
-    target.innerHTML = `<div class="live-empty"><strong>No Compare Models block is open.</strong><br><br>Open the center of a Compare Models block to resolve its graph-connected runs. CSV ranking remains available below.</div>`;
+    target.innerHTML = `<div class="live-empty"><strong>No Compare Models block is open.</strong><br><br>Add a <strong>Compare Models</strong> block and open it (click its preview, or Inspect → Compare) to resolve runs connected in the graph. The <strong>Evaluation CSV mean ranking</strong> below works without one — pick the CSVs yourself.</div>`;
     return;
   }
   if (!resolved.runs.length) {
-    target.innerHTML = `<div class="live-empty"><strong>No connected run has metric evidence yet.</strong><br><br>Connect two or more Train Metrics outputs, choose a real job in each block, then return here.${resolved.unresolved.length ? `<br><br>Unresolved: ${resolved.unresolved.map(item => escapeHtml(item.label)).join(", ")}` : ""}</div>`;
+    target.innerHTML = `<div class="live-empty"><strong>No connected run has metric evidence yet.</strong><br><br>Three things feed this block: <strong>Train Metrics</strong> outputs, <strong>model blocks with a finished run</strong>, and <strong>Evaluate Predictions</strong> outputs (their per-sample CSV is preselected in the ranking below). Connect one and choose a real job.${resolved.unresolved.length ? `<br><br>Unresolved: ${resolved.unresolved.map(item => escapeHtml(item.label)).join(", ")}` : ""}</div>`;
     return;
   }
   const sharedKeys = sharedRunMetricKeys(resolved.runs);
@@ -1843,7 +2118,13 @@ export async function renderComparisonWorkspace(container, nodeId = null) {
   if (!isCurrentStudioRender(container, request)) return;
   const q = selector => $(selector, container);
   const csvFiles = artifacts.items.filter(item => item.extension === ".csv");
-  const compareNode = state.nodes.find(node => node.id === nodeId && node.type === "evaluate.compare") || null;
+  // Fall back to the block on the canvas, the way the Optimization and
+  // Evaluation workspaces already do. Without this, opening Compare from the top
+  // nav could never resolve graph-connected runs -- it reported "no Compare
+  // Models block is open" while one sat on the canvas.
+  const compareNode = state.nodes.find(node => node.id === nodeId && node.type === "evaluate.compare")
+    || state.nodes.find(node => node.type === "evaluate.compare")
+    || null;
   const connectedRuns = connectedComparisonSources(nodeId, metricCatalog.items);
   const evaluationCsvPaths = connectedEvaluationCsvPaths(nodeId);
   let savedCsvPaths = [];
@@ -1860,7 +2141,7 @@ export async function renderComparisonWorkspace(container, nodeId = null) {
       : pendingCsvPaths;
   container.innerHTML = `<div class="live-toolbar"><span><strong>Connected run comparison</strong><small>Graph links resolve persisted run IDs first; only actual logged values are plotted.</small></span></div>
     <section class="connected-comparison config-card" id="connectedComparison"></section>
-    <div class="live-toolbar"><span><strong>Evaluation CSV mean ranking</strong><small>Select outputs from the same held-out dataset and metric; Studio validates shape and finite values, not scientific comparability.</small></span></div>
+    <div class="live-toolbar"><span><strong>Evaluation CSV mean ranking</strong><small>Ranks the mean of one numeric column. Selecting outputs from the same held-out set is yours to get right; the contract and sample IDs in each CSV are cross-checked and any mismatch is reported below.</small></span></div>
     <div class="config-card">
       <label class="config-help">Runs to compare${evaluationCsvPaths.length ? ` · ${evaluationCsvPaths.length} graph-connected evaluation output${evaluationCsvPaths.length === 1 ? "" : "s"} preselected` : ""}</label>
       <div id="comparisonRunList"></div>
@@ -1868,6 +2149,7 @@ export async function renderComparisonWorkspace(container, nodeId = null) {
       <label class="config-help" style="margin-top:10px">Model / group column (matching rows are averaged; leave blank for one mean per CSV)</label><input class="config-control" id="comparisonGroup" value="${escapeHtml(compareNode?.config.group_column || "model")}">
       <label class="config-help">Numeric metric column</label><select class="config-control" id="comparisonMetric"><option value="">Select CSV runs first</option></select>
       <div class="config-help" id="comparisonSchemaStatus" role="status" aria-live="polite">The common CSV schema will be detected automatically.</div>
+      <div id="comparisonQualification"></div>
       <label class="config-help">Direction</label><select class="config-control" id="comparisonDirection"><option value="min"${compareNode?.config.csv_direction === "max" ? "" : " selected"}>Lower is better</option><option value="max"${compareNode?.config.csv_direction === "max" ? " selected" : ""}>Higher is better</option></select>
       <button class="button primary" id="runComparison" style="margin-top:8px" disabled>Rank run / group means</button>
     </div><div id="comparisonResults"></div>`;
@@ -1896,6 +2178,7 @@ export async function renderComparisonWorkspace(container, nodeId = null) {
       metricSelect.innerHTML = '<option value="">Select CSV runs first</option>';
       runButton.disabled = true;
       q("#comparisonSchemaStatus").textContent = "The common CSV schema will be detected automatically.";
+      q("#comparisonQualification").innerHTML = "";
       persistCsvComparison();
       return;
     }
@@ -1929,10 +2212,17 @@ export async function renderComparisonWorkspace(container, nodeId = null) {
       q("#comparisonSchemaStatus").textContent = preferredMetric
         ? `${schema.common_columns.length} common columns · ${schema.numeric_columns.length} numeric metric${schema.numeric_columns.length === 1 ? "" : "s"} · ${schema.sources.reduce((sum, source) => sum + source.rows_sampled, 0)} rows sampled`
         : "These CSV runs have no common numeric metric column. Choose comparable evaluation outputs.";
+      // The block's own "same held-out set" precondition, checked rather than
+      // asserted: differing array contracts or disjoint sample IDs mean the
+      // means below are not measuring the same thing.
+      q("#comparisonQualification").innerHTML = (schema.warnings || [])
+        .map(message => `<div class="diagnostic warn"><i></i><span>${escapeHtml(message)}</span></div>`)
+        .join("");
       persistCsvComparison();
     } catch (error) {
       if (revision !== schemaRevision || !isCurrentStudioRender(container, request)) return;
       metricSelect.innerHTML = '<option value="">Schema unavailable</option>';
+      q("#comparisonQualification").innerHTML = "";
       runButton.disabled = true;
       q("#comparisonSchemaStatus").textContent = `Schema inspection failed: ${error.message}`;
     }
@@ -1994,10 +2284,11 @@ export async function renderComparisonWorkspace(container, nodeId = null) {
       if (!isCurrentStudioRender(container, actionRequest)) return;
       q("#comparisonResults").innerHTML = `<div class="live-summary">
         <span><strong>${report.numeric_rows}</strong><small>finite observations</small></span>
-        <span><strong>${report.runs}</strong><small>connected run${report.runs === 1 ? "" : "s"}</small></span>
+        <span><strong>${report.runs}</strong><small>selected CSV run${report.runs === 1 ? "" : "s"}</small></span>
         <span><strong>${report.ranked_groups}</strong><small>ranked run / group means</small></span>
         <span><strong>${escapeHtml(report.best.name)}</strong><small>best mean · ${escapeHtml(report.metric)} ${escapeHtml(report.direction)}</small></span>
       </div>
+      ${(report.warnings || []).map(message => `<div class="diagnostic warn" style="margin-top:8px"><i></i><span>${escapeHtml(message)}</span></div>`).join("")}
       <div class="config-help" style="margin-top:8px">Ranking uses the arithmetic mean of finite ${escapeHtml(report.metric)} values within each selected CSV and group.</div>
       ${report.runs > 1 ? `<div class="chip-row" style="margin-top:8px">${report.sources.map(source => `<span class="chip">${escapeHtml(source.run)}: ${source.numeric_rows}/${source.rows} observations · ${source.groups} group${source.groups === 1 ? "" : "s"}</span>`).join("")}</div>` : ""}
       <div class="live-list" style="margin-top:8px">${report.ranked.slice(0, 25).map(item => `<article class="live-row">

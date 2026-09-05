@@ -14,6 +14,10 @@ if TYPE_CHECKING:
 class PathKind(str, Enum):
     INPUT_FILE = "input_file"
     INPUT_DIR = "input_dir"
+    # Either is acceptable. GeometryIngest is the case: `gather_paths` returns
+    # `[root]` for a file and globs a tree for a directory, so demanding one or
+    # the other rejects a configuration the native code runs happily.
+    INPUT_PATH = "input_path"
     OUTPUT_FILE = "output_file"
     OUTPUT_DIR = "output_dir"
 

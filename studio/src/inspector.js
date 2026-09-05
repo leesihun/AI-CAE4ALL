@@ -1,7 +1,7 @@
 import { $, $$, escapeHtml, toast, formatBytes, on } from "./dom.js";
 import { state, snapshot } from "./state.js";
 import { savePipelineState } from "./persistence.js";
-import { BLOCK_SPECS, MODEL_CATALOG, TYPE_META, INPUT_SOURCE_META } from "./constants.js";
+import { BLOCK_SPECS, MODEL_CATALOG, TYPE_META, INPUT_SOURCE_META, HELP } from "./constants.js";
 import { apiRequest, requireRuntime } from "./api.js";
 import { previewGraphic, nodeVisualLabel } from "./graphics.js";
 import { typeColor, STANDALONE_INFERENCE_MODEL_IDS } from "./validate.js";
@@ -60,7 +60,7 @@ export function embeddedInspector(node, spec) {
       <div class="inspect-card-list">
         ${inspectorCard("Sequential pipeline", "Native", "train executes the hierarchical VAE stage and then the latent-conditioner stage; compatible completed stages may be reused.")}
         ${inspectorCard("VAE stage", "Native", "Compress fixed-geometry field tensors into a main latent code plus per-level hierarchical latent codes.")}
-        ${inspectorCard("Latent conditioner", "Native", "Map ordered CSV parameter rows or condition images into the VAE latent representation.")}
+        ${inspectorCard("Latent conditioner", "Native", "Map conditions into the VAE latent representation: the dataset's own cond_var rows (lc_data_type hdf5, the default), an ordered CSV, or condition images.")}
         ${inspectorCard("Reconstruction", "Native", "Load both checkpoints, generate fields from conditions, write reconstructions.h5, and report field MSE.")}
         ${inspectorCard("Dataset gate", "Required", "The current loader requires uniform node count N and timestep count T across samples.", "adapter")}
       </div>
@@ -70,10 +70,10 @@ export function embeddedInspector(node, spec) {
     return `<div class="inspect-section">
       <div class="section-title">Model-owned workspace</div>
       <div class="inspect-card-list">
-        ${inspectorCard("Data mapping", "Inside model", "Choose named inputs, targets, timesteps, units, and compatible condition bindings.")}
+        ${inspectorCard("Data contract", "Full config", "input_var / output_var / cond_var, edge and positional features, and normalization live in Full config; preflight checks them against the dataset's real row layout before launch.")}
         ${inspectorCard("Automatic preflight", "Before run", "Graph, config, route, paths, environment, dataset, checkpoint, native dry-run, and command checks.")}
-        ${inspectorCard("Resources and VRAM", "Live estimate", "GPU selection, precision, batch feasibility, measured peak allocation, throughput, and low-memory controls.")}
-        ${inspectorCard("Training outputs", ".pth ready", "Loss curves, validation samples, checkpoints, resume state, and model download.")}
+        ${inspectorCard("Resources", "Presets + preflight", "gpu_ids, mixed precision, activation checkpointing, batch size and the Low-VRAM preset. Peak VRAM is read back from the run log in Train Metrics; it is not estimated in advance.")}
+        ${inspectorCard("Training outputs", ".pth on disk", "Loss curves in Train Metrics, the checkpoint at modelpath, periodic prediction dumps under log_file_dir, and warm-start via the resume port.")}
       </div>
     </div>`;
   }
@@ -95,8 +95,8 @@ export function embeddedInspector(node, spec) {
     return `<div class="inspect-section"><div class="section-title">Optimization layers</div><div class="inspect-card-list">
       ${inspectorCard("Geometry feasibility", "CSV evidence", "Use explicit geometry-check columns from the selected evaluation CSV as hard constraints.", "adapter")}
       ${inspectorCard("Physics evaluators", "Actual outputs", "Consume completed inference or benchmark CSVs; no physics score is synthesized.", "adapter")}
-      ${inspectorCard("Objectives and constraints", "Native", "Numeric columns, min/max direction, hard inequalities, and evaluator response mapping.")}
-      ${inspectorCard("Pareto and diversity", "Native", "Feasible non-dominated set and crowding-distance top-k; scalarization remains optional.")}
+      ${inspectorCard("Objectives and constraints", "CSV evidence", "Numeric columns, min/max direction, and hard inequalities read from the selected CSV.", "adapter")}
+      ${inspectorCard("Pareto and diversity", "CSV evidence", "Feasible non-dominated set with crowding-distance top-k. There is no scalarization.", "adapter")}
       ${inspectorCard("Search and verification", "Roadmap", "DOE/evolutionary/Bayesian search, solver verification, OOD gates, and active learning.", "roadmap")}
     </div></div>`;
   }
@@ -239,6 +239,85 @@ const FIXED_BEHAVIOUR_KEYS = new Set([
 ]);
 
 /**
+ * Same idea, scoped per block type, for keys that are real controls on one
+ * block and pure statements on another. `mode` is the obvious case: it drives
+ * model blocks, prep.geometry and run.cad_generator, but on run.inference it
+ * is derived from the connected model and on optimize.design there is only one
+ * mode. Everything listed here was verified to be read by no code at all:
+ * editing it changed the label and nothing else.
+ */
+const FIXED_BEHAVIOUR_BY_TYPE = {
+  "run.inference": new Set(["mode", "viewer"]),
+  // selection/objectives/directions/constraints/top_k are all owned by the
+  // Optimization workspace, which writes them back through assignManualConfig;
+  // `selection` is a description of the fixed algorithm, not a choice.
+  "optimize.design": new Set(["mode", "selection"]),
+  // field_pairs and mapping_confirmed are the evaluation gate. Typing "True"
+  // into mapping_confirmed here used to satisfy the "I inspected this mapping"
+  // check without ever opening the mapping -- the one control whose whole point
+  // is that a human looked at it.
+  "evaluate.predictions": new Set(["metrics", "aggregate", "field_pairs", "mapping_confirmed"]),
+  // The Comparison workspace resolves the metric from the runs' shared metric
+  // keys and writes csv_metric/csv_direction; these two rows were free text that
+  // nothing read back.
+  "evaluate.compare": new Set(["metric", "direction", "qualification"]),
+  "output.export": new Set(["format", "path"]),
+  "source.cad": new Set(["units"]),
+  // Filled from the checkpoint's own metadata by autofill; typing over it
+  // detached the row from the file without changing what would be loaded.
+  "source.checkpoint": new Set(["compatibility"])
+};
+
+/**
+ * prep.geometry rows that the block's own current mode/reader makes inert.
+ *
+ * `inspect` is a dry run -- geometryConfigText emits no output_dataset and the
+ * native pipeline writes nothing -- and the two gmsh sizing knobs reach no code
+ * path when the reader is trimesh. Both were shown as ordinary editable fields,
+ * so the block offered four settings that could not affect its own run.
+ */
+/**
+ * Where a read-only row's value is actually set, for the rows a Studio workspace
+ * owns. Without this the inspector labelled them "fixed behaviour", which reads
+ * as "nothing can change this" for values the user genuinely can change -- just
+ * not from here.
+ */
+const FIXED_BEHAVIOUR_SOURCE = {
+  "evaluate.compare": { metric: "set in Comparison", direction: "set in Comparison", qualification: "not enforced" },
+  "evaluate.predictions": { field_pairs: "set in Evaluation", mapping_confirmed: "set in Evaluation" },
+  "optimize.design": { selection: "fixed algorithm" }
+};
+
+/** Mirrors pipeline.pointcloud_output_path() in methods/GeometryIngest. */
+function pointCloudSidecar(outputDataset) {
+  const path = String(outputDataset || "").trim();
+  if (!path) return "<output_dataset>_pointcloud.h5";
+  const dot = path.lastIndexOf(".");
+  const slash = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+  return dot > slash
+    ? `${path.slice(0, dot)}_pointcloud${path.slice(dot)}`
+    : `${path}_pointcloud.h5`;
+}
+
+function inertGeometryKey(node, key) {
+  if (node.type !== "prep.geometry") return false;
+  const mode = String(node.config.mode || "").toLowerCase();
+  const reader = String(node.config.reader || "").toLowerCase();
+  // `emit` stays visible in inspect: it still decides whether process_one
+  // computes the point cloud, which the dry run reports. num_fields reaches
+  // writer.write_contract only, and output_dataset is never opened.
+  if (mode === "inspect" && ["output_dataset", "num_fields"].includes(key)) return true;
+  if (reader === "trimesh" && ["mesh_size_min", "mesh_size_max"].includes(key)) return true;
+  if (!String(node.config.emit || "").includes("pointcloud")
+    && ["num_points", "resample_method"].includes(key)) return true;
+  return false;
+}
+
+function isFixedBehaviour(node, key) {
+  return FIXED_BEHAVIOUR_KEYS.has(key) || Boolean(FIXED_BEHAVIOUR_BY_TYPE[node.type]?.has(key));
+}
+
+/**
  * Which config rows a model block shows in the side inspector.
  *
  * This used to be `Object.entries(node.config).slice(0, 6)` — the first six keys
@@ -256,8 +335,9 @@ const FIXED_BEHAVIOUR_KEYS = new Set([
  * (hidden_layers on MLP, slice_num on Transolver, the multiscale controls on
  * HI-MGN). Six left no room for any of them.
  *
- * So: rank by what the block is for, and stay mode-aware — an inference block
- * wants the dataset it reads and the checkpoint it loads, not an epoch budget.
+ * So: rank by what the block is for, and stay mode-aware — a block running a
+ * trained model wants the data it reads, the checkpoint it loads and where it
+ * writes, not an epoch budget.
  * Keys absent from the config are skipped, and anything left over keeps its
  * original order, so a route with unusual keys still fills its rows.
  */
@@ -266,8 +346,10 @@ const MODEL_INSPECTOR_PRIORITY = [
   // Primary input. `inference` flips which of the two is the real one, so both
   // are listed and the irrelevant one is simply absent from that mode's config.
   "infer_dataset", "dataset_dir",
-  // Primary artifact, including the staged variants.
-  "modelpath", "vae_modelpath", "fm_modelpath", "lc_modelpath",
+  // Primary artifact, including the staged variants. output_dir is where the
+  // non-training modes write (and is required by sdfflow evaluate/sample/
+  // reconstruct/interpolate/optimize), so it belongs with them.
+  "modelpath", "vae_modelpath", "fm_modelpath", "lc_modelpath", "output_dir",
   // The training trio, plus the per-stage spellings SDFFlow/SimulGen-VAE use.
   "training_epochs", "vae_training_epochs", "fm_training_epochs", "lc_training_epochs",
   "batch_size", "vae_batch_size", "fm_batch_size", "lc_batch_size",
@@ -277,10 +359,30 @@ const MODEL_INSPECTOR_PRIORITY = [
   "gpu_ids"
 ];
 
+/**
+ * The one-line explanation under a field.
+ *
+ * Model blocks have a Full config sheet that already shows HELP for every key,
+ * so repeating it in an 8-row summary panel would crowd it out. Every other
+ * block has no second surface at all: prep.geometry's twelve fields -- reader,
+ * emit, mesh_size_max and the rest -- had nowhere to say what they mean.
+ */
+function rowHelp(node, key) {
+  if (BLOCK_SPECS[node.type]?.isModel) return "";
+  const text = HELP[key];
+  return text ? `<small class="row-help">${escapeHtml(text)}</small>` : "";
+}
+
 function modelInspectorEntries(node, modelId, limit) {
   const config = node.config || {};
   const mode = String(config.mode || "").toLowerCase();
-  const isInference = mode === "inference" || mode === "reconstruct";
+  // Every mode that is not one of the four training modes runs a trained model.
+  // Keying on that, rather than on a list of inference-ish names, is what keeps
+  // sdfflow's `evaluate` / `sample` / `interpolate` / `optimize` correct: they
+  // showed three epoch budgets each while the artifact they write did not fit.
+  const TRAINING_MODES = new Set(["train", "train_vae", "train_fm", "train_lc"]);
+  const isRunMode = Boolean(mode) && !TRAINING_MODES.has(mode);
+  const readsHeldOut = mode === "inference" || mode === "reconstruct";
   // The live spec's per-mode required set decides between competing spellings,
   // so this needs no per-model table and cannot drift from the launcher. It is
   // what separates SDFFlow's merged `train` (vae_training_epochs /
@@ -293,12 +395,16 @@ function modelInspectorEntries(node, modelId, limit) {
   // lossless -- but they do nothing in those modes, and the panel used to spend
   // three of its rows on them. Hide them here; the Full config sheet still
   // lists everything.
-  const trainingOnly = key => isInference && /^(?:vae_|fm_|lc_)?(?:training_epochs|learningr)$/.test(key);
+  // Deliberately NOT batch_size: SimulGen-VAE's `reconstruct` batches its
+  // decode loop with it (inference_profiles/reconstruct.py reads
+  // config['batch_size']), so hiding it there would hide a live control.
+  // Epochs, learning rate, warm-up and weight decay are optimizer-only.
+  const trainingOnly = key => isRunMode && /^(?:vae_|fm_|lc_)?(?:training_epochs|learningr|warmup_epochs|weight_decay)$/.test(key);
   const applicable = MODEL_INSPECTOR_PRIORITY.filter(key => {
     if (!(key in config)) return false;
     // Both dataset keys are usually present; show the one this mode reads.
-    if (key === "dataset_dir" && isInference && "infer_dataset" in config) return false;
-    if (key === "infer_dataset" && !isInference) return false;
+    if (key === "dataset_dir" && readsHeldOut && "infer_dataset" in config) return false;
+    if (key === "infer_dataset" && !readsHeldOut) return false;
     if (trainingOnly(key)) return false;
     return true;
   });
@@ -369,6 +475,7 @@ export function renderInspector() {
     ? modelInspectorEntries(node, spec.modelId, 8)
     : Object.entries(node.config)
       .filter(([key]) => node.type !== "source.parameters" || !["condition_names", "feature_names", "parameter_table", "parameter_dataset"].includes(key))
+      .filter(([key]) => !inertGeometryKey(node, key))
       .slice(0, 20);
   const inspectorChoices = node.type === "prep.geometry"
     ? {
@@ -386,12 +493,15 @@ export function renderInspector() {
           flow_solver: ["", "heun", "euler"],
           flow_predict: ["", "sample", "mean", "ensemble_mean"]
         }
-      // mapping_confirmed gates whether a positional field mapping is allowed to
-      // score, and studio.js/validate.js compare it against "True" exactly. As a
-      // free-text box any typo read as False and silently blocked the run with
-      // no sign the value was the problem.
+      // mapping_confirmed is NOT offered here. It gates whether a positional
+      // field mapping may score, and its entire meaning is "a human looked at
+      // the mapping" -- which is exactly what the Evaluation workspace shows and
+      // this panel does not. It was a dropdown; flipping it to True from here
+      // satisfied the gate without ever opening the mapping. It is now a
+      // read-only statement (FIXED_BEHAVIOUR_BY_TYPE) sourced from that
+      // workspace, alongside field_pairs.
       : node.type === "evaluate.predictions"
-        ? { mapping_confirmed: ["False", "True"], mapping_mode: ["schema", "legacy"] }
+        ? { mapping_mode: ["schema", "legacy"] }
         : node.type === "run.cad_generator"
           // `optimize` runs the closed generate -> analyze -> search loop
           // instead of producing a plain candidate batch; opt_analysis then
@@ -428,7 +538,7 @@ export function renderInspector() {
           return `<div class="form-row"><label>${escapeHtml(key.replaceAll("_", " "))}</label><select class="field inspector-config" data-key="${key}">${modelChoices.map(choice => `<option value="${escapeHtml(choice)}"${String(value) === String(choice) ? " selected" : ""}>${escapeHtml(choice)}</option>`).join("")}</select></div>`;
         }
         if (inspectorChoices[key]) {
-          return `<div class="form-row"><label>${escapeHtml(key.replaceAll("_", " "))}</label><select class="field inspector-config" data-key="${key}">${inspectorChoices[key].map(choice => `<option value="${escapeHtml(choice)}"${String(value) === choice ? " selected" : ""}>${escapeHtml(choice)}</option>`).join("")}</select></div>`;
+          return `<div class="form-row"><label>${escapeHtml(key.replaceAll("_", " "))}</label><select class="field inspector-config" data-key="${key}">${inspectorChoices[key].map(choice => `<option value="${escapeHtml(choice)}"${String(value) === choice ? " selected" : ""}>${escapeHtml(choice)}</option>`).join("")}</select>${rowHelp(node, key)}</div>`;
         }
         if (RUN_EVIDENCE_KEYS.has(key)) {
           // What a run produced, not something to configure. Rendering it as a
@@ -437,17 +547,33 @@ export function renderInspector() {
           // canvas while the results on disk stayed exactly as they were.
           return `<div class="form-row run-evidence"><label>${escapeHtml(key.replaceAll("_", " "))}<small class="inline-auto">from the last run</small></label><output class="field readonly" title="${escapeHtml(value)}">${escapeHtml(value) || "—"}</output></div>`;
         }
-        if (FIXED_BEHAVIOUR_KEYS.has(key)) {
-          return `<div class="form-row run-evidence"><label>${escapeHtml(key.replaceAll("_", " "))}<small class="inline-auto">fixed behaviour</small></label><output class="field readonly" title="${escapeHtml(value)}">${escapeHtml(value) || "—"}</output></div>`;
+        if (isFixedBehaviour(node, key)) {
+          // A fixed row can still be graph-filled (source.checkpoint's
+          // compatibility comes from the file's metadata); say where it came
+          // from rather than the generic tag when that is the case. Rows a
+          // workspace owns say so, so "fixed behaviour" is not used to describe
+          // a value the user really can change -- somewhere else.
+          const filled = autoFillMeta(node, key);
+          const note = filled
+            ? `auto · ${escapeHtml(filled.sourceLabel)}`
+            : FIXED_BEHAVIOUR_SOURCE[node.type]?.[key] || "fixed behaviour";
+          return `<div class="form-row run-evidence"><label>${escapeHtml(key.replaceAll("_", " "))}<small class="inline-auto">${note}</small></label><output class="field readonly" title="${escapeHtml(value)}">${escapeHtml(value) || "—"}</output></div>`;
         }
         const automatic = autoFillMeta(node, key);
-        return `<div class="form-row${automatic ? " graph-autofilled" : ""}"><label>${escapeHtml(key.replaceAll("_", " "))}${automatic ? `<small class="inline-auto">auto · ${escapeHtml(automatic.sourceLabel)}</small>` : ""}</label><input class="field inspector-config" data-key="${key}" value="${escapeHtml(value)}"></div>`;
+        return `<div class="form-row${automatic ? " graph-autofilled" : ""}"><label>${escapeHtml(key.replaceAll("_", " "))}${automatic ? `<small class="inline-auto">auto · ${escapeHtml(automatic.sourceLabel)}</small>` : ""}</label><input class="field inspector-config" data-key="${key}" value="${escapeHtml(value)}">${rowHelp(node, key)}</div>`;
       }).join("")}</div>
     </section>
     ${node.type === "run.cad_generator"
       && String(node.config.mode || "").toLowerCase() === "optimize"
       && String(node.config.opt_analysis || "fea").toLowerCase() === "surrogate"
       ? `<section class="inspect-section"><div class="section-title">Surrogate accuracy gate</div><div class="diagnostic warning"><i></i><div><strong>Demonstration path, not verified structural evidence.</strong><br>Add <code>opt_surrogate_checkpoint</code> and <code>opt_surrogate_config</code> in the connected SDFFlow block's Full config. Preflight blocks a missing pair. Use FEA for actionable stress or displacement values until the surrogate is validated on representative held-out designs.</div></div></section>`
+      : ""}
+    ${node.type === "prep.geometry" && String(node.config.emit || "").includes("pointcloud") && String(node.config.mode || "").toLowerCase() === "ingest"
+      // pipeline.py writes the point cloud to a sidecar next to the graph file
+      // (pointcloud_output_path: "<stem>_pointcloud<ext>"). Nothing in the graph
+      // named it, so a run configured for both emits produced a second dataset
+      // that no downstream block and no export could see.
+      ? `<section class="inspect-section"><div class="section-title">Also written</div><div class="form-row run-evidence"><label>point cloud<small class="inline-auto">sidecar file</small></label><output class="field readonly">${escapeHtml(pointCloudSidecar(node.config.output_dataset))}</output></div><p class="input-source-help">The <code>graph</code> emit writes <code>output_dataset</code>; the <code>pointcloud</code> emit writes this second file beside it. Point an Export or HDF5 Dataset block at it to use it.</p></section>`
       : ""}
     ${inputSourcePanel(node)}
     ${embeddedInspector(node, spec)}
@@ -464,6 +590,10 @@ export function renderInspector() {
     markManualConfigValue(node, control.dataset.key, control.value);
     applyGraphAutofill();
     renderInspector();
+    // The canvas card shows the configured mode (title verb and kind line) and
+    // autofill may have rewritten other blocks' values, so redraw it too --
+    // editing `mode` here used to leave the card claiming the old one.
+    render();
     toast(`Updated ${control.dataset.key}.`);
   }));
   $("#openParameterSpreadsheet")?.addEventListener("click", () => openArtifact(node.id));

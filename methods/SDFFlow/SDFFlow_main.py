@@ -43,7 +43,7 @@ def main():
     config = load_config(args.config)
     run_mode = config.get('mode')
     valid_modes = ('train', 'train_vae', 'train_fm', 'sample', 'reconstruct',
-                   'interpolate', 'optimize')
+                   'interpolate', 'evaluate', 'optimize')
     if run_mode not in valid_modes:
         raise ValueError(f"Unsupported mode '{run_mode}'. Supported: {valid_modes}. "
                          f"(Datasets are built with build_dataset.py, not a mode.)")
@@ -72,6 +72,9 @@ def main():
     elif run_mode == 'interpolate':
         from inference_profiles.interpolate import run_interpolate
         run_interpolate(config, args.config)
+    elif run_mode == 'evaluate':
+        from inference_profiles.evaluate import run_evaluate
+        run_evaluate(config, args.config)
     elif run_mode == 'optimize':
         from inference_profiles.optimize import run_optimize
         run_optimize(config, args.config)

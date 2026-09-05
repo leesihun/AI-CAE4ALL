@@ -1,0 +1,62 @@
+model	SDFFlow  # SDF-VAE + latent flow-matching geometry generator
+mode	train_vae  # VAE stage only; the FM is trained once, for the winning arm, via config_train_v3.txt
+gpu_ids	0  # one GPU per arm; configs/campaigns/benchmarks_all/campaign_runner.py rewrites this per job
+
+%   Arm A1: ex1 architecture on the v3 data settings -- isolates architecture.
+%   Part of the configs/SDFFlow/arms/ sweep (see README.md there). Every arm
+%   shares the v3 data settings, split, and training budget; only the axis named
+%   above differs from A0. Score with config_evaluate.txt pointed at this arm's
+%   checkpoint.
+%   Architecture and losses are config_train.txt's (ex1); the data settings
+%   (8192 points, parent split) are v3's, so this isolates the architecture.
+
+%   Outputs
+output_dir	../../output/geometry_generation/arms/A1  # Periodic reconstruction test artifacts
+vae_modelpath	../../output/geometry_generation/arms/A1/sdfflow_vae.pth  # Final VAE checkpoint (last epoch)
+vae_best_modelpath	../../output/geometry_generation/arms/A1/sdfflow_vae_best.pth  # Best-validation VAE checkpoint
+
+%   Dataset (as v3)
+dataset_dir	../../dataset/deepjeb.h5  # SDF HDF5 dataset (build_dataset.py); 2138 DeepJEB brackets from 263 parent geometries
+split_seed	42  # Seed for the deterministic 80/10/10 split
+split_by_parent	True  # Split whole parent geometries (source basename before the first '_'), not individual variants; False = legacy per-shape split
+num_encoder_points	6144  # As v3: a genuine 75% subsample of the 8192 stored surface points, so every epoch draws a different cloud (8192 would be a permutation of one fixed set)
+num_query_points	8192  # SDF query points per shape for decoder supervision (dataset stores 10240)
+
+%   VAE architecture
+latent_tokens	1  # ex1: one global token
+latent_dim	256  # ex1: 256-d single latent (256 flat)
+decoder_type	mlp  # ex1: DeepSDF-style MLP decoder
+decoder_hidden	512  # ex1 MLP width
+decoder_layers	8  # ex1 MLP depth
+encoder_dim	256  # ex1 encoder d_model
+encoder_heads	4  # ex1 encoder heads
+encoder_blocks	2  # ex1 encoder depth
+encoder_self_attention	False  # ex1 had no token self-attention (meaningless with one token anyway)
+encoder_query_type	learned  # ex1: free nn.Parameter query (fps is undefined for a single token + mlp decoder)
+fourier_bands	8  # NeRF-style positional encoding bands for point/query coordinates
+
+%   VAE losses and posterior schedule
+kl_weight	0.00001  # ex1 value; x 256 dims = the same total pressure as v3's 0.0000025 x 1024
+deterministic_warmup_epochs	20  # Epochs with mu-only encoding (no posterior noise, no KL) before the warmups start
+posterior_noise_warmup_epochs	80  # Epochs to ramp the reparameterization noise scale linearly up to posterior_noise_max_scale
+posterior_noise_max_scale	0.1  # ex1 legacy noise scale
+posterior_min_std_rel	0.0  # ex1 had no posterior std floor
+kl_warmup_epochs	100  # Epochs to ramp the KL weight linearly up to kl_weight
+clamp_dist	0.1  # Truncation distance for the SDF loss target
+
+%   VAE training (unprefixed stage keys: this is mode train_vae)
+seed	0  # Global seed (torch/numpy/python + the DataLoader shuffle) so arms differ by their axis, not by run-to-run noise; A9 repeats A0 at seed 1 to measure that noise floor
+log_file_dir	../../output/geometry_generation/arms/A1/train_vae.log  # VAE training log
+training_epochs	500  # ~428 updates/epoch at batch 4 on the parent-split train set
+batch_size	4  # Shapes per step
+learningr	0.0005  # Learning rate
+weight_decay	0.0001  # AdamW weight decay
+warmup_epochs	5  # LR warmup epochs
+num_workers	4  # Dataloader workers
+use_amp	True  # No hybrid terms, so autocast is safe (as ex1)
+use_ema	True  # EMA shadow model for validation/test and both checkpoints
+ema_decay	0.999  # ~214k updates; fine
+val_interval	5  # Validate every N epochs (ValidSign / ValidSignBal and ActiveUnits / ActiveSNR are logged)
+test_interval	50  # Reconstruction test + checkpoint save every N epochs
+num_test_shapes	1  # Shapes reconstructed in the periodic test
+mc_resolution_test	96  # Marching Cubes grid for the periodic test

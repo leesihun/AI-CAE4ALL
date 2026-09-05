@@ -54,6 +54,9 @@
           <input id="blockSearch" type="search" placeholder="Search blocks">
         </label>
         <div class="library-summary"><span>Typed modules</span><span>Drag or click to add</span></div>
+        <!-- Filled by paletteRender(); the "native"/"adapter" badge on every
+             item below is meaningless without it. -->
+        <div class="palette-legend" id="paletteLegend"></div>
         <div class="palette-list" id="paletteList"></div>
       </aside>
 
@@ -62,7 +65,9 @@
           <div class="pipeline-heading">
             <span class="toolbar-kicker">Pipeline</span>
             <span class="pipeline-title-row">
-              <input id="pipelineName" value="SimulGen-VAE field reconstruction" aria-label="Pipeline name">
+              <!-- Replaced by the loaded template's name at startup (main.js); this
+                   is what paints first and what a user sees if that fails. -->
+              <input id="pipelineName" value="" placeholder="Loading pipeline…" aria-label="Pipeline name">
               <span class="saved-state" id="savedState" role="status" aria-live="polite">Loading workspace…</span>
             </span>
           </div>
@@ -84,10 +89,13 @@
         </header>
 
         <div class="stage" id="stage">
+          <!-- Value-free until renderGraphMeta() runs on the first render. These
+               used to read "7 blocks / 9 links / Ready", which is not what any
+               template produces and was simply false for the ~200 ms it showed. -->
           <div class="graph-meta" id="graphStats">
-            <span><strong>7</strong> blocks</span>
-            <span><strong>9</strong> links</span>
-            <span class="graph-ready"><i></i> Ready</span>
+            <span><strong>&mdash;</strong> blocks</span>
+            <span><strong>&mdash;</strong> links</span>
+            <span><i></i>Loading…</span>
           </div>
 
           <div class="canvas-world" id="canvasWorld">
@@ -108,7 +116,7 @@
           <div class="zoom">
             <button id="zoomOut" aria-label="Zoom out" title="Zoom out (−)">−</button>
             <button id="fitGraph" aria-label="Fit graph" title="Fit the whole pipeline in view (F)">⌗</button>
-            <span id="zoomLevel">90%</span>
+            <span id="zoomLevel">&mdash;</span>
             <button id="zoomIn" aria-label="Zoom in" title="Zoom in (+)">+</button>
           </div>
         </div>
@@ -174,7 +182,10 @@
         <aside class="raw-panel">
           <header>
             <strong>Flat .txt configuration</strong>
-            <small>form ↔ text</small>
+            <!-- Say which direction loses information: Regenerate rewrites the
+                 text from the form, so comments and the author's line order in
+                 an imported .txt do not survive a round trip. -->
+            <small>form &#8596; text · comments and line order are not preserved</small>
           </header>
           <textarea id="configRaw" aria-label="Raw flat configuration" spellcheck="false"></textarea>
           <div class="raw-actions">

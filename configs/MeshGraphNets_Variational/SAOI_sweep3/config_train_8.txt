@@ -127,7 +127,7 @@ prior_mp_layers	7  # SWEPT AXIS
 prior_hidden_dim	384  # SWEPT AXIS
 prior_temperature	1.0  # Sampling spread control (inference only)
 
-%   Time integration (CONFIGURATION_REFERENCE.md sections 3.5 and 6.7)
+%   Time integration (docs/CONFIGURATION.md sections 3.5 and 6.7)
 time_integration	ar_ot  # ar_ot = one-step/teacher-forced (default); ar_rt = full-trajectory autoregressive rollout training
 
 

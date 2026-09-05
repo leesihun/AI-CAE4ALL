@@ -282,7 +282,25 @@ function modelAutofill(desired, node) {
   if (dataLink) {
     const path = datasetPath(dataLink.node);
     const key = mode === "inference" && accepted.has("infer_dataset") ? "infer_dataset" : accepted.has("dataset_dir") ? "dataset_dir" : "";
-    if (key && path) put(desired, node, key, candidate(toMethodPath(path, spec.modelId), dataLink.node, `${mode} dataset from graph`, dataLink.edge.fromPort));
+    // Same rule validate.js applies when building the inference step: the graph
+    // is authoritative EXCEPT when what it says is "predict the data you
+    // trained on". Switching a template block to inference used to overwrite
+    // its held-out infer_dataset with the training file wired to the data port,
+    // and switching back then withdrew the autofill and left the key deleted --
+    // silently, with the diagnostics panel still reporting everything present.
+    const wired = key && path ? toMethodPath(path, spec.modelId) : "";
+    // Deliberately not compared against node.config.dataset_dir: by the time
+    // this runs in inference mode that key has already been withdrawn, so the
+    // comparison always passed and the overwrite happened anyway. A block that
+    // already names a held-out split keeps it -- no model's defaults set
+    // infer_dataset, so this only ever protects a value a template or the user
+    // put there, and editing the field directly still wins (manual keys).
+    const configuredSplit = text(node.config.infer_dataset);
+    const wouldPredictTrainingData = key === "infer_dataset"
+      && configuredSplit && wired && wired !== configuredSplit;
+    if (wired && !wouldPredictTrainingData) {
+      put(desired, node, key, candidate(wired, dataLink.node, `${mode} dataset from graph`, dataLink.edge.fromPort));
+    }
 
     const featureNames = commaNames(dataLink.node, "feature_names");
     if (spec.modelId === "simulgenvae" && accepted.has("num_var") && featureNames.length) {
@@ -383,6 +401,22 @@ function genericAutofill(desired, node) {
       const paths = checkpointPaths(model.node);
       for (const key of ["checkpoint_path", "vae_modelpath", "lc_modelpath", "fm_modelpath", "model_id"]) {
         if (paths[key]) put(desired, node, key, candidate(paths[key], model.node, "inference model from graph", model.edge.fromPort));
+      }
+      // Name the output directory explicitly, beside the checkpoint -- the
+      // convention every checked-in benchmark config already follows
+      // (.../gino/model.pth -> .../gino/inference). Left blank, the native
+      // default ("../../output/<slug>/rollout") is invisible in the config text
+      // the Studio reads back, and its fallback scan could not find it either
+      // once the natives stopped writing inside their own repositories -- so a
+      // pipeline trained for hours, inferred 87 scenes, and then failed at
+      // Evaluate with "prediction_path is empty". A Studio-run inference now
+      // always says where it wrote.
+      const accepts = MODEL_CATALOG[paths.model_id]?.keys?.includes("inference_output_dir");
+      const checkpoint = String(paths.checkpoint_path || "").replaceAll("\\", "/");
+      const checkpointDir = checkpoint.replace(/\/[^/]*$/, "");
+      if (accepts && checkpointDir && checkpointDir !== checkpoint) {
+        put(desired, node, "inference_output_dir", candidate(
+          toMethodPath(`${checkpointDir}/inference`, paths.model_id), model.node, "beside the checkpoint from graph", model.edge.fromPort));
       }
     }
     const binding = actualBindingPath(parameters?.node);
@@ -506,18 +540,27 @@ export function applyGraphAutofill() {
       Object.entries(previous).forEach(([key, meta]) => {
         if (text(node.config[key]) !== text(meta?.value)) manual.add(key);
         if (!wanted[key] && !manual.has(key) && text(node.config[key]) === text(meta?.value)) {
-          delete node.config[key];
+          // Put back whatever this autofill displaced. Deleting outright lost
+          // template- and user-authored values for good the moment a link or a
+          // mode changed.
+          if (text(meta?.displaced)) node.config[key] = meta.displaced;
+          else delete node.config[key];
           passChanged += 1;
         }
       });
 
       Object.entries(wanted).forEach(([key, meta]) => {
         if (manual.has(key)) return;
+        // Remember the value being replaced once, so a later withdrawal can
+        // restore it; carry it forward while the same autofill stays in place.
+        const displaced = Object.hasOwn(previous, key)
+          ? previous[key]?.displaced
+          : (text(node.config[key]) && text(node.config[key]) !== meta.value ? node.config[key] : "");
         if (text(node.config[key]) !== meta.value) {
           node.config[key] = meta.value;
           passChanged += 1;
         }
-        next[key] = { ...meta };
+        next[key] = { ...meta, displaced: displaced || "" };
       });
 
       node.manualConfigKeys = [...manual].sort();

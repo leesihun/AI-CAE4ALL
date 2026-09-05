@@ -3,6 +3,10 @@ mode	train  # train (merged VAE->FM pipeline), train_vae, train_fm, sample, reco
 gpu_ids	0  # SDFFlow is single-process; only the first GPU ID is used
 '
 %   SOTA-aligned variant. Trains from scratch to ex2/ so ex1 stays intact.
+%   Kept as the 'v2 control' for config_train_v3.txt (ex4/): the architecture below
+%   is deliberately unchanged; only kl_weight (ex1 parity), split_by_parent, and
+%   vae_best_modelpath were added so the v2 and v3 runs are scored on the same
+%   held-out shapes.
 %   Enables, vs config_train.txt:
 %     - VecSet latent (32 tokens x 64 dim) + attention decoder      (#4)
 %     - DiT velocity net with self-attention over tokens            (#5)
@@ -17,11 +21,14 @@ pipeline_log_file	../../output/geometry_generation/ex2/train.log
 skip_completed_stages	True
 output_dir	../../output/geometry_generation/ex2
 vae_modelpath	../../output/geometry_generation/ex2/sdfflow_vae.pth
+vae_best_modelpath	../../output/geometry_generation/ex2/sdfflow_vae_best.pth  # Best-validation VAE checkpoint (same payload format); the final save above is unchanged
 fm_modelpath	../../output/geometry_generation/ex2/sdfflow_fm.pth
 '
 %   Shared dataset
 dataset_dir	../../dataset/deepjeb.h5  # rebuild with --sharp_edge_fraction to also get #2
 split_seed	42
+seed	0  # Global run seed: each stage worker seeds torch/numpy/python and the train DataLoader with seed + rank. Absent = legacy unseeded run, which is not reproducible and has no measurable run-to-run noise floor
+split_by_parent	True  # Whole parent geometries (263 in DeepJEB) stay on one side of the split; the per-shape seed-42 split put a sibling of every val/test shape into train
 num_encoder_points	4096
 num_query_points	4096
 encode_batch_size	16
@@ -38,7 +45,7 @@ encoder_heads	8
 encoder_blocks	4  # 2 -> 4 blocks
 encoder_self_attention	True  # let latent tokens exchange info (Dora-style dual attention)
 fourier_bands	8
-kl_weight	0.0001  # tuning knob; nudge toward ~1e-3 if the FM latent is under-regularized
+kl_weight	0.00000125  # sum-KL: same TOTAL pressure as ex1 (1e-5 x 256 = 1.25e-6 x 2048). The old 1e-4 was 80x tighter and its 'nudge toward 1e-3' pointed the wrong way -- 3DShape2VecSet's 1e-3 is a MEAN-KL weight (~6e-8 per element)
 deterministic_warmup_epochs	20
 posterior_noise_warmup_epochs	80
 posterior_noise_max_scale	0.1

@@ -1,0 +1,246 @@
+% =====================================================================
+%  Benchmark landscape survey + our benchmark construction
+%  Requires: references.bib, booktabs
+% =====================================================================
+
+\section{The benchmark landscape for one-to-many simulation}
+\label{sec:bench}
+
+\subsection{The admission criterion}
+\label{sec:bench:criterion}
+
+A dataset can validate a distributional claim only if it supplies
+\emph{multiple ground-truth realisations at a single model-visible condition}.
+This is a harder requirement than it sounds, and most datasets described as
+``stochastic'' in the neural-PDE literature fail it. Chaos is not sufficient: a
+chaotic system with one trajectory per parameter setting still gives one draw
+from the conditional, and a distance to one draw is not a divergence between
+distributions. Nor is visual variability sufficient. We surveyed
+$87$ candidate datasets across curated PDE suites, weather and climate
+ensembles, turbulence archives, solid-mechanics and fracture sets, engineering
+CAE collections, stochastic-PDE benchmarks and adjacent generative domains, and
+classified each by three properties: replicate count at a fixed condition, the
+representation (mesh, graph, or structured grid), and \emph{what is hidden from
+the model} that creates the spread.
+
+Table~\ref{tab:landscape} summarises the outcome. The organising finding is
+negative and, we argue, publishable in itself.
+
+\begin{table}[t]
+\centering
+\small
+\caption{The partition of failure modes. No surveyed dataset has all three of
+(a)~an unstructured mesh with nodal fields, (b)~Monte-Carlo replicates at a
+fixed condition, and (c)~many distinct conditions.}
+\label{tab:landscape}
+\begin{tabular}{@{}llp{0.30\linewidth}@{}}
+\toprule
+\textbf{Has} & \textbf{Missing} & \textbf{Exemplar} \\
+\midrule
+Replicates $+$ many conditions   & unstructured mesh & The Well (all subsets), PBFM, StocBench \\
+Replicates $+$ real CAE mesh     & many conditions   & SimJEB ($381 \times 1$ condition) \\
+Many conditions $+$ real CAE mesh & replicates       & DrivAerNet++, CFDBench, Mechanical MNIST \\
+Replicates $+$ real CAE physics  & the mesh itself   & Airfoil RANS ($25\times5{,}000$, regridded to Cartesian) \\
+Many ground-truth realisations   & condition diversity & CESM2 LENS2 ($100$ truths, ${\sim}2$ conditions) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Weather supplies \emph{many conditions $\times$ one truth}; large climate
+initial-condition ensembles supply \emph{many truths $\times$ two conditions}.
+Nobody has built many conditions $\times$ many truths on a mesh.
+
+\subsection{What is admissible today}
+\label{sec:bench:tier1}
+
+Only a handful of obtainable datasets clear the criterion with a replicate
+count adequate for a fair-CRPS estimate, and four of them belong to a single
+collection~---~The Well~\cite{ohana2024well}~---~which is the only corpus that
+systematically ships seed ensembles.
+
+\paragraph{Turbulence-gravity-cooling ($100$ seeds $\times$ $27$ conditions).}
+The only combination in the survey supporting \emph{both} a stable per-condition
+CRPS and rank histogram \emph{and} a held-out-condition calibration test. This
+is the headline conditional result. Its cost is storage
+($\sim\!829$\,GB) and a free-fall-time-normalised cadence that must be
+reconciled before pairing seeds.
+
+\paragraph{Rayleigh--B\'enard ($10$ seeds $\times$ $35$ conditions).}
+Chebyshev-graded wall-normal spacing makes it the most mesh-like structured set
+available and mildly mis-specifies uniform-grid CNN baselines. Ten replicates
+suffice for CRPS but are thin for rank histograms. At high Rayleigh and Prandtl
+number the spread collapses, so per-condition spread must be reported rather
+than a pooled number.
+
+\paragraph{Turbulent radiative layer 2D ($10$ seeds $\times$ $9$ conditions).}
+At $6.9$\,GB this is the ablation harness, not a result: nearly one-dimensional
+conditioning makes it a strong calibration test and a weak expressivity test,
+and $90$ trajectories is a small training set for a generative mesh model.
+
+\paragraph{Viscoelastic instability (four coexisting attractors).}
+The only genuinely \emph{multimodal-with-discrete-modes} dataset available, and
+therefore the direct empirical answer to ``why a flow-matching prior instead of
+a heteroscedastic Gaussian head'': a unimodal head provably cannot represent
+four attractors. It is unconditional, so conditional calibration is untestable
+here, and unequal mode counts and trajectory lengths must be reweighted
+explicitly or a sampler will confuse mode weight with sampling artefact.
+
+\paragraph{Airfoil RANS ensembles.}
+The only entry whose uncertainty mechanism~---~solver non-convergence plus
+turbulence-closure deficiency~---~is the one a CAE practitioner actually meets,
+and the only one whose conditioning variable \emph{is a geometry}. It is
+distributed regridded to a Cartesian lattice, so exercising a mesh hierarchy
+requires re-running the cases or obtaining the raw mesh.
+
+\subsection{Instructive rejections}
+\label{sec:bench:reject}
+
+Several datasets are cited in probabilistic work as though they satisfied the
+criterion. They do not, and the reasons are worth naming.
+
+\begin{itemize}
+  \item \textbf{One realisation per model-visible condition.} PDEBench and
+    PDEArena sample the governing parameter continuously, so no two runs share
+    a condition; the ACDM scenarios ship one trajectory per Reynolds or Mach
+    number, which is why their ``posterior sampling'' is scored against physics
+    statistics rather than a ground-truth divergence~\cite{kohl2026acdm}; JHTDB
+    stores exactly one DNS per configuration; DrivAerNet++ one CFD run per
+    geometry~\cite{elrefaie2024drivaernetpp}.
+  \item \textbf{Temporally correlated snapshots posed as an ensemble.} Several
+    archives present $N$ snapshots of \emph{one} trajectory as $N$ samples.
+    That is a decorrelation-time question, not an uncertainty question, and it
+    is the most common silent error in this area.
+  \item \textbf{Averaged targets.} Where a benchmark releases the \emph{mean}
+    of a small initial-condition ensemble as its target, an emulator wins by
+    suppressing variability, and RMSE against a three-member mean is
+    substantially scoring noise.
+  \item \textbf{Model-form variation mistaken for aleatory spread.} Sets whose
+    ``repeats'' are alternative energy decompositions, alternative constitutive
+    models, or \emph{neural-network training seeds} are varying model form, not
+    the physical law's randomness. Pooling them into a spread estimate is a
+    category error.
+\end{itemize}
+
+The most instructive rejection is the canonical near-miss. Mechanical MNIST
+Crack Path exhibits dramatic path sensitivity under an identical loading
+protocol, and is regularly invoked as evidence of stochastic behaviour. But as
+published, the realised inclusion centres are handed to the network as a
+$64\times64$ rigidity array and the resulting map is solved deterministically at
+$\mathrm{F}_1 = 0.870$~\cite{mohammadzadeh2022crackpath}. \emph{Sensitivity is
+not uncertainty.} Three separate recent fracture and damage benchmarks shipped
+with visually dramatic stochastic-looking behaviour and zero aleatory
+replicates. Naming this confusion, we think, is overdue.
+
+\subsection{Our construction, and its measured information floor}
+\label{sec:bench:construction}
+
+We turn the canonical near-miss into an admissible benchmark by an explicit,
+declared act of information withholding. The rigid-inclusion field is
+\emph{not} converted; the model sees reference coordinates, the damage and
+displacement state, and nothing else. Every case then presents a bit-identical
+visible input, so the released samples are draws from a single conditional and
+the empirical conditional distribution is directly observable.
+
+We report four properties measured on the converted data, because a
+withholding construction is only defensible if its consequences are stated
+rather than assumed.
+
+\paragraph{The spread is large and continuous.}
+Pairwise relative $L^2$ of the damage field rises from $0.047$ at the first
+stored step to $0.948$ at the last; final-crack IoU averages $0.283$ with a
+$95$th percentile of $0.473$. A PCA of the final damage fields requires $43$
+components for $90\%$ of variance, and no sample has a nearest-neighbour crack
+IoU above $0.9$. There is no discrete mode structure: the outcome distribution
+is continuous and high-dimensional, which is precisely why a
+descriptor-histogram acceptance test would be inadequate and a proper score is
+required.
+
+\paragraph{The latent is structured, not i.i.d.}
+Inclusion centres are seeded on bitmap pixels above an intensity threshold,
+with sub-pixel jitter and a minimum-spacing rejection rule. The hidden variable
+is therefore a structured, class-clustered prior with a genuinely random
+realisation drawn on top of it~---~not white noise. Any paper using this
+construction should say so; the distinction changes what a well-calibrated
+prior is expected to look like.
+
+\paragraph{The withholding is not perfect, and we quantify the leak.}
+The first stored frame is not the pristine notch but an early loading step, so
+the recorded displacements already encode the \emph{elastic response} to the
+hidden inclusions. Nearest-neighbour retrieval on that first frame predicts the
+final crack at IoU $0.2726$ against a random baseline of $0.1833$
+($z = +24.7$; Spearman $\rho = +0.240$, reproducing held-out and on the test
+split, and surviving a crack-size control at partial $\rho = +0.199$). The
+latent partially images itself into the visible state. The practical size of
+the leak is small~---~a best guess moves from $0.18$ to $0.27$ against a mean
+pairwise IoU of $0.283$~---~so the conditional remains broad, but we report
+this as a measured \emph{floor} on achievable sharpness rather than claiming a
+clean hidden-variable setup.
+
+\paragraph{The branching window is narrow.}
+The stochasticity is concentrated in roughly three of nineteen stored steps.
+The earliest steps are frozen (per-step change below the cross-sample spread,
+so an autoregressive model wins by copying), a short window branches sharply
+(nearest neighbours diverge by factors of $3.1$, $9.1$ and $4.9$ over
+consecutive steps), and thereafter the outcome is locked (top-$1$
+nearest-neighbour retention returns to $40/40$). A one-step score averaged over
+the trajectory therefore dilutes the real signal roughly six-fold, and must be
+reported step-resolved.
+
+\subsection{Two negative results on candidate slots}
+\label{sec:bench:negative}
+
+We record two datasets we prepared and then rejected, because both failures are
+general.
+
+\paragraph{A chaotic ensemble is not an aleatory one.}
+A radiative-mixing-layer ensemble with nine cooling-time values and ten seeds
+appears ideal. It is not, for the task an autoregressive simulator actually
+trains: the seeds differ \emph{only} in an initial velocity perturbation, and
+density and pressure at the first step are bitwise identical across seeds. That
+perturbation is stored in the state rows the model reads as input. The seed is
+therefore fully observed, and $p(u_{t+1} \mid u_t, c)$ is a point mass for a
+deterministic solver on a fully resolved state. Genuine spread exists only for
+the trajectory-given-condition map, where cross-seed spread grows to exceed the
+cross-condition spread by the final step. The dataset is a legitimate
+\emph{chaotic ensemble-spread} benchmark; it is not an aleatory-uncertainty
+benchmark, and one-step CRPS on it degenerates toward mean absolute error. Two
+replicates per condition in a standard $80/10/10$ split~---~a $75.6\%$ relative
+standard error on the spread estimate and a three-bin rank histogram~---~would
+in any case not support a calibration claim.
+
+\paragraph{An unconditional generative task is not a UQ benchmark, and grain
+labels are not a field.}
+A Potts kinetic Monte Carlo grain-growth set with one thousand seeds is a
+textbook stochastic process, but it carries no conditioning variable at all:
+every sample presents an identical input, so $p(y \mid x) \equiv p(y)$. Worse,
+the target is a labelling, not a field. Relabelling a sample by a permutation
+that provably preserves the partition (boundary-indicator IoU exactly $1.0$)
+scores a mean squared error statistically indistinguishable from comparing two
+\emph{genuinely different} microstructures, while a constant field scores twice
+as well as either. Under a pointwise loss, mode collapse is the global optimum.
+This survives the obvious repair: even on a permutation-invariant $0/1$
+grain-boundary target, a spatially constant predictor attains a Brier score of
+$0.2469$ against the true ensemble's $0.2624$~---~the constant \emph{beats} the
+truth by $5.9\%$~---~and a spatially scrambled ensemble ties it, because the
+per-node marginal standard deviation ($0.1568$) sits at the independent-Bernoulli
+null ($0.1572$). Per-node scoring here is not weak but anti-informative. The
+generative-microstructure community's choice of morphological-distribution
+metrics~\cite{torquato2002random, hoffman2025grainpaint} is correct, and a
+pointwise proper score is simply the wrong instrument.
+
+\subsection{The benchmark that should exist}
+\label{sec:bench:missing}
+
+We state the design requirements explicitly, each traceable to a failure above.
+A one-to-many CAE benchmark needs: (1)~at least $50$ members at each of at
+least $50$ conditions, with fair-CRPS reported under the finite-ensemble
+correction~\cite{ferro2014fair}; (2)~a native mesh with connectivity retained
+and nodal fields, since every dataset that regridded destroyed exactly the
+structure a hierarchical mesh network exists to exploit; (3)~a \emph{labelled
+uncertainty-source axis}, because no CAE benchmark today distinguishes ``my
+solver with a different seed'' from ``a different solver''; (4)~a paired
+deterministic control on which the predicted spread must collapse, without
+which a model that hallucinates spread is indistinguishable from a calibrated
+one; and (5)~an engineering quantity-of-interest distribution, since
+calibration on a stress field that is miscalibrated on peak stress is
+worthless.

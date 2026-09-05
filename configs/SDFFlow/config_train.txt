@@ -12,6 +12,7 @@ fm_modelpath	../../output/geometry_generation/ex1/sdfflow_fm.pth  # FM checkpoin
 %   Shared dataset
 dataset_dir	../../dataset/deepjeb.h5  # SDF HDF5 dataset (see build_dataset.py)
 split_seed	42  # Seed for the deterministic 80/10/10 train/val/test split
+seed	0  # Global run seed: each stage worker seeds torch/numpy/python and the train DataLoader with seed + rank. Absent = legacy unseeded run, which is not reproducible and has no measurable run-to-run noise floor
 num_encoder_points	4096  # Surface points (+normals) sampled per shape for the VAE encoder
 num_query_points	4096  # SDF query points sampled per shape for VAE decoder supervision
 encode_batch_size	16  # Batch size when the FM stage encodes the dataset to frozen VAE latents

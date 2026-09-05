@@ -1,5 +1,10 @@
 # AI-CAE4ALL Studio Frontend
 
+> Using the Studio rather than working on it? Read [../GUI.md](../GUI.md) — the
+> manual for the block library, the shipped pipeline templates, the config
+> sheet, Validate/Run and the evaluation rules. This file is the front end's own
+> notes: what ships, the local API surface, and the integration boundary.
+
 This folder contains the local AI-CAE4ALL block-pipeline Studio. Its Python
 server connects the browser to the existing suite registry, preflight system,
 native launcher, repository files, HDF5 datasets, jobs, logs, documentation,
@@ -63,6 +68,47 @@ Useful review URLs:
 - `index.html` — the default HI-MGN multiscale pipeline
 - `index.html?review=config` — the large SimulGen-VAE configuration workspace
 - `index.html?review=optimization` — conditional CAD generation and optimization
+
+## Pipeline templates
+
+The picker in the canvas toolbar is generated from `TEMPLATES` in
+`studio/src/constants.js` and grouped by what each pipeline trains. Every live
+route has a default profile, and each one passes Validate on a fresh checkout
+except the design-optimization pipeline, which by design needs checkpoints that
+do not exist yet (see below):
+
+- **Mesh field surrogates** — all on ex9 plasticity (`dataset/ex9.h5` to train,
+  `dataset/ex9_infer.h5` held out; 900 / 87 samples, 20 steps, 3131 nodes):
+  HI-MGN multiscale (the default), MeshGraphNets flat, MeshGraphNets-V,
+  cHI-MGNflow, Transolver, FNO, GINO, DeepONet, Point-DeepONet. They wire
+  dataset → trainer → Train Metrics, with the held-out file — not the training
+  file — feeding Inference and Evaluate. Each mirrors its own checked-in
+  training config: the two MeshGraphNets pipelines follow
+  `configs/MeshGraphNets/ex9/`, cHI-MGNflow `configs/HI_MGNFlow/ex9/`,
+  Transolver `configs/Transolver/ex9/`, and the four operators
+  `configs/Neural_Operator/ex9/`. MeshGraphNets-V has no checked-in ex9 config —
+  it was deliberately left out of the ex4–ex9 roster as a one-to-many method —
+  so its template reuses the same ex9 dataset keys (`cond_var 2` included) with
+  MGN-V's own architecture.
+- **Fixed-geometry and tabular surrogates** — SimulGen-VAE reconstruction (ex9,
+  the only staged mesh dataset with one fixed `(T, N)` besides ex6/ex8;
+  conditions come from the dataset's own `cond_var` rows via
+  `lc_data_type hdf5`, no CSV) and Parametric response estimation (MLP on
+  `dataset/mlp/train.h5` → `infer.h5`, `input_var 3` / `output_var 2`).
+- **Generative geometry (SDFFlow)** — SDFFlow train (DeepJEB) trains the merged
+  VAE → flow-matching pipeline on `dataset/deepjeb.h5` and feeds a sample-mode
+  CAD Generator; Design optimization consumes the checkpoints that run writes
+  (`output/geometry_generation/studio/sdfflow_{vae,fm}.pth`) and therefore
+  preflights red until they exist.
+- **Data preparation** — Geometry to HDF5 inspection (GeometryIngest).
+- **Start from scratch** — an empty canvas.
+
+A model block's inspector shows eight rows chosen by mode — mode, the dataset
+it reads, the checkpoint, the epoch / batch / learning-rate trio (or the
+per-stage spellings for SDFFlow and SimulGen-VAE), then the keys that
+distinguish that route. Everything else, with help text, is under **Full
+config**. Rows marked *fixed behaviour* are facts about what the block does,
+not controls.
 
 ## Included
 

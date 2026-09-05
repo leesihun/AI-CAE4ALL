@@ -4,6 +4,7 @@ import gc
 import os
 import time
 
+import numpy as np
 import torch
 
 from general_modules import distributed as D
@@ -25,6 +26,9 @@ _STAGE_SETTING_SUFFIXES = (
     'num_test_shapes',
     'mc_resolution_test',
 )
+# `vae_best_modelpath` is deliberately NOT a stage-suffixed key: it reaches the
+# VAE worker unchanged (train_vae.py reads it by its full name) and the FM
+# worker simply ignores it.
 
 _VAE_COMPATIBILITY_KEYS = (
     'dataset_dir', 'split_seed', 'num_encoder_points', 'num_query_points',
@@ -36,15 +40,18 @@ _VAE_COMPATIBILITY_KEYS = (
     'posterior_noise_max_scale', 'kl_warmup_epochs', 'clamp_dist',
     'training_epochs', 'batch_size', 'learningr', 'weight_decay',
     'warmup_epochs', 'use_amp', 'use_ema', 'ema_decay',
+    'encoder_query_type', 'posterior_min_std_rel', 'split_by_parent',
 )
 
 _FM_COMPATIBILITY_KEYS = (
     'dataset_dir', 'split_seed', 'num_encoder_points', 'encode_batch_size',
     'vae_modelpath', 'use_conditions', 'condition_names', 'condition_clip',
-    'min_condition_std', 'cond_dropout', 'fm_hidden', 'fm_blocks',
+    'min_condition_std', 'cond_dropout', 'cond_dropout_mode',
+    'fm_hidden', 'fm_blocks',
     'fm_cond_hidden', 'fm_arch', 'fm_heads', 'fm_time_sampling',
     'fm_time_logit_mean', 'fm_time_logit_std', 'training_epochs', 'batch_size',
     'learningr', 'weight_decay', 'warmup_epochs', 'use_amp', 'use_ema', 'ema_decay',
+    'split_by_parent',
 )
 
 
@@ -113,6 +120,43 @@ def _release_stage_memory():
         torch.cuda.empty_cache()
 
 
+def check_condition_names(fm_config):
+    """Fail in seconds when `condition_names` is not in the dataset, not hours later.
+
+    Reads only the HDF5 root attrs (`cond_names` and the optional
+    `cond_extra_names` sidecar written by `add_fea_conditions.py`), so it costs
+    one file open and needs no split, no encode pass, and no VAE.
+    """
+    if not bool(fm_config.get('use_conditions', False)):
+        return
+    requested = fm_config.get('condition_names')
+    if requested is None:
+        return
+    if not isinstance(requested, list):
+        requested = [requested]
+    requested = [str(name) for name in requested]
+    dataset_dir = fm_config.get('dataset_dir')
+    if not dataset_dir or not os.path.exists(str(dataset_dir)):
+        return
+    import h5py
+    try:
+        with h5py.File(str(dataset_dir), 'r') as h5:
+            available = [str(n) for n in np.atleast_1d(h5.attrs.get('cond_names', []))]
+            available += [str(n) for n in np.atleast_1d(h5.attrs.get('cond_extra_names', []))]
+    except OSError:
+        return
+    if not available:
+        return
+    unknown = [name for name in requested if name not in available]
+    if unknown:
+        raise ValueError(
+            f'Unknown condition_names {unknown}; {dataset_dir} carries {available}. '
+            'FEA-named conditions live in the cond_extra sidecar -- run '
+            'methods/SDFFlow/add_fea_conditions.py --h5 <dataset> --csv <bracket_labels.csv> '
+            'first. (Checked before the VAE stage so the mistake costs seconds, not a full '
+            'VAE training run.)')
+
+
 def train_pipeline(config, config_filename='config.txt'):
     """Train VAE, verify its checkpoint, then immediately train FM."""
     from training_profiles.train_fm import fm_worker
@@ -124,6 +168,13 @@ def train_pipeline(config, config_filename='config.txt'):
     fm_path = fm_config.get('fm_modelpath', '../../output/geometry_generation/sdfflow_fm.pth')
     if fm_config.get('vae_modelpath') != vae_path:
         raise ValueError('Merged pipeline must use the same vae_modelpath for both stages')
+
+    # Check the FM stage's condition_names against the dataset BEFORE the VAE
+    # stage runs. train_fm validates them too, but only after hours of VAE
+    # training have already been spent -- and the usual failure is an ex5-style
+    # config naming FEA conditions against a deepjeb.h5 that has never had
+    # add_fea_conditions.py run on it.
+    check_condition_names(fm_config)
 
     skip_completed = bool(config.get('skip_completed_stages', True))
     pipeline_log = config.get('pipeline_log_file', 'ex1/train.log')

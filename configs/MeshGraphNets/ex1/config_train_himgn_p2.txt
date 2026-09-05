@@ -74,5 +74,5 @@ mp_per_level	4, 6, 8, 6, 4       # Overides message_passing_num if use_multiscal
 %   built on first run (shared with the _p12 arm).
 voronoi_branches	1, 4
 '
-%   Time integration (CONFIGURATION_REFERENCE.md section 3.5)
+%   Time integration (docs/CONFIGURATION.md section 3.5)
 time_integration	ar_ot  # forced: ex1 is num_timesteps=1, ar_rt is impossible (see header)

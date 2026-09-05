@@ -6,12 +6,26 @@ import {
   MIN_ZOOM, MAX_ZOOM, FIT_MIN_ZOOM
 } from "./constants.js";
 import { previewGraphic, nodeVisualLabel, parametersTableGraphic } from "./graphics.js";
-import { typeColor, compatible, validateGraph } from "./validate.js";
+import { typeColor, compatible, portRequiredInMode, validateGraph } from "./validate.js";
 import { openArtifact } from "./viewer.js";
 import { runGraph } from "./run.js";
 import { renderInspector } from "./inspector.js";
 import { schedulePipelineSave } from "./persistence.js";
 import { applyGraphAutofill } from "./autofill.js";
+
+/**
+ * What the "native" / "adapter" badge on every palette item and node card means.
+ *
+ * The badge shipped on 24 blocks and 12 model cards with the word alone and no
+ * legend anywhere in the app or the docs, so it read as decoration. These two
+ * lines are the definition; they are used as the badge's title and printed once
+ * in the palette header so the distinction is discoverable without hovering.
+ */
+export const MATURITY_HELP = {
+  native: "Native: runs a method repository's own entrypoint through the launcher.",
+  adapter: "Adapter: a Studio-side step composed from launcher outputs; no model code runs.",
+  roadmap: "Roadmap: described but not implemented."
+};
 
 export function paletteRender(query = "") {
   const normalized = query.trim().toLowerCase();
@@ -34,12 +48,14 @@ export function paletteRender(query = "") {
         <span class="palette-copy">
           <span class="palette-name">${escapeHtml(spec.label)}</span>
           <span class="palette-desc">${escapeHtml(spec.description)}</span>
-          <span class="maturity ${spec.maturity}">${spec.maturity}</span>
+          <span class="maturity ${spec.maturity}" title="${escapeHtml(MATURITY_HELP[spec.maturity] || spec.maturity)}">${spec.maturity}</span>
         </span>
         <span class="palette-add">+</span>
       </button>`).join("")}
     </section>`;
   }).join("") || `<div class="inspect-empty" style="height:auto;padding:36px 10px"><p>No blocks match “${escapeHtml(query)}”.</p></div>`;
+  const legend = $("#paletteLegend");
+  if (legend) legend.innerHTML = `<span class="maturity native" title="${escapeHtml(MATURITY_HELP.native)}">native</span> runs a method's own entrypoint · <span class="maturity adapter" title="${escapeHtml(MATURITY_HELP.adapter)}">adapter</span> composed by the Studio from launcher outputs`;
 
   $$(".palette-item").forEach(button => {
     button.addEventListener("click", () => addBlock(button.dataset.blockType));
@@ -74,7 +90,11 @@ export function loadTemplate(name, saveHistory = true) {
   state.selectedEdge = null;
   state.pendingPort = null;
   layoutGraph(false, false);
-  state.view = { x: 26, y: 54, scale: .78 };
+  // Frame what was actually laid out. A hardcoded view left the last block of
+  // the default 7-node template entirely off-stage at 1366x768 (and the MLP
+  // template's even at 1600x1000), so a freshly loaded pipeline looked like it
+  // was missing a step and only Fit recovered it.
+  fitGraphView();
   $("#pipelineName").value = template.name;
   render();
   schedulePipelineSave();
@@ -89,13 +109,16 @@ export function addBlock(type, position) {
   do {
     id = `${type.replaceAll(".", "_")}_${state.nodeCounter++}`;
   } while (state.nodes.some(node => node.id === id));
-  const existing = state.nodes.length;
-  const visibleWorldLeft = -state.view.x / state.view.scale;
-  const visibleWorldTop = -state.view.y / state.view.scale;
-  const viewportPosition = {
-    x: visibleWorldLeft + 72 + (existing % 3) * 340,
-    y: visibleWorldTop + 96 + Math.floor(existing / 3) * 370
-  };
+  // Place it in the visible area, in the first free slot. The old grid keyed
+  // its column/row off state.nodes.length with an unbounded row count, so on a
+  // 7-node graph the 3rd added block onwards landed hundreds of pixels below
+  // the stage: the toast said "added", the inspector opened it, and the canvas
+  // showed nothing.
+  // The inspector opens as part of adding a block, and that narrows the stage,
+  // so the slot has to be chosen against the canvas the user will end up
+  // looking at -- not the wider one that exists for the next few milliseconds.
+  setPanelVisibility("inspector", true);
+  const viewportPosition = freeSlotInView();
   state.nodes.push({
     id,
     type,
@@ -107,8 +130,10 @@ export function addBlock(type, position) {
   });
   state.selectedNode = id;
   state.selectedEdge = null;
-  setPanelVisibility("inspector", true);
   render();
+  // Last resort: if the graph is dense enough that no free slot was visible,
+  // pan to the block rather than announcing an addition the user cannot see.
+  panNodeIntoView(id);
   toast(`${spec.label} added. Click either socket first, then choose a highlighted compatible socket.`);
 }
 
@@ -226,6 +251,10 @@ export function duplicateNode(id) {
   state.selectedEdge = null;
   setPanelVisibility("inspector", true);
   render();
+  panNodeIntoView(copy.id);
+  // Worth saying out loud: duplicateNodeRecord deliberately strips the job,
+  // result and report ids, so the copy is not carrying the original's evidence.
+  toast(`${BLOCK_SPECS[copy.type]?.label || "Block"} duplicated · run evidence was not copied.`);
 }
 
 export function deleteSelected() {
@@ -270,11 +299,33 @@ export function portDetail(element) {
   };
 }
 
+/** Would linking these two ports close a loop? Same walk connectPortDetails
+ *  runs before it refuses -- shared so the highlight cannot promise a link the
+ *  click then rejects. */
+export function wouldCycle(output, input) {
+  const reaches = new Set([input.nodeId]);
+  const queue = [input.nodeId];
+  while (queue.length) {
+    const current = queue.shift();
+    state.edges
+      .filter(edge => edge.fromNode === current)
+      .map(edge => edge.toNode)
+      .forEach(next => {
+        if (reaches.has(next)) return;
+        reaches.add(next);
+        queue.push(next);
+      });
+  }
+  return reaches.has(output.nodeId);
+}
+
 export function portsCanLink(first, second) {
   if (!first || !second || first.nodeId === second.nodeId || first.direction === second.direction) return false;
   const output = first.direction === "output" ? first : second;
   const input = first.direction === "input" ? first : second;
-  return compatible(output.type, input.type);
+  // Green means "this click will work". Type compatibility alone promised links
+  // that the click then refused as a cycle.
+  return compatible(output.type, input.type) && !wouldCycle(output, input);
 }
 
 export function portStateClass(nodeId, port, direction) {
@@ -395,6 +446,21 @@ function compactPath(value) {
   return text ? text.split("/").filter(Boolean).pop() || text : "";
 }
 
+/**
+ * Whether this block has produced anything yet.
+ *
+ * Drives the card preview: with no run behind it, a model block shows an empty
+ * state instead of an illustrative loss curve that reads as its own result.
+ */
+export function nodeHasEvidence(node) {
+  const config = node.config || {};
+  return Boolean(
+    config.results_path || config.export_path || config.report_path
+    || config.metrics_csv || config.job_id
+    || node.optimizationReport || node.savedConfigPath || node.jobId
+  );
+}
+
 export function nodeEvidenceLabel(node, spec) {
   const config = node.config || {};
   // An Inference block's evidence is how many samples it predicted. Showing the
@@ -434,6 +500,26 @@ export function nodeEvidenceLabel(node, spec) {
   return spec.sampleLabel;
 }
 
+/** The mode a model block will actually run, with the same fallback the
+ *  serializer uses (first catalog mode) so the card never says "no mode". */
+function nodeMode(node) {
+  const spec = BLOCK_SPECS[node.type];
+  const modes = MODEL_CATALOG[spec.modelId]?.modes || [];
+  return String(node.config?.mode || modes[0] || "train").toLowerCase();
+}
+
+/* What the primary button does, per mode. Anything unlisted falls back to
+   "Run" rather than claiming a verb that may be wrong. */
+const MODE_VERB = {
+  train: "Train", train_vae: "Train", train_fm: "Train", train_lc: "Train",
+  inference: "Predict", reconstruct: "Reconstruct", sample: "Generate",
+  interpolate: "Interpolate", optimize: "Optimize", evaluate: "Evaluate"
+};
+
+function modeVerb(node) {
+  return MODE_VERB[nodeMode(node)] || "Run";
+}
+
 export function renderNodes() {
   applyViewTransform();
   $("#nodeLayer").innerHTML = state.nodes.map(node => {
@@ -448,15 +534,19 @@ export function renderNodes() {
         ? `${spec.label} input and output spreadsheet`
         : `${spec.label} samples`;
     const openLabel = spec.isModel ? "Open model details" : spec.isMetricsViewer ? "Open training metrics" : spec.workspace ? `Open ${spec.workspace} workspace` : node.type === "source.parameters" ? "Open spreadsheet" : "Open samples";
-    const primaryLabel = spec.isModel ? "Train" : spec.executable ? "Run" : spec.isMetricsViewer ? "Metrics" : node.type === "source.parameters" ? "Sheet" : "Open";
+    // A model block runs whatever mode it is configured for, so the button has
+    // to say which. It read "Train" on every model block -- including the
+    // generative template's SDFFlow node, which is set to `sample` and trains
+    // nothing.
+    const primaryLabel = spec.isModel ? modeVerb(node) : spec.executable ? "Run" : spec.isMetricsViewer ? "Metrics" : node.type === "source.parameters" ? "Sheet" : "Open";
     const portRows = nodePortRows(node);
-    const inputs = spec.inputs.map((port, index) => `<button class="port input${portStateClass(node.id, port, "input")}" draggable="true" data-node="${node.id}" data-direction="input" data-port="${port.id}" data-port-type="${port.type}" style="top:${portTop(index) - 13}px;--port:${typeColor(port.type)}" aria-label="${escapeHtml(port.label)} input" title="Connect ${escapeHtml(port.label)} input"><span class="port-label">${escapeHtml(port.label)}${port.required ? " *" : ""}</span></button>`).join("");
+    const inputs = spec.inputs.map((port, index) => `<button class="port input${portStateClass(node.id, port, "input")}" draggable="true" data-node="${node.id}" data-direction="input" data-port="${port.id}" data-port-type="${port.type}" style="top:${portTop(index) - 13}px;--port:${typeColor(port.type)}" aria-label="${escapeHtml(port.label)} input" title="Connect ${escapeHtml(port.label)} input"><span class="port-label">${escapeHtml(port.label)}${portRequiredInMode(node, port) ? " *" : ""}</span></button>`).join("");
     const outputs = spec.outputs.map((port, index) => `<button class="port output${portStateClass(node.id, port, "output")}" draggable="true" data-node="${node.id}" data-direction="output" data-port="${port.id}" data-port-type="${port.type}" style="top:${portTop(index) - 13}px;--port:${typeColor(port.type)}" aria-label="${escapeHtml(port.label)} output" title="Connect ${escapeHtml(port.label)} output"><span class="port-label">${escapeHtml(port.label)}</span></button>`).join("");
     return `<article class="node ${node.status}${state.selectedNode === node.id ? " selected" : ""}" data-node-id="${node.id}" style="left:${node.x}px;top:${node.y}px;--node-accent:${spec.accent};--progress:${node.progress}%">
       ${inputs}${outputs}
       <header class="node-head" data-drag-handle>
         <span class="node-icon">${ICONS[spec.icon]}</span>
-        <span><span class="node-title">${escapeHtml(spec.label)}</span><span class="node-kind">${spec.isModel ? "Model · " + MODEL_CATALOG[spec.modelId].modes.join(" / ") : `${spec.category} · ${spec.maturity}`}</span></span>
+        <span><span class="node-title">${escapeHtml(spec.label)}</span><span class="node-kind"${spec.isModel ? ` title="Modes: ${escapeHtml(MODEL_CATALOG[spec.modelId].modes.join(" / "))}"` : ` title="${escapeHtml(MATURITY_HELP[spec.maturity] || spec.maturity)}"`}>${spec.isModel ? `Model · ${escapeHtml(nodeMode(node))}` : `${spec.category} · ${spec.maturity}`}</span></span>
         <span class="node-menu-wrap">
           <button class="node-menu" data-node-menu="${node.id}" aria-label="More actions for ${escapeHtml(spec.label)}" aria-haspopup="menu" aria-expanded="false">•••</button>
           <span class="node-menu-popover" role="menu" aria-label="${escapeHtml(spec.label)} actions">
@@ -466,7 +556,7 @@ export function renderNodes() {
           </span>
         </span>
       </header>
-      <div class="node-preview" data-preview="${node.id}" data-open-label="${escapeHtml(openLabel)}" role="button" tabindex="0" aria-label="Open ${escapeHtml(detailLabel)}">${node.type === "source.parameters" ? parametersTableGraphic(node, true) : previewGraphic(spec.visual, node.id.length)}<span class="preview-label">${escapeHtml(spec.isModel ? "config + training status" : spec.isMetricsViewer ? "all metrics · selectable plots" : spec.workspace ? `${spec.workspace} evidence + controls` : nodeVisualLabel(spec))}</span></div>
+      <div class="node-preview" data-preview="${node.id}" data-open-label="${escapeHtml(openLabel)}" role="button" tabindex="0" aria-label="Open ${escapeHtml(detailLabel)}">${node.type === "source.parameters" ? parametersTableGraphic(node, true) : previewGraphic(spec.visual, node.id.length, false, nodeHasEvidence(node))}<span class="preview-label">${escapeHtml(spec.isModel ? "config + training status" : spec.isMetricsViewer ? "all metrics · selectable plots" : spec.workspace ? `${spec.workspace} evidence + controls` : nodeVisualLabel(spec))}</span></div>
       <div class="node-port-space" style="height:${portRows * PORT_GAP + 6}px" aria-hidden="true"></div>
       <div class="node-summary"><span class="status"><i></i>${node.status === "idle" ? "ready" : node.status}</span><span>${escapeHtml(nodeEvidenceLabel(node, spec))}</span></div>
       <div class="node-progress"><i></i></div>
@@ -785,14 +875,20 @@ export function renderGraphMeta() {
   const errors = validateGraph(false);
   const running = state.nodes.filter(node => node.status === "running").length;
   const complete = state.nodes.filter(node => node.status === "complete").length;
-  const statusClass = errors.length ? "graph-warning" : running ? "graph-running" : "graph-ready";
-  const statusText = errors.length
-    ? `${errors.length} issue${errors.length === 1 ? "" : "s"}`
-    : running
-      ? `${running} running`
-      : complete
-        ? `${complete} completed`
-        : "Ready";
+  // An empty canvas has nothing to be ready for: validateGraph returns no
+  // errors for zero blocks, so the pill used to read a confident green "Ready"
+  // on a graph that Run would refuse.
+  const empty = state.nodes.length === 0;
+  const statusClass = empty ? "graph-warning" : errors.length ? "graph-warning" : running ? "graph-running" : "graph-ready";
+  const statusText = empty
+    ? "Empty · add a block"
+    : errors.length
+      ? `${errors.length} issue${errors.length === 1 ? "" : "s"}`
+      : running
+        ? `${running} running`
+        : complete
+          ? `${complete} completed`
+          : "Ready";
   container.innerHTML = `
     <span><strong>${state.nodes.length}</strong> blocks</span>
     <span><strong>${state.edges.length}</strong> links</span>
@@ -854,7 +950,10 @@ export function arrangeGraph() {
 
 export function setZoom(value, anchor = null) {
   const previous = state.view.scale;
-  const next = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, value));
+  // Below the manual floor (Fit may go there), clamping up to MIN_ZOOM made the
+  // zoom-OUT button zoom in. The floor can never be above where we already are.
+  const floor = Math.min(MIN_ZOOM, previous);
+  const next = Math.min(MAX_ZOOM, Math.max(floor, value));
   if (anchor && next !== previous) {
     const rect = $("#stage").getBoundingClientRect();
     const localX = anchor.x - rect.left;
@@ -866,6 +965,56 @@ export function setZoom(value, anchor = null) {
   }
   state.view.scale = next;
   applyViewTransform();
+  schedulePipelineSave();
+}
+
+/**
+ * First grid slot inside the visible canvas that no existing node occupies,
+ * falling back to the viewport centre when the visible area is full.
+ */
+function freeSlotInView() {
+  const rect = $("#stage").getBoundingClientRect();
+  const scale = state.view.scale || 1;
+  const left = -state.view.x / scale;
+  const top = -state.view.y / scale;
+  const width = rect.width / scale;
+  const height = rect.height / scale;
+  const stepX = 340;
+  const stepY = 370;
+  const columns = Math.max(1, Math.floor((width - 72) / stepX));
+  const rows = Math.max(1, Math.floor((height - 96) / stepY));
+  const occupied = (x, y) => state.nodes.some(node =>
+    Math.abs(node.x - x) < stepX * 0.6 && Math.abs(node.y - y) < stepY * 0.6);
+  for (let row = 0; row < rows; row += 1) {
+    for (let column = 0; column < columns; column += 1) {
+      const x = left + 72 + column * stepX;
+      const y = top + 96 + row * stepY;
+      if (!occupied(x, y)) return { x, y };
+    }
+  }
+  return { x: left + width / 2 - NODE_WIDTH / 2, y: top + height / 2 - 90 };
+}
+
+/** Pan the minimum amount that brings one node fully inside the stage. */
+function panNodeIntoView(nodeId) {
+  const node = state.nodes.find(item => item.id === nodeId);
+  const element = $(`[data-node-id="${nodeId}"]`);
+  const stage = $("#stage");
+  if (!node || !element || !stage) return;
+  const rect = element.getBoundingClientRect();
+  const bounds = stage.getBoundingClientRect();
+  const margin = 16;
+  let dx = 0;
+  let dy = 0;
+  if (rect.right > bounds.right - margin) dx = bounds.right - margin - rect.right;
+  if (rect.left + dx < bounds.left + margin) dx = bounds.left + margin - rect.left;
+  if (rect.bottom > bounds.bottom - margin) dy = bounds.bottom - margin - rect.bottom;
+  if (rect.top + dy < bounds.top + margin) dy = bounds.top + margin - rect.top;
+  if (!dx && !dy) return;
+  state.view.x += dx;
+  state.view.y += dy;
+  applyViewTransform();
+  renderEdges();
   schedulePipelineSave();
 }
 

@@ -106,7 +106,9 @@ def build_geometry_ingest_spec() -> MethodSpec:
             "num_fields": 3, "num_points": 0, "resample_method": "fps", "seed": 42,
         },
         path_rules=(
-            PathRule("input_geometry", PathKind.INPUT_DIR),
+            # A single mesh file or a directory to walk: pipeline.gather_paths
+            # handles both, and the Studio's CAD picker only ever yields a file.
+            PathRule("input_geometry", PathKind.INPUT_PATH),
             PathRule("output_dataset", PathKind.OUTPUT_FILE, frozenset({"ingest"})),
         ),
         validators=(validate_geometry_ingest,),

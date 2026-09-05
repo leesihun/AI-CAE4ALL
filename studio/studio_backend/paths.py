@@ -75,6 +75,14 @@ def file_record(path: Path, kind: str) -> dict[str, Any]:
     }
 
 
+# Files that are derived caches, not artifacts anyone should pick. The
+# MeshGraphNets bi-stride coarsening cache sits beside its dataset as
+# `<name>.mscache.<hash>.h5`, so it appeared in every dataset picker as if it
+# were a real dataset -- selecting it as ground truth yields an empty contract
+# and four errors, which is the only thing it can ever do.
+DERIVED_FILE_PATTERNS = (re.compile(r"\.mscache\.", re.IGNORECASE),)
+
+
 def walk_files(
     roots: tuple[Path, ...],
     suffixes: set[str],
@@ -106,6 +114,8 @@ def walk_files(
                 visited += 1
                 path = Path(directory) / name
                 if suffixes and path.suffix.lower() not in suffixes:
+                    continue
+                if any(pattern.search(name) for pattern in DERIVED_FILE_PATTERNS):
                     continue
                 try:
                     records.append(file_record(path, kind))

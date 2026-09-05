@@ -1,0 +1,31 @@
+model	SDFFlow  # SDF-VAE + latent flow-matching geometry generator
+mode	evaluate  # held-out VAE reconstruction metrics: encode -> (refine) -> decode -> mesh -> compare with the stored GT
+gpu_ids	0  # single process; only the first GPU ID is used
+
+%   Scores one trained VAE on a dataset split it never saw. The architecture comes
+%   from the checkpoint's saved config; the split and eval keys come from THIS file,
+%   falling back to the values recorded in the checkpoint when a key is absent
+%   (SPLIT_KEYS in evaluate.py). So omitting split_seed / split_by_parent reproduces
+%   the training split, while setting them to something else silently rescores a
+%   different one -- and the 'held-out' shapes are then not held out. Writes eval_<split>.json (aggregate + per-shape rows) and
+%   eval_<split>.csv under output_dir and prints the aggregate table.
+%   To score an arm from configs/SDFFlow/arms/, copy this file and point vae_modelpath
+%   at that arm's sdfflow_vae_best.pth (or sdfflow_vae.pth) and output_dir at its dir.
+
+%   Inputs and outputs
+vae_modelpath	../../output/geometry_generation/ex4/sdfflow_vae.pth  # VAE checkpoint under test (architecture is rebuilt from its saved config)
+dataset_dir	../../dataset/deepjeb.h5  # The dataset the VAE was trained on; GT surface points / SDF labels come from here
+output_dir	../../output/geometry_generation/ex4/eval  # eval_<split>.json / eval_<split>.csv are written here
+
+%   Split -- must match the training config
+split_seed	42  # Same seed as config_train_v3.txt
+split_by_parent	True  # Same grouping as config_train_v3.txt; whole parent geometries stay on one side of the split
+eval_split	val  # train | val | test. Use val for model selection; touch test once, for the final winner
+eval_num_shapes	0  # 0 = every shape of the split; N > 0 = a RANDOM subset of that size, drawn with eval_seed (never a head slice: with split_by_parent the split is ordered parent by parent, so the first N would be 1-2 bracket families)
+eval_seed	0  # Seed for the deterministic encoder subsample of each shape
+
+%   Reconstruction
+mc_resolution	128  # Marching Cubes grid for the decoded SDF
+latent_refine_steps	300  # Adam steps optimizing the latent against HALF the shape's stored SDF labels with the decoder frozen; 0 = encoder mean only. >0 reports BOTH enc_* and ref_* metrics, both scored on the held-out half (ref_*_insample are the fit-half numbers)
+latent_refine_lr	0.01  # Adam LR for the latent refinement
+latent_refine_prior_weight	0.0  # Weight on ||z - z_encoder||^2, SUMMED over the latent scalars and averaged over the batch. 0 = unconstrained, which is what this mode is FOR: refinement here measures how much better the frozen decoder can do than the encoder found, so pulling z back toward the encoder answer destroys the measurement. A measured sweep on a smoke checkpoint (held-out SDF gain vs |z-z_enc|): 0.0 -> +0.66% at |dz| 5.17, 0.0001 -> +0.19% at 0.51, 0.001 -> +0.05% at 0.089, 0.01 -> +0.01% at 0.0097 -- monotone, with no overfitting signal for the prior to protect against (the fit-half and held-out-half errors move together). Raise it to 0.0001-0.001 only when the refined latents will be fed back to the FM stage, where drift off the encoder manifold is the actual risk

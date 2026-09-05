@@ -49,7 +49,20 @@ KEY_CATALOGS.meshgraphnetsV = [...new Set([
   ...KEY_CATALOGS.meshgraphnetsV,
   ...keys(`gamma_es es_samples es_steps es_noise_source es_start_epoch`)
 ])].sort();
-KEY_CATALOGS.sdfflow = [...new Set([...KEY_CATALOGS.sdfflow, "opt_seed"])].sort();
+// SDFFlow v3 recipe + `evaluate` mode (cae_suite/specs/sdfflow.py SDFFLOW_KEYS):
+// FPS encoder queries, relative posterior-std floor, parent-grouped split,
+// best-val VAE checkpoint, decoder-frozen latent refinement, held-out
+// evaluation controls, and the interpolation-space switch.
+KEY_CATALOGS.sdfflow = [...new Set([
+  ...KEY_CATALOGS.sdfflow,
+  "opt_seed",
+  ...keys(`encoder_query_type posterior_min_std_rel split_by_parent vae_best_modelpath latent_refine_steps latent_refine_lr latent_refine_prior_weight eval_split eval_num_shapes eval_seed interpolation_space`),
+  // Conditional generation (docs/research/sdfflow/CONDITIONAL_GENERATION_DESIGN_2026-09.md):
+  // per-dimension condition dropout, sample-time descriptor guidance (C2) and
+  // Newton correction (E2) with their shared calibration artifact, the FEA
+  // condition audit, the fixed-noise condition sweep, and the evaluate tasks.
+  ...keys(`cond_dropout_mode guidance_enabled guidance_t_start guidance_eta guidance_step_mode guidance_targets soft_descriptor_resolution soft_descriptor_tau descriptor_calibration_path newton_rounds newton_step_cap_rms newton_line_search_tries newton_measure_resolution condition_audit cond_values_a cond_values_b sweep_steps eval_task eval_methods calibration_num_shapes calibration_samples_per_shape cond_dropout_all_prob calibration_min_r2 eval_exclude_shapes`)
+])].sort();
 
 // cHI-MGNflow deliberately shares the complete MeshGraphNets-V diagnostic
 // surface. The backend keeps stale latent/prior keys in `known_keys` so strict
@@ -163,7 +176,7 @@ export const MODEL_CATALOG = {
     defaults: { model: "transolver", mode: "train", gpu_ids: "0", modelpath: "../../output/transolver/studio/transolver.pth", coordinate_normalization: "centered_isotropic", latent_dim: "256", num_layers: "10", num_heads: "8", slice_num: "128", attention_kernel: "slice_space", use_checkpointing: "True", training_epochs: "500", batch_size: "1", grad_accum_steps: "4", learningr: "0.0001" }
   },
   sdfflow: {
-    label: "SDFFlow", short: "SDF", accent: "#8b7837", modes: ["train", "train_vae", "train_fm", "sample", "reconstruct", "interpolate", "optimize"], keys: KEY_CATALOGS.sdfflow,
+    label: "SDFFlow", short: "SDF", accent: "#8b7837", modes: ["train", "train_vae", "train_fm", "sample", "reconstruct", "interpolate", "optimize", "evaluate"], keys: KEY_CATALOGS.sdfflow,
     description: "SDF-VAE and conditional flow matching for CAD candidate generation.", dataset: "SDF HDF5",
     // SDFFlow's train route requires 25 keys. Without architecture/checkpoint
     // defaults a freshly added block needed 18 hand-typed values before it could
@@ -249,9 +262,15 @@ export const REQUIRED = {
     train_vae: keys(`model mode gpu_ids dataset_dir output_dir vae_modelpath training_epochs batch_size learningr latent_dim latent_tokens encoder_dim encoder_heads encoder_blocks decoder_type decoder_hidden decoder_layers num_encoder_points num_query_points`),
     train_fm: keys(`model mode gpu_ids dataset_dir output_dir vae_modelpath fm_modelpath training_epochs batch_size learningr fm_hidden fm_blocks fm_cond_hidden`),
     sample: keys(`model mode gpu_ids vae_modelpath fm_modelpath output_dir num_samples seed ode_steps mc_resolution`),
-    reconstruct: keys(`model mode gpu_ids vae_modelpath input_mesh output_dir mc_resolution`),
-    interpolate: keys(`model mode gpu_ids vae_modelpath fm_modelpath output_dir seed source_num_samples sample_index_a sample_index_b alpha ode_steps mc_resolution`),
-    optimize: keys(`model mode gpu_ids vae_modelpath fm_modelpath output_dir seed ode_steps mc_resolution opt_subspace_dim opt_budget opt_popsize opt_baseline_size opt_load_cases`)
+    reconstruct: keys(`model mode gpu_ids vae_modelpath input_mesh output_dir mc_resolution latent_refine_steps latent_refine_lr latent_refine_prior_weight`),
+    // sample_index_b is conditional (SDF-INTERP-007): slerp_noise / lerp_latent
+    // need the second endpoint, interpolation_space cond_sweep integrates the one
+    // noise row sample_index_a under a condition sweep. alpha has a spec default.
+    interpolate: keys(`model mode gpu_ids vae_modelpath fm_modelpath output_dir seed source_num_samples sample_index_a ode_steps mc_resolution interpolation_space`),
+    optimize: keys(`model mode gpu_ids vae_modelpath fm_modelpath output_dir seed ode_steps mc_resolution opt_subspace_dim opt_budget opt_popsize opt_baseline_size opt_load_cases`),
+    // Held-out VAE reconstruction metrics; the split keys must match the
+    // training run so the evaluated shapes are the ones the VAE never saw.
+    evaluate: keys(`model mode gpu_ids vae_modelpath dataset_dir output_dir split_seed split_by_parent eval_split eval_num_shapes eval_seed mc_resolution latent_refine_steps latent_refine_lr latent_refine_prior_weight`)
   }
 };
 
@@ -281,6 +300,19 @@ export const CHOICES = {
   // checkpoint's numbers can be trusted before switching a live run to it.
   opt_analysis: ["fea", "surrogate"],
   decoder_type: ["mlp", "attention"],
+  // SDFFlow v3 / evaluate-mode enums. Each is enforced by a spec validator
+  // (SDF-EVAL-001, SDF-QUERY-001, and the interpolation_space check), so
+  // without them the sheet took free text the launcher then rejected.
+  eval_split: ["train", "val", "test"],
+  encoder_query_type: ["learned", "fps"],
+  interpolation_space: ["slerp_noise", "lerp_latent", "cond_sweep"],
+  // SDFFlow conditional generation enums, each mirrored by a spec validator:
+  // SDF-CDROP-001, SDF-GUIDE-001, SDF-AUDIT-001, SDF-EVAL-002. eval_methods is
+  // a comma list (subset of plain,rejection,c2,e2,c2e2; SDF-EVAL-003), not an enum.
+  cond_dropout_mode: ["all", "per_dim"],
+  guidance_step_mode: ["velocity_dt", "per_step_jump"],
+  condition_audit: ["geometric", "fea", "surrogate"],
+  eval_task: ["reconstruction", "descriptor_calibration", "conditional"],
   fm_arch: ["mlp", "dit"],
   fm_time_sampling: ["uniform", "logit_normal"],
   point_variant: ["mesh_state"],
@@ -315,10 +347,19 @@ export const PARALLEL_MODE_CHOICES = Object.freeze({
   "chi-mgnflow": ["ddp"]
 });
 
-export const BOOLEAN_KEYS = new Set(keys(`augment_geometry bipartite_unpool coarse_world_edges display_testset display_trainset encoder_self_attention fit_latent_gmm fm_use_amp fm_use_ema gino_cache_neighbors gino_group_shared_geometry gino_include_grid_coordinates gino_use_torch_cluster load_all make_histogram overfit_all_shapes point_resample_each_epoch resume_prior show_histogram skip_completed_stages small_output_init train_conditional_prior use_amp use_checkpointing use_compile use_conditional_prior use_ema use_multiscale use_node_types use_parallel_stats use_vae use_world_edges vae_graph_aware vae_use_amp vae_use_ema lc_use_amp lc_use_ema write_preprocessing write_test_predictions`));
+export const BOOLEAN_KEYS = new Set(keys(`augment_geometry bipartite_unpool coarse_world_edges display_testset display_trainset encoder_self_attention fit_latent_gmm fm_use_amp fm_use_ema gino_cache_neighbors guidance_enabled gino_group_shared_geometry gino_include_grid_coordinates gino_use_torch_cluster load_all make_histogram overfit_all_shapes point_resample_each_epoch resume_prior show_histogram skip_completed_stages small_output_init split_by_parent train_conditional_prior use_amp use_checkpointing use_compile use_conditional_prior use_ema use_multiscale use_node_types use_parallel_stats use_vae use_world_edges vae_graph_aware vae_use_amp vae_use_ema lc_use_amp lc_use_ema write_preprocessing write_test_predictions`));
 BOOLEAN_KEYS.delete("load_all");
 export const OPERATOR_REMOVED = new Set(keys(`message_passing_num latent_dim edge_var world_radius_multiplier world_max_num_neighbors world_edge_backend coarse_world_edges multiscale_levels mp_per_level coarsening_type voronoi_clusters coarse_cache_per_worker use_vae vae_latent_dim vae_mp_layers vae_graph_aware free_bits posterior_min_std lambda_mmd lambda_kl lambda_det`));
 export const TRANSOLVER_REJECTED = new Set(keys(`edge_var message_passing_num mp_per_level coarsening_type voronoi_clusters multiscale_levels world_radius_multiplier world_max_num_neighbors world_edge_backend coarse_world_edges`));
+// Exact mirrors of cae_suite/specs/meshgraphnets.py. The deterministic runtime
+// RAISES on the first set (removed_feature_guard) and silently ignores the
+// second, but the spec still lists both in known_keys so preflight can explain
+// them -- which meant the config sheet showed all 56 as ordinary editable
+// fields with generic help, and only a preflight round-trip revealed that
+// setting one is an error.
+export const MGN_NATIVE_REMOVED = new Set(keys(`alpha_recon beta_aux fit_latent_gmm free_bits gmm_components gmm_covariance_type gmm_reg_covar lambda_det lambda_kl lambda_mmd num_vae_samples num_z posterior_min_std prior_batch_size prior_diagnose_interval prior_epochs prior_hidden_dim prior_learningr prior_loss_type prior_mc_samples prior_min_std prior_mixture_components prior_mp_layers prior_num_workers prior_temperature prior_val_interval resume_prior train_conditional_prior use_conditional_prior use_vae vae_graph_aware vae_latent_dim vae_mp_layers vae_valid_prior_samples`));
+export const MGN_VARIATIONAL_IGNORED = new Set(keys(`eval_dataset hierarchy_cache_build_workers hierarchy_cache_dir hierarchy_cache_keep hierarchy_cache_wait_timeout histogram_bins histogram_clip_quantile make_histogram mmd_bandwidth prior_cov_rank prior_family prior_fm_steps prior_kl_reg_weight prior_nll_weight prior_type recon_loss show_histogram static_cache_per_worker vae_batch_size vae_batch_size_max vae_batch_size_min vae_batch_vram_fraction`));
+
 export const VARIATIONAL_REMOVED = new Set(keys(`alpha_prior_max bipartite_unpool fit_latent_gmm free_bits gmm_components gmm_covariance_type gmm_reg_covar lambda_det lambda_kl positional_encoding residual_scale gamma_es es_samples es_steps es_noise_source es_start_epoch`));
 export const CHI_FLOW_REMOVED = new Set(keys(`use_vae vae_latent_dim vae_mp_layers vae_graph_aware posterior_min_std num_z z_conditioning mmd_bandwidth mmd_gather_ranks lambda_mmd beta_aux alpha_recon recon_loss prior_type use_conditional_prior prior_family prior_nll_weight prior_fm_steps prior_fm_solver prior_mp_layers prior_hidden_dim prior_temperature prior_kl_reg_weight prior_cov_rank prior_min_std prior_mixture_components prior_grad_to_encoder vae_valid_prior_samples gamma_es es_samples es_steps es_noise_source es_start_epoch pipeline_microbatches std_noise noise_gamma noise_std_ratio`));
 VARIATIONAL_REMOVED.forEach(key => CHI_FLOW_REMOVED.add(key));
@@ -328,14 +369,20 @@ export const BLOCK_SPECS = {
     label: "CAD", category: "Sources", icon: "cad", accent: "#4c7f71", visual: "geometry", maturity: "native",
     description: "Select STEP, IGES, STL, PLY, or OBJ geometry and inspect every body.",
     inputs: [], outputs: [{ id: "geometry", type: "geometry", label: "geometry" }],
-    defaults: { path: "", units: "mm" }, sampleLabel: "CAD / mesh geometry"
+    // `units` is a statement, not a control: nothing in Studio or GeometryIngest
+    // reads it and the ingest performs no unit conversion. It used to be an
+    // editable "mm", which implied both. Rendered read-only by inspector.js.
+    defaults: { path: "", units: "as stored in the file (no unit conversion)" }, sampleLabel: "CAD / mesh geometry"
   },
   "source.hdf5": {
     label: "HDF5 Dataset", category: "Sources", icon: "data", accent: "#3c7193", visual: "dataset", maturity: "native",
     description: "Browse samples, fields, geometry, splits, statistics, and verified parameter bindings.",
     inputs: [{ id: "parameters", type: "parameters", label: "parameter overlay", required: false }],
     outputs: [{ id: "data", type: "dataset", label: "configured dataset" }],
-    defaults: { path: "dataset/ex1.h5", split: "seeded 80/10/10", edit_mode: "immutable overlay" }, sampleLabel: "100 samples"
+    // ex9 is what every shipped template trains on and the only staged dataset
+    // every route (SimulGen-VAE included) accepts; a bare dataset block used to
+    // default to ex1.h5, which SimulGen-VAE rejects outright.
+    defaults: { path: "dataset/ex9.h5", split: "seeded 80/10/10", edit_mode: "immutable overlay" }, sampleLabel: "900 samples"
   },
   "source.parameters": {
     label: "Design Parameters", category: "Sources", icon: "parameters", accent: "#b0713f", visual: "parameters", maturity: "adapter",
@@ -374,7 +421,11 @@ export const BLOCK_SPECS = {
     ],
     outputs: [{ id: "prediction", type: "field", label: "predictions" }, { id: "metrics", type: "metrics", label: "run statistics" }],
     defaults: {
-      mode: "auto from saved model",
+      // `mode` and `viewer` are facts, not controls (nothing reads either; the
+      // step's mode comes from the connected model block and the viewer is
+      // fixed). Both used to be editable prose. inspector.js renders them
+      // read-only per block type, because `mode` IS a real control elsewhere.
+      mode: "resolved from the connected model block",
       // Which method to launch when no trainer is on the canvas. Read back from
       // the checkpoint itself when it can be identified; editable because a
       // checkpoint that records nothing about its family would otherwise leave
@@ -384,7 +435,7 @@ export const BLOCK_SPECS = {
       batch_size: "16", num_workers: "", infer_chunk_size: "", infer_query_chunk_size: "",
       num_vae_samples: "", vae_batch_size: "",
       flow_steps: "", flow_solver: "", flow_predict: "",
-      viewer: "field + samples + distributions"
+      viewer: "prediction · truth · error · timestep player · distributions"
     }, sampleLabel: "20 reconstructions", executable: true
   },
   "run.cad_generator": {
@@ -406,17 +457,25 @@ export const BLOCK_SPECS = {
   },
   "optimize.design": {
     label: "Optimization", category: "Optimization", icon: "optimize", accent: "#8a613b", visual: "pareto", maturity: "adapter",
-    description: "Evaluate designs with geometry gates, physics objectives, constraints, uncertainty, and Pareto trade-offs.",
+    // One input, not three. The block ranks the rows of one candidate/evaluation
+    // CSV: connectedOptimizationCsv() reads a csv path off the connected source
+    // and nothing else is consulted, so the former "physics evaluators"
+    // (checkpoint) and "search variables" (parameters) ports accepted links that
+    // changed no result -- a wire that promises an effect it cannot have.
+    description: "Rank the rows of one candidate/evaluation CSV: hard constraints, then the feasible Pareto front with crowding-distance top-k.",
     inputs: [
-      { id: "candidates", type: "candidates", label: "CAD candidates", required: true },
-      { id: "models", type: "checkpoint", label: "physics evaluators", required: false },
-      { id: "parameters", type: "parameters", label: "search variables", required: false }
+      { id: "candidates", type: "candidates", label: "candidate / evaluation CSV", required: true }
     ],
     outputs: [{ id: "selected", type: "candidates", label: "Pareto designs" }, { id: "metrics", type: "metrics", label: "objective table" }, { id: "report", type: "report", label: "optimization report" }],
     defaults: {
       mode: "evaluate CSV candidate batch", csv_path: "",
       objectives: "volume,bbox_z", directions: "min,max",
-      constraints: "watertight >= 1", selection: "feasible Pareto + diverse top-k", top_k: "6"
+      // No default constraint. "watertight >= 1" is a column of the DeepJEB
+      // candidate table and of nothing else, so with the constraint box now
+      // validated against the selected CSV the block arrived DISABLED for every
+      // other input. Constraints are optional; the datalist suggests the real
+      // columns of whichever CSV is chosen.
+      constraints: "", selection: "feasible Pareto + diverse top-k", top_k: "6"
     }, sampleLabel: "No report yet", workspace: "optimization"
   },
   "evaluate.predictions": {
@@ -425,7 +484,11 @@ export const BLOCK_SPECS = {
     inputs: [{ id: "prediction", type: "field", label: "predictions", required: true }, { id: "truth", type: "dataset", label: "ground truth", required: true }],
     outputs: [{ id: "metrics", type: "metrics", label: "metrics" }, { id: "report", type: "report", label: "evaluation report" }],
     defaults: {
-      metrics: "relative L2, MAE, RMSE", aggregate: "mean + median + p95", error_view: "absolute + relative",
+      // The metric set and its aggregates are fixed in studio_backend/analysis.py
+      // (relative_l2, mae, rmse, max_absolute_error, r2; mean/median/p95/min/max).
+      // These two rows state that; they were editable text that read as if the
+      // user could choose, and understated what is actually computed.
+      metrics: "relative L2 · MAE · RMSE · max abs error · R²", aggregate: "mean · median · p95 · min · max", error_view: "absolute + relative",
       mapping_mode: "schema", field_pairs: "", mapping_confirmed: "False"
     }, sampleLabel: "100 sample metrics", workspace: "evaluation"
   },
@@ -449,7 +512,14 @@ export const BLOCK_SPECS = {
     description: "Export selected datasets, fields, CAD, metrics, reports, or model files with provenance.",
     inputs: [{ id: "input", type: "artifact", label: "artifact", required: true }],
     outputs: [{ id: "files", type: "artifact", label: "files" }],
-    defaults: { format: "auto: HDF5 / VTK / STL / CSV / JSON / HTML", path: "output/studio/run_001" }, sampleLabel: "13 files", workspace: "export"
+    // Both rows used to be untrue AND editable: export_artifact() in
+    // studio_backend/analysis.py copies a file or ZIPs a directory verbatim --
+    // there is no VTK/STL/HTML conversion -- and always writes under
+    // studio/runtime/exports/<label>-<token>, never to output/studio/run_001.
+    // export_label IS editable and is the only field that changes the output --
+    // it names the directory the copy/ZIP lands in. Leaving it out of defaults
+    // meant the block's inspector showed two read-only statements and no control.
+    defaults: { export_label: "ai-cae4all-artifact", format: "as-is copy (file) or ZIP (directory) · no conversion", path: "studio/runtime/exports/<label>-<token>" }, sampleLabel: "13 files", workspace: "export"
   },
   "deploy.api": {
     label: "API Deployment", category: "Deployment", icon: "output", accent: "#4d6874", visual: "export", maturity: "adapter",
@@ -549,7 +619,7 @@ const EX9_MESH = {
   use_node_types: "False", infer_timesteps: "19", split_seed: "42"
 };
 
-function meshPipeline(name, modelType, trainerConfig = {}) {
+function meshPipeline(name, modelType, trainerConfig = {}, inferenceConfig = {}) {
   return {
     name,
     nodes: [
@@ -563,7 +633,9 @@ function meshPipeline(name, modelType, trainerConfig = {}) {
       ["infer_dataset_src", "source.hdf5", 35, 300, { path: "dataset/ex9_infer.h5" }],
       ["trainer", modelType, 330, 70, { ...EX9_MESH, ...trainerConfig }],
       ["train_metrics", "evaluate.training_metrics", 625, 390],
-      ["inference", "run.inference", 625, 70],
+      // inferenceConfig: run-time readout choices that belong to the Inference
+      // block, not the trainer (see chimgnflow).
+      ["inference", "run.inference", 625, 70, { ...inferenceConfig }],
       ["evaluation", "evaluate.predictions", 920, 70],
       ["export", "output.export", 1215, 70]
     ],
@@ -612,7 +684,7 @@ export const TEMPLATES = {
    * config_train_vae.txt; the trailing rows are conditions, not field channels.
    */
   simulgen: {
-    name: "SimulGen-VAE field reconstruction (ex9 plasticity)",
+    name: "SimulGen-VAE reconstruction (ex9)",
     nodes: [
       ["dataset", "source.hdf5", 35, 70, { path: "dataset/ex9.h5", compatibility: "fixed N and T required" }],
       // Held out on purpose: reconstructing the training split is not evidence.
@@ -637,11 +709,21 @@ export const TEMPLATES = {
     ]
   },
   geometry: {
-    name: "Geometry to HDF5 inspection",
+    // `ingest`, not `inspect`. The template wires the ingest block's output into
+    // an Export block, but `inspect` is a dry run -- pipeline.py returns after
+    // printing "no file written", and geometryConfigText only emits
+    // output_dataset for `ingest` -- so the shipped pipeline's second half
+    // pointed at a file its first half could never produce. `inspect` is still
+    // one dropdown away for a dry check.
+    name: "Geometry to HDF5 (ingest)",
     nodes: [
-      ["cad", "source.cad", 35, 125, { path: "", units: "dataset native" }],
-      ["ingest", "prep.geometry", 365, 125, { mode: "inspect", reader: "trimesh", mesh_type: "surface", emit: "graph, pointcloud", num_points: "4096", limit: "3" }],
-      ["export", "output.export", 710, 125, { path: "studio/runtime/geometry-ingest" }]
+      ["cad", "source.cad", 35, 125, { path: "" }],
+      // reader "auto", not "trimesh": the CAD block accepts .step/.stp/.iges/.igs,
+      // which trimesh cannot read at all. auto routes CAD to gmsh and meshes to
+      // trimesh, so it is correct for every extension the picker offers.
+      ["ingest", "prep.geometry", 365, 125, { mode: "ingest", reader: "auto", mesh_type: "surface", emit: "graph, pointcloud", num_points: "4096", limit: "3" }],
+      // No `path` override: exports always land under studio/runtime/exports/.
+      ["export", "output.export", 710, 125]
     ],
     edges: [
       ["cad", "geometry", "ingest", "geometry"],
@@ -685,6 +767,25 @@ export const TEMPLATES = {
     use_checkpointing: "True", use_amp: "True", use_ema: "True", ema_decay: "0.99",
     val_interval: "5", num_workers: "2", augment_geometry: "False",
     grad_accum_steps: "1"
+  }, {
+    // Readout for the Inference block, not the trainer -- and `sample` here is
+    // measured, not assumed. The reasoning for `mean` is seductive: Evaluate
+    // computes relative L2 and R^2, which are pointwise metrics, so scoring one
+    // stochastic draw looks like counting the model's variance as error. Both
+    // were run end to end on this exact 25-epoch checkpoint over all 87 held-out
+    // ex9 samples:
+    //
+    //     flow_predict sample   relative L2 1.25   R^2 mean -0.96 (median -0.44)
+    //     flow_predict mean     relative L2 1.53   R^2 mean -1.76 (median -1.41)
+    //
+    // `mean` is the deterministic t=0 readout, and this arm mirrors FM_V
+    // (flow_loss_weighting uniform, flow_det_prob 0) -- it spends no training
+    // budget at t=0, so reading the mode out of it is reading out something it
+    // never trained. configs/HI_MGNFlow/ex9/config_ex9_fm_x0.txt is the arm
+    // built for that readout (x0 weighting + flow_det_prob 0.25 + best_by det).
+    // For a better pointwise score without changing the training arm, raise
+    // num_vae_samples and use flow_predict ensemble_mean, at N x the cost.
+    flow_predict: "sample", num_vae_samples: "1"
   }),
   transolver: meshPipeline("Transolver (ex9 plasticity)", "model.transolver", {
     latent_dim: "128", num_layers: "10", num_heads: "8", slice_num: "128",
@@ -781,7 +882,7 @@ export const TEMPLATES = {
   // generator to prove the trained model actually produces candidates --
   // the natural on-ramp into the "generative" design-optimization template.
   sdfflow_train: {
-    name: "SDFFlow train (deepjeb VAE + flow matching)",
+    name: "SDFFlow train (DeepJEB)",
     nodes: [
       ["dataset", "source.hdf5", 35, 70, { path: "dataset/deepjeb.h5" }],
       ["trainer", "model.sdfflow", 330, 70, { mode: "train" }],
@@ -801,7 +902,7 @@ export const TEMPLATES = {
     // preflights RED on a fresh checkout: its two SDFFlow checkpoints do not
     // exist until something trains them. "sdfflow_train" writes to exactly
     // these two paths, so running that first turns both errors green.
-    name: "Generative design optimization (needs a trained SDFFlow)",
+    name: "Design optimization (needs trained SDFFlow)",
     nodes: [
       ["parameters", "source.parameters", 35, 300],
       // num_samples/seed are required for sdfflow `sample` and were absent, so
@@ -852,7 +953,7 @@ export const STUDIO_SECTIONS = {
   },
   optimization: {
     label: "Optimization", icon: "optimize", color: "#8a613b", note: "Objectives, constraints, Pareto",
-    title: "Generated-design evaluation and optimization", description: "Turn candidate galleries into engineering decisions while keeping geometry evidence, physics predictions, constraints, uncertainty, Pareto trade-offs, and verification separate.",
+    title: "Generated-design evaluation and optimization", description: "Turn candidate galleries into engineering decisions while keeping geometry evidence, physics predictions, constraints, Pareto trade-offs, and verification separate.",
     cards: [
       ["Geometry feasibility", "prepare", "adapter", "Consume explicit geometry-check columns from the selected candidate CSV as hard constraints.", ["CSV gate", "condition column", "traceable"], "optimize.design"],
       ["Surrogate evaluation", "model", "adapter", "Consume actual outputs from linked inference or benchmark runs; the optimizer does not invent physics scores.", ["actual CSV", "multi-model", "lineage"], "optimize.design"],
@@ -938,14 +1039,18 @@ export const STUDIO_SECTIONS = {
     ]
   },
   docs: {
+    // docCards: the badge follows the live document count when the server is up,
+    // because that is what this section actually shows. The cards below render
+    // only in the offline fallback.
+    docCards: true,
     label: "Docs", icon: "docs", color: "#377264", note: "Methods, configs, datasets",
     title: "Documentation workspace", description: "Open contextual method, configuration, dataset, inference, benchmark, and implementation documentation without leaving Studio.",
     cards: [
-      ["SimulGen-VAE README", "docs", "native", "Overview, architecture, training concepts, data conditioning, performance, and troubleshooting.", ["SimulGenVAE/README.md", "method"], "model.simulgenvae"],
-      ["SimulGen technical documentation", "docs", "native", "Hierarchical latent design, VAE/LC components, training pipeline, losses, and implementation notes.", ["TECHNICAL_DOCUMENTATION.md", "architecture"], "model.simulgenvae"],
+      ["SimulGen-VAE README", "docs", "native", "Overview, architecture, training concepts, data conditioning, performance, and troubleshooting.", ["methods/SimulGenVAE/README.md", "method"], "model.simulgenvae"],
+      ["SimulGen technical documentation", "docs", "native", "Hierarchical latent design, VAE/LC components, training pipeline, losses, and implementation notes.", ["docs/research/simulgenvae/TECHNICAL_DOCUMENTATION.md", "architecture"], "model.simulgenvae"],
       ["SimulGen checked configs", "docs", "native", "Merged train, VAE-only, LC-only, and reconstruction examples matching the live route.", ["4 modes", "flat config", "examples"], "model.simulgenvae"],
-      ["Configuration reference", "docs", "native", "Suite-wide keys, modes, validation semantics, path resolution, and examples.", ["CONFIGURATION_REFERENCE.md", "spec"]],
-      ["Dataset format", "docs", "native", "Shared mesh HDF5 groups, shapes, field conventions, splits, and metadata.", ["DATASET_FORMAT.md", "HDF5"]],
+      ["Configuration reference", "docs", "native", "Suite-wide keys, modes, validation semantics, path resolution, and examples.", ["docs/CONFIGURATION.md", "spec"]],
+      ["Dataset format", "docs", "native", "Shared mesh HDF5 groups, shapes, field conventions, splits, and metadata.", ["docs/reference/DATASET_FORMAT.md", "HDF5"]],
       ["Studio boundary", "docs", "native", "The Studio lives in studio/; narrow checkpoint-family and portable-routing compatibility fixes preserve truthful native integration.", ["studio/", "local bridge", "native routes"]]
     ]
   }
@@ -962,10 +1067,14 @@ export const HELP = {
   fm_modelpath: "SDFFlow flow-matching checkpoint. It defines the learned latent distribution used by sample, interpolate, and optimize modes.",
   lc_modelpath: "SimulGen latent-conditioner checkpoint output for train/train_lc and input for reconstruct.",
   num_filter_enc: "Space-separated progressive VAE encoder widths; hierarchical levels equal length minus one.",
-  latent_dim: "Per-level hierarchical latent width.",
+  // HELP is keyed by config key, and several keys are shared across routes with
+  // different meanings -- so shared entries name each meaning. The old
+  // latent_dim text ("per-level hierarchical latent width") was true only for
+  // SimulGen-VAE and shown, unchanged, on the other ten routes.
+  latent_dim: "Hidden width. MeshGraphNets family: node/edge latent size; Transolver: token width (must be divisible by num_heads); SDFFlow: channels per latent token; SimulGen-VAE: per-level hierarchical latent width.",
   latent_dim_end: "Main SimulGen latent width.",
   lc_filter: "Space-separated latent-conditioner widths.",
-  lc_data_type: "csv selects the MLP conditioner; image selects the CNN conditioner.",
+  lc_data_type: "csv: MLP conditioner over an ordered CSV (param_dir); image: CNN conditioner over condition images (param_dir); hdf5: MLP conditioner over the dataset's own cond_var rows, no separate file.",
   param_dir: "CSV file or image directory ordered to match sorted HDF5 sample IDs.",
   field_start_row: "First physical-field row; the checked example leaves rows 0:3 for reference coordinates.",
   num_var: "Number of physical field components supplied to the VAE.",
@@ -1023,7 +1132,167 @@ export const HELP = {
   opt_surrogate_target_nodes: "Approximate surface-node count sampled for each surrogate evaluation. Larger values preserve more geometric detail but increase graph construction and inference cost.",
   opt_verify_resolution: "Marching Cubes resolution used to regenerate the final winner for verification.",
   opt_verify_target_faces: "Surface-face target for the final refined verification mesh.",
-  opt_verify_mesh_size_max: "Maximum gmsh element size for the final refined verification solve."
+  opt_verify_mesh_size_max: "Maximum gmsh element size for the final refined verification solve.",
+
+  // --- Shared data contract and training keys -------------------------------
+  // These are the rows a user sees on every model block and in every "Required"
+  // tab, and none of them had help: the sheet fell back to "Manual input is
+  // retained because the live spec does not publish a closed value set".
+  cond_var: "Trailing input-only rows after the state rows: conditions the model reads (boundary, flight or process parameters) but never predicts. They get their own normalization and are carried unchanged through a rollout. 0 reproduces the pre-conditioning behaviour.",
+  feature_loss_weights: "One weight per output_var channel, comma-separated; scales each channel's share of the loss.",
+  positional_features: "Number of positional feature channels appended to every node input (encoded coordinates).",
+  infer_timesteps: "Rollout length in steps. For a dataset with T timesteps the paired training config uses T-1: the first frame is the initial condition.",
+  time_integration: "ar_ot: one-step, teacher-forced training. ar_rt: full-trajectory autoregressive rollout training, slower per epoch but trained against its own compounding error.",
+  split_seed: "Seed of the deterministic train / validation / test split.",
+  warmup_epochs: "Epochs of linear learning-rate warm-up before the schedule takes over.",
+  weight_decay: "Optimizer L2 weight decay.",
+  use_amp: "Mixed-precision training: bfloat16 where the GPU supports it, else float16.",
+  use_ema: "Keep an exponential moving average of the weights and validate and checkpoint with it.",
+  ema_decay: "EMA decay per step. 0.99 to 0.999 is typical; higher is smoother and slower to follow.",
+  val_interval: "Run validation every N epochs.",
+  num_workers: "DataLoader worker processes. The mesh loaders here are input-bound, so more than 2 to 4 rarely helps.",
+  grad_accum_steps: "Micro-batches accumulated before each optimizer step; the effective batch is batch_size times this.",
+
+  // --- MeshGraphNets family -------------------------------------------------
+  edge_var: "Edge feature count. Fixed at 8 for the MeshGraphNets family (mesh- and world-space relative position plus their norms); MGN-EDGE-001 rejects any other value.",
+  use_multiscale: "True builds the HI-MGN V-cycle hierarchy and makes coarsening_type, multiscale_levels, voronoi_clusters and mp_per_level mandatory. False runs the flat stack sized by message_passing_num.",
+  message_passing_num: "Message-passing blocks in the flat model. Ignored when use_multiscale is True; mp_per_level sizes each level instead.",
+  coarsening_type: "How each coarser level is built: bfs, voronoi_centroid, voronoi_inherit or voronoi_seedmean (what every checked-in HI-MGN config uses). The bare 'voronoi' alias was removed and the native build raises on it.",
+  multiscale_levels: "Number of coarser levels below the fine mesh. mp_per_level then needs 2 x levels + 1 entries; voronoi_clusters one value or one per level.",
+  voronoi_clusters: "Target node count per coarse level, e.g. 500, 100 for two levels on a 3131-node mesh. A single value is reused for every level.",
+  mp_per_level: "Message-passing blocks per V-cycle stage, listed pre-levels, coarsest, post-levels: 3, 4, 6, 4, 3 for two levels.",
+  hierarchy_variants: "How many independently seeded coarsening partitions to cache per sample; training rotates through them per epoch as augmentation. 1 disables that.",
+  hierarchy_seed: "Seed of the coarsening partition. Pinning it makes inference rebuild the hierarchy the model trained on; unseeded, about half the partition differs between runs.",
+  hierarchy_cache_keep: "Keep the on-disk hierarchy cache (dataset/<name>.mscache.*) after the run instead of deleting it.",
+  vae_latent_dim: "MeshGraphNets-V: width of the per-graph stochastic latent sampled at every rollout step.",
+
+  // --- Transolver -----------------------------------------------------------
+  num_layers: "Transolver blocks.",
+  num_heads: "Attention heads. latent_dim must be divisible by it (TRANS-HEADS-001).",
+  slice_num: "Physics-Attention slices per head. Attention memory scales with heads x nodes x slice_num per layer, so this, not latent_dim, drives VRAM.",
+  attention_kernel: "naive materializes the full attention; slice_space streams it and is required by chunk_size, amortized_training and node_shard.",
+
+  // --- MLP -------------------------------------------------------------------
+  hidden_layers: "Comma-separated hidden layer widths, e.g. 256,256,128.",
+  activation: "Hidden-layer activation.",
+
+  // --- Neural operators -----------------------------------------------------
+  fno_grid_resolution: "Latent grid size per spatial axis: 2 or 3 entries matching the data's dimensionality (ex9 is 2-D: 64, 32). Mesh values are interpolated onto this grid.",
+  fno_modes: "Retained Fourier modes per axis, same entry count as fno_grid_resolution. Each must be at most grid/2 (last axis grid/2 + 1).",
+  fno_hidden_channels: "Channel width of the spectral layers.",
+  fno_layers: "Number of spectral convolution layers.",
+  gino_grid_resolution: "Latent grid per axis for the FNO core; the graph-kernel encoder maps mesh points onto it and the decoder maps back. 2 or 3 entries.",
+  gino_fno_modes: "Fourier modes per axis for the latent FNO core; same rules as fno_modes.",
+  gino_fno_hidden_channels: "Channel width of the latent FNO core.",
+  gino_fno_layers: "Spectral layers in the latent FNO core.",
+  gino_kernel_hidden: "Hidden width of the graph-kernel MLPs that move features between mesh points and the grid.",
+  gino_in_radius: "Neighbourhood radius, in normalized coordinates, for the mesh-to-grid kernel integration. Too small leaves grid cells empty (see gino_max_empty_input_fraction).",
+  gino_out_radius: "Neighbourhood radius, in normalized coordinates, for the grid-to-query kernel integration.",
+  deeponet_sensor_resolution: "Fixed sensor grid per axis at which the branch net samples the input field (2 or 3 entries).",
+  deeponet_hidden_channels: "Width of the branch and trunk MLPs.",
+  deeponet_branch_depth: "Branch-net layers.",
+  deeponet_trunk_depth: "Trunk-net layers.",
+  deeponet_basis_dim: "Number of basis functions the branch and trunk outputs are contracted over (the DeepONet p).",
+  point_sensor_count: "Points sampled per sample as the branch input; point_resample_each_epoch redraws them every epoch.",
+  point_hidden_channels: "Width of the point encoder and trunk MLPs.",
+  point_feature_dim: "Pooled per-sample feature width produced by the PointNet branch.",
+  pointnet_depth: "PointNet layers before pooling.",
+  point_trunk_depth: "Trunk layers evaluated at each query point.",
+
+  // --- SimulGen-VAE -----------------------------------------------------------
+  output_dir: "Directory for periodic reconstruction / generation test artifacts and for reconstruct- and sample-mode outputs.",
+  node_start: "Optional node-axis slice start (0 = first node); pairs with node_end.",
+  network_size: "small or large: preset width of the VAE encoder / decoder blocks.",
+  alpha: "SimulGen-VAE: reconstruction-loss weight relative to the KL term (1e6 in the checked configs). SDFFlow interpolate: position in [0, 1] between the two endpoints -- of the FM source noise under interpolation_space slerp_noise (the default, so the result is an on-manifold sample and its latent distances to the endpoints are not symmetric), of the normalized latents under lerp_latent.",
+  init_beta_divisor: "Initial KL weight is 10^-divisor; it warms up to beta_target over kl_warmup_epochs.",
+  vae_training_epochs: "Epochs for the VAE stage of the merged pipeline. The standalone train_vae mode uses training_epochs instead.",
+  vae_learningr: "Learning rate for the VAE stage.",
+  lc_dropout: "Dropout in the latent conditioner.",
+  use_spatial_attention: "1 enables spatial attention in the image (CNN) conditioner; inert for csv and hdf5 conditions.",
+  lc_training_epochs: "Epochs for the latent-conditioner stage of the merged pipeline. The standalone train_lc mode uses training_epochs.",
+  lc_batch_size: "Batch size for the latent-conditioner stage.",
+  lc_learningr: "Learning rate for the latent-conditioner stage.",
+
+  // --- SDFFlow ---------------------------------------------------------------
+  latent_tokens: "Latent tokens per shape. 1 is a single global code (DeepSDF-style, pairs with decoder_type mlp); more than 1 pairs with decoder_type attention (VecSet-style).",
+  use_conditions: "Condition the flow-matching stage on the shape descriptors in condition_names. Off, the generator is unconditional and cond_values are ignored.",
+  cond_dropout: "Fraction of FM batches trained with the null condition. Required when use_conditions is True, and what makes classifier-free guidance (cfg_scale) possible.",
+  condition_names: "Subset and order of the dataset's cond_names attribute used as FM conditions. cond_values at sample time follow this order.",
+  num_encoder_points: "Surface points (with normals) drawn per shape, per epoch, for the VAE encoder. Keep it BELOW the number the dataset stores: set equal to it, the without-replacement draw is just a permutation of one fixed point set, and because the encoder is permutation-invariant the shape then presents a bit-identical input every epoch -- which removes the only surface augmentation. The v3 recipe draws 6144 of the 8192 stored.",
+  num_query_points: "SDF query points per shape used to supervise the decoder.",
+  decoder_type: "mlp: DeepSDF-style coordinate MLP. attention: VecSet-style cross-attention over the latent tokens.",
+  decoder_hidden: "Decoder hidden width (mlp) or attention d_model.",
+  decoder_layers: "MLP layers (mlp) or cross-attention blocks (attention).",
+  encoder_dim: "Point-cloud cross-attention encoder d_model.",
+  encoder_heads: "Encoder cross-attention heads.",
+  encoder_blocks: "Encoder cross-attention blocks.",
+  fm_hidden: "Velocity-network hidden width.",
+  fm_blocks: "AdaLN-Zero residual blocks in the velocity network.",
+  fm_cond_hidden: "Timestep and condition embedding width.",
+  fm_training_epochs: "Epochs for the flow-matching stage of the merged pipeline. The standalone train_fm mode uses training_epochs.",
+  fm_batch_size: "Latents per step in the flow-matching stage.",
+  fm_learningr: "Learning rate for the flow-matching stage.",
+  num_samples: "Shapes to generate in sample mode.",
+  seed: "Seed for the latent noise, and for the CMA-ES trajectory in optimize mode. In the training modes it is the run seed: each rank seeds torch/numpy/python and its train DataLoader shuffle with seed + rank, while model construction is put back on the rank-independent base seed. Leave it out for the legacy unseeded run -- but then two runs of the same config differ, and a sweep has no noise floor to judge its arms against.",
+  ode_steps: "Integration steps for flow-matching sampling. A sampling-time cost, not architecture: the same checkpoint runs at any step count.",
+  mc_resolution: "Marching-cubes grid resolution for the output surface; cost grows with the cube of this.",
+  input_mesh: "Mesh file to encode and reconstruct in reconstruct mode.",
+  source_num_samples: "Number of latents drawn before sample_index_a and sample_index_b pick the two to interpolate.",
+  sample_index_a: "Index of the first drawn sample to interpolate from.",
+  sample_index_b: "Index of the second drawn sample to interpolate to.",
+
+  // --- Geometry ingest -------------------------------------------------------
+  input_geometry: "A single CAD/mesh file, or a directory that is walked recursively for meshes. Resolved relative to the method repository like every other path key.",
+  output_dataset: "Destination HDF5 written by `ingest`. `inspect` is a dry run and writes nothing, so this key is only emitted for `ingest`.",
+  reader: "auto picks gmsh for CAD (STEP/IGES/BREP) and trimesh for meshes (STL/OBJ/PLY). trimesh cannot read CAD at all; gmsh can do both but is slower.",
+  mesh_type: "surface keeps the boundary triangles; volume asks gmsh for a tetrahedral mesh, which only works for watertight solids.",
+  emit: "Which contract to write: graph (nodes + mesh_edge, for MeshGraphNets) or pointcloud (sampled points, for the operators and Transolver). Both can be written at once.",
+  num_fields: "How many zero-filled field rows to allocate after the coordinates, so the file matches the shared dataset contract a model expects.",
+  num_points: "Points sampled per shape for the point-cloud output. Ignored when emit is graph only.",
+  resample_method: "fps spreads points evenly by farthest-point sampling; random is cheaper and clumpier.",
+  mesh_size_min: "gmsh minimum element size, in the geometry's own units. 0 leaves gmsh's default.",
+  mesh_size_max: "gmsh maximum element size, in the geometry's own units. This is the main control over mesh density; 0 leaves gmsh's default.",
+  limit: "Process at most this many input files. 0 means all of them.",
+
+  // --- SDFFlow v3 encoder / split / evaluate ---------------------------------
+  encoder_query_type: "learned uses trained query vectors; fps uses farthest-point-sampled input points as the queries. fps makes the latent token ORDER depend on the input point set, so pair it with decoder_type attention -- the flattened-token mlp decoder would see an input-dependent channel layout (SDF-QUERY-002).",
+  posterior_min_std_rel: "Floor on the posterior standard deviation, relative to the latent scale. 0 disables the floor.",
+  vae_best_modelpath: "Where the best-validation VAE checkpoint is written, alongside the last-epoch vae_modelpath.",
+  split_by_parent: "Keep every shape derived from one parent geometry on the same side of the train/val/test split. Off, near-duplicate variants of the same part land on both sides and the held-out score is optimistic.",
+  eval_split: "Which split to score: train, val, or test. Use val for model selection and touch test once, for the final winner.",
+  eval_num_shapes: "How many shapes of the split to score. 0 scores all of them; N scores a random subset of that size, drawn with eval_seed -- not the first N, because under split_by_parent the split is ordered parent by parent and a head slice would be one or two part families.",
+  eval_seed: "Seed for the deterministic encoder subsample drawn from each shape.",
+  latent_refine_steps: "Adam steps that optimize the latent against the shape's stored SDF labels with the decoder frozen. 0 reports the encoder mean only; above 0 the stored query points are halved -- refinement fits one half and BOTH the encoder (enc_*) and refined (ref_*) metrics are scored on the other -- so the gap separates encoder error from decoder capacity without measuring fit. Expect near-zero movement on an undertrained checkpoint, whose decoder is barely z-sensitive.",
+  latent_refine_lr: "Adam learning rate for that latent refinement.",
+  latent_refine_prior_weight: "Weight on ||z - z_encoder||^2 during refinement -- summed over the latent scalars and averaged over the batch, so it keeps its meaning as the latent grows. Keeps the refined latent near the encoder's estimate; calibrate against latent_shift_l2 in the per-shape rows. 0 lets the latent drift freely.",
+  interpolation_space: "slerp_noise interpolates the FM source noise spherically, so the endpoints reproduce the original samples. lerp_latent is the legacy straight line in normalized latent space. cond_sweep keeps ONE noise row (sample_index_a) fixed and integrates it under sweep_steps conditions lerped from cond_values_a to cond_values_b -- the controllable morph a designer asks for (lighter, stiffer, ...), scored per panel by the geometric audit.",
+
+  // --- SDFFlow conditional generation ---------------------------------------
+  cond_dropout_mode: "all (legacy): one Bernoulli mask per sample and a learned null embedding -- every condition must be given at inference. per_dim: an independent mask per condition entry with a learned null value and the mask fed to the network, so a sample request may leave entries 'nan' (unspecified) and the model fills them in from the ones given. Stored in the FM checkpoint; the two modes do not share parameters.",
+  cond_values_a: "Condition vector at the START of a cond_sweep, in the FM checkpoint's cond_names order and stored space (natural log for log_* FEA names). 'nan' = unspecified (per_dim checkpoints only).",
+  cond_values_b: "Condition vector at the END of a cond_sweep; same order and length as cond_values_a. The sweep is a straight line between the two in normalized condition space.",
+  sweep_steps: "Panels in a cond_sweep: alphas linspace(0, 1, sweep_steps); each is integrated from the same noise row and written as sample_<seed>_sweep_<k>.stl plus one strip PNG. Fewer than 2 shows no morph.",
+  guidance_enabled: "C2: calibrated endpoint-prediction guidance during the FM ODE. After each Euler step the one-step endpoint x1_hat is decoded through the soft SDF proxy and the latent is nudged toward the requested volume/area (in calibrated proxy units). Needs descriptor_calibration_path and a conditional request (cond_values). Off by default; measured on the ex1 pilot only.",
+  guidance_t_start: "Guidance acts on Euler states with t_start <= t < 1; the endpoint estimate is unreliable at small t, so the early trajectory is left alone. Pilot value 0.3.",
+  guidance_eta: "Guidance strength (> 0). The per-sample RMS-normalized gradient is scaled by eta * (1 - t). Pilot value 0.1.",
+  guidance_step_mode: "velocity_dt: the correction is a velocity integrated over dt, so the total strength does not change with ode_steps (equals the pilot at 50 steps). per_step_jump: the pilot's per-step state jump, whose total grows with ode_steps -- only for reproducing the 50-step pilot.",
+  guidance_targets: "Which requested conditions guidance / Newton act on. Only volume and area have a soft SDF proxy; other names are ignored with a note, and FEA-named conditions are measured by condition_audit instead.",
+  soft_descriptor_resolution: "Cell-centre grid resolution of the differentiable soft volume/area proxy (48 in the pilot). Must match the value the calibration was fitted with -- the calibration file refuses a mismatch.",
+  soft_descriptor_tau: "Sigmoid temperature of the soft occupancy, in normalized SDF units (0.032 in the pilot). Must match the calibration.",
+  descriptor_calibration_path: "The affine calibration proxy = a * true + b of the soft proxy against the real Marching Cubes measurement, fitted per descriptor on the val split by evaluate + eval_task descriptor_calibration. Bound to the exact VAE/FM pair and proxy settings (SHA-256 checked). Read by sample guidance/Newton and by eval_task conditional; written by the calibration task.",
+  newton_rounds: "E2: rounds of proxy-Jacobian Newton correction applied to each retained latent after sampling. Each round measures the decoded mesh, takes a damped least-squares step toward the requested volume/area, and keeps it only if the TRUE relative residual drops. 0 = off. Pilot: 3 rounds, volume median error 7.6% -> 0.28%.",
+  newton_step_cap_rms: "Cap on one Newton step, as coordinate RMS in the normalized flat latent (cap = value * sqrt(latent_flat_dim)). 0.12 in the pilot; the uncapped step collapsed shapes.",
+  newton_line_search_tries: "Backtracking tries per round: dz, dz/2, dz/4 for 3. A step is accepted only if the decoded mesh is valid and the true residual norm decreases.",
+  newton_measure_resolution: "Marching Cubes resolution of the true measurement inside the Newton loop. Defaults to mc_resolution, and that is what it should stay: the calibration slope is fitted against the export path at mc_resolution and the audit reports there, so a different grid makes E2 converge a residual it is not scored on (MC volume moves ~0.05-0.1% between res 96 and 128). DescriptorCalibration.check_compatible refuses a mismatched artifact.",
+  condition_audit: "How decoded meshes are re-measured against the request. geometric: volume/area/bbox from the mesh (always runs). fea: also gmsh-mesh and solve the GE load cases with design_loop (needs gmsh + pyamg). surrogate: design_loop's HI-MGN surrogate (needs opt_surrogate_config / opt_surrogate_checkpoint). fea/surrogate fall back to geometric with one printed message when unavailable; the metadata records which backend ran. Both are relative-only: tet4 is stiff and the solver reports a stress percentile.",
+  eval_task: "reconstruction: held-out VAE reconstruction metrics (default). descriptor_calibration: fit and write descriptor_calibration_path from calibration_num_shapes x calibration_samples_per_shape samples of the split's conditions. conditional: paired-noise condition-accuracy benchmark of eval_methods against the split's true conditions (needs fm_modelpath).",
+  eval_methods: "Comma list for eval_task conditional, subset of plain, rejection, c2, e2, c2e2. All methods start from the same seeded noise per shape; rejection uses candidate_multiplier, c2 the guidance_* keys, e2 the newton_* keys (both need descriptor_calibration_path).",
+  calibration_num_shapes: "Shapes of eval_split whose true conditions seed the calibration samples (eval_task descriptor_calibration).",
+  calibration_samples_per_shape: "Samples generated per calibration shape; the affine fit sees calibration_num_shapes x this many (proxy, true) pairs per descriptor.",
+  cond_dropout_all_prob: "per_dim only: probability that a training row has EVERY condition masked, i.e. how often the classifier-free-guidance unconditional branch is trained. Independent per-entry dropout alone would draw that row with probability cond_dropout ** cond_dim (6e-5 for six conditions at 0.2), leaving the CFG branch near initialization. 0 restores the chance-only behaviour, and cfg_scale must then stay 1.0.",
+  calibration_min_r2: "eval_task descriptor_calibration: refuse to save a calibration whose per-descriptor fit is weaker than this (0 disables). C2/E2 apply proxy_target = a * true + b, so a poorly determined slope makes the correction worse rather than weaker -- the pilot's uncalibrated round 1 took volume error from 7.6% to 23%.",
+  eval_exclude_shapes: "Comma list of HDF5 shape indices to drop from the evaluate pool before the seeded subset is drawn. DeepJEB index 2099 (131_561) is a partial STL carrying full-bracket labels: no generator can hit its conditions, and at n=32 one such shape dominates the p95 column of every method."
+
 };
 
 export const INPUT_SOURCE_META = {
@@ -1031,7 +1300,9 @@ export const INPUT_SOURCE_META = {
     key: "path",
     kind: "geometry",
     label: "CAD / mesh input",
-    accept: ".stl,.step,.stp,.iges,.igs,.obj,.ply,.off,.msh"
+    // Mirrors _MESH_GLOBS in studio_backend/paths.py exactly: .msh was offered
+    // and cannot be read, .brep is read and was not offered.
+    accept: ".stl,.ply,.obj,.off,.step,.stp,.igs,.iges,.brep"
   },
   "source.hdf5": {
     key: "path",

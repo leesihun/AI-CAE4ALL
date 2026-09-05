@@ -3,6 +3,7 @@ Shared setup helpers for the SDFFlow training stages (MeshGraphNets conventions:
 fused AdamW, LinearLR warmup -> cosine warm restarts, optional EMA, text log).
 """
 
+import contextlib
 import os
 import time
 
@@ -109,3 +110,106 @@ def load_checkpoint(path, device):
     if not os.path.exists(path):
         raise FileNotFoundError(f'Checkpoint not found: {path}')
     return torch.load(path, map_location=device, weights_only=False)
+
+
+def ema_horizon_warning(config, steps_per_epoch, total_epochs, stage=''):
+    """Return a WARNING string when the EMA horizon does not fit the run, else None.
+
+    An EMA with decay ``d`` averages over roughly ``1 / (1 - d)`` optimizer
+    updates. When the whole run makes fewer than ten such horizons of updates,
+    the shadow weights still carry a visible fraction ``d ** updates`` of their
+    random initialization -- and the EMA model is what validation, the periodic
+    test, and inference prefer. Returns None when EMA is off or the budget is
+    adequate; the caller decides whether (rank 0) and where to print it.
+    """
+    if not config.get('use_ema', False):
+        return None
+    decay = float(config.get('ema_decay', 0.999))
+    updates_total = int(steps_per_epoch) * int(total_epochs)
+    if updates_total <= 0 or (1.0 - decay) * updates_total >= 10.0:
+        return None
+    retained = decay ** updates_total
+    label = f'{stage} ' if stage else ''
+    head = (f'WARNING: {label}EMA decay {decay:g} over only {updates_total} optimizer updates '
+            f'({int(steps_per_epoch)} steps/epoch x {int(total_epochs)} epochs) leaves '
+            f'{retained:.1%} of the random initialization in the EMA weights; ')
+    if updates_total <= 10:
+        # `1 - 10 / updates_total` is <= 0 here, so quoting it would print the
+        # useless 'set ema_decay <= 0.000000'. No decay in (0, 1) gives an EMA
+        # horizon that fits ten times into a run this short.
+        return (head + 'the run is too short for a meaningful EMA at any decay -- '
+                'train longer, or set use_ema False and validate the raw weights.')
+    suggested = 1.0 - 10.0 / updates_total
+    return (head + f'set ema_decay <= {suggested:.6f} (or train longer) so the EMA horizon '
+            f'1/(1-decay) fits at least 10 times into the run.')
+
+
+def seed_stage(config, stage='', offset=0, verbose=True):
+    """Seed torch / numpy / python from the config's ``seed`` key, if present.
+
+    Without this, nothing in the training path seeds anything: model init, the
+    DataLoader shuffle order, and the reparameterization noise all differ
+    between runs, so a sweep cannot tell an arm gap from run-to-run noise. The
+    key is optional -- absent, the legacy unseeded behaviour is kept exactly.
+
+    ``offset`` is the caller's distributed rank: every rank seeds from
+    ``seed + rank`` so the ranks do not draw identical posterior noise or
+    shuffle orders. Returns the seed actually used, or None. Module
+    construction must stay bit-identical across ranks -- see
+    ``identical_across_ranks`` below, which the trainers wrap it in.
+
+    ``SDFShapeDataset``'s per-item train subsample stays a fresh draw (it is the
+    surface-sampling augmentation), but its RNG is a child of torch's stream, so
+    seeding torch here makes that augmentation reproducible without freezing it;
+    see ``SDFShapeDataset._rng``. val/test/latent-cache reads are pinned
+    separately through ``deterministic=True``.
+    """
+    raw = config.get('seed')
+    if raw is None or str(raw).strip() == '':
+        return None
+    seed = int(raw) + int(offset)
+    import random as _random
+
+    import numpy as _np
+
+    _random.seed(seed)
+    _np.random.seed(seed % (2 ** 32))
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    if verbose:
+        label = f'{stage} ' if stage else ''
+        print(f'{label}seeded from config seed={raw} (effective {seed})')
+    return seed
+
+
+def seeded_generator(seed):
+    """A ``torch.Generator`` at ``seed`` for DataLoader shuffling, or None."""
+    if seed is None:
+        return None
+    generator = torch.Generator()
+    generator.manual_seed(int(seed))
+    return generator
+
+
+@contextlib.contextmanager
+def identical_across_ranks(run_seed, rank):
+    """Seed torch identically on every rank inside the block, then restore.
+
+    ``seed_stage`` offsets each rank's stream by its rank, which is what you
+    want for posterior noise and shuffling -- but NOT for module construction:
+    ``distributed.wrap_model`` builds FSDP without ``sync_module_states``, so
+    every rank shards whatever it happened to initialize. Wrapping the model
+    construction in this context keeps the initial weights bit-identical.
+    A no-op for an unseeded run (``run_seed`` None) or rank 0.
+    """
+    if run_seed is None or int(rank) == 0:
+        yield
+        return
+    base = int(run_seed) - int(rank)
+    state = torch.get_rng_state()
+    torch.manual_seed(base)
+    try:
+        yield
+    finally:
+        torch.set_rng_state(state)

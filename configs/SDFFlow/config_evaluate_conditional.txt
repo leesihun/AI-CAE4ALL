@@ -1,0 +1,78 @@
+model	SDFFlow  # SDF-VAE + latent flow-matching geometry generator
+mode	evaluate  # eval_task conditional: paired-noise condition-accuracy benchmark of the ex5 FM
+gpu_ids	0  # single process; only the first GPU ID is used
+
+%   Conditional benchmark on the ex5 TEST split (config_train_v3_fea.txt). For eval_num_shapes
+%   seeded-random test shapes the target is that shape's TRUE stored condition vector
+%   (restricted to the checkpoint's six cond_names), and every method in eval_methods
+%   starts from the SAME base noise per shape (paired z0 seeded by eval_seed and the shape
+%   index), so method differences are not noise differences:
+%     plain      -- one conditional sample per shape (50 NFE)
+%     rejection  -- best-of-candidate_multiplier by geometric condition error (the shipped
+%                   sample-mode mechanism; 4 x 50 NFE)
+%     e2         -- plain + newton_rounds of proxy-Jacobian Newton correction on the true
+%                   Marching Cubes volume/area (needs descriptor_calibration_path)
+%     c2 / c2e2  -- add them to eval_methods, with guidance_t_start 0.3 / guidance_eta 0.1 /
+%                   guidance_step_mode velocity_dt, once the ex5 calibration exists
+%   Per method and per condition name it reports the relative error |actual - target| /
+%   |target| in RAW units (MPa / Hz via from_stored, normalized volume / area) as median
+%   and p95, the valid/watertight rate, the latent RMS drift from the plain sample, the
+%   NFE count and wall time, to eval_conditional.json/.csv plus a printed table.
+%   The four FEA-named conditions are 'not measurable geometrically' under
+%   condition_audit geometric; fea / surrogate re-measure them with design_loop
+%   (relative-only: tet4 is stiff and the solver reports a stress percentile).
+%   Protocol facts to keep in mind when reading the numbers:
+%     - calibration on val (config_calibrate_descriptors.txt), scoring on test; touch test once.
+%     - the parent-grouped split is IN-distribution in condition space (test nearest-train
+%       distance ratio ~1.0, <= 0.5% of test values outside the train range): this measures
+%       whether seen condition values can be realised with unseen bracket families, not
+%       condition extrapolation. Extrapolation targets must be constructed explicitly.
+%     - test targets reach |z| 3.82 (area) and 3.21 (torsion stress) under train statistics,
+%       so max_condition_z must be >= 4 or those shapes are rejected before sampling.
+%     - shape h5 index 2099 (source 131_561) is a partial STL with full-bracket labels; it
+%       is dropped by the eval_exclude_shapes line below, not by prose.
+%     - c2/e2/c2e2 optimise volume and area ONLY (the soft SDF proxy has no stress form),
+%       while the table scores whatever condition_audit can measure. On DeepJEB
+%       corr(volume, log_max_ver_stress) = -0.76 and corr(volume, log_first_mode) = +0.82,
+%       so a volume-driven latent step necessarily moves the FEA conditions too. The run
+%       prints a SCOPE line naming what each method optimises versus what is scored.
+%     - the printed table carries a per-condition n and a PAIRED block (only the shapes
+%       every method could be measured on). Compare methods on the paired block: an
+%       unpaired median is taken over a method-selected subsample, and a method that
+%       breaks the meshes it cannot correct looks better for it.
+
+%   Inputs and outputs
+eval_task	conditional  # reconstruction | descriptor_calibration | conditional
+vae_modelpath	../../output/geometry_generation/ex5/sdfflow_vae.pth  # VAE that decodes the sampled latents
+fm_modelpath	../../output/geometry_generation/ex5/sdfflow_fm.pth  # FM under test (required for eval_task conditional; SDF-EVAL-004)
+dataset_dir	../../dataset/deepjeb.h5  # Dataset WITH the cond_extra sidecar; the targets are its stored condition rows
+output_dir	../../output/geometry_generation/ex5/eval_conditional  # eval_conditional.json / eval_conditional.csv
+
+%   Split -- must match config_train_v3_fea.txt
+split_seed	42  # Same seed as the training config
+split_by_parent	True  # Same grouping as the training config
+eval_split	test  # The held-out families; val is for choosing eta / rounds / methods
+eval_num_shapes	32  # Seeded RANDOM subset of the split (0 = every shape); never a head slice under split_by_parent
+eval_seed	0  # Seeds the shape subset and, with the shape index, the paired base noise of every method
+eval_exclude_shapes	2099  # Dropped from the pool BEFORE the subset is drawn: h5 2099 (131_561) is a partial STL with full-bracket labels, so no generator can hit its conditions and at n=32 it would own the p95 column of every method
+
+%   Methods
+eval_methods	plain,rejection,e2  # Subset of plain, rejection, c2, e2, c2e2
+candidate_multiplier	4  # Candidates per shape for the rejection method
+cfg_scale	1.0  # Plain conditional velocity for every method
+ode_steps	50  # Euler steps per trajectory
+mc_resolution	128  # Marching Cubes grid for the exported / audited meshes
+max_condition_z	5.0  # Must be >= 4: the test split's true conditions reach |z| 3.82 under train statistics
+condition_ood_policy	error  # error | warn | clamp for a TRUE target beyond max_condition_z. A target the checkpoint's cond_clip would clamp is asked for clamped but scored unclamped, i.e. a fixed error floor for every method; the default here is warn, this config makes it fail loudly instead
+
+%   E2 Newton correction (method e2) and the calibration it needs
+descriptor_calibration_path	../../output/geometry_generation/ex5/eval/descriptor_calibration.pth  # Written by config_calibrate_descriptors.txt on the val split of THIS VAE/FM pair
+soft_descriptor_resolution	48  # Must match the calibration
+soft_descriptor_tau	0.032  # Must match the calibration
+newton_rounds	3  # Correction rounds per shape for method e2
+newton_step_cap_rms	0.12  # Coordinate-RMS step cap in the normalized flat latent
+newton_line_search_tries	3  # Backtracking: dz, dz/2, dz/4
+newton_measure_resolution	128  # In-loop true-measure grid, EQUAL to mc_resolution and to the grid the calibration was fitted on; check_compatible refuses a mismatch
+
+%   Audit backend for the FEA-named conditions
+condition_audit	geometric  # geometric | fea | surrogate

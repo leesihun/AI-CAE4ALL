@@ -1,3 +1,4 @@
+import { toast } from "./dom.js";
 import { BLOCK_SPECS, FIT_MIN_ZOOM, MAX_ZOOM } from "./constants.js";
 import { state, registerMutationHook, snapshot } from "./state.js";
 import { applyGraphAutofill } from "./autofill.js";
@@ -7,6 +8,8 @@ const PIPELINE_FORMAT = "ai-cae4all-pipeline";
 const PIPELINE_VERSION = 1;
 let saveTimer = null;
 let lastFingerprint = "";
+// The label for the copy actually in localStorage, reused when a save is a no-op.
+let lastSavedLabel = "";
 
 function pipelineName() {
   return document.getElementById("pipelineName")?.value?.trim() || "Untitled pipeline";
@@ -97,7 +100,14 @@ export function applyPipelineDocument(payload, {
       type,
       x: Math.min(100000, Math.max(10, finite(raw.x, 24))),
       y: Math.min(100000, Math.max(10, finite(raw.y, 54))),
-      config: { ...spec.defaults, ...config },
+      // NOT `{...spec.defaults, ...config}`. pipelineDocument() runs
+      // applyGraphAutofill() and writes the full effective config, so the file
+      // is already complete; merging defaults on top injected whatever the
+      // catalog had gained since the export (parallel_mode ddp,
+      // use_checkpointing False) as if the user had typed them, which made
+      // Export -> Import not a round trip. Missing keys are the launcher's
+      // business: preflight reports them with their own diagnostic codes.
+      config: { ...config },
       autoFill: raw.auto_fill && typeof raw.auto_fill === "object" && !Array.isArray(raw.auto_fill) ? { ...raw.auto_fill } : {},
       manualConfigKeys: Array.isArray(raw.manual_config_keys) ? raw.manual_config_keys.map(String) : [],
       status: "idle",
@@ -110,16 +120,30 @@ export function applyPipelineDocument(payload, {
   const nodeById = new Map(nodes.map(node => [node.id, node]));
   const edgeIds = new Set();
   const occupiedInputs = new Set();
+  // A port that a block SPEC no longer declares is version drift, not a
+  // malformed file: removing an inert port (optimize.design lost two) would
+  // otherwise make every stored workspace that touched it unloadable, and
+  // restorePipelineState would throw away the user's whole canvas. Those edges
+  // are dropped and named; anything else is still a hard error.
+  const droppedEdges = [];
   const edges = payload.edges.map((raw, index) => {
     const source = nodeById.get(String(raw?.fromNode || ""));
     const target = nodeById.get(String(raw?.toNode || ""));
-    const sourcePort = source && BLOCK_SPECS[source.type].outputs.find(port => port.id === raw.fromPort);
-    const targetPort = target && BLOCK_SPECS[target.type].inputs.find(port => port.id === raw.toPort);
-    if (!source || !target || !sourcePort || !targetPort) {
-      throw new Error(`Connection ${index + 1} references a missing node or port.`);
+    if (!source || !target) {
+      throw new Error(`Connection ${index + 1} references a missing node.`);
+    }
+    const sourcePort = BLOCK_SPECS[source.type].outputs.find(port => port.id === raw.fromPort);
+    const targetPort = BLOCK_SPECS[target.type].inputs.find(port => port.id === raw.toPort);
+    if (!sourcePort || !targetPort) {
+      droppedEdges.push(`${source.type}.${raw.fromPort} → ${target.type}.${raw.toPort}`);
+      return null;
     }
     if (source.id === target.id) throw new Error(`Connection ${index + 1} cannot connect a block to itself.`);
-    const compatible = sourcePort.type === targetPort.type || sourcePort.type === "artifact" || targetPort.type === "artifact";
+    // Same rule as validate.js::compatible -- the artifact wildcard is
+    // RECEIVE-side only. This copy still had the send-side half, so a document
+    // could reintroduce exactly the Export-into-training-data edge the canvas
+    // now refuses.
+    const compatible = sourcePort.type === targetPort.type || targetPort.type === "artifact";
     if (!compatible) throw new Error(`Connection ${index + 1} links incompatible port types.`);
     const id = String(raw.id || `edge_imported_${index + 1}`);
     if (edgeIds.has(id)) throw new Error(`Connection ${index + 1} has a duplicate ID.`);
@@ -136,7 +160,7 @@ export function applyPipelineDocument(payload, {
       toNode: target.id,
       toPort: targetPort.id
     };
-  });
+  }).filter(Boolean);
   const indegree = new Map(nodes.map(node => [node.id, 0]));
   const outgoing = new Map(nodes.map(node => [node.id, []]));
   edges.forEach(edge => {
@@ -175,6 +199,9 @@ export function applyPipelineDocument(payload, {
   applyGraphAutofill();
   const nameInput = document.getElementById("pipelineName");
   if (nameInput) nameInput.value = String(payload.name || "Untitled pipeline");
+  if (droppedEdges.length) {
+    toast(`${droppedEdges.length} connection${droppedEdges.length === 1 ? "" : "s"} to a port that no longer exists ${droppedEdges.length === 1 ? "was" : "were"} dropped: ${droppedEdges.join(", ")}.`, "warn");
+  }
   return payload;
 }
 
@@ -185,12 +212,19 @@ export function savePipelineState({ announce = false } = {}) {
     const documentValue = pipelineDocument();
     const serialized = JSON.stringify(documentValue);
     const fingerprint = JSON.stringify({ ...documentValue, saved_at: "" });
-    if (fingerprint !== lastFingerprint) localStorage.setItem(PIPELINE_STORAGE_KEY, serialized);
+    // The timestamp must describe the stored copy, not this call. The
+    // fingerprint guard means an unchanged pipeline writes nothing, and
+    // refreshing the label anyway claimed a save that never happened -- so the
+    // stored saved_at could be minutes older than the line above it.
+    const wrote = fingerprint !== lastFingerprint;
+    if (wrote) localStorage.setItem(PIPELINE_STORAGE_KEY, serialized);
     lastFingerprint = fingerprint;
     const status = document.getElementById("savedState");
-    if (status) {
-      const time = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-      status.textContent = `Saved locally · ${time}`;
+    if (status && wrote) {
+      lastSavedLabel = `Saved locally · ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+      status.textContent = lastSavedLabel;
+    } else if (status && lastSavedLabel) {
+      status.textContent = lastSavedLabel;
     }
     if (announce) document.dispatchEvent(new CustomEvent("pipeline-saved"));
     return documentValue;

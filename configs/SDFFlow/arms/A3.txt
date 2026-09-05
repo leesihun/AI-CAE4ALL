@@ -1,0 +1,66 @@
+model	SDFFlow  # SDF-VAE + latent flow-matching geometry generator
+mode	train_vae  # VAE stage only; the FM is trained once, for the winning arm, via config_train_v3.txt
+gpu_ids	0  # one GPU per arm; configs/campaigns/benchmarks_all/campaign_runner.py rewrites this per job
+
+%   Arm A3: v3 with kl_weight x10 (0.000025) -- KL pressure.
+%   Part of the configs/SDFFlow/arms/ sweep (see README.md there). Every arm
+%   shares the v3 data settings, split, and training budget; only the axis named
+%   above differs from A0. Score with config_evaluate.txt pointed at this arm's
+%   checkpoint.
+%   Only kl_weight differs from A0.
+
+%   Outputs
+output_dir	../../output/geometry_generation/arms/A3  # Periodic reconstruction test artifacts
+vae_modelpath	../../output/geometry_generation/arms/A3/sdfflow_vae.pth  # Final VAE checkpoint (last epoch)
+vae_best_modelpath	../../output/geometry_generation/arms/A3/sdfflow_vae_best.pth  # Best-validation VAE checkpoint
+
+%   Dataset (as v3)
+dataset_dir	../../dataset/deepjeb.h5  # SDF HDF5 dataset (build_dataset.py); 2138 DeepJEB brackets from 263 parent geometries
+split_seed	42  # Seed for the deterministic 80/10/10 split
+split_by_parent	True  # Split whole parent geometries (source basename before the first '_'), not individual variants; False = legacy per-shape split
+num_encoder_points	6144  # As v3: a genuine 75% subsample of the 8192 stored surface points, so every epoch draws a different cloud (8192 would be a permutation of one fixed set)
+num_query_points	8192  # SDF query points per shape for decoder supervision (dataset stores 10240)
+
+%   VAE architecture
+latent_tokens	32  # VecSet latent: 32 tokens
+latent_dim	32  # 32 channels per token -> 32 x 32 = 1024 flat (v2 was 2048; latent optimization beat the encoder 2.4x there, so the latent was over-sized)
+decoder_type	attention  # VecSet cross-attention decoder (required with latent_tokens > 1 and with encoder_query_type fps)
+decoder_hidden	256  # Attention d_model (v2: 512)
+decoder_layers	4  # Cross-attention block count
+decoder_heads	4  # Decoder attention heads
+encoder_dim	256  # Point-cloud cross-attention encoder d_model (v2: 512)
+encoder_heads	4  # Encoder attention heads
+encoder_blocks	3  # Encoder block count (v2: 4)
+encoder_self_attention	True  # Self-attention among latent tokens after each cross-attention block
+encoder_query_type	fps  # fps = farthest-point-sampled input points embedded by point_proj are the initial queries (3DShape2VecSet); learned = free nn.Parameter queries (legacy)
+fourier_bands	8  # NeRF-style positional encoding bands for point/query coordinates
+
+%   VAE losses and posterior schedule
+kl_weight	0.000025  # 10x A0's 0.0000025 (sum-KL)
+deterministic_warmup_epochs	20  # Epochs with mu-only encoding (no posterior noise, no KL) before the warmups start
+posterior_noise_warmup_epochs	80  # Epochs to ramp the reparameterization noise scale linearly up to posterior_noise_max_scale
+posterior_noise_max_scale	1.0  # Full reparameterization once warmed up (legacy 0.1 sampled at a tenth of sigma, so the decoder never learned to tolerate the posterior width the FM later samples)
+posterior_min_std_rel	0.02  # Floor on the posterior std: std >= 0.02 x running per-dim spread of mu (variance-collapse guard); 0 = off
+kl_warmup_epochs	100  # Epochs to ramp the KL weight linearly up to kl_weight
+clamp_dist	0.1  # Truncation distance for the SDF loss target
+surface_weight	0.1  # |f(x_surface)| -> 0 (hybrid TripoSG-style term)
+normal_weight	0.1  # Align grad f with the stored surface normals
+eikonal_weight	0.01  # ||grad f|| -> 1 so the field is a metric SDF
+hybrid_grad_points	2048  # Points per shape used for the gradient terms (second-order cost cap)
+
+%   VAE training (unprefixed stage keys: this is mode train_vae)
+seed	0  # Global seed (torch/numpy/python + the DataLoader shuffle) so arms differ by their axis, not by run-to-run noise; A9 repeats A0 at seed 1 to measure that noise floor
+log_file_dir	../../output/geometry_generation/arms/A3/train_vae.log  # VAE training log
+training_epochs	500  # ~428 updates/epoch at batch 4 on the parent-split train set
+batch_size	4  # Shapes per step
+learningr	0.0005  # Learning rate
+weight_decay	0.0001  # AdamW weight decay
+warmup_epochs	5  # LR warmup epochs
+num_workers	4  # Dataloader workers
+use_amp	False  # Hybrid terms double-backward through the decoder; keep fp32
+use_ema	True  # EMA shadow model for validation/test and both checkpoints
+ema_decay	0.999  # ~214k updates; fine
+val_interval	5  # Validate every N epochs (ValidSign / ValidSignBal and ActiveUnits / ActiveSNR are logged)
+test_interval	50  # Reconstruction test + checkpoint save every N epochs
+num_test_shapes	1  # Shapes reconstructed in the periodic test
+mc_resolution_test	96  # Marching Cubes grid for the periodic test

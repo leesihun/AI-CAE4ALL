@@ -58,5 +58,5 @@ mp_per_level	8, 12, 8  # Overides message_passing_num if use_multiscale=True
 split_seed	42
 inference_output_dir	../../output/meshgraphnets/ex1/ablation/infer_vc_1stage
 '
-%   Time integration (CONFIGURATION_REFERENCE.md section 3.5)
+%   Time integration (docs/CONFIGURATION.md section 3.5)
 time_integration	ar_ot  # ar_ot = one-step/teacher-forced (default); ar_rt = full-trajectory autoregressive rollout training

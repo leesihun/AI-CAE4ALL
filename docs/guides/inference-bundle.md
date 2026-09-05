@@ -137,8 +137,9 @@ If you have an **older** checkpoint pair (separate `sdfflow_vae.pth` +
 
 ```bash
 python methods/SDFFlow/merge_sdfflow_checkpoint.py \
-    --vae outputs/ex1/sdfflow_vae.pth --fm outputs/ex1/sdfflow_fm.pth \
-    --output outputs/ex1/sdfflow.pth
+    --vae output/geometry_generation/ex1/sdfflow_vae.pth \
+    --fm output/geometry_generation/ex1/sdfflow_fm.pth \
+    --output output/geometry_generation/ex1/sdfflow.pth
 ```
 
 The driver also has a fallback that reads `ckpt['vae_modelpath']` directly if

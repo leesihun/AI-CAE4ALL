@@ -1,0 +1,462 @@
+% =====================================================================
+%  Introduction + literature survey
+%  For a paper on HI-MGN-V / cHI-MGNflow.
+%  Requires: references.bib (121 verified entries)
+%  Compile through main.tex.
+% =====================================================================
+
+\section{Introduction}
+\label{sec:intro}
+
+\subsection{Learned mesh simulators converged on a single objective}
+\label{sec:intro:lineage}
+
+Learned simulators for continuum mechanics descend from one architectural
+idea: represent the discretised state as a graph and learn its one-step
+dynamics by message passing. Graph Network-based Simulators established the
+template on particle systems, predicting per-particle accelerations under an
+encode--process--decode graph network and showing that a model supervised on
+single timesteps generalises to longer horizons, new initial conditions and an
+order of magnitude more particles at test
+time~\cite{sanchezgonzalez2020gns}. MeshGraphNets carried the template onto
+simulation meshes, adding a world-space edge set for contact and a learned
+sizing field for adaptive remeshing, and covering cloth, structural mechanics,
+incompressible flow and compressible aerodynamics at one to two orders of
+magnitude below solver cost~\cite{pfaff2021meshgraphnets}.
+
+It is worth stating plainly what these two papers optimise, because the
+subsequent literature inherits it without amendment: the objective is an $L^2$
+loss between the predicted per-node output and the corresponding ground-truth
+value, and the reported figure of merit is an RMSE averaged over coordinates,
+nodes, rollout steps and test trajectories. Neither paper emits a probabilistic
+output. The stochasticity that does appear---Gaussian noise injected into
+training inputs---is a regulariser that makes deterministic rollouts robust over
+hundreds of steps, not a model of a predictive distribution.
+
+The hierarchical branch grew from a purely computational diagnosis. Flat
+message passing propagates information one hop per layer, so the number of
+steps required scales with mesh diameter, and stacking them induces
+over-smoothing and prohibitive memory cost. MultiScale MeshGraphNets learned
+surrogate dynamics on a coarser mesh and passed messages at two resolutions
+simultaneously~\cite{fortunato2022msmgn}; Bi-Stride Multi-Scale GNN made the
+coarsening principled and automatic, pooling on every other frontier of a
+breadth-first search so that no coarse mesh need be drawn by hand and
+connectivity is provably preserved~\cite{cao2023bsmsgnn}, reusing the
+pool/unpool-with-skip primitive of graph U-Nets~\cite{gao2019graphunets}.
+X-MeshGraphNet removed the remaining partitioning
+bottleneck~\cite{nabian2024xmeshgraphnet}, HOOD replaced explicit supervision
+with an incremental potential~\cite{grigorev2023hood}, EAGLE and MAgNet
+attacked long-range transport and mesh-free
+querying~\cite{janny2023eagle, boussif2022magnet}, and Erwin brought
+ball-tree attention to large point systems~\cite{zhdanov2025erwin}. Replacing
+message passing altogether---by physics-attention slicing in
+Transolver~\cite{wu2024transolver}, by general operator transformers in
+GNOT~\cite{hao2023gnot}, by graph--Fourier hybrids in
+GINO~\cite{li2023gino}, or by universal physics
+transformers~\cite{alkin2024upt, alkin2025abupt}---reaches the same evaluation
+endpoint by a different architectural route. Across the whole lineage,
+including the operator-learning ancestors~\cite{lu2021deeponet, li2021fourier},
+the reported metric is a relative $L^2$ or RMSE against \emph{one} reference
+trajectory per condition.
+
+Crucially, in every one of these papers hierarchy is justified on
+receptive-field and cost grounds alone. No work in this line argues, or tests,
+that coarsening changes \emph{what object} the network estimates.
+
+\subsection{What a squared loss elicits}
+\label{sec:intro:elicitation}
+
+Decision theory says exactly what such an objective yields. Under a squared
+loss the Bayes-optimal predictor is the conditional mean; under an absolute
+loss, the conditional median~\cite{gneiting2007strictly}. When the conditional
+law $p(u \mid c)$ of the field given the model's observable inputs is narrow,
+the mean is an adequate summary and the practice is harmless. When it is
+broad, the conditional mean is not a physically realisable state at all: it is
+a blurred average over mutually incompatible outcomes. This is not an
+optimisation failure to be engineered away---it is the \emph{optimum} of the
+stated objective.
+
+The claim is made most forcefully by GenCFD, which states in its abstract that
+ensembles of deterministic models trained to minimise mean-square errors
+regress to the mean flow, and supplies solvable toy models explaining why a
+score-based generative alternative does not~\cite{molinaro2024gencfd}. The
+vocabulary for the failure mode, however, was invented in stochastic video
+prediction, where a pixel loss was diagnosed as producing a blurry average of
+futures~\cite{babaeizadeh2018sv2p, denton2018svglp, lee2018savp}, and
+Lucas et al.\ settled analytically that latent collapse is a property of the
+Gaussian likelihood rather than a defect of the variational
+bound~\cite{lucas2019dontblame}. Microstructure makes the point undeniable:
+averaging grain fields over Monte Carlo seeds yields an object with no grain
+boundaries at all~\cite{torquato2002random, plimpton2009spparks}.
+
+\subsection{Engineering meshes are broad-conditional for a different reason
+than weather is}
+\label{sec:intro:mechanisms}
+
+It matters a great deal \emph{why} a conditional is broad, because the three
+mechanisms in play do not respond to the same modelling choice and are not
+scored with the same metric. Conflating them is the largest conceptual hazard
+in this area, and it is worth separating them at the outset.
+
+\paragraph{(a) Chaotic amplification of an observed initial state.}
+The solver is deterministic and the state is fully resolved; trajectories
+diverge because a small \emph{observed} perturbation grows. Conditioned on the
+state, the one-step map is a point mass, and uncertainty exists only relative
+to a \emph{coarsened} conditioning set---a lead time, or a parameter with the
+initial condition marginalised out. This is the weather and turbulence
+setting~\cite{price2025gencast, kohl2026acdm}, and the appropriate metrics are
+trajectory-level and lead-time-resolved.
+
+\paragraph{(b) An unobservable latent field.}
+The solver may again be deterministic, but a genuinely random, high-dimensional
+covariate governing the response---a microstructure, a material scatter field,
+an unmodelled boundary condition---is marginalised out. From the model's
+viewpoint the spread is irreducible no matter how much data is collected; from
+the physics viewpoint it is epistemic and would vanish if the field were
+supplied. This is the classical aleatoric/epistemic
+distinction~\cite{huellermeier2021aleatoric, kendall2017what}, and it is the
+regime we target, because it is the one an engineering analyst actually
+inhabits: the CAD model is known, the mesh is known, and the thing that decides
+the answer is not in either.
+
+\paragraph{(c) A Monte Carlo seed of a statistical process.}
+Nothing varies but the random stream~\cite{plimpton2009spparks,
+tran2023spparkshackathon, qin2024graingnn}. There is no condition and no
+conditional; the task is distribution matching of a random field, and the
+observable of interest is a set of morphological summary statistics rather than
+a per-node value. This is a generative-modelling benchmark, not an
+uncertainty-quantification one.
+
+\subsection{The measurement is missing, not only the model}
+\label{sec:intro:measurement}
+
+Even a correctly specified probabilistic mesh simulator cannot currently be
+\emph{shown} to be one. Mesh benchmarks in the learned-simulator
+literature---MeshGraphNets' six datasets, BSMS-GNN's four, EAGLE's 1{,}184 RANS
+runs, AirfRANS, DrivAerNet++'s 8{,}000 geometries, the Darcy and Navier--Stokes
+operator suites---store exactly one deterministic realisation per
+condition~\cite{pfaff2021meshgraphnets, janny2023eagle, elrefaie2024drivaernetpp,
+li2021fourier}. Against a single draw, a collapsed predictor and a correctly
+calibrated one are not merely unranked: they are formally indistinguishable,
+because the RMSE-family metric being reported is minimised by the former.
+
+Nor is swapping RMSE for CRPS sufficient. Two estimation issues intervene
+before any modelling claim can be made. First, a generative simulator is
+evaluated through a finite ensemble, and the naive empirical-CDF estimator of
+the CRPS is biased in a direction that actively \emph{rewards} under-dispersion;
+Ferro's fair scores supply the ensemble-size correction that removes this
+incentive~\cite{ferro2014fair}, and Zamo and Naveau quantify the residual bias
+of the competing estimators and warn specifically against comparing a
+parametric predictive distribution to an ensemble using the uncorrected
+form~\cite{zamo2018estimation}. The same arithmetic governs the spread--skill
+diagnostic, whose $\sqrt{(M{+}1)/M}$ correction is routinely
+omitted~\cite{fortin2014why}. Second, propriety is an asymptotic statement
+about expectations and guarantees no statistical \emph{power} at realistic
+sample sizes: the energy score is empirically the weakest discriminator of its
+family and degrades with dimension~\cite{pinson2013discrimination,
+alexander2024evaluating, marcotte2023regions}, which is precisely why
+dependence-sensitive alternatives such as the variogram score
+exist~\cite{scheuerer2015variogram}. A flat rank histogram is necessary, not
+sufficient~\cite{hamill2001interpretation}, and the best-of-$N$ protocol
+imported from vision is not a proper scoring rule at all---its minimiser is
+approximately the square root of the true density~\cite{thiede2019analyzing}.
+Finally, a single realisation does not determine a microstructural
+statistic~\cite{dahari2025representativity}, so replicate counts must be
+reported, not assumed.
+
+\subsection{Contributions}
+\label{sec:intro:contributions}
+
+\begin{enumerate}
+  \item \textbf{Two mesh-native probabilistic hierarchical simulators.}
+    HI-MGN-V places an MMD-InfoVAE latent at the coarse level of a per-sample
+    bi-stride mesh hierarchy and learns its conditional prior by flow matching,
+    jointly with the simulator. cHI-MGNflow removes the latent bottleneck and
+    flow-matches the mesh increment itself, conditioned hierarchically and
+    coupled by minibatch optimal transport so that few-step sampling stays
+    affordable inside a several-hundred-step rollout.
+  \item \textbf{A hidden-latent mesh benchmark with many realisations per
+    condition}, built by \emph{withholding} the rigid-inclusion field of a
+    phase-field crack-propagation dataset, together with a measured
+    quantification of its residual information leak
+    (\S\ref{sec:bench:construction}).
+  \item \textbf{A scoring protocol that is proper by construction}:
+    fair-estimator CRPS on nodal marginals and on engineering functionals, a
+    variogram score and a hierarchy-matched multivariate score for spatial
+    coherence, and ensemble-size-corrected spread--skill and rank-histogram
+    diagnostics.
+  \item \textbf{An audit of the available benchmark landscape}
+    (\S\ref{sec:bench:landscape}), establishing which datasets can and cannot
+    support a distributional claim, and why several widely used candidates
+    cannot.
+\end{enumerate}
+
+
+% =====================================================================
+\section{Related work}
+\label{sec:related}
+
+\subsection{Generative PDE surrogates: stability first, distribution second}
+\label{sec:related:diffusion}
+
+Denoising diffusion entered the neural-PDE literature primarily as a stability
+device rather than a distributional one. PDE-Refiner reinterprets the update
+step of a neural solver as a short denoising chain, on the diagnosis that a
+pointwise MSE objective systematically underweights low-amplitude spatial
+frequencies, and that iterative refinement with a decreasing noise schedule
+restores them~\cite{lippe2023pderefiner}. Kohl et al.\ roll a conditional
+diffusion model autoregressively across an incompressible cylinder wake, a
+transonic shock interaction and slices of isotropic turbulence, dominating
+U-Net, FNO and VAE baselines in temporal stability and spectral
+fidelity~\cite{kohl2026acdm}.
+
+Both are generative models evaluated as deterministic ones. PDE-Refiner reports
+the rollout time at which correlation with a single reference falls below a
+threshold; \cite{kohl2026acdm} reports MSE, the LSiM similarity metric and
+spectra over five posterior samples. Neither reports a proper scoring rule,
+and---decisively---every test condition in~\cite{kohl2026acdm} is accompanied
+by exactly one ground-truth trajectory, so the strongest statement the metric
+can support is a distance to one draw, not a divergence between distributions.
+The authors say as much. The explicitly distributional
+minority~\cite{molinaro2024gencfd, rozet2023sda, du2024confild,
+gao2024bayesiandiffusion, huang2024diffusionpde, shu2023physicsdiffusion,
+pfister2026stocbench, srikishan2026trie, galletti2026gyroflow} proves the point
+rather than refuting it; and the field's revealed preference still rewards the
+mean, as in a 2026 work that deliberately removes stochastic denoising in
+favour of a deterministic ODE correction and reports better accuracy and
+physical consistency~\cite{dai2026flowrefiner}.
+
+\subsection{Flow matching: why a generative prior is affordable}
+\label{sec:related:fm}
+
+Flow matching arrived as three near-simultaneous answers to one question: how
+to train a continuous normalising flow without differentiating through an ODE
+solver. Lipman et al.\ observed that regressing a network onto the closed-form
+velocity of a \emph{conditional} probability path yields an unbiased gradient
+for the intractable marginal objective~\cite{lipman2023flowmatching}; Liu et
+al.\ derived the same construction from straight-line interpolations and added
+rectification~\cite{liu2023rectifiedflow}; Albergo and Vanden-Eijnden obtained
+the velocity as the minimiser of a quadratic loss over a stochastic
+interpolant, later generalising it so that one learned drift induces a family
+of deterministic and stochastic
+samplers~\cite{albergo2023buildingflows, albergo2023interpolants}. The
+practical consequence for us is decisive: a generative prior over simulation
+states costs no more to train than a regression head, because the loss is a
+mean-squared error against an analytically known target. That is what makes it
+feasible to train a flow prior \emph{jointly} with a message-passing simulator
+rather than as a separate second stage.
+
+What distinguishes flow matching from diffusion, in a way that matters directly
+for autoregressive physics, is that the coupling between base and target is a
+free design variable. Under independent pairing the conditional velocity is an
+average over all data points a given noise sample could have come from, so
+trajectories are curved, the regression target is high-variance, and many
+integration steps are needed. OT-CFM pairs noise and data by solving an
+optimal-transport problem within each minibatch, giving in the small-noise
+limit an unbiased estimator of the dynamic-OT velocity, straighter flows and
+markedly lower gradient variance~\cite{tong2024otcfm}. Pooladian et al.\ prove
+the property that makes this safe rather than merely convenient: any
+exchangeable multisample coupling leaves the model's marginals unchanged while
+reducing transport cost~\cite{pooladian2023multisample}. Conditioning can be
+injected through the coupling itself~\cite{albergo2024datadependent,
+chen2024follmer}. The caveat a reviewer will raise is that no work in this line
+analyses \emph{accumulation} of transport error across hundreds of conditioned
+autoregressive steps.
+
+\subsection{Generative models off the grid}
+\label{sec:related:offgrid}
+
+The machinery survives the loss of a lattice, but every existing instance stops
+short of the construction we need. Chen et al.\ extend flow matching to general
+geometries~\cite{chen2024generalgeometries} and DeFoG to discrete graph
+topology~\cite{qin2025defog}; Ramos et al.\ apply conditional flow matching to
+unstructured CFD meshes without resampling~\cite{ramos2026fluidflow}; Lino et
+al.\ sample equilibrium flow states directly on unstructured meshes and, in
+follow-up work, factorise the sampler coarse-to-fine across mesh
+levels~\cite{lino2025diffusiongraphnets, lino2026scaleautoregressive}; Li et
+al.\ perform generative rollout by first mapping heterogeneous meshes onto a
+unified structured latent grid~\cite{li2025genlatentfm}. Each generates
+either points \emph{on} a surface, discrete topology, a flat mesh field, or a
+resampled structured latent---never a continuous field factorised over a
+coarsening hierarchy reconstructed per sample.
+
+\subsection{Latent-variable surrogates and the collapse problem}
+\label{sec:related:vae}
+
+The conditional VAE posed structured prediction as sampling from $p(y \mid x)$
+with a Gaussian latent~\cite{sohn2015cvae}. The factorisation is attractive for
+engineering surrogates---it puts the unobserved part of the problem into a
+low-dimensional code while leaving the decoder free---but it carries two
+liabilities the subsequent decade has not resolved. The first is the asymmetry
+between a recognition network at training time and a prior at test time, so the
+sampling distribution actually used at deployment is never the one the decoder
+was optimised against. The second is that under a Gaussian likelihood the
+reconstruction term is a squared error, and a sufficiently powerful conditional
+decoder minimises it by ignoring the latent and emitting the conditional mean.
+The $\beta$-VAE made the trade-off explicit~\cite{higgins2017betavae} but
+confined it to a single scalar axis; InfoVAE broke that coupling by replacing
+the per-sample KL with a divergence on the \emph{aggregate} posterior, the MMD
+instantiation giving an adversary-free penalty that keeps the code informative
+under a flexible decoder~\cite{zhao2017infovae}. Since collapse is a property
+of the likelihood rather than the bound~\cite{lucas2019dontblame}, annealing
+$\beta$ treats a symptom---the training signal itself must stop rewarding the
+conditional mean. A learned, past-conditioned prior is the known fix for the
+train/test asymmetry~\cite{denton2018svglp, babaeizadeh2018sv2p, lee2018savp},
+and it has been carried into physics surrogates and field
+generation~\cite{wu2022lepde, solerarico2024betavae,
+guo2022normalizingfieldflows}.
+
+\subsection{Probabilistic weather: the one field that changed its objective}
+\label{sec:related:weather}
+
+Nowhere has the shift from deterministic surrogate to calibrated probabilistic
+emulator been carried out as completely, or adjudicated as publicly. The
+lineage begins with mesh graph networks almost identical in spirit to those
+used for engineering simulation~\cite{keisler2022graphweather, lam2023graphcast},
+with contemporaneous transformer emulators reaching the same frontier by other
+routes~\cite{bi2023pangu, pathak2022fourcastnet, nguyen2024stormer,
+bodnar2025aurora, kochkov2024neuralgcm}. Every one is trained on a weighted MSE
+against a single reanalysis trajectory and reports RMSE and anomaly correlation
+as headline skill.
+
+That choice was quickly recognised as self-defeating: because RMSE is minimised
+by the conditional mean, a model that hedges is rewarded, and as lead time
+grows the optimal forecast becomes smoother than any physically realisable
+state. WeatherBench~2 made this concrete, documenting explicitly that blurred
+forecasts win on RMSE while failing spectral and probabilistic diagnostics, and
+elevating CRPS, spread--skill, rank histograms and Brier scores to first-class
+metrics~\cite{rasp2024weatherbench2}. Generative ensembles
+followed~\cite{li2024seeds, price2025gencast, couairon2024archesweathergen,
+zhong2024fuxiens, oskarsson2024graphefm}, and then the objective itself
+changed: FuXi-ENS replaced an $L1$+KL objective with CRPS+KL precisely to stop
+its decoder collapsing to a conditional mean~\cite{zhong2024fuxiens},
+AIFS-CRPS trains on an ensemble-size-debiased
+CRPS~\cite{lang2026aifscrps, andrae2025continuous}, and FGN attains
+state-of-the-art ensemble skill from learned model perturbations trained on
+per-location marginal CRPS alone~\cite{alet2025fgn, landry2025fmap}.
+
+Two lessons transfer, and one warning. The score can be the objective. A
+coarse-level latent is a working architectural answer---Graph-EFM draws a
+single latent map at the coarsest level of an icosahedral hierarchy and
+propagates it downward, obtaining spatially coherent members at one forward
+pass each~\cite{oskarsson2024graphefm}. But the warning is that weather
+verifies against a \emph{single} observed realisation per initial condition,
+pooling over many cases; that works because the cases are exchangeable, and it
+is exactly the assumption an engineering benchmark with a fixed geometry cannot
+make.
+
+\subsection{UQ for operators: bands, not samples}
+\label{sec:related:operatoruq}
+
+The first response of the operator-learning community was to retrofit
+uncertainty onto a mean predictor. Magnani et al.\ gave the shallow neural
+operator an exact GP reading and lifted it to deep operators with approximate
+Bayesian deep learning~\cite{magnani2022approximatebno}; Garg and Chakraborty
+replaced MCMC with variational inference for a Bayesian
+DeepONet~\cite{garg2023vbdeeponet}; deep
+ensembles~\cite{lakshminarayanan2017deepensembles} were carried over by Mouli
+et al., who showed ensemble spread localises high-error regions under
+distribution shift~\cite{mouli2024diverseno}; and Ma et al.\ supplied a
+distribution-free counterpart whose functional split-conformal calibration
+guarantees an expected coverage fraction~\cite{ma2024calibrated}. The survey
+of Psaros et al.\ maps this space~\cite{psaros2023uqsciml}. What these share is
+that they attach an \emph{interval} to a predictor that remains a conditional
+mean: they quantify epistemic uncertainty that contracts with data and produce
+no jointly coherent draws. The exception that proves the rule is Bülte et al.,
+who obtain calibrated functional predictive distributions by replacing the
+squared loss with a strictly proper scoring rule and no generative sampler at
+all~\cite{bulte2025pno, cao2023residual}. Formally, the hidden-latent setting
+is a posterior-predictive problem, which connects it to amortised
+simulation-based inference~\cite{cranmer2020frontier, wildberger2023fmpe} and
+to that literature's own calibration
+crisis~\cite{hermans2022trustcrisis}.
+
+\subsection{Microstructure: a community that already evaluates
+distributionally}
+\label{sec:related:micro}
+
+Microstructure is the setting in which the inadequacy of pointwise regression
+is least deniable, because the predicted object is not identified up to the
+labels the loss is written in. A grain field produced by the Potts kinetic
+Monte Carlo model in SPPARKS~\cite{plimpton2009spparks} is a stochastic
+realisation: fixing the lattice, temperature and mobility fixes a \emph{law},
+and the run-to-run difference is carried entirely by the seed. Two consequences
+follow. The conditional mean of that law is not a microstructure. And grain
+identifiers are arbitrary labels, so a prediction reproducing the true
+morphology exactly but permuting the identifiers incurs near-maximal $L^2$
+error. Any per-node, per-channel metric is measuring the wrong thing twice
+over; the correct functionals are the permutation- and translation-invariant
+descriptors catalogued by Torquato~\cite{torquato2002random}.
+
+The generative-microstructure community reached this conclusion two decades ago
+and has evaluated distributionally
+since~\cite{mosser2017porousgan, kench2021slicegan, kench2022microlib,
+seibert2022descriptor, vlassis2023diffusionmicrostructure,
+lee2024anisotropicdiffusion, hoffman2025grainpaint}, while its \emph{surrogate}
+half continues to regress against one seed~\cite{yan2022primme, tian2026primme3d,
+qin2024graingnn, tian2025cnngnn, oommen2022microstructureoperator}. It settled,
+however, on descriptor-moment agreement and KS tests, which are not proper
+scores---a gap on the other side of the same problem.
+
+\subsection{Positioning}
+\label{sec:related:gap}
+
+Four ingredients are required to make a learned mesh simulator predict a
+distribution rather than a blur, and each already exists---but only in pairs.
+\emph{Mesh-native generation} exists~\cite{lino2025diffusiongraphnets,
+lino2026scaleautoregressive, ramos2026fluidflow}. \emph{Hierarchical
+stochasticity} exists~\cite{oskarsson2024graphefm}. \emph{Proper-score training
+and evaluation} exist, at operational scale~\cite{zhong2024fuxiens,
+lang2026aifscrps, price2025gencast}. And \emph{multi-realisation benchmarks}
+exist~\cite{molinaro2024gencfd, pfister2026stocbench}.
+
+What does not exist is the conjunction. Every hierarchical mesh simulator is
+deterministic and scored by RMSE~\cite{fortunato2022msmgn, cao2023bsmsgnn,
+nabian2024xmeshgraphnet, zhdanov2025erwin}. Every generative mesh model is
+either flat, steady-state, or resampled onto a structured latent grid that
+discards the mesh~\cite{lino2025diffusiongraphnets, li2025genlatentfm,
+ramos2026fluidflow}. Every hierarchical-latent probabilistic model lives on a
+single fixed grid shared by all samples, where the hierarchy is a static
+multi-resolution decomposition of one domain rather than something
+reconstructed per sample from varying
+geometry~\cite{oskarsson2024graphefm, price2025gencast, lam2023graphcast}.
+Every proper-score-trained simulator is either
+grid-bound~\cite{bulte2025pno, molinaro2024gencfd} or scores a marginal per
+location~\cite{alet2025fgn, lang2026aifscrps}. And every mesh benchmark in the
+learned-simulator literature stores exactly one deterministic realisation per
+condition~\cite{pfaff2021meshgraphnets, janny2023eagle,
+elrefaie2024drivaernetpp, li2021fourier}, so that a collapsed predictor and a
+calibrated one are formally indistinguishable.
+
+This paper closes the conjunction. HI-MGN-V places an MMD-InfoVAE latent at the
+coarse level of a per-sample bi-stride mesh hierarchy and learns its
+conditional prior by flow matching, jointly with the simulator; cHI-MGNflow
+removes the latent bottleneck and flow-matches the mesh increment itself,
+conditioned hierarchically and coupled by minibatch optimal transport. Both are
+trained and reported under a protocol that is proper by
+construction~\cite{gneiting2007strictly, ferro2014fair, fortin2014why,
+scheuerer2015variogram, marcotte2023regions}, on a benchmark supplying many
+realisations per condition with a \emph{known but hidden} source of spread.
+
+\paragraph{Differentiation from the closest prior art.}
+Lino et al.\ sample the \emph{equilibrium} distribution of a flow on a fixed
+unstructured mesh, factorising the sampler coarse-to-fine in
+space~\cite{lino2025diffusiongraphnets, lino2026scaleautoregressive}; we model
+the \emph{conditional temporal} law of an autoregressive rollout with a
+persistent latent that carries an unobservable field across steps, and score it
+with strictly proper, ensemble-size-corrected rules. Graph-EFM's hierarchy is a
+single fixed global grid shared by every sample, its latent is regularised by a
+per-sample KL with no control over the aggregate posterior, and the uncertainty
+it represents is chaotic divergence from an \emph{observed} initial
+state~\cite{oskarsson2024graphefm}. GenCast's generative process is flat---a
+full denoising chain at a single resolution of a fixed icosahedral mesh---and
+its verification is against a single realised trajectory pooled over
+cases~\cite{price2025gencast}. Li et al.\ collapse their own ensembles to an
+ensemble-mean NRMSE, reporting no CRPS, energy score, spread--skill ratio or
+rank histogram---a generative model scored exclusively by the point error of
+its mean is being evaluated on precisely the objective its construction was
+meant to escape~\cite{li2025genlatentfm}. And because a marginal score
+is minimised by the correct marginal at every node and is blind to spatial
+correlation~\cite{bulte2025pno, alet2025fgn}, we report both marginal and
+dependence-sensitive scores, and show explicitly that the hierarchical latent
+buys \emph{joint} structure a marginally-scored ensemble does not produce.

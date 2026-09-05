@@ -7,6 +7,9 @@ interface is the lug that rises in +z near y = 0. A cross-shape occupancy study
 over 600 samples confirmed both features are present in essentially every
 shape, so a geometric rule -- not a per-shape label, which the dataset does not
 carry -- picks the fixed and loaded node sets consistently.
+
+Loads are the GE challenge cases in SI (see `Bracket`): DeepJEB's labels were
+generated with them, and `fea.py` works in N, m and Pa throughout.
 """
 
 import numpy as np
@@ -19,16 +22,60 @@ MOUNT_Z_BAND = 0.06         # thickness of the bolted-down bottom face
 LUG_ABS_Y = 0.32            # central interface half-width along y
 LUG_Z_BAND = 0.10           # depth below the lug crown that carries the load
 
+# Unit conversions for the GE challenge's imperial load statement. `fea.py`
+# works in N, m and Pa, so every load has to enter in SI. Both factors are the
+# exact definitions (1 lbf = 0.45359237 kg * 9.80665 m/s^2; 1 in = 0.0254 m).
+LBF_TO_N = 4.4482216152605               # pound-force -> newton
+LBIN_TO_NM = 0.1129848290276167          # pound-force inch -> newton metre
+
+# GE jet-engine-bracket challenge loads as stated (imperial) and as DeepJEB's
+# FEA labels were produced (SI, arXiv 2406.09047): vertical 8,000 lbf = 35.6 kN,
+# horizontal 8,500 lbf = 37.8 kN, diagonal 9,500 lbf = 42.3 kN at 42 deg,
+# torsion 5,000 lb*in = 565 N*m. The paper's kN / N*m figures are these
+# conversions rounded to three significant digits.
+VERTICAL_LBF = 8000.0
+HORIZONTAL_LBF = 8500.0
+DIAGONAL_LBF = 9500.0
+DIAGONAL_ANGLE_DEG = 42.0
+TORSION_LBIN = 5000.0
+
 
 class Bracket:
-    """Load cases from the GE bracket challenge, scaled to this geometry."""
+    """Load cases from the GE bracket challenge, scaled to this geometry.
+
+    Magnitudes are SI (N and N*m), converted explicitly from the challenge's
+    imperial statement so they match the loads DeepJEB's labels were computed
+    under (35.6 / 37.8 / 42.3 kN, 565 N*m). This table used to hold the bare
+    imperial numbers 8000 / 8500 / 9500 and 5000 and `fea.py` read them as N
+    and N*m: the three forces were 4.448x too small and the torsion moment
+    8.85x too large, so the four cases were mis-weighted against each other
+    and absolute stresses were understated. Linear statics means a common
+    force factor rescales every stress and displacement exactly (compliance by
+    its square); absolute numbers recorded before this change are not
+    comparable with numbers recorded after it.
+
+    Axes are this repo's, derived from an occupancy study of the normalized
+    frame (module docstring): vertical is +z, horizontal is +y (the long
+    axis), torsion is about y, and the interface rules above depend on them.
+    The DeepJEB paper labels its horizontal case +x and its torsion about -z in
+    *its* frame -- a frame-convention difference, not a load difference, and
+    nothing is rotated here. The diagonal vector likewise keeps its historical
+    decomposition (F cos 42 along y, F sin 42 along z, i.e. 42 deg from the
+    horizontal axis), whereas the challenge statement reads "42 deg from
+    vertical"; that is a deliberate no-rotation choice, flagged, not fixed.
+    """
 
     LOAD_CASES = {
-        'vertical': dict(kind='force', vector=(0.0, 0.0, 8000.0)),
-        'horizontal': dict(kind='force', vector=(0.0, 8500.0, 0.0)),
-        'diagonal': dict(kind='force', vector=(0.0, 9500.0 * np.cos(np.deg2rad(42.0)),
-                                               9500.0 * np.sin(np.deg2rad(42.0)))),
-        'torsion': dict(kind='moment', axis=(0.0, 1.0, 0.0), magnitude=5000.0),
+        'vertical': dict(kind='force',
+                         vector=(0.0, 0.0, VERTICAL_LBF * LBF_TO_N)),               # 35.6 kN
+        'horizontal': dict(kind='force',
+                           vector=(0.0, HORIZONTAL_LBF * LBF_TO_N, 0.0)),           # 37.8 kN
+        'diagonal': dict(kind='force',                                             # 42.3 kN
+                         vector=(0.0,
+                                 DIAGONAL_LBF * LBF_TO_N * np.cos(np.deg2rad(DIAGONAL_ANGLE_DEG)),
+                                 DIAGONAL_LBF * LBF_TO_N * np.sin(np.deg2rad(DIAGONAL_ANGLE_DEG)))),
+        'torsion': dict(kind='moment', axis=(0.0, 1.0, 0.0),
+                        magnitude=TORSION_LBIN * LBIN_TO_NM),                      # 565 N*m
     }
 
     def __init__(self, material=None, length_scale=0.19 / 1.8,

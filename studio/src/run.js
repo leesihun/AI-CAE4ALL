@@ -2,7 +2,7 @@ import { $, $$, escapeHtml, toast } from "./dom.js";
 import { state } from "./state.js";
 import { BLOCK_SPECS } from "./constants.js";
 import { apiRequest, requireRuntime, refreshNavCounts } from "./api.js";
-import { validateGraph, executableSteps, preflightConfigText, preflightMessages, inferenceDatasetWarnings } from "./validate.js";
+import { graphErrorNodes, validateGraph, executableSteps, preflightConfigText, preflightMessages, inferenceDatasetWarnings } from "./validate.js";
 import { render } from "./graph.js";
 import { jumpToFailingField } from "./config.js";
 import { schedulePipelineSave, pipelineDocument } from "./persistence.js";
@@ -290,7 +290,27 @@ const PREFLIGHT_PASS_NOTE = "Every native step will receive a full filesystem, d
 export async function validatePipeline(targetId = null) {
   const errors = validateGraph(false);
   if (errors.length) {
+    // A graph error used to be a toast and nothing else: it vanished after a
+    // few seconds, named only the first of possibly several problems, and could
+    // not be clicked. Config errors, meanwhile, got a persistent drawer with a
+    // "Fix now" that opens the offending block. Same treatment for both.
     toast(`Graph validation failed: ${errors[0]}`, "error");
+    renderRuntimeJob({
+      id: "preflight",
+      label: `${$("#pipelineName").value} · preflight`,
+      status: "failed",
+      current_step: 0,
+      total_steps: 0,
+      diagnostics: errors.map((message, index) => ({
+        severity: "error",
+        code: "GRAPH-001",
+        stepLabel: "Pipeline graph",
+        nodeId: graphErrorNodes[index] || "",
+        message,
+        hint: "Fix the block's inputs on the canvas, then validate again."
+      })),
+      log: errors.map(message => `GRAPH ${message}`).join("\n")
+    });
     return false;
   }
   if (!requireRuntime()) return false;

@@ -728,10 +728,12 @@ class StudioState:
         """Pin a finished step to the prediction directory it just wrote.
 
         For a *training* step the output directory genuinely cannot be guessed:
-        it lands in `<MethodRepo>/outputs/<split>/<gpu>/<epoch>/`, where the
-        epoch is only known to the training loop. Asking the filesystem what
-        appeared under this step's repository while the step was running answers
-        it exactly, for one directory scan.
+        the periodic prediction dumps land under `log_file_dir`'s run directory
+        with the epoch in the path, and the epoch is only known to the training
+        loop. Asking the filesystem what appeared while the step was running --
+        under this step's repository for the old layout, and under the suite's
+        `output/` root where every native now writes -- answers it exactly, for
+        one directory scan (see prediction_preview.outputs_since).
 
         An *inference* step is not like that. `inference_output_dir` is a path
         rule the user sets and preflight resolves, so the repository scan is not

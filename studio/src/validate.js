@@ -9,8 +9,18 @@ export function typeColor(type) {
   return (TYPE_META[type] || TYPE_META.artifact).color;
 }
 
+/**
+ * The artifact wildcard is RECEIVE-side only.
+ *
+ * `output.export` is the one block with an artifact-typed OUTPUT, so a
+ * send-side wildcard made its `files` port compatible with every input in the
+ * graph -- including a trainer's `training data`. Clicking the two ports then
+ * replaced the real dataset edge (single-input replacement) and reported only
+ * "Blocks linked.", leaving a pipeline that trains on an export.
+ * Export -> Export still links, via fromType === toType.
+ */
 export function compatible(fromType, toType) {
-  return fromType === toType || fromType === "artifact" || toType === "artifact";
+  return fromType === toType || toType === "artifact";
 }
 
 export function configTextForNode(node, overrides = {}) {
@@ -426,7 +436,10 @@ export function analysisStep(node, steps) {
       action: "export",
       label: `${BLOCK_SPECS[node.type].label} · package`,
       nodeId: node.id,
-      payload: { path: source, label: node.config.path || "studio-export" }
+      // The archive label comes from the block's export_label (the same field
+      // the Export workspace edits). It used to be config.path, which is the
+      // read-only destination note, so the archive was named after a path.
+      payload: { path: source, label: node.config.export_label || "studio-export" }
     };
   }
   if (node.type === "optimize.design") {
@@ -504,7 +517,7 @@ export function inferenceDatasetWarnings() {
  * The launcher's per-mode required set is the authority: if it does not ask for
  * a dataset in this mode, neither do we.
  */
-function portRequiredInMode(node, port) {
+export function portRequiredInMode(node, port) {
   if (!port.required) return false;
   const spec = BLOCK_SPECS[node.type];
   if (port.id !== "data" || !spec?.isModel) return true;
@@ -522,17 +535,29 @@ function portRequiredInMode(node, port) {
   return !pathFields.some(key => String(node.config?.[key] || "").trim());
 }
 
+/** Node ids for the most recent validateGraph() errors, positionally aligned
+ *  with the returned strings. Lets the runtime drawer make a graph error
+ *  clickable in the same way a preflight diagnostic already is. */
+export const graphErrorNodes = [];
+
 export function validateGraph(showToast = true) {
   // Validation must inspect the same graph-derived values that execution will
   // serialize, including a selected Design Parameters spreadsheet row.
   applyGraphAutofill();
   const errors = [];
+  graphErrorNodes.length = 0;
+  // Every push below records the block it belongs to, so the two arrays stay
+  // index-aligned; `errors.push` is wrapped rather than each call site changed.
+  const push = (message, nodeId = "") => {
+    errors.push(message);
+    graphErrorNodes[errors.length - 1] = nodeId;
+  };
   state.nodes.forEach(node => {
     const spec = BLOCK_SPECS[node.type];
     spec.inputs.filter(port => portRequiredInMode(node, port)).forEach(port => {
       const edge = state.edges.find(candidate => candidate.toNode === node.id && candidate.toPort === port.id);
       if (!edge) {
-        errors.push(`${spec.label}: missing ${port.label}`);
+        push(`${spec.label}: missing ${port.label}`, node.id);
         return;
       }
       const source = state.nodes.find(candidate => candidate.id === edge.fromNode);
@@ -545,7 +570,14 @@ export function validateGraph(showToast = true) {
       // on the block without an external CSV/JSON binding.
       if (sourceMeta && source.type !== "source.parameters"
           && !String(source.config?.[sourceMeta.key] || "").trim()) {
-        errors.push(`${spec.label}: ${port.label} is connected, but ${sourceMeta.label} is not selected.`);
+        // Name the remedy. The shipped Geometry template starts with an empty
+        // CAD block on purpose (there is no checked-in geometry), so this is the
+        // first thing a new user hits -- and "not selected" alone does not say
+        // that the block itself can create a runnable fixture.
+        const remedy = source.type === "source.cad"
+          ? ' Pick a geometry file or folder on the CAD block, or press "Create sample geometry" there.'
+          : "";
+        push(`${spec.label}: ${port.label} is connected, but ${sourceMeta.label} is not selected.${remedy}`, source?.id || node.id);
       }
     });
   });
@@ -555,7 +587,21 @@ export function validateGraph(showToast = true) {
     if (!source || !target) return;
     const out = BLOCK_SPECS[source.type].outputs.find(port => port.id === edge.fromPort);
     const input = BLOCK_SPECS[target.type].inputs.find(port => port.id === edge.toPort);
-    if (out && input && !compatible(out.type, input.type)) errors.push(`Type mismatch: ${out.type} → ${input.type}`);
+    if (out && input && !compatible(out.type, input.type)) push(`Type mismatch: ${out.type} → ${input.type}`, edge.toNode);
+  });
+  // trimesh has no CAD kernel: given a .step/.iges it raises rather than
+  // meshing, and the failure surfaces deep inside the native run.
+  const CAD_SUFFIXES = [".step", ".stp", ".igs", ".iges", ".brep"];
+  state.nodes.filter(node => node.type === "prep.geometry").forEach(node => {
+    if (String(node.config.reader || "").toLowerCase() !== "trimesh") return;
+    const upstream = state.edges
+      .filter(edge => edge.toNode === node.id)
+      .map(edge => state.nodes.find(item => item.id === edge.fromNode))
+      .find(item => item?.type === "source.cad");
+    const path = String(node.config.input_geometry || upstream?.config.path || "").toLowerCase();
+    if (CAD_SUFFIXES.some(suffix => path.endsWith(suffix))) {
+      push(`Geometry → HDF5: reader "trimesh" cannot read CAD (${path.split(".").pop()}). Use reader "auto" or "gmsh".`, node.id);
+    }
   });
   // An Inference block that cannot name its model family is not runnable, and
   // saying so here is the difference between an actionable message and the old
@@ -570,13 +616,13 @@ export function validateGraph(showToast = true) {
     const resolved = inferenceModel(node);
     const label = BLOCK_SPECS[node.type].label;
     if (resolved.checkpointError) {
-      errors.push(`${label}: the saved model could not be read (${resolved.checkpointError}).`);
+      push(`${label}: the saved model could not be read (${resolved.checkpointError}).`, node.id);
     } else if (!resolved.modelId) {
-      errors.push(`${label}: cannot tell which method this saved model belongs to. Set "model id" on the block, or connect the model that trained it.`);
+      push(`${label}: cannot tell which method this saved model belongs to. Set "model id" on the block, or connect the model that trained it.`, node.id);
     } else if (!STANDALONE_INFERENCE_MODELS.has(resolved.modelId)) {
-      errors.push(`${label}: ${MODEL_CATALOG[resolved.modelId]?.label || resolved.modelId} needs its model block on the canvas — its checkpoint does not record every key that mode requires.`);
+      push(`${label}: ${MODEL_CATALOG[resolved.modelId]?.label || resolved.modelId} needs its model block on the canvas — its checkpoint does not record every key that mode requires.`, node.id);
     } else if (!node.config.dataset_path) {
-      errors.push(`${label}: connect the dataset to infer on.`);
+      push(`${label}: connect the dataset to infer on.`, node.id);
     }
   });
   state.nodes.filter(node => node.type === "run.cad_generator").forEach(node => {
@@ -584,7 +630,7 @@ export function validateGraph(showToast = true) {
     const generatorMode = String(node.config.mode || "sample").trim().toLowerCase();
     const analysisBackend = String(node.config.opt_analysis || "fea").trim().toLowerCase();
     if (generatorMode === "optimize" && !["fea", "surrogate"].includes(analysisBackend)) {
-      errors.push(`${label}: analysis backend must be fea or surrogate.`);
+      push(`${label}: analysis backend must be fea or surrogate.`, node.id);
     }
     if (generatorMode === "optimize" && analysisBackend === "surrogate") {
       const modelEdge = state.edges.find(edge => edge.toNode === node.id && edge.toPort === "model");
@@ -593,12 +639,12 @@ export function validateGraph(showToast = true) {
       const missing = ["opt_surrogate_checkpoint", "opt_surrogate_config"]
         .filter(key => !String(merged[key] || "").trim());
       if (missing.length) {
-        errors.push(`${label}: surrogate analysis needs ${missing.join(" and ")} in the connected SDFFlow block's Full config.`);
+        push(`${label}: surrogate analysis needs ${missing.join(" and ")} in the connected SDFFlow block's Full config.`, node.id);
       }
     }
     const rawConditions = String(node.config.cond_values || "").split(",").map(item => item.trim()).filter(Boolean);
     if (rawConditions.some(value => !Number.isFinite(Number(value)))) {
-      errors.push(`${label}: condition values must all be finite numbers.`);
+      push(`${label}: condition values must all be finite numbers.`, node.id);
       return;
     }
     const parameterEdge = state.edges.find(edge => edge.toNode === node.id && edge.toPort === "parameters");
@@ -609,20 +655,20 @@ export function validateGraph(showToast = true) {
     const manualConditions = (node.manualConfigKeys || []).includes("cond_values") && rawConditions.length > 0;
     if (manualConditions) {
       if (selected.inputs.length && rawConditions.length !== selected.inputs.length) {
-        errors.push(`${label}: manual condition values must match the spreadsheet's ${selected.inputs.length} Input columns.`);
+        push(`${label}: manual condition values must match the spreadsheet's ${selected.inputs.length} Input columns.`, node.id);
       }
       return;
     }
     if (!selected.selectedSampleId) {
-      errors.push(`${label}: choose one Design Parameters spreadsheet row for generation.`);
+      push(`${label}: choose one Design Parameters spreadsheet row for generation.`, node.id);
     } else if (!selected.row) {
-      errors.push(`${label}: the selected generation row no longer exists in the bound dataset.`);
+      push(`${label}: the selected generation row no longer exists in the bound dataset.`, node.id);
     } else if (selected.missingNames.length) {
-      errors.push(`${label}: every generation Input column needs a name.`);
+      push(`${label}: every generation Input column needs a name.`, node.id);
     } else if (selected.duplicateNames.length) {
-      errors.push(`${label}: generation Input column names must be unique (${selected.duplicateNames.join(", ")}).`);
+      push(`${label}: generation Input column names must be unique (${selected.duplicateNames.join(", ")}).`, node.id);
     } else if (selected.invalidInputs.length) {
-      errors.push(`${label}: selected row has missing or non-numeric values for ${selected.invalidInputs.map(item => item.name || item.id).join(", ")}.`);
+      push(`${label}: selected row has missing or non-numeric values for ${selected.invalidInputs.map(item => item.name || item.id).join(", ")}.`, node.id);
     }
   });
   state.nodes.filter(node => node.type === "optimize.design").forEach(node => {
@@ -630,15 +676,15 @@ export function validateGraph(showToast = true) {
     const objectives = String(node.config.objectives || "").split(",").map(item => item.trim()).filter(Boolean);
     const directions = String(node.config.directions || "").split(",").map(item => item.trim().toLowerCase()).filter(Boolean);
     if (!objectives.length) {
-      errors.push(`${label}: add at least one objective column.`);
+      push(`${label}: add at least one objective column.`, node.id);
     } else if (directions.length !== objectives.length || directions.some(item => !["min", "max"].includes(item))) {
-      errors.push(`${label}: directions must contain one min or max entry for every objective.`);
+      push(`${label}: directions must contain one min or max entry for every objective.`, node.id);
     }
   });
   try {
     topologicalNodes();
   } catch (error) {
-    errors.push(error.message);
+    push(error.message);
   }
   if (showToast) toast(errors.length ? `${errors.length} graph issue${errors.length === 1 ? "" : "s"}: ${errors[0]}` : "Validation passed: typed graph and required links are complete.", errors.length ? "error" : "");
   return errors;
@@ -652,8 +698,13 @@ export function preflightMessages(payload) {
       type: report.summary.errors ? "error" : report.summary.warnings ? "warn" : "",
       text: `Authoritative preflight: ${report.summary.errors} errors, ${report.summary.warnings} warnings, ${report.summary.notices} notices.`
     },
+    // `field` is carried through, not folded into the text: the config sheet
+    // turns a diagnostic that names a field into a button that scrolls to and
+    // flashes it. Without it, an in-sheet preflight named a key and left the
+    // reader to find it among ~120 rows across nine sections.
     ...report.diagnostics.map(item => ({
       type: item.severity === "error" ? "error" : item.severity === "warning" ? "warn" : "",
+      field: item.field || "",
       text: `[${item.code}]${item.field ? ` ${item.field}:` : ""} ${item.message}${item.hint ? ` Hint: ${item.hint}` : ""}`
     }))
   ];

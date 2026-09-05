@@ -1,0 +1,51 @@
+model	SDFFlow  # SDF-VAE + latent flow-matching geometry generator
+mode	evaluate  # eval_task descriptor_calibration: fit the soft-proxy affine calibration and write descriptor_calibration_path
+gpu_ids	0  # single process; only the first GPU ID is used
+
+%   Descriptor calibration for the ex5 checkpoints (config_train_v3_fea.txt). The soft
+%   volume/area proxy (sigmoid occupancy on a 48^3 cell-centre grid) that C2 guidance and
+%   E2 Newton differentiate through is biased but almost perfectly LINEAR in the real
+%   Marching Cubes measurement (ex1 pilot: volume R^2 0.98, soft ~= 0.86 true + 0.40;
+%   area R^2 0.60). This task generates calibration_num_shapes x calibration_samples_per_shape
+%   samples under the VAL split's true conditions, measures each once through the proxy
+%   and once through the export path (decode -> Marching Cubes -> mesh descriptors), fits
+%   proxy = a * true + b per descriptor, and saves the DescriptorCalibration (a, b, R^2, n
+%   per name; the VAE and FM SHA-256s; resolution and tau; split and sample counts) to
+%   descriptor_calibration_path. Uncalibrated guidance made the pilot's volume error WORSE
+%   (7.6% -> 23%); calibrated, it went to 1.7%. The artifact is bound to this exact
+%   VAE/FM pair and to soft_descriptor_resolution / soft_descriptor_tau: sample.py and the
+%   conditional benchmark refuse a mismatch, so re-run this after any retrain.
+%   The ex1 pilot percentages quoted above were measured with a different quadrature
+%   (node-centred, h = 2/(R-1)) and a different loss denominator than this implementation
+%   uses, so read them as the shape of the expected effect and re-measure on ex5; the
+%   pilot's a = 0.86 in particular does not transfer to the cell-centre proxy.
+%   Calibrate on val, score on test (config_evaluate_conditional.txt).
+%   Non-watertight decodes contribute no volume pair to the fit (their true volume is NaN,
+%   not a convex hull, which would be 2-4x the solid volume on a holed bracket); their area
+%   pair is kept. The printed watertight rate says how many rows the volume fit really had.
+
+%   Inputs and outputs
+eval_task	descriptor_calibration  # reconstruction | descriptor_calibration | conditional
+vae_modelpath	../../output/geometry_generation/ex5/sdfflow_vae.pth  # VAE whose decoder the proxy differentiates through
+fm_modelpath	../../output/geometry_generation/ex5/sdfflow_fm.pth  # FM that generates the calibration samples (required; SDF-EVAL-004)
+dataset_dir	../../dataset/deepjeb.h5  # Dataset WITH the cond_extra sidecar; the calibration conditions are drawn from eval_split's true rows
+output_dir	../../output/geometry_generation/ex5/eval  # Evaluate artifacts for ex5
+descriptor_calibration_path	../../output/geometry_generation/ex5/eval/descriptor_calibration.pth  # OUTPUT of this task; INPUT of config_sample_conditional.txt / config_evaluate_conditional.txt
+
+%   Split -- must match config_train_v3_fea.txt
+split_seed	42  # Same seed as the training config
+split_by_parent	True  # Same grouping as the training config
+eval_split	val  # Calibrate on val; never on the test split the conditional benchmark scores
+eval_seed	0  # Seeds the shape subset and the sample noise
+eval_exclude_shapes	2099  # h5 index 2099 (131_561) is a partial STL carrying full-bracket labels; it is a test-split shape under split_seed 42 but excluded here too so the same pool rule holds for both tasks
+
+%   Calibration sample budget and proxy settings
+calibration_num_shapes	64  # Val shapes whose true conditions seed the samples (val holds 216 shapes / 26 parents)
+calibration_samples_per_shape	4  # Samples per shape -> 256 (proxy, true) pairs per descriptor
+soft_descriptor_resolution	48  # Cell-centre grid of the soft proxy; recorded in the artifact and matched at use
+soft_descriptor_tau	0.032  # Soft-occupancy temperature in normalized SDF units; recorded and matched at use
+calibration_min_r2	0.5  # Refuse to save a fit weaker than this per descriptor (0 disables). a and b ARE the mechanism: an ill-determined slope makes C2/E2 worse, not weaker. The ex1 pilot measured volume R^2 0.98 and area 0.60
+newton_measure_resolution	128  # The grid E2 will re-measure on, recorded here so it MATCHES the fit grid (mc_resolution below, where this task measures the true descriptors). check_compatible pins it, so a sample/conditional run at a different value is refused rather than silently offset: MC volume/area move 0.02-0.10% between res 96 and 128, which is 10-35% of the accuracy C2/E2 are quoted at
+cfg_scale	1.0  # Plain conditional sampling for the calibration draws
+ode_steps	50  # Euler steps per trajectory
+mc_resolution	128  # Marching Cubes grid for any exported mesh AND the grid the TRUE volume/area of every calibration sample is measured on (the proxy is fitted against this)

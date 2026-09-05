@@ -5,6 +5,7 @@ import {
   ICONS, BLOCK_SPECS, MODEL_CATALOG, REQUIRED, CHOICES, BOOLEAN_KEYS,
   OPERATOR_REMOVED, TRANSOLVER_REJECTED, VARIATIONAL_REMOVED,
   CHI_FLOW_REMOVED, SIMULGEN_REMOVED_NOOPS, PARALLEL_MODE_CHOICES,
+  MGN_NATIVE_REMOVED, MGN_VARIATIONAL_IGNORED,
   CONFIG_SECTIONS, HELP
 } from "./constants.js";
 import { apiRequest, requireRuntime } from "./api.js";
@@ -14,10 +15,42 @@ import {
   markManualConfigValue, resetManualConfigValues
 } from "./autofill.js";
 
-function retainExplicitConfig(node) {
+/**
+ * Adopt a pasted / loaded config without silently severing the graph.
+ *
+ * This used to mark EVERY key manual, so importing a .txt or pressing
+ * "Parse & apply" detached dataset_dir, modelpath, infer_dataset and the rest
+ * from the blocks feeding them -- even when the pasted value was character for
+ * character what the graph was already supplying. Rewiring the canvas afterwards
+ * then changed nothing, with no sign why.
+ *
+ * A key becomes a manual override only when its new value actually differs from
+ * what the graph supplies. Returns the keys that genuinely were overridden, so
+ * the caller can say so instead of leaving it to be discovered.
+ */
+export function retainExplicitConfig(node) {
+  const same = (left, right) => String(left ?? "").trim() === String(right ?? "").trim();
+  // node.autoFill still holds the bindings in force before the paste; each
+  // entry's `value` is what the graph wants that key to be.
+  const graphValues = new Map(
+    Object.entries(node.autoFill || {}).map(([key, meta]) => [key, meta?.value])
+  );
   resetManualConfigValues(node);
-  Object.entries(node.config).forEach(([key, value]) => markManualConfigValue(node, key, value));
+  Object.entries(node.config).forEach(([key, value]) => {
+    if (graphValues.has(key) && same(graphValues.get(key), value)) return;
+    markManualConfigValue(node, key, value);
+  });
   applyGraphAutofill();
+  const manual = new Set(node.manualConfigKeys || []);
+  return [...graphValues.keys()].filter(key => manual.has(key));
+}
+
+export function overrideMessage(overridden) {
+  if (!overridden.length) return [];
+  return [{
+    type: "warn",
+    text: `${overridden.join(", ")} now override the graph and no longer follow the connected blocks. Clear a field to hand it back to the graph.`
+  }];
 }
 
 export function requiredFor(modelId, mode) {
@@ -55,6 +88,10 @@ export function keyDisposition(modelId, key, config = null) {
   // reasonably turn that number and see nothing change. Both shipped HI-MGN
   // paths leave message_passing_num in the config, which makes it worse.
   if (key === "message_passing_num" && config && isTruthyConfigValue(config.use_multiscale)) return "inactive";
+  if (modelId === "meshgraphnets") {
+    if (MGN_NATIVE_REMOVED.has(key)) return "removed";
+    if (MGN_VARIATIONAL_IGNORED.has(key)) return "inactive";
+  }
   if (modelId === "transolver" && TRANSOLVER_REJECTED.has(key)) return "removed";
   if (modelId === "meshgraphnets-v" && VARIATIONAL_REMOVED.has(key)) return "removed";
   if (modelId === "chi-mgnflow" && CHI_FLOW_REMOVED.has(key)) return "removed";
@@ -206,9 +243,15 @@ export function parseConfig(text) {
   const values = {};
   const messages = [];
   const seen = new Set();
+  // Counted so the lossy direction is reported rather than discovered: the form
+  // holds key/value pairs only, so a Parse & apply drops every comment line.
+  let comments = 0;
   text.split(/\r?\n/).forEach((line, index) => {
     const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("%") || trimmed.startsWith("#") || trimmed === "'") return;
+    if (!trimmed || trimmed.startsWith("%") || trimmed.startsWith("#") || trimmed === "'") {
+      if (trimmed.startsWith("%") || trimmed.startsWith("#")) comments += 1;
+      return;
+    }
     const clean = line.split("#")[0].trim();
     const match = clean.match(/^(\S+)\s+(.+)$/);
     if (!match) {
@@ -220,14 +263,31 @@ export function parseConfig(text) {
     seen.add(key);
     values[key] = canonicalConfigValue(key, match[2]);
   });
+  if (comments) {
+    messages.push({
+      type: "",
+      text: `${comments} comment line${comments === 1 ? "" : "s"} were read but are not stored; Regenerate text will not bring them back.`
+    });
+  }
   return { values, messages };
 }
 
 export function presetOptions(modelId) {
-  const options = [["repository", "Checked-in example"], ["smoke", "Smoke test"], ["low_vram", "Low VRAM"]];
+  // "repository" applies this Studio's own opinionated defaults for the model;
+  // it does not read any file under configs/. It was labelled "Checked-in
+  // example", which is what loadConfigExample and the sdfflow_optimize preset
+  // actually do.
+  const options = [["repository", "Studio defaults"], ["smoke", "Smoke test"], ["low_vram", "Low VRAM"]];
   if (modelId === "meshgraphnets") options.push(["mgn_flat", "Flat MGN"], ["mgn_hi", "HI-MGN"], ["mgn_bsms", "BSMS-GNN"]);
-  if (modelId === "sdfflow") options.push(["sdfflow_full", "Full VAE + FM"], ["sdfflow_vae", "VAE only"], ["sdfflow_fm", "Flow matching only"], ["sdfflow_optimize", "Checked-in closed-loop optimization"]);
-  if (modelId === "simulgenvae") options.push(["simulgen_full", "VAE → LC pipeline"], ["simulgen_vae", "VAE only"], ["simulgen_lc", "LC only"], ["simulgen_reconstruct", "Reconstruct fields"]);
+  // Two checked-in optimize configs exist and they are different runs: one
+  // solves each candidate with the exact FEA path, the other with the HI-MGN
+  // surrogate. One entry had to pick silently, so both are offered.
+  // No "sdfflow_full" / "simulgen_full" entry: both fell through to the same
+  // `{...model.defaults}` branch as "Studio defaults", so the menu offered the
+  // same action under three names. The staged presets below each change a
+  // different set of keys.
+  if (modelId === "sdfflow") options.push(["sdfflow_vae", "VAE only"], ["sdfflow_fm", "Flow matching only"], ["sdfflow_optimize", "Closed-loop optimization (FEA)"], ["sdfflow_optimize_surrogate", "Closed-loop optimization (surrogate)"]);
+  if (modelId === "simulgenvae") options.push(["simulgen_vae", "VAE only"], ["simulgen_lc", "LC only"], ["simulgen_reconstruct", "Reconstruct fields"]);
   return options;
 }
 
@@ -346,7 +406,9 @@ export function renderConfig() {
       : disposition === "removed" ? "Known by a shared diagnostic schema, but rejected for this selected model."
       : disposition === "inactive" ? "Accepted by the shared family schema but configures a different variant."
       : "";
-    const baseHelp = dispositionHelp || HELP[key] || "Manual input is retained because the live spec does not publish a closed value set for this field.";
+    const baseHelp = dispositionHelp || HELP[key] || (choices
+      ? "Pick one of the accepted values, or leave it unset to use the native default."
+      : "No closed value set is published for this field, so it takes a manual value.");
     const help = automatic
       ? `Auto-filled from ${automatic.sourceLabel}: ${automatic.reason}. Edit it to keep a manual override, or clear it to follow the graph again.`
       : hasBackendDefault && disposition === "active"
@@ -385,10 +447,19 @@ export function renderConfig() {
     { type: "", text: `${model.keys.length} accepted keys loaded; ${Object.keys(node.config).length} currently set.` },
     ...(missing.length ? [{ type: "warn", text: `Missing required for ${mode}: ${missing.join(", ")}` }] : [{ type: "", text: `All required ${mode} keys have explicit values or published backend defaults.` }]),
     ...conditional,
-    ...(unknown.length ? [{ type: "warn", text: `Unknown keys will fail preflight: ${unknown.join(", ")}` }] : []),
+    // CFG-UNKNOWN-001 is a WARNING: the key is still emitted and the run still
+    // launches, unless --strict promotes it. Saying "will fail preflight" was
+    // contradicted by the preflight button directly below it.
+    ...(unknown.length ? [{ type: "warn", text: `Not accepted by this route (CFG-UNKNOWN-001 warning; blocking only under strict preflight): ${unknown.join(", ")}` }] : []),
     ...state.configMessages
   ];
-  $("#configDiagnostics").innerHTML = diagnostics.map(item => `<div class="diagnostic ${item.type}"><i></i><span>${escapeHtml(item.text)}</span></div>`).join("");
+  // A diagnostic that names a field gets a jump button. The machinery already
+  // existed for the runtime drawer (jumpToFailingField); the sheet's own
+  // preflight was the one place that named a key and offered no way to reach it.
+  $("#configDiagnostics").innerHTML = diagnostics.map(item => `<div class="diagnostic ${item.type}"><i></i><span>${escapeHtml(item.text)}</span>${item.field && model.keys.includes(String(item.field).toLowerCase()) ? `<button class="button small" data-jump-field="${escapeHtml(item.field)}">Show field</button>` : ""}</div>`).join("");
+  $$("[data-jump-field]").forEach(button => button.addEventListener("click", () => {
+    jumpToFailingField(node.id, button.dataset.jumpField);
+  }));
 }
 
 export async function applyPreset() {
@@ -405,12 +476,13 @@ export async function applyPreset() {
       const parsed = parseConfig(fixture.config);
       snapshot();
       node.config = { ...parsed.values };
-      retainExplicitConfig(node);
+      const overridden = retainExplicitConfig(node);
       $("#configMode").value = fixture.mode;
       state.configSection = "Required";
       state.configMessages = [
         { type: "", text: `Runnable smoke fixture created: ${fixture.dataset}` },
-        { type: "warn", text: fixture.note }
+        { type: "warn", text: fixture.note },
+        ...overrideMessage(overridden)
       ];
       $("#savedState").textContent = "Runnable smoke config · not scientific evidence";
       renderConfig();
@@ -421,7 +493,7 @@ export async function applyPreset() {
     return;
   }
   let values = {};
-  if (preset === "repository" || preset === "simulgen_full" || preset === "sdfflow_full") values = { ...model.defaults };
+  if (preset === "repository") values = { ...model.defaults };
   if (preset === "smoke") values = {
     training_epochs: "2", batch_size: "1", vae_training_epochs: "2", lc_training_epochs: "2", fm_training_epochs: "2",
     vae_batch_size: "1", lc_batch_size: "2", fm_batch_size: "2", test_max_batches: "1", num_test_shapes: "2"
@@ -448,13 +520,16 @@ export async function applyPreset() {
   };
   if (preset === "sdfflow_vae") values = { mode: "train_vae" };
   if (preset === "sdfflow_fm") values = { mode: "train_fm" };
-  if (preset === "sdfflow_optimize") {
+  if (preset === "sdfflow_optimize" || preset === "sdfflow_optimize_surrogate") {
     if (!requireRuntime()) return;
+    // configs/Geometry_generation/ was renamed to configs/SDFFlow/; this preset
+    // still asked for the old path, so it could only ever fail with a 400.
+    const file = preset === "sdfflow_optimize_surrogate" ? "config_optimize_surrogate.txt" : "config_optimize.txt";
     try {
-      const payload = await apiRequest("/api/config?path=configs%2FGeometry_generation%2Fconfig_optimize.txt");
+      const payload = await apiRequest(`/api/config?path=configs%2FSDFFlow%2F${file}`);
       values = parseConfig(payload.text).values;
     } catch (error) {
-      toast(`Could not load the checked-in SDFFlow optimization config: ${error.message}`, "error");
+      toast(`Could not load ${file}: ${error.message}`, "error");
       return;
     }
   }
@@ -493,14 +568,15 @@ export async function loadConfigExample(modelId, path) {
     }
     snapshot();
     node.config = { ...parsed.values };
-    retainExplicitConfig(node);
+    const overridden = retainExplicitConfig(node);
     node.loadedConfigPath = path;
     closeOverlay("studioOverlay");
     selectNode(node.id);
     openConfig(node.id);
     state.configMessages = [
       { type: "", text: `Loaded checked-in configuration: ${path}` },
-      ...parsed.messages
+      ...parsed.messages,
+      ...overrideMessage(overridden)
     ];
     renderConfig();
     toast(`Loaded ${path} into the real ${modelId} block.`);
@@ -556,10 +632,11 @@ export async function configureViaLlm() {
     const parsed = parseConfig(result.text);
     snapshot();
     node.config = { ...parsed.values, model: modelId, mode: parsed.values.mode || node.config.mode };
-    retainExplicitConfig(node);
+    const overridden = retainExplicitConfig(node);
     state.configMessages = [
       { type: "", text: `LLM applied instruction: ${instruction.trim()}` },
-      ...parsed.messages
+      ...parsed.messages,
+      ...overrideMessage(overridden)
     ];
     $("#configMode").value = node.config.mode;
     $("#savedState").textContent = "Unsaved changes · LLM edited";

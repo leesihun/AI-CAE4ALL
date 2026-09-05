@@ -29,6 +29,15 @@ snapshot, as the current count.
 - Booleans are `true` or `false` (case-insensitive).
 - Paths are resolved relative to the native method repository, matching the
   directory in which the unified launcher starts that method.
+- **Path-valued keys keep the case you wrote**; every other string value is
+  lowercased. The exempt set is listed twice and the two must agree — once in
+  `cae_suite/config_parser.py::PATH_KEYS` (the launcher's mirror) and once in the
+  method's own `general_modules/load_config.py::PATH_KEYS` — so adding a new path
+  key means editing both, or the launcher and the native parser disagree about
+  what the model actually opens. `descriptor_calibration_path` and
+  `vae_best_modelpath` (SDFFlow) are the most recent additions. Preflight's
+  `PATH-CASE-001` warns when a config's spelling differs from the on-disk name:
+  it resolves on Windows and fails on Linux.
 
 ## Registered routes
 
@@ -39,7 +48,7 @@ snapshot, as the current count.
 | `chi-mgnflow` | `methods/HI_MGNFlow/` | `train`, `inference` |
 | `point_deeponet`, `deeponet`, `fno`, `gino` | `Neural_Operator/` | `train`, `inference` |
 | `transolver` | `Transolver/` | `train`, `inference` |
-| `sdfflow` | `methods/SDFFlow/` | `train`, `train_vae`, `train_fm`, `sample`, `reconstruct`, `interpolate`, `optimize` |
+| `sdfflow` | `methods/SDFFlow/` | `train`, `train_vae`, `train_fm`, `sample`, `reconstruct`, `interpolate`, `optimize`, `evaluate` |
 | `simulgenvae` | `SimulGenVAE/` | `train`, `train_vae`, `train_lc`, `reconstruct` |
 | `mlp` | `MLP/` | `train`, `inference` |
 | `geometry_ingest` | `methods/GeometryIngest/` | `ingest`, `inspect` |

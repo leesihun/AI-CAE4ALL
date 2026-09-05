@@ -635,7 +635,8 @@ softly assigns mesh nodes to a small learned set of "physics slices"
 ## 10. Method 5 — SDFFlow (generative geometry)
 
 `model sdfflow` → `methods/SDFFlow/SDFFlow_main.py`. Modes: `train`,
-`train_vae`, `train_fm`, `sample`, `reconstruct`, `interpolate`. Own docs:
+`train_vae`, `train_fm`, `sample`, `reconstruct`, `interpolate`, `optimize`,
+`evaluate`. Own docs:
 [methods/SDFFlow/CLAUDE.md](../methods/SDFFlow/CLAUDE.md).
 
 Unlike the other four (which predict *fields on a given mesh*), SDFFlow
@@ -644,9 +645,11 @@ distance functions (SDFs), plus a different data contract.
 
 **Stage 1 — SDF-VAE** ([model/sdf_vae.py](../methods/SDFFlow/model/sdf_vae.py)):
 a transformer encoder consumes surface points and produces a compact latent
-(`latent_tokens × latent_dim`; the shipped model uses one global token). MLP or
-attention SDF decoders reconstruct the signed distance field. Training supports
-deterministic / posterior-noise / KL warmups.
+(`latent_tokens × latent_dim`; the ex1 model uses one global token, the v3
+recipe 32 farthest-point-anchored VecSet tokens via `encoder_query_type fps`).
+MLP or attention SDF decoders reconstruct the signed distance field. Training
+supports deterministic / posterior-noise / KL warmups and an optional relative
+posterior-std floor (`posterior_min_std_rel`).
 
 **Stage 2 — Flow Matching** ([model/velocity_net.py](../methods/SDFFlow/model/velocity_net.py)):
 a **rectified-flow** velocity network with AdaLN-Zero blocks learns to transport
@@ -658,8 +661,17 @@ descriptors. FM consumes *normalized encoder means* (not posterior samples).
 `sdf_dataset.py`): HDF5 layout is
 `shapes/{index:05d}/{surface_points,surface_normals,sdf_points,sdf_values,cond}`;
 `cond` holds five raw descriptors `bbox_x, bbox_y, bbox_z, volume, area`. FM may
-select a subset via `condition_names` (the shipped DeepJEB config uses
-`bbox_x,bbox_z,volume,area`). SDF sign is **negative inside**, positive outside;
+select a subset via `condition_names` (the ex1/ex2 DeepJEB configs use
+`bbox_x,bbox_z,volume,area`; the v3 recipe uses `volume,area`, the two
+descriptors that actually vary). An optional root `cond_extra` sidecar, appended
+by `add_fea_conditions.py` from DeepJEB's FEA labels and named by
+`general_modules/condition_names.py`, is read as further `cond` columns (the ex5
+recipe conditions on `volume,area` plus the log peak stresses of the vertical,
+diagonal and torsion load cases and the log first mode, with
+`cond_dropout_mode per_dim` so a request may leave entries unspecified).
+`split_by_parent` groups DeepJEB's 2138 variants by their 263 parent geometries
+before splitting. SDF sign is **negative inside**,
+positive outside;
 shapes occupy ≈`[-0.9,0.9]³`, queries cover `[-1,1]³`.
 
 **The merged training pipeline** — this is the production path and the
@@ -678,10 +690,27 @@ its prefix for the matching stage), then:
 This keeps the GPU busy end-to-end and prevents stale VAE/FM pairings.
 
 **Inference modes**: `sample` (with OOD guarding via `max_condition_z` +
-`condition_ood_policy`, candidate ranking, and marching-cubes meshing),
-`reconstruct` (mesh → VAE → mesh, no FM needed), and `interpolate` (reproducible
-`torch.lerp` in normalized FM latent space → three STLs + a triptych PNG).
-Marching cubes via
+`condition_ood_policy`, candidate ranking, marching-cubes meshing, and the
+opt-in descriptor-accuracy tools: C2 calibrated endpoint-prediction guidance
+inside the ODE (`guidance_enabled`), E2 proxy-Jacobian Newton correction of the
+retained latents (`newton_rounds`), both in the calibrated proxy units of
+`descriptor_calibration_path`, and a geometric / FEA / surrogate
+`condition_audit` of the decoded meshes), `reconstruct` (mesh → VAE → mesh, no
+FM needed; optional decoder-frozen latent refinement via `latent_refine_steps`),
+`interpolate` (reproducible: by default `interpolation_space slerp_noise`
+spherically interpolates the two endpoints' FM source noise and integrates all
+three through the ODE, so the endpoints reproduce the original samples and the
+midpoint is on-manifold; `lerp_latent` keeps the legacy `torch.lerp` in
+normalized latent space → three STLs + a triptych PNG; `cond_sweep` decodes one
+noise row under a straight-line sweep of conditions → a strip of STLs),
+`optimize` (closed-loop generate → mesh → FEA/surrogate → CMA-ES search; its
+load cases are the GE challenge's in SI since 2026-09 -- earlier runs keep
+their ranking but their absolute stresses were understated ~4.4x), and
+`evaluate` (`eval_task reconstruction`: held-out VAE reconstruction metrics,
+surface distance, sign accuracy, body count, per shape and aggregate, for the
+encoder mean and the refined latent; `descriptor_calibration`: fits the soft
+proxy's affine calibration; `conditional`: paired-noise condition-accuracy
+benchmark of plain / rejection / c2 / e2 sampling). Marching cubes via
 [general_modules/mesh_extraction.py](../methods/SDFFlow/general_modules/mesh_extraction.py).
 
 ---
@@ -699,7 +728,7 @@ dataset/campaign. Counts drift; use
 | `configs/HI_MGNFlow/` | DeepJEB, ex9, SAOI, and wave0 flow campaigns |
 | `configs/Neural_Operator/ex1` … `ex9` | Point-DeepONet, DeepONet, FNO, and GINO profiles |
 | `configs/Transolver/ex1` … `ex9` | Transolver training/inference profiles |
-| `configs/SDFFlow/` | SDFFlow train, sample, reconstruct, interpolate, and optimize profiles |
+| `configs/SDFFlow/` | SDFFlow train (ex1 / v2 / v3 / 8-GPU b300 / FEA-conditioned ex5), evaluate (reconstruction, descriptor calibration, conditional benchmark), sample (unconditional, extrapolation, partial conditional), interpolate (slerp, condition sweep), and optimize profiles, plus the `arms/` VAE ablation sweep (`A0`..`A9`, mostly single-axis) |
 | `configs/SimulGenVAE/`, `configs/MLP/`, `configs/GeometryIngest/` | Fixed-geometry latent, tabular, and ingestion workflows |
 | `configs/campaigns/benchmarks_all/` | Cross-method campaign scheduling, roster, inference, and scoring helpers; no bundled paper dataset or reproduced-result report |
 
@@ -808,7 +837,7 @@ in sync:
 | `meshgraphnets-v` | `methods/MeshGraphNets_Variational/` | `MeshGraphNets_main.py` | train, inference |
 | `point_deeponet`, `deeponet`, `fno`, `gino` | `Neural_Operator/` | `main.py` | train, inference |
 | `transolver` | `Transolver/` | `Transolver_main.py` | train, inference |
-| `sdfflow` | `methods/SDFFlow/` | `SDFFlow_main.py` | train, train_vae, train_fm, sample, reconstruct, interpolate |
+| `sdfflow` | `methods/SDFFlow/` | `SDFFlow_main.py` | train, train_vae, train_fm, sample, reconstruct, interpolate, optimize, evaluate |
 | `mlp` | `MLP/` | `MLP_main.py` | train, inference |
 | `geometry_ingest` | `methods/GeometryIngest/` | `main.py` | ingest, inspect (non-ML data-prep) |
 

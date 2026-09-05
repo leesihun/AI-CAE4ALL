@@ -1,0 +1,39 @@
+model	SDFFlow  # SDF-VAE + latent flow-matching geometry generator
+mode	interpolate  # one fixed noise row, integrated under a sweep of conditions, decoded to a strip of STLs
+gpu_ids	0  # SDFFlow is single-process; only the first GPU ID is used
+
+%   Condition sweep on the ex5 FEA-conditioned checkpoints (config_train_v3_fea.txt).
+%   interpolation_space cond_sweep is the controllable morph: the SAME source noise (row
+%   sample_index_a of the seeded batch) is integrated sweep_steps times while the condition
+%   vector moves in a straight line, in normalized condition space, from cond_values_a to
+%   cond_values_b. Here: a light bracket (volume 0.20, area 4.0, ln(1300 MPa) vertical
+%   stress, ln(2200 Hz) first mode) to a heavy, stiff one (0.36, 5.2, ln(800 MPa),
+%   ln(4200 Hz)); the diagonal and torsion stresses stay 'nan' (unspecified) throughout,
+%   which needs cond_dropout_mode per_dim. Read the strip with its metadata, not by eye:
+%   every panel carries the requested vs measured geometric conditions and body_count_raw,
+%   and a jump between panels (a topology change, extra bodies) is a real property of the
+%   flow map, not a rendering artefact -- run 3+ seeds before reading the effect of a
+%   condition. slerp_noise / lerp_latent (config_interpolate.txt) are unchanged.
+
+%   Models and outputs
+vae_modelpath	../../output/geometry_generation/ex5/sdfflow_vae.pth  # Frozen VAE checkpoint (decodes latents to SDF)
+fm_modelpath	../../output/geometry_generation/ex5/sdfflow_fm.pth  # FM checkpoint trained with cond_dropout_mode per_dim
+output_dir	../../output/geometry_generation/ex5/cond_sweep  # sample_<seed>_sweep_<k>.stl, the strip PNG, and *_meta.json
+
+%   Base noise: row sample_index_a of the seed-0 batch that config_sample_conditional.txt draws
+%   (num_samples 8 x candidate_multiplier 4 = 32 rows), so panel k=0 at cond_values_a equals
+%   the conditional run's candidate 0 whenever cond_values_a equals its request.
+interpolation_space	cond_sweep  # slerp_noise | lerp_latent | cond_sweep
+seed	0  # RNG seed of the source batch
+source_num_samples	32  # Rows in the seeded source batch (must equal the sampling run's total candidates for row indices to line up)
+sample_index_a	0  # The one noise row that is swept
+
+%   Sweep -- ex5 cond_names order: volume, area, log_max_ver_stress_mpa, log_max_dia_stress_mpa, log_max_tor_stress_mpa, log_first_mode_freq_hz
+cond_values_a	0.20,4.0,7.1701,nan,nan,7.6962  # Start: light bracket; stored space (natural log for log_* names), 'nan' = unspecified
+cond_values_b	0.36,5.2,6.6846,nan,nan,8.3428  # End: heavy, stiff bracket; same order and length as cond_values_a
+sweep_steps	5  # Panels: alphas linspace(0, 1, 5); all rows are integrated in ONE sample_latents call with the noise repeated
+
+ode_steps	50  # Euler integration steps for the FM ODE
+mc_resolution	128  # Marching Cubes grid resolution for the decoded SDF
+plot_dpi	180  # DPI for the strip PNG
+plot_max_faces	0  # Max triangles rendered per panel (0 = every face)

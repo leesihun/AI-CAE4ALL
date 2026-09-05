@@ -44,6 +44,28 @@ export function formatBytes(value) {
 }
 
 /**
+ * A file timestamp a person can read.
+ *
+ * The backend returns ISO-8601 UTC with microseconds
+ * ("2026-08-19T04:21:57.183422+00:00"), and the Files and Docs catalogs printed
+ * it verbatim in a 10px column -- unreadable, and in the wrong time zone for
+ * every reader. Recent times become a relative age, which is what "is this the
+ * run I just launched?" actually asks; older ones become a local date.
+ */
+export function formatTimestamp(value) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  const parsed = new Date(text);
+  if (Number.isNaN(parsed.getTime())) return text;
+  const seconds = (Date.now() - parsed.getTime()) / 1000;
+  if (seconds >= 0 && seconds < 60) return "just now";
+  if (seconds >= 0 && seconds < 3600) return `${Math.floor(seconds / 60)} min ago`;
+  if (seconds >= 0 && seconds < 86400) return `${Math.floor(seconds / 3600)} h ago`;
+  if (seconds >= 0 && seconds < 604800) return `${Math.floor(seconds / 86400)} d ago`;
+  return parsed.toLocaleDateString([], { year: "numeric", month: "short", day: "numeric" });
+}
+
+/**
  * The ids of every open overlay, oldest first.
  *
  * Escape has to close the modal the user is actually looking at, and the only

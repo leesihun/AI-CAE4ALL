@@ -74,5 +74,5 @@ unpool_type	attention   # sum (baseline) | attention
 pool_heads	4           # latent_dim 128 / 4 heads = 32 dims per head
 voronoi_branches	1, 4    # 4 partitions of the coarsest level; level 0 unbranched
 '
-%   Time integration (CONFIGURATION_REFERENCE.md section 3.5)
+%   Time integration (docs/CONFIGURATION.md section 3.5)
 time_integration	ar_ot  # forced: ex1 is num_timesteps=1, ar_rt is impossible (see header)

@@ -2,96 +2,121 @@ model	SDFFlow  # SDF-VAE + latent flow-matching geometry generator
 mode	train  # merged VAE->FM pipeline
 gpu_ids	0,1,2,3,4,5,6,7  # all 8 B300 GPUs
 parallel_mode	ddp  # ddp = data parallel (fits on one 288GB B300); fsdp = shard a huge DiT
-'
-%   Multi-GPU B300 variant of config_train_v2.txt. Trains to ex3/.
+
+%   Multi-GPU B300 twin of config_train_v3.txt (same architecture, losses, split,
+%   and conditioning -- see that file's header for the rationale). Trains to ex3/.
 %   parallel_mode ddp: SDFFlow self-spawns one rank per GPU (no torchrun needed).
 %   Effective batch = per-GPU batch x num GPUs. Rank 0 owns val/test/checkpoints.
+%
+%   Batch/LR/epoch arithmetic (parent-split train set ~1.7k shapes):
+%     VAE: 4 per rank x 8 = 32 effective -> ~54 updates/epoch/rank; 1500 epochs ->
+%          ~81k updates (the single-GPU v3 makes ~214k at batch 4). LR 0.0005 x
+%          sqrt(8) = 0.0014 for the 8x batch, warmup stretched 5 -> 20 epochs.
+%     FM:  8 per rank x 8 = 64 effective = the single-GPU batch, so updates/epoch
+%          (~27) and the 1000-epoch budget match v3 exactly. The old 64 x 8 = 512
+%          config made only ~4 updates/epoch x 300 = 1,200 updates, and EMA 0.999 kept
+%          0.999^1200 = 30% of the RANDOM INIT in the shadow weights it saved.
+%          0.999 needs >10k updates; 27k here.
+%
+%   seed 0 is the same value config_train_v3.txt uses. Each rank seeds from
+%   seed + rank, so the ranks do not replay one another's shuffle or noise, while
+%   model construction is put back on the rank-independent base seed (FSDP is
+%   wrapped without sync_module_states, so the initial weights must match).
 %
 %   Switch parallel_mode to fsdp ONLY when the velocity DiT itself does not fit
 %   on one B300 (multi-billion params). fsdp shards params/grads/optimizer
 %   (SDFFlow's "model split"); it disables EMA and does its own bf16.
 %   fsdp_min_params controls the auto-wrap granularity.
 % fsdp_min_params	20000000
-'
+
 %   Sequential VAE -> FM pipeline
 pipeline_log_file	../../output/geometry_generation/ex3/train.log
 skip_completed_stages	True
 output_dir	../../output/geometry_generation/ex3
-vae_modelpath	../../output/geometry_generation/ex3/sdfflow_vae.pth
+vae_modelpath	../../output/geometry_generation/ex3/sdfflow_vae.pth  # Final VAE checkpoint (last epoch)
+vae_best_modelpath	../../output/geometry_generation/ex3/sdfflow_vae_best.pth  # Best-validation VAE checkpoint
 fm_modelpath	../../output/geometry_generation/ex3/sdfflow_fm.pth
-'
-%   Shared dataset
-dataset_dir	../../dataset/deepjeb.h5
-split_seed	42
-num_encoder_points	4096
-num_query_points	4096
-encode_batch_size	32
-'
-%   VAE architecture and losses (VecSet + hybrid, as config_train_v2)
-latent_tokens	32
-latent_dim	64
-decoder_type	attention
-decoder_hidden	512
-decoder_layers	4
-decoder_heads	8
-encoder_dim	512
-encoder_heads	8
-encoder_blocks	4
-encoder_self_attention	True
-fourier_bands	8
-kl_weight	0.0001
-deterministic_warmup_epochs	20
-posterior_noise_warmup_epochs	80
-posterior_noise_max_scale	0.1
-kl_warmup_epochs	100
-clamp_dist	0.1
-surface_weight	0.1
-normal_weight	0.1
-eikonal_weight	0.01
-hybrid_grad_points	2048
-'
+
+%   Reproducibility (as v3)
+seed	0  # Global run seed: each rank seeds torch/numpy/python and its train DataLoader shuffle with seed + rank; model construction is put back on the rank-independent base seed so every rank initializes bit-identical weights. Absent = legacy unseeded run
+
+%   Shared dataset (as v3)
+dataset_dir	../../dataset/deepjeb.h5  # SDF HDF5 dataset (build_dataset.py); 2138 DeepJEB brackets from 263 parent geometries
+split_seed	42  # Seed for the deterministic 80/10/10 split
+split_by_parent	True  # Split whole parent geometries (source basename before the first '_'), not individual variants; False = legacy per-shape split
+num_encoder_points	6144  # As v3: a genuine 75% subsample of the 8192 stored surface points, so the per-epoch draw is stochastic. 8192 would be a permutation of one fixed set and the permutation-invariant encoder would see a bit-identical input every epoch
+num_query_points	8192  # SDF query points per shape for decoder supervision (dataset stores 10240)
+encode_batch_size	32  # Latent-cache encode batch (B300 has room)
+
+%   VAE architecture (as v3: 32 x 32 VecSet latent, FPS queries, width 256)
+latent_tokens	32  # VecSet latent: 32 tokens
+latent_dim	32  # 32 channels per token -> 32 x 32 = 1024 flat (v2 was 2048; latent optimization beat the encoder 2.4x there, so the latent was over-sized)
+decoder_type	attention  # VecSet cross-attention decoder (required with latent_tokens > 1 and with encoder_query_type fps)
+decoder_hidden	256  # Attention d_model (v2: 512)
+decoder_layers	4  # Cross-attention block count
+decoder_heads	4  # Decoder attention heads
+encoder_dim	256  # Point-cloud cross-attention encoder d_model (v2: 512)
+encoder_heads	4  # Encoder attention heads
+encoder_blocks	3  # Encoder block count (v2: 4)
+encoder_self_attention	True  # Self-attention among latent tokens after each cross-attention block
+encoder_query_type	fps  # fps = farthest-point-sampled input points embedded by point_proj are the initial queries (3DShape2VecSet); learned = free nn.Parameter queries (legacy)
+fourier_bands	8  # NeRF-style positional encoding bands for point/query coordinates
+
+%   VAE losses and posterior schedule (as v3)
+kl_weight	0.0000025  # sum-KL weight: same TOTAL pressure as ex1's 1e-5 x 256 dims (2.5e-6 x 1024); 3DShape2VecSet's mean-KL 1e-3 is ~6e-8 per element, so do NOT raise this toward 1e-3
+deterministic_warmup_epochs	20  # Epochs with mu-only encoding (no posterior noise, no KL) before the warmups start
+posterior_noise_warmup_epochs	80  # Epochs to ramp the reparameterization noise scale linearly up to posterior_noise_max_scale
+posterior_noise_max_scale	1.0  # Full reparameterization once warmed up (legacy 0.1 sampled at a tenth of sigma, so the decoder never learned to tolerate the posterior width the FM later samples)
+posterior_min_std_rel	0.02  # Floor on the posterior std: std >= 0.02 x running per-dim spread of mu (variance-collapse guard); 0 = off
+kl_warmup_epochs	100  # Epochs to ramp the KL weight linearly up to kl_weight
+clamp_dist	0.1  # Truncation distance for the SDF loss target
+surface_weight	0.1  # |f(x_surface)| -> 0 (hybrid TripoSG-style term)
+normal_weight	0.1  # Align grad f with the stored surface normals
+eikonal_weight	0.01  # ||grad f|| -> 1 so the field is a metric SDF
+hybrid_grad_points	2048  # Points per shape used for the gradient terms (second-order cost cap)
+
 %   VAE training
 vae_log_file_dir	../../output/geometry_generation/ex3/train_vae.log
-vae_training_epochs	500
+vae_training_epochs	1500  # ~54 updates/epoch/rank x 1500 = ~81k updates
 vae_batch_size	4  # per GPU; effective 32 across 8 GPUs
-vae_learningr	0.0005
+vae_learningr	0.0014  # 0.0005 x sqrt(8) for the 8x effective batch
 vae_weight_decay	0.0001
-vae_warmup_epochs	5
+vae_warmup_epochs	20  # 5 -> 20: fewer updates per epoch, so warm up over more of them
 vae_num_workers	8
-vae_use_amp	False  # hybrid losses need fp32; B300 is fast enough
+vae_use_amp	False  # hybrid losses double-backward in fp32; B300 is fast enough
 vae_use_ema	True
-vae_ema_decay	0.999
+vae_ema_decay	0.999  # ~81k updates; fine
 vae_val_interval	5
 vae_test_interval	50
 vae_num_test_shapes	1
 vae_mc_resolution_test	96
-'
-%   FM conditioning and architecture (DiT + logit-normal, as config_train_v2)
-use_conditions	True
-condition_names	bbox_x,bbox_z,volume,area
-condition_clip	5.0
-min_condition_std	0.00001
-cond_dropout	0.1
-fm_arch	dit
-fm_hidden	512
-fm_blocks	8
-fm_heads	8
-fm_cond_hidden	256
-fm_time_sampling	logit_normal
-fm_time_logit_mean	0.0
-fm_time_logit_std	1.0
-'
+
+%   FM conditioning and architecture (as v3: DiT 384 x 6, volume+area conditions)
+use_conditions	True  # Condition the FM on shape descriptors
+condition_names	volume,area  # bbox_y has zero train-split std and bbox_x a 0.45% CV in DeepJEB, so only the two descriptors that actually move are used (v2: bbox_x,bbox_z,volume,area)
+condition_clip	5.0  # Clip normalized conditions to +/- this many std devs
+min_condition_std	0.00001  # Reject a condition whose train-split std is below this
+cond_dropout	0.1  # Fraction of batches trained on the null condition (classifier-free guidance)
+fm_arch	dit  # DiT over the 32 latent tokens
+fm_hidden	384  # DiT width (v2: 512) sized for the 1024-d latent
+fm_blocks	6  # DiT depth (v2: 8)
+fm_heads	6  # DiT heads (384 / 6 = 64 per head)
+fm_cond_hidden	192  # Timestep/condition embedding width
+fm_time_sampling	logit_normal  # Stable Diffusion 3 timestep schedule
+fm_time_logit_mean	0.0  # logit-normal mean
+fm_time_logit_std	1.0  # logit-normal std
+
 %   FM training
 fm_log_file_dir	../../output/geometry_generation/ex3/train_fm.log
-fm_training_epochs	300
-fm_batch_size	64  # per GPU; effective 512 across 8 GPUs
-fm_learningr	0.0002
+fm_training_epochs	1000  # ~27 updates/epoch x 1000 = ~27k updates
+fm_batch_size	8  # per GPU; effective 64 across 8 GPUs = the single-GPU v3 batch
+fm_learningr	0.0002  # same effective batch as v3, so the same LR
 fm_weight_decay	0.001
-fm_warmup_epochs	10
+fm_warmup_epochs	20
 fm_num_workers	8
 fm_use_amp	True  # bf16 on B300
 fm_use_ema	True
-fm_ema_decay	0.999
+fm_ema_decay	0.999  # 0.999 needs >10k updates; the old 64x8 config made 1,200 and kept 30% of the random init in the EMA
 fm_val_interval	10
 fm_test_interval	100
 fm_num_test_shapes	2

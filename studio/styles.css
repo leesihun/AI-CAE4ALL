@@ -608,7 +608,10 @@ body.workspace-overlay #studioOverlay.open { top: var(--topbar-height, 66px); }
 .config-status.defaulted { color: var(--blue); }
 .config-status.autofill { padding: 2px 5px; border-radius: 999px; color: #285f76; background: #e5f2f7; text-transform: none; }
 .form-row.graph-autofilled { padding: 7px; border: 1px solid #b9d4de; border-radius: 8px; background: #f7fbfd; }
-.form-row label .inline-auto { display: block; margin-top: 2px; color: #367188; font-size: 8px; font-weight: 750; text-transform: none; }
+/* 10px, not 8: this badge carries "auto · <source>" and "fixed behaviour", the
+   two notes that say whether a row is a control at all. It was the smallest
+   text on the page. */
+.form-row label .inline-auto { display: block; margin-top: 2px; color: #367188; font-size: 10px; font-weight: 750; text-transform: none; }
 .config-control { width: 100%; height: 31px; padding: 0 8px; border: 1px solid var(--line); border-radius: 7px; color: var(--ink); background: #fff; font-size: 8px; }
 .config-help { margin-top: 6px; color: var(--muted); font-size: 6px; line-height: 1.48; }
 .raw-panel { display: grid; grid-template-rows: 43px minmax(230px,1fr) auto minmax(130px,.45fr); min-height: 0; border-left: 1px solid var(--line); background: #fff; }
@@ -649,6 +652,9 @@ body.workspace-overlay #studioOverlay.open { top: var(--topbar-height, 66px); }
 .studio-kicker { color: var(--green); font-size: 7px; font-weight: 900; letter-spacing: .1em; text-transform: uppercase; }
 .studio-hero h3 { margin: 6px 0 5px; font-size: 23px; letter-spacing: -.035em; }
 .studio-hero p { max-width: 720px; margin: 0; color: var(--muted); font-size: 9px; line-height: 1.55; }
+/* The roadmap tags from the section's capability cards, which only render in
+   the offline fallback. Muted, because it is a caveat, not a heading. */
+.studio-roadmap-note { margin-top: 6px !important; color: var(--quiet) !important; font-style: italic; }
 .studio-stats { display: flex; gap: 7px; }
 .studio-stat { min-width: 80px; padding: 9px; border: 1px solid #e0e2dc; border-radius: 9px; background: #fafaf7; }
 .studio-stat strong { display: block; font-size: 14px; }
@@ -989,7 +995,7 @@ body.drawer-open .zoom { bottom: calc(16px + var(--drawer-clearance, 0px)); }
 .model-config-row.graph-autofilled { border-color: #9fc5d4; background: #f7fbfd; }
 .model-config-row code { overflow: hidden; font: 8px ui-monospace, SFMono-Regular, Consolas, monospace; font-weight: 800; text-overflow: ellipsis; white-space: nowrap; }
 .model-config-row span { overflow-wrap: anywhere; font: 8px/1.35 ui-monospace, SFMono-Regular, Consolas, monospace; }
-.model-config-row .inline-auto { display: block; margin-top: 3px; color: #367188; font: 7px/1.25 "Segoe UI", sans-serif; }
+.model-config-row .inline-auto { display: block; margin-top: 3px; color: #367188; font: 10px/1.25 "Segoe UI", sans-serif; }
 .comparison-run-row { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 6px; margin-bottom: 6px; }
 .comparison-run-row:last-child { margin-bottom: 0; }
 .live-row strong { display: block; font-size: 10px; overflow-wrap: anywhere; }
@@ -997,10 +1003,39 @@ body.drawer-open .zoom { bottom: calc(16px + var(--drawer-clearance, 0px)); }
 .live-row .chip-row { justify-content: flex-start; margin: 0; }
 .live-actions { display: flex; justify-content: flex-end; gap: 6px; }
 .live-empty { padding: 32px; text-align: center; color: var(--muted); border: 1px dashed var(--line); border-radius: 10px; }
+/* Rendered Markdown, not source. It was a 10px monospace pre-wrap box at 56vh,
+   which is a hard read for a 50-80 KB architecture document. */
 .live-document {
-  max-height: 56vh; margin: 0; padding: 18px; overflow: auto; border: 1px solid var(--line); border-radius: 10px;
-  color: #26352f; background: #fff; font: 10px/1.55 "SFMono-Regular", Consolas, monospace; white-space: pre-wrap;
+  max-height: 74vh; margin: 0; padding: 20px 24px; overflow: auto; border: 1px solid var(--line);
+  border-radius: 10px; color: #26352f; background: #fff; font-size: 13px; line-height: 1.62;
 }
+.live-document > :first-child { margin-top: 0; }
+.live-document h2, .live-document h3, .live-document h4,
+.live-document h5, .live-document h6 { margin: 18px 0 7px; line-height: 1.3; }
+.live-document h2 { font-size: 18px; }
+.live-document h3 { font-size: 15px; }
+.live-document h4, .live-document h5, .live-document h6 { font-size: 13px; }
+.live-document p, .live-document ul, .live-document ol, .live-document blockquote { margin: 0 0 10px; }
+.live-document ul, .live-document ol { padding-left: 22px; }
+.live-document li { margin: 3px 0; }
+.live-document a { color: var(--green); text-decoration: underline; text-underline-offset: 2px; }
+.live-document code {
+  padding: 1px 4px; border-radius: 4px; background: rgba(16,45,36,.07);
+  font: 12px/1.45 "SFMono-Regular", Consolas, monospace;
+}
+.live-document .doc-code {
+  margin: 0 0 12px; padding: 12px 14px; overflow-x: auto; border: 1px solid var(--hairline);
+  border-radius: 8px; background: #f7f8f6; font: 12px/1.5 "SFMono-Regular", Consolas, monospace;
+}
+.live-document blockquote {
+  padding: 2px 0 2px 12px; border-left: 3px solid var(--line); color: var(--muted);
+}
+.live-document table { width: 100%; margin: 0 0 12px; border-collapse: collapse; font-size: 12px; }
+.live-document th, .live-document td {
+  padding: 6px 9px; border: 1px solid var(--hairline); text-align: left; vertical-align: top;
+}
+.live-document th { background: #f4f6f3; }
+.live-document hr { margin: 16px 0; border: 0; border-top: 1px solid var(--line); }
 .live-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; }
 .live-summary > span { padding: 12px; border: 1px solid var(--line); border-radius: 9px; background: #fff; }
 .live-summary strong { display: block; font-size: 14px; }
@@ -1306,6 +1341,16 @@ body {
   font-size: 11px;
   box-shadow: 0 1px 2px rgba(24,43,35,.03);
 }
+/* An unparseable or unknown-column constraint clause, flagged while typing. */
+.constraint-invalid { color: var(--red, #a5443a); }
+.constraint-invalid code { background: rgba(165,68,58,.09); }
+.doc-start-here { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px 0 2px; }
+.doc-start-here strong { margin-right: 4px; color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .06em; }
+.live-group-head { padding: 12px 2px 4px; color: var(--muted); font-size: 10px; font-weight: 800; letter-spacing: .04em; }
+.live-group-head small { margin-left: 6px; color: var(--quiet); font-weight: 500; }
+.artifact-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.artifact-table th, .artifact-table td { padding: 4px 8px; border-bottom: 1px solid var(--hairline); text-align: left; white-space: nowrap; }
+.artifact-table th { position: sticky; top: 0; background: #f4f6f3; }
 .library-summary {
   display: flex;
   align-items: center;
@@ -1314,8 +1359,19 @@ body {
   color: var(--quiet);
   font-size: 10px;
 }
+/* One line explaining the native/adapter badge that every item below carries. */
+.palette-legend {
+  padding: 0 16px 6px;
+  color: var(--quiet);
+  font-size: 10px;
+  line-height: 1.5;
+  border-bottom: 1px solid var(--hairline);
+}
+.palette-legend:empty { display: none; }
+.palette-legend .maturity { margin: 0 1px; padding: 1px 5px; font-size: 9px; vertical-align: baseline; }
 .palette-list {
-  height: calc(100% - 132px);
+  /* 132px of fixed chrome above, plus the ~36px badge legend. */
+  height: calc(100% - 168px);
   padding: 2px 10px 32px;
   scrollbar-color: #bcc8c2 transparent;
   scrollbar-width: thin;
@@ -1379,8 +1435,17 @@ body {
   text-transform: uppercase;
 }
 .pipeline-title-row { display: flex; align-items: center; gap: 10px; min-width: 0; }
+/* The heading may shrink (min-width: 0) but its input used to keep a fixed
+   width, so with the inspector open at 1366x768 the input overflowed its own
+   box and the actions row -- which never shrinks -- was painted over it: the
+   template picker sat exactly where the pipeline name is clicked. Let the
+   input yield with its container instead. */
+.pipeline-heading { min-width: 0; }
 .pipeline-heading input {
   width: min(370px, 30vw);
+  max-width: 100%;
+  min-width: 90px;
+  flex: 1 1 auto;
   padding: 0;
   font-size: 15px;
   font-weight: 820;
@@ -1390,11 +1455,25 @@ body {
 .canvas-actions { min-width: 0; }
 .canvas-actions select {
   min-width: 210px;
+  /* A <select> sizes itself to its LONGEST option, so one long template name
+     silently widened the whole toolbar. Cap it; the option list itself is
+     unaffected and the chosen name is clipped, never the layout. */
+  max-width: clamp(190px, 21vw, 300px);
   height: 37px;
   border-color: var(--hairline);
   font-size: 10px;
 }
 .canvas-actions .button { min-height: 36px; }
+/* The toolbar's real constraint is its own width -- the inspector and library
+   panels take it away regardless of viewport -- so degrade on the container,
+   not on a viewport media query. At 1280x720 with the inspector open the row
+   still overhung the name field by ~17px with the input at its minimum. */
+.canvas-toolbar { container-type: inline-size; }
+@container (max-width: 720px) {
+  .canvas-actions #arrangeGraph,
+  .saved-state { display: none; }
+  .canvas-actions select { min-width: 150px; max-width: 190px; }
+}
 .panel-reopen { display: none; }
 .shell.library-collapsed #showLibrary,
 .shell.inspector-collapsed #showInspector { display: inline-flex; }
@@ -1870,6 +1949,15 @@ body {
 /* Evaluation contract and explicit field mapping. */
 .evaluation-schema { display: grid; gap: 9px; margin-top: 9px; }
 .evaluation-contract-summary { margin: 0; }
+/* Metrics computed for a prediction/truth pair that is no longer selected.
+   Dimmed rather than removed: the panel also carries the saved evidence paths. */
+/* One-line field explanation in the inspector, for blocks that have no Full
+   config sheet to carry it. */
+.form-row .row-help { display: block; margin-top: 3px; color: var(--muted); font-size: 10px; line-height: 1.35; }
+
+.stale-results { opacity: .62; filter: saturate(.55); }
+.stale-results .live-summary strong { text-decoration: line-through; }
+
 .evaluation-array-contract {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

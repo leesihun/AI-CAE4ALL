@@ -1,0 +1,151 @@
+model	SDFFlow  # SDF-VAE + latent flow-matching geometry generator
+mode	train  # merged VAE -> FM pipeline
+gpu_ids	0  # single process; only the first GPU ID is used with parallel_mode single
+parallel_mode	single  # single | ddp | fsdp
+
+%   config_train_v3_fea.txt -- the v3 recipe conditioned on DeepJEB's FEA labels. Trains to ex5/.
+%
+%   PREREQUISITE -- this file will NOT preflight or run on a fresh dataset/deepjeb.h5.
+%   The six condition_names below include four FEA labels that live in the HDF5's
+%   root 'cond_extra' sidecar, which is appended once by (from methods/SDFFlow):
+%
+%       python add_fea_conditions.py --h5 ../../dataset/deepjeb.h5 \
+%           --csv D:/CAE_datasets_raw/deepjeb/Scalar/bracket_labels.csv --dry_run
+%       python add_fea_conditions.py --h5 ../../dataset/deepjeb.h5 \
+%           --csv D:/CAE_datasets_raw/deepjeb/Scalar/bracket_labels.csv
+%
+%   The join is basename(source) == item_name (2138/2138 match); the builder writes all
+%   registry names in STORED space (natural log for the log_* names), and the dataset
+%   then reports cond_names = the five geometric descriptors + the FEA names, from
+%   which condition_names selects. A file without the sidecar is read exactly as before,
+%   so ex1/ex2/ex4 configs are unaffected. Known data defect: shape h5 index 2099
+%   (source 131_561, a v3 TEST-split shape) is a partial STL carrying full-bracket
+%   labels (mass 1.07 kg, volume*scale^3 off by +429%); its labels do not describe its
+%   geometry, so drop it from any conditional evaluation (see
+%   docs/research/sdfflow/CONDITIONAL_GENERATION_DESIGN_2026-09.md section 2).
+%
+%   Everything except the conditioning block is config_train_v3.txt verbatim (ex4/),
+%   so ex4 vs ex5 isolates the condition set. Departures, and why:
+%     - condition_names volume,area + log_max_ver_stress_mpa, log_max_dia_stress_mpa,
+%       log_max_tor_stress_mpa, log_first_mode_freq_hz. The label analysis (263 parents,
+%       parent-grouped CV) picked the decorrelated set: volume/area are the two
+%       geometric DOF and the only proxy-guidable ones; vertical stress is the primary
+%       GE load case and stands in for vertical displacement (r 0.91) and most of the
+%       horizontal case (R^2 0.70/0.92); diagonal stress is design_loop's second default
+%       case and only 29% predictable from geometry; torsion stress is the one label
+%       orthogonal to everything else (R^2 -0.04 from geometry, unique info 0.91) --
+%       and the riskiest (ICC 0.06); the 1st mode is the modal DOF (r 0.95 with the 2nd).
+%       Participation ratio 2.53 and 4 PCs for 90% variance versus 1.43 for v3's
+%       volume,area. Left out as duplicates: mass_kg and volume_mm3 (= 4.793 x volume,
+%       constant density), surface_area_mm2 (= 10468 x area), the displacements
+%       (0.58-0.85 predictable from geometry, r 0.91 with their stress), horizontal
+%       stress/displacement (recovered from the vertical case), the 2nd mode.
+%     - cond_dropout_mode per_dim: an independent Bernoulli mask per condition entry with
+%       a learned null value and the mask fed to the network, so a sample request can
+%       leave entries 'nan' (a designer specifies mass and one stress, not six numbers)
+%       and cond_sweep can morph one axis. 'all' would keep the legacy single mask.
+%     - cond_dropout 0.2 (v3: 0.1): the mask distribution has to contain the request
+%       patterns inference will use. At 0.2 a given two-of-six-unspecified pattern is
+%       1.6% of rows (~28k examples over ~27k updates x 64), 74% of entries stay
+%       observed, and the all-masked row is 6e-5 -- fine while cfg_scale stays 1.0 (the
+%       unconditional branch is then never used), but a CFG curve re-measured on this
+%       checkpoint would read a starved branch; add an explicit drop-all term first.
+%     - max_condition_z at inference must be >= 4 for the test split: the test targets
+%       reach |z| 3.82 (area), 3.21 (torsion stress), 3.06 (volume), 3.02 (2nd mode).
+
+%   Sequential VAE -> FM pipeline
+pipeline_log_file	../../output/geometry_generation/ex5/train.log  # Pipeline-level start/reuse/complete banner log
+skip_completed_stages	True  # Reuse a stage checkpoint when it is complete and config-compatible (the VAE stage is condition-free, so a finished ex4 VAE copied here is reusable)
+output_dir	../../output/geometry_generation/ex5  # Base dir for periodic reconstruction/generation test artifacts
+vae_modelpath	../../output/geometry_generation/ex5/sdfflow_vae.pth  # Final VAE checkpoint (last epoch); also the FM stage's frozen encoder
+vae_best_modelpath	../../output/geometry_generation/ex5/sdfflow_vae_best.pth  # Best-validation VAE checkpoint (same payload format)
+fm_modelpath	../../output/geometry_generation/ex5/sdfflow_fm.pth  # FM checkpoint; stores cond_names, their statistics and cond_dropout_mode
+
+%   Reproducibility
+seed	0  # Global run seed (seed + rank per stage worker); same as v3 so the ex4/ex5 comparison has the same noise floor
+
+%   Shared dataset
+dataset_dir	../../dataset/deepjeb.h5  # SDF HDF5 dataset WITH the cond_extra FEA sidecar (add_fea_conditions.py; see header)
+split_seed	42  # Seed for the deterministic 80/10/10 split
+split_by_parent	True  # Whole parent geometries stay on one side of the split (train 1713 shapes / 209 parents, val 216 / 26, test 209 / 28)
+num_encoder_points	6144  # 75% subsample of the 8192 stored surface points; the only surface augmentation (see config_train_v3.txt)
+num_query_points	8192  # SDF query points per shape for decoder supervision (dataset stores 10240)
+encode_batch_size	16  # Batch size when the FM stage encodes the dataset to frozen VAE latents
+
+%   VAE architecture (= v3)
+latent_tokens	32  # VecSet latent: 32 tokens
+latent_dim	32  # 32 channels per token -> 32 x 32 = 1024 flat
+decoder_type	attention  # VecSet cross-attention decoder
+decoder_hidden	256  # Attention d_model
+decoder_layers	4  # Cross-attention block count
+decoder_heads	4  # Decoder attention heads
+encoder_dim	256  # Point-cloud cross-attention encoder d_model
+encoder_heads	4  # Encoder attention heads
+encoder_blocks	3  # Encoder block count
+encoder_self_attention	True  # Self-attention among latent tokens after each cross-attention block
+encoder_query_type	fps  # Farthest-point-sampled input points as the initial queries (3DShape2VecSet)
+fourier_bands	8  # NeRF-style positional encoding bands
+
+%   VAE losses and posterior schedule (= v3)
+kl_weight	0.0000025  # sum-KL weight: same TOTAL pressure as ex1 (1e-5 x 256 = 2.5e-6 x 1024)
+deterministic_warmup_epochs	20  # Epochs with mu-only encoding before the warmups start
+posterior_noise_warmup_epochs	80  # Epochs to ramp the reparameterization noise scale
+posterior_noise_max_scale	1.0  # Full reparameterization once warmed up
+posterior_min_std_rel	0.02  # Floor on the posterior std: 2% of the running per-dim spread of mu
+kl_warmup_epochs	100  # Epochs to ramp the KL weight
+clamp_dist	0.1  # Truncation distance for the SDF loss target
+surface_weight	0.1  # |f(x_surface)| -> 0
+normal_weight	0.1  # Align grad f with the stored surface normals
+eikonal_weight	0.01  # ||grad f|| -> 1
+hybrid_grad_points	2048  # Points per shape for the gradient terms
+
+%   VAE training (= v3)
+vae_log_file_dir	../../output/geometry_generation/ex5/train_vae.log  # VAE-stage training log
+vae_training_epochs	500  # VAE training epochs
+vae_batch_size	4  # Shapes per step
+vae_learningr	0.0005  # VAE learning rate
+vae_weight_decay	0.0001  # AdamW weight decay
+vae_warmup_epochs	5  # LR warmup epochs
+vae_num_workers	4  # Dataloader workers
+vae_use_amp	False  # The hybrid normal/eikonal terms double-backward through the decoder; keep fp32
+vae_use_ema	True  # EMA shadow model for validation, the periodic test, and both saved checkpoints
+vae_ema_decay	0.999  # EMA decay
+vae_val_interval	5  # Validate every N epochs
+vae_test_interval	50  # Reconstruction test + checkpoint save every N epochs
+vae_num_test_shapes	1  # Shapes reconstructed in the periodic test
+vae_mc_resolution_test	96  # Marching Cubes grid for the periodic test
+
+%   FM conditioning -- the one block that differs from config_train_v3.txt
+use_conditions	True  # Condition the FM on the six names below
+condition_names	volume,area,log_max_ver_stress_mpa,log_max_dia_stress_mpa,log_max_tor_stress_mpa,log_first_mode_freq_hz  # Two geometric + four FEA (STORED space: natural log of MPa / Hz). Order = cond_values order at inference
+condition_clip	5.0  # Clip normalized conditions to +/- this many std devs
+min_condition_std	0.00001  # Reject a condition whose train-split std is below this (the four FEA names have stored-space std 0.22-0.46)
+cond_dropout	0.2  # Per-ENTRY Bernoulli mask probability under cond_dropout_mode per_dim (see header); v3 used 0.1 per sample
+cond_dropout_mode	per_dim  # per_dim = independent mask per condition entry, learned null_values, mask concatenated to the input; all = legacy one-mask-per-sample null embedding
+cond_dropout_all_prob	0.1  # Probability that a per_dim training row masks EVERY condition -- the classifier-free-guidance unconditional branch. Independent per-entry dropout alone draws it with probability cond_dropout ** cond_dim = 0.2^6 = 6.4e-5 (about 111 rows in the whole run), so without this term a CFG ablation on this checkpoint would measure a starved branch, not CFG. 0 restores that chance-only behaviour
+
+%   FM architecture (= v3)
+fm_arch	dit  # DiT over the 32 latent tokens
+fm_hidden	384  # DiT width
+fm_blocks	6  # DiT depth
+fm_heads	6  # DiT heads (384 / 6 = 64 per head)
+fm_cond_hidden	192  # Timestep/condition embedding width (the condition MLP input is 2 x 6 = 12 under per_dim)
+fm_time_sampling	logit_normal  # Stable Diffusion 3 timestep schedule
+fm_time_logit_mean	0.0  # logit-normal mean
+fm_time_logit_std	1.0  # logit-normal std
+
+%   FM training (= v3)
+fm_log_file_dir	../../output/geometry_generation/ex5/train_fm.log  # FM-stage training log
+fm_training_epochs	1000  # FM epochs (~27 updates/epoch at batch 64 -> ~27k updates)
+fm_batch_size	64  # Latents per step
+fm_learningr	0.0002  # FM learning rate
+fm_weight_decay	0.001  # AdamW weight decay
+fm_warmup_epochs	20  # LR warmup epochs
+fm_use_amp	True  # bf16/fp16 autocast for the FM
+fm_use_ema	True  # EMA shadow model for validation/generation test and the checkpoint
+fm_ema_decay	0.999  # Needs >10k updates to forget the init; 27k here
+fm_val_interval	10  # Validate every N epochs
+fm_test_interval	100  # Generation test + checkpoint save every N epochs
+fm_num_test_shapes	2  # Latents sampled in the periodic generation test
+fm_mc_resolution_test	96  # Marching Cubes grid for the FM test
+ode_steps	50  # Euler steps for FM sampling during the periodic test

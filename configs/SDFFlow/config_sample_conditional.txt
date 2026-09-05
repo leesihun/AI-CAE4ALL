@@ -1,0 +1,68 @@
+model	SDFFlow  # SDF-VAE + latent flow-matching geometry generator
+mode	sample  # noise -> FM ODE (partial conditions) -> candidate ranking -> E2 Newton correction -> SDF -> STL
+gpu_ids	0  # SDFFlow is single-process; only the first GPU ID is used
+
+%   Conditional generation against the ex5 FEA-conditioned checkpoints (config_train_v3_fea.txt).
+%   A designer specifies what matters and leaves the rest to the model: here volume, area,
+%   the vertical-case peak stress and the first mode are requested; the diagonal and
+%   torsion stresses are 'nan' = unspecified, which needs an FM trained with
+%   cond_dropout_mode per_dim (a legacy 'all' checkpoint raises a clear ValueError).
+%   Values are in STORED space, i.e. natural logs for the log_* names:
+%     ln(900 MPa) = 6.8024, ln(3300 Hz) = 8.1017; volume 0.30 / area 4.8 are the normalized
+%     descriptors (train mean 0.256 / 4.44). A larger bracket carries lower vertical stress
+%     and a higher first mode, so the four requested values are mutually consistent.
+%   Accuracy comes from three stacked mechanisms, cheapest first:
+%     1. candidate_multiplier 4: decode 4x the candidates and keep the best by geometric
+%        condition error (best-8-of-32 here);
+%     2. newton_rounds 3 (E2): proxy-Jacobian Newton correction of each retained latent
+%        on the TRUE Marching Cubes volume/area (pilot: volume median 7.6% -> 0.28%);
+%     3. guidance_enabled (C2) is OFF: it acts inside the ODE and needs the same calibration
+%        file; turn it on once the ex5 calibration exists and the 25/50/100-step
+%        NFE-invariance check has been run on it. Recipe:
+%          guidance_enabled True / guidance_t_start 0.3 / guidance_eta 0.1 /
+%          guidance_step_mode velocity_dt / guidance_targets volume,area
+%   Guidance and Newton act on the geometric targets only (volume, area); the stress and
+%   frequency requests are honoured by the conditional FM and audited geometrically here.
+%   Two numbers to read with the output, not around it:
+%     - the pilot percentages above were measured on the ex1 checkpoint with a different
+%       quadrature (node-centred) and calibration than this implementation uses; treat them
+%       as the shape of the expected effect, and re-measure on ex5.
+%     - condition_audit fea|surrogate converts the decoded mesh with the DeepJEB
+%       label-calibrated constants (0.1838 m per 1.8 normalized units, 4470 kg/m3) rather
+%       than the design-loop optimisation defaults, which would add +8.7% / +9.7% / +6.4%
+%       median bias to mass / volume / area. The residual floor is the 0.79% extent CV.
+%   condition_audit fea would also gmsh-mesh and solve the vertical case with design_loop
+%   (relative-only numbers: tet4 is stiff and the solver reports a stress percentile).
+%   cfg_scale stays 1.0: raising it worsened volume error 2.5x on the ex1 measurement.
+
+%   Models and outputs
+vae_modelpath	../../output/geometry_generation/ex5/sdfflow_vae.pth  # Frozen VAE checkpoint (decodes sampled latents to SDF)
+fm_modelpath	../../output/geometry_generation/ex5/sdfflow_fm.pth  # FM checkpoint trained with cond_dropout_mode per_dim; defines cond_names order and statistics
+output_dir	../../output/geometry_generation/ex5/samples_conditional  # STLs + sample_<seed>_meta.json (requested/actual conditions, Newton history, audit backend)
+
+%   Request -- ex5 cond_names order: volume, area, log_max_ver_stress_mpa, log_max_dia_stress_mpa, log_max_tor_stress_mpa, log_first_mode_freq_hz
+cond_values	0.30,4.8,6.8024,nan,nan,8.1017  # Stored-space targets; 'nan' = unspecified (per_dim checkpoints only)
+cfg_scale	1.0  # Plain conditional sampling; higher CFG is mode-seeking, not condition-following
+max_condition_z	4.0  # Reject a request whose normalized condition exceeds this many train std devs (test-split extremes reach 3.8)
+condition_ood_policy	error  # error | warn | clamp when a requested condition exceeds max_condition_z
+latent_clip	5.0  # Clamp sampled normalized latents to +/- this magnitude before decoding
+candidate_multiplier	4  # Oversample num_samples x this many candidates, rank by geometric condition error, keep the best num_samples
+
+%   Sampling parameters
+num_samples	8  # Shapes kept after candidate ranking
+seed	0  # RNG seed for the source noise
+ode_steps	50  # Euler integration steps for the FM sampling ODE
+mc_resolution	128  # Marching Cubes grid resolution for the exported SDF
+
+%   Sample-time descriptor accuracy (C2 guidance off, E2 Newton on)
+guidance_enabled	False  # C2 calibrated endpoint-prediction guidance inside the ODE; see header for the recipe to enable it
+descriptor_calibration_path	../../output/geometry_generation/ex5/eval/descriptor_calibration.pth  # Affine proxy calibration written by config_calibrate_descriptors.txt on THIS VAE/FM pair (SHA-256 checked)
+soft_descriptor_resolution	48  # Cell-centre grid of the differentiable soft volume/area proxy; must match the calibration
+soft_descriptor_tau	0.032  # Soft-occupancy temperature in normalized SDF units; must match the calibration
+newton_rounds	3  # E2 rounds per retained latent (0 = off); each round measures the mesh at newton_measure_resolution and accepts a step only if the true residual drops
+newton_step_cap_rms	0.12  # Cap on one step, coordinate RMS in the normalized flat latent (x sqrt(latent_flat_dim))
+newton_line_search_tries	3  # Backtracking: dz, dz/2, dz/4
+newton_measure_resolution	128  # Marching Cubes grid of the in-loop true measurement. Keep it EQUAL to mc_resolution: the calibration slope is fitted against the export path at mc_resolution and the audit reports there, so a different grid makes E2 drive a residual it is not scored on (MC volume moves 0.02-0.10% between res 96 and 128, i.e. 10-35% of the accuracy E2 is quoted at). DescriptorCalibration.check_compatible refuses a mismatched artifact
+
+%   How the decoded meshes are audited against the request
+condition_audit	geometric  # geometric | fea | surrogate; fea/surrogate re-measure the FEA-named conditions with design_loop (relative-only) and fall back to geometric with one printed message when unavailable

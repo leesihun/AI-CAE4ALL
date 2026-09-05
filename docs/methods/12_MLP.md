@@ -75,7 +75,7 @@ fields rather than a fixed-length scalar vector, this is the wrong method.
 
 ## Config keys
 
-See [CONFIGURATION_REFERENCE.md §9.10](../CONFIGURATION.md) for the
+See [CONFIGURATION.md §9.10](../CONFIGURATION.md) for the
 full catalog; the launcher spec
 [cae_suite/specs/mlp.py](../../cae_suite/specs/mlp.py) is the validation source of
 truth. Minimal train example:

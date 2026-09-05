@@ -23,6 +23,33 @@ except ImportError:
     HAS_COARSENING = False
 
 
+
+def _rollout_feature_names(dataset_dir, output_dim):
+    """Channel names written into each rollout file.
+
+    Prefer the inference dataset's own declared names (metadata/feature_names)
+    for the coordinate and state rows, so an evaluator can pair prediction and
+    truth channels by name. The legacy NASA-CRM list below used to be written
+    for *every* dataset, so ex9's ux/uy came out labelled x_disp(mm)/y_disp(mm),
+    matched nothing but x/y/z_coord in the truth file, and the Studio scored the
+    coordinates as a perfect model. The trailing row is the node-type/part id.
+    """
+    legacy = [b'x_coord', b'y_coord', b'z_coord',
+              b'x_disp(mm)', b'y_disp(mm)', b'z_disp(mm)',
+              b'stress(MPa)', b'Part No.']
+    keep = 3 + int(output_dim)
+    names = None
+    try:
+        with h5py.File(dataset_dir, 'r') as f:
+            if 'metadata/feature_names' in f:
+                raw = f['metadata/feature_names'][()]
+                names = [n if isinstance(n, bytes) else str(n).encode('utf-8') for n in raw]
+    except Exception:
+        names = None
+    if names and len(names) >= keep:
+        return np.array(names[:keep] + [b'Part No.'])
+    return np.array(legacy[:keep] + [b'Part No.'])
+
 def run_rollout(config, config_filename='config.txt'):
     """Perform deterministic autoregressive rollout inference."""
     print("\n" + "=" * 60)
@@ -130,6 +157,8 @@ def run_rollout(config, config_filename='config.txt'):
     input_dim = config.get('input_var')
     output_dim = config.get('output_var')
     cond_dim = int(config.get('cond_var', 0) or 0)
+    # Resolved once, not per sample: names come from the inference dataset.
+    rollout_feature_names = _rollout_feature_names(dataset_dir, output_dim)
     num_pos_features = int(config.get('positional_features', 0))
     # Static training (T=1) feeds a ZERO state and regresses the field directly;
     # temporal training feeds state_t and regresses a delta. Inference has to
@@ -390,6 +419,10 @@ def run_rollout(config, config_filename='config.txt'):
             f.attrs['num_samples'] = 1
             f.attrs['num_features'] = 3 + output_dim + 1
             f.attrs['num_timesteps'] = steps_this_sample + 1
+            # The evaluator has to know how many of these rows are PREDICTIONS.
+            # With only num_features it had to infer them, which is how the
+            # coordinate rows and the trailing node-type row reached a score.
+            f.attrs['output_var'] = int(output_dim)
 
             data_grp = f.create_group('data')
             sample_grp = data_grp.create_group(str(sample_id))
@@ -421,12 +454,7 @@ def run_rollout(config, config_filename='config.txt'):
             meta_grp.attrs['config_file'] = config_filename
             meta_grp.attrs['total_rollout_time_s'] = total_rollout_time
 
-            all_feature_names = [
-                b'x_coord', b'y_coord', b'z_coord',
-                b'x_disp(mm)', b'y_disp(mm)', b'z_disp(mm)',
-                b'stress(MPa)', b'Part No.'
-            ]
-            feature_names = np.array(all_feature_names[:3 + output_dim] + [b'Part No.'])
+            feature_names = rollout_feature_names
             feature_min = np.array([nodal_data[i].min() for i in range(num_save_features)], dtype=np.float32)
             feature_max = np.array([nodal_data[i].max() for i in range(num_save_features)], dtype=np.float32)
             feature_mean = np.array([nodal_data[i].mean() for i in range(num_save_features)], dtype=np.float32)

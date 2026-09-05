@@ -201,7 +201,14 @@ def _probe_dataset(
     kind = result.resolved.spec.dataset_kind
     if kind is None:
         return
-    field_name = "dataset_dir" if result.mode in {"train", "train_vae", "train_fm"} else "infer_dataset"
+    # `evaluate` (SDFFlow) reads its held-out split from `dataset_dir` like the
+    # training modes; without it here the sdf_hdf5 schema probe never runs and a
+    # wrong-contract dataset only fails deep inside the native run.
+    field_name = (
+        "dataset_dir"
+        if result.mode in {"train", "train_vae", "train_fm", "evaluate"}
+        else "infer_dataset"
+    )
     path = result.resolved_paths.get(field_name)
     if path is None or not path.is_file():
         return
@@ -248,10 +255,64 @@ def _probe_dataset(
     _validate_dataset_against_config(result, field_name)
 
 
+def _truthy(value) -> bool:
+    """Truthiness the way the native `bool(config.get(key, False))` reads it.
+
+    The flat parser types `1` as an int and `true` as a bool, and both spellings
+    are in use across this repo's configs.
+    """
+    if isinstance(value, str):
+        return value.strip().lower() not in {"", "false", "0", "no", "off"}
+    return bool(value)
+
+
+def _validate_sdf_against_config(result: PreflightResult, field_name: str) -> None:
+    """Cross-check SDFFlow `condition_names` against the dataset's vocabulary.
+
+    The FEA-named conditions of the ex5 track live in the optional `cond_extra`
+    sidecar (`methods/SDFFlow/add_fea_conditions.py`). Natively the membership
+    check runs in the FM stage, i.e. AFTER the VAE has trained for hours, so a
+    dataset that has never had the sidecar written turns a typo into a wasted
+    training run. The probe now returns the merged vocabulary; check it here.
+    """
+    metadata = result.dataset_metadata
+    available = [str(n) for n in metadata.get("cond_names", [])]
+    available += [str(n) for n in metadata.get("cond_extra_names", [])]
+    if not available:
+        return
+    values = result.parsed.values
+    # `use_conditions 1` parses to the int 1, and the native reader is
+    # `bool(config.get('use_conditions', False))`, so an `is True` test here
+    # would skip the check for a config that really does train conditionally.
+    if result.mode not in {"train", "train_fm"} or not _truthy(values.get("use_conditions", False)):
+        return
+    requested = values.get("condition_names")
+    if requested is None:
+        return
+    if not isinstance(requested, (list, tuple)):
+        requested = [requested]
+    unknown = [str(name).strip().lower() for name in requested
+               if str(name).strip().lower() not in {n.lower() for n in available}]
+    if unknown:
+        result.report.add(
+            "SDF-COND-FEA-003",
+            Severity.ERROR,
+            f"condition_names {unknown} are not in the dataset: it carries {available}.",
+            field_name="condition_names",
+            location=result.parsed.location("condition_names"),
+            hint="FEA-named conditions live in the 'cond_extra' sidecar. Write it first: "
+            "python methods/SDFFlow/add_fea_conditions.py --h5 <dataset.h5> "
+            "--csv <bracket_labels.csv>",
+        )
+
+
 def _validate_dataset_against_config(result: PreflightResult, field_name: str) -> None:
     metadata = result.dataset_metadata
     if metadata.get("x_shape") or metadata.get("y_shape"):
         _validate_table_against_config(result, field_name)
+        return
+    if metadata.get("shape_count") is not None:
+        _validate_sdf_against_config(result, field_name)
         return
     nodal_shape = metadata.get("nodal_shape")
     if not nodal_shape or len(nodal_shape) != 3:

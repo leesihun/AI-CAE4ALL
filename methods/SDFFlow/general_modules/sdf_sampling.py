@@ -2,12 +2,59 @@
 Mesh -> SDF sample generation and synthetic analytic shape families.
 
 Sign convention everywhere: SDF is NEGATIVE inside the solid, POSITIVE outside
-(DeepSDF convention). trimesh.signed_distance returns positive inside, so it is
-flipped here.
+(DeepSDF convention).
+
+Signed-distance backends, tried in this order once per process (see
+``sdf_backend_name``):
+
+    igl      libigl winding-number signed distance; negative inside already.
+    open3d   ``open3d.t.geometry.RaycastingScene.compute_signed_distance``;
+             verified negative inside on a unit icosphere and a rotated box
+             (2026-09), so it is used as-is.
+    trimesh  ``trimesh.proximity.signed_distance`` returns POSITIVE inside and
+             is flipped here (requires rtree, slowest).
 """
 
 import numpy as np
 import trimesh
+
+
+# ---------------------------------------------------------------------------
+# Signed-distance backend selection
+# ---------------------------------------------------------------------------
+
+_SDF_BACKEND = None
+
+
+def _resolve_sdf_backend():
+    # Every probe swallows Exception, not just ImportError: a partially working
+    # install (open3d with `t` but no populated `t.geometry`, an igl build that
+    # raises on import) must fall through to the trimesh fallback rather than
+    # take down every caller of sdf_backend_name().
+    try:
+        import igl  # noqa: F401
+        return 'igl'
+    except Exception:
+        pass
+    try:
+        import open3d  # noqa: F401
+        tensor_geometry = getattr(getattr(open3d, 't', None), 'geometry', None)
+        if tensor_geometry is not None and hasattr(tensor_geometry, 'RaycastingScene'):
+            return 'open3d'
+    except Exception:
+        pass
+    return 'trimesh'
+
+
+def sdf_backend_name():
+    """Name of the signed-distance backend this process uses: 'igl', 'open3d',
+    or 'trimesh'. Resolved lazily once per process and announced on stdout the
+    first time it is asked for (dataset builders record it as provenance)."""
+    global _SDF_BACKEND
+    if _SDF_BACKEND is None:
+        _SDF_BACKEND = _resolve_sdf_backend()
+        print(f'SDF backend: {_SDF_BACKEND}')
+    return _SDF_BACKEND
 
 
 # ---------------------------------------------------------------------------
@@ -30,28 +77,78 @@ def normalize_mesh(mesh, target_half_extent=0.9):
     return mesh, center, scale
 
 
-def _signed_distance(mesh, points, chunk=32768):
-    """Signed distance to mesh surface, negative inside (chunked).
+def _signed_distance_igl(mesh, points):
+    import igl
+    sd, _, _ = igl.signed_distance(
+        np.ascontiguousarray(points, dtype=np.float64),
+        np.ascontiguousarray(mesh.vertices, dtype=np.float64),
+        np.ascontiguousarray(mesh.faces, dtype=np.int64),
+    )
+    return np.asarray(sd, dtype=np.float32)  # igl: negative inside already
 
-    Uses libigl when available (fast, robust winding number); falls back to
-    trimesh.proximity.signed_distance (requires rtree, slower).
-    """
-    try:
-        import igl
-        sd, _, _ = igl.signed_distance(
-            points.astype(np.float64),
-            mesh.vertices.astype(np.float64),
-            mesh.faces.astype(np.int64),
-        )
-        return sd.astype(np.float32)  # igl: negative inside already
-    except ImportError:
-        pass
 
+def _signed_distance_open3d(mesh, points, chunk):
+    import open3d as o3d
+    scene = o3d.t.geometry.RaycastingScene()
+    tmesh = o3d.t.geometry.TriangleMesh(
+        o3d.core.Tensor(np.ascontiguousarray(mesh.vertices, dtype=np.float32)),
+        o3d.core.Tensor(np.ascontiguousarray(mesh.faces, dtype=np.int32)))
+    scene.add_triangles(tmesh)
+    out = np.empty(len(points), dtype=np.float32)
+    for i in range(0, len(points), chunk):
+        query = o3d.core.Tensor(np.ascontiguousarray(points[i:i + chunk], dtype=np.float32))
+        try:
+            # Odd ray count: a majority vote guards against a ray grazing an
+            # edge or vertex exactly. Older Open3D builds lack the kwarg.
+            sd = scene.compute_signed_distance(query, nsamples=3)
+        except TypeError:
+            sd = scene.compute_signed_distance(query)
+        # Open3D: negative inside (verified), matches the module convention.
+        out[i:i + chunk] = sd.numpy().reshape(-1)
+    return out
+
+
+def _signed_distance_trimesh(mesh, points, chunk):
     out = np.empty(len(points), dtype=np.float32)
     for i in range(0, len(points), chunk):
         # trimesh: positive inside -> flip to negative inside
         out[i:i + chunk] = -trimesh.proximity.signed_distance(mesh, points[i:i + chunk])
     return out
+
+
+def _signed_distance(mesh, points, chunk=32768):
+    """Signed distance to mesh surface, negative inside (chunked).
+
+    Backend order: igl -> open3d RaycastingScene -> trimesh (see module doc).
+    """
+    backend = sdf_backend_name()
+    if backend == 'igl':
+        return _signed_distance_igl(mesh, points)
+    if backend == 'open3d':
+        return _signed_distance_open3d(mesh, points, chunk)
+    return _signed_distance_trimesh(mesh, points, chunk)
+
+
+def _near_sigmas_array(near_sigmas):
+    """Validate ``near_sigmas`` (scalar or any sequence of length >= 1)."""
+    sig = np.atleast_1d(np.asarray(near_sigmas, dtype=np.float64)).reshape(-1)
+    if sig.size < 1 or not np.all(np.isfinite(sig)) or np.any(sig <= 0):
+        raise ValueError(
+            f'near_sigmas must hold at least one positive finite value, got {near_sigmas!r}')
+    return sig
+
+
+def _choose_near_sigmas(rng, near_sigmas, num_near):
+    """One sigma per near point, chosen uniformly at random among ``near_sigmas``.
+
+    Implemented as a single uniform draw binned into ``len(near_sigmas)`` equal
+    intervals, so the legacy two-scale case (``u < 0.5 -> sigma[0]``)
+    reproduces the historical random stream bit-for-bit.
+    """
+    sig = _near_sigmas_array(near_sigmas)
+    u = rng.random(num_near)
+    idx = np.minimum((u * sig.size).astype(np.int64), sig.size - 1)
+    return sig[idx]
 
 
 def _sharp_face_ids(mesh, angle_threshold):
@@ -94,8 +191,10 @@ def sample_mesh_sdf(mesh, num_surface, num_near, num_uniform,
                     sharp_edge_fraction=0.0, sharp_edge_angle=0.5236):
     """Sample surface points/normals and SDF query points from a watertight mesh.
 
-    Near-surface queries are surface samples perturbed by Gaussian noise at two
-    scales (half each); uniform queries fill [-bound, bound]^3.
+    Near-surface queries are surface samples perturbed by Gaussian noise whose
+    scale is drawn uniformly at random per point from ``near_sigmas`` (any
+    sequence of length >= 1; the default two scales are used half each);
+    uniform queries fill [-bound, bound]^3.
 
     `sharp_edge_fraction` (Dora-style Sharp Edge Sampling) routes that fraction
     of surface points onto faces adjacent to sharp edges (dihedral angle above
@@ -126,7 +225,7 @@ def sample_mesh_sdf(mesh, num_surface, num_near, num_uniform,
 
     base_idx = rng.integers(0, num_surface, size=num_near)
     base = surface_points[base_idx]
-    sigmas = np.where(rng.random(num_near) < 0.5, near_sigmas[0], near_sigmas[1])
+    sigmas = _choose_near_sigmas(rng, near_sigmas, num_near)
     near_pts = base + rng.normal(size=(num_near, 3)) * sigmas[:, None]
 
     uni_pts = rng.uniform(-bound, bound, size=(num_uniform, 3))
@@ -248,7 +347,7 @@ def synthetic_sample(rng, num_surface, num_near, num_uniform,
     surface_normals = mesh.face_normals[face_idx]
 
     base = surface_points[rng.integers(0, num_surface, size=num_near)]
-    sigmas = np.where(rng.random(num_near) < 0.5, near_sigmas[0], near_sigmas[1])
+    sigmas = _choose_near_sigmas(rng, near_sigmas, num_near)
     near_pts = base + rng.normal(size=(num_near, 3)) * sigmas[:, None]
     uni_pts = rng.uniform(-bound, bound, size=(num_uniform, 3))
 

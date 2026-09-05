@@ -11,13 +11,15 @@ code; their primary entry points are indexed below.
 | [../README.md](../README.md) | You want the tour: what the suite is, the model zoo, quick start |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | You need the full picture — launcher internals, the config system, a section per method, known gaps |
 | [CONFIGURATION.md](CONFIGURATION.md) | You are writing or debugging a config file |
+| [GUI.md](GUI.md) | You are using the browser Studio: blocks, templates, validation, evaluation rules |
 | [guides/testing.md](guides/testing.md) | You changed something and want to know what to run |
 
 ## Guides
 
 | Doc | Covers |
 | --- | --- |
-| [guides/studio.md](guides/studio.md) | The browser Studio: capabilities, local API surface, integration boundary |
+| [GUI.md](GUI.md) | The Studio manual: the block library, the shipped pipeline templates, the config sheet, Validate/Run, and the evaluation contract |
+| [guides/studio.md](guides/studio.md) | The Studio's front-end notes: capabilities list, local API surface, integration boundary |
 | [guides/inference-bundle.md](guides/inference-bundle.md) | The portable CPU inference bundle: checkpoint family detection, CLI, `.exe` build |
 | [guides/testing.md](guides/testing.md) | Which test command belongs to which layer |
 
@@ -61,7 +63,7 @@ behaviour — treat the mismatch as something to reconcile, not to ignore.
 - [research/meshgraphnets_variational/](research/meshgraphnets_variational/) — distribution modelling, world edges, VRAM and performance work
 - [research/neural_operator/](research/neural_operator/) — GINO and Point-DeepONet parity, model capabilities
 - [research/transolver/](research/transolver/) — foundation-model design
-- [research/sdfflow/](research/sdfflow/) — conditional geometry survey, meshing upgrade, guidance mechanisms
+- [research/sdfflow/](research/sdfflow/) — conditional geometry survey, meshing upgrade, guidance mechanisms, [conditional generation design](research/sdfflow/CONDITIONAL_GENERATION_DESIGN_2026-09.md) (FEA-label conditions, per-dim dropout, C2/E2, the load-unit correction)
 - [research/hi_mgnflow/](research/hi_mgnflow/) — deterministic mode, sweep plan
 - [research/simulgenvae/](research/simulgenvae/) — technical documentation
 

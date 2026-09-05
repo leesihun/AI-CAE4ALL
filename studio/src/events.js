@@ -2,7 +2,7 @@ import { $, $$, toast, closeOverlay, watchOverlayOrder, topOverlayId } from "./d
 import { state, snapshot, restoreSnapshot } from "./state.js";
 import { BLOCK_SPECS, MODEL_CATALOG, NODE_WIDTH, NODE_HEADER_HEIGHT } from "./constants.js";
 import { apiRequest, requireRuntime } from "./api.js";
-import { rawConfig, parseConfig, applyPreset, renderConfig, explainConfig, explainMessages, configureViaLlm } from "./config.js";
+import { rawConfig, parseConfig, applyPreset, renderConfig, explainConfig, explainMessages, configureViaLlm, retainExplicitConfig, overrideMessage } from "./config.js";
 import { preflightConfigText, preflightMessages } from "./validate.js";
 import {
   paletteRender, loadTemplate, arrangeGraph, setZoom, fitGraphView,
@@ -15,7 +15,7 @@ import {
   PipelineLoadCancelledError, downloadPipelineJson, importPipelineJson,
   savePipelineState, schedulePipelineSave
 } from "./persistence.js";
-import { applyGraphAutofill, markManualConfigValue, resetManualConfigValues } from "./autofill.js";
+import { applyGraphAutofill } from "./autofill.js";
 
 function undoGraphChange() {
   const previous = state.history.pop();
@@ -34,11 +34,6 @@ function undoGraphChange() {
   toast("Undid the last graph change.");
 }
 
-function retainExplicitConfig(node) {
-  resetManualConfigValues(node);
-  Object.entries(node.config).forEach(([key, value]) => markManualConfigValue(node, key, value));
-  applyGraphAutofill();
-}
 import {
   compareCurrentSample, downloadCurrentSample, copyArtifactId,
   useArtifactInPipeline, toggleViewerPlayback, renderViewerMode,
@@ -197,8 +192,8 @@ export function bindEvents() {
       if (!node) return;
       snapshot();
       node.config = { ...parsed.values };
-      retainExplicitConfig(node);
-      state.configMessages = [{ type: "", text: `Loaded ${file.name} with ${Object.keys(parsed.values).length} values.` }, ...parsed.messages];
+      const overridden = retainExplicitConfig(node);
+      state.configMessages = [{ type: "", text: `Loaded ${file.name} with ${Object.keys(parsed.values).length} values.` }, ...parsed.messages, ...overrideMessage(overridden)];
       $("#savedState").textContent = "Unsaved changes";
       renderConfig();
     };
@@ -224,8 +219,11 @@ export function bindEvents() {
     const parsed = parseConfig($("#configRaw").value);
     snapshot();
     node.config = { ...parsed.values };
-    retainExplicitConfig(node);
-    state.configMessages = parsed.messages.length ? parsed.messages : [{ type: "", text: "Parsed raw .txt without syntax errors." }];
+    const overridden = retainExplicitConfig(node);
+    state.configMessages = [
+      ...(parsed.messages.length ? parsed.messages : [{ type: "", text: "Parsed raw .txt without syntax errors." }]),
+      ...overrideMessage(overridden)
+    ];
     $("#savedState").textContent = "Unsaved changes";
     renderConfig();
   });
@@ -250,6 +248,16 @@ export function bindEvents() {
       const result = await preflightConfigText(text, `${modelId}-${node.config.mode || "config"}`);
       state.api.lastPreflight = result;
       state.configMessages = preflightMessages(result);
+      // The sheet already knows how to scroll to and flash a rejected field
+      // (jumpToFailingField / state.configRejectedField), and the runtime drawer
+      // used it -- but the in-sheet preflight named the field and left the user
+      // to find it among ~120 rows across nine sections.
+      const rejected = preflightMessages(result).find(item => item.type === "error" && item.field);
+      if (rejected) {
+        state.configRejectedNode = node.id;
+        state.configRejectedField = rejected.field;
+        state.configSection = "";
+      }
       renderConfig();
       toast(result?.ok ? "Authoritative launcher preflight passed." : "Real preflight found blocking errors.", result?.ok ? "" : "error");
     } catch (error) {
@@ -330,6 +338,10 @@ export function bindEvents() {
     setZoom(state.view.scale * factor, { x: event.clientX, y: event.clientY });
   }, { passive: false });
   $("#stage").addEventListener("dragover", event => {
+    // Only a palette block drag is droppable on the stage. Accepting every drag
+    // meant a port-to-port wire drag showed "copy" over ports that would refuse
+    // it -- the cursor said yes while the drop said no.
+    if (!event.dataTransfer.types.includes("application/x-ai-cae-block")) return;
     event.preventDefault();
     event.dataTransfer.dropEffect = "copy";
   });

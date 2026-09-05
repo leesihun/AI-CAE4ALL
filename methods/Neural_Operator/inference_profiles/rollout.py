@@ -249,6 +249,10 @@ def _write_rollout_output(output_dir, sample_id, ref_pos, mesh_edge, all_states,
         f.attrs['num_samples'] = 1
         f.attrs['num_features'] = num_save_features
         f.attrs['num_timesteps'] = num_steps + 1
+        # The evaluator has to know how many of these rows are PREDICTIONS.
+        # With only num_features it had to infer them, which is how the
+        # coordinate rows and the trailing node-type row reached a score.
+        f.attrs['output_var'] = int(output_var)
 
         data_grp = f.create_group('data')
         sample_grp = data_grp.create_group(str(sample_id))
