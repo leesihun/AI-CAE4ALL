@@ -313,7 +313,9 @@ measured after decoding by the audit instead.
   accepting a step only if the decoded mesh is valid and the TRUE relative
   residual norm decreases. Because a torn mesh has NaN volume, its residual is
   `inf` and it can never be accepted; `require_watertight` additionally
-  defaults to True whenever `volume` is among the corrected names, and
+  defaults to True for every corrected name, because an area-only correction
+  is the worse trap (area IS defined on an open surface, so without the flag
+  the line search would accept a step that tore the bracket open), and
   `latent_clip` (passed from the run config) clamps each candidate before it is
   measured so the corrected latent obeys the same box every other arm does.
   A hybrid quasi-Newton step, not a Newton step on one objective; a round that

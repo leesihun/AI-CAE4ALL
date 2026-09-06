@@ -148,10 +148,13 @@ def newton_correct(vae, z_flat, targets, calibration, latent_mean, latent_std, r
         measure_resolution: Marching Cubes grid for the true measurements.
         resolution, tau, bound, chunk: soft-proxy settings for the Jacobian.
         require_watertight: also reject steps whose mesh is not watertight.
-            None (default) resolves to True whenever `volume` is one of the
-            corrected names -- a torn mesh has no volume to score the step on
-            (`true_descriptors` reports NaN, `relative_residual` inf), so
-            accepting one would move the latent on an unmeasured quantity.
+            None (default) resolves to True for every corrected name. Under
+            `volume` the reason is arithmetic -- a torn mesh has no volume to
+            score the step on (`true_descriptors` reports NaN,
+            `relative_residual` inf) -- but an area-only correction is the
+            worse trap, because area IS defined on an open surface and the
+            line search would accept a step that tore the bracket open.
+            Pass False explicitly to opt out.
         latent_clip: when > 0 (and `normalized`), every candidate is clamped to
             +/- this magnitude BEFORE it is measured, so the accepted latent
             obeys the same box the sampler's `latent_clip` applies and the
@@ -192,7 +195,15 @@ def newton_correct(vae, z_flat, targets, calibration, latent_mean, latent_std, r
     names = list(supported_soft_names(targets.keys()))
     ignored = [n for n in targets if n not in names]
     if require_watertight is None:
-        require_watertight = 'volume' in names
+        # True for every corrected name, not just `volume`. With `volume` the
+        # reason is arithmetic -- a torn mesh has no volume to score the step on
+        # (`true_descriptors` reports NaN, `relative_residual` inf). With an
+        # area-only correction the residual IS well defined on an open surface,
+        # which is exactly the trap: the line search would happily accept a step
+        # that tore the bracket open because the area still improved. A torn
+        # decode is never the shape the caller asked for, so reject it either
+        # way; pass require_watertight=False explicitly to opt out.
+        require_watertight = True
     if not names:
         raise ValueError(f'newton_correct: none of the targets {list(targets)} has a soft proxy')
     for name in names:
