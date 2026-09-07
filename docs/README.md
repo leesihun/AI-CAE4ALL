@@ -66,6 +66,7 @@ behaviour — treat the mismatch as something to reconcile, not to ignore.
 - [research/sdfflow/](research/sdfflow/) — conditional geometry survey, meshing upgrade, guidance mechanisms, [conditional generation design](research/sdfflow/CONDITIONAL_GENERATION_DESIGN_2026-09.md) (FEA-label conditions, per-dim dropout, C2/E2, the load-unit correction)
 - [research/hi_mgnflow/](research/hi_mgnflow/) — deterministic mode, sweep plan
 - [research/simulgenvae/](research/simulgenvae/) — technical documentation
+- [research/shell_buckling/](research/shell_buckling/) — [benchmark design](research/shell_buckling/BENCHMARK_DESIGN.md): a static one-to-many shell post-buckling dataset with an OOD geometry test set
 
 ## Per-method notes
 
