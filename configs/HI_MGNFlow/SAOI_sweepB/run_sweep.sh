@@ -120,7 +120,13 @@ STAGGER="${STAGGER:-10}"   # seconds between arm launches
 # training, and it is what tells a shrunk conditional mean (a regression
 # failure) apart from an over-tight ensemble (a sampler failure).
 DET="${DET:-0}"
-if [ "$DET" = "1" ]; then CFG_SUFFIX="_det"; else CFG_SUFFIX=""; fi
+if [ "$DET" = "1" ]; then
+    CFG_SUFFIX="_det"
+    DET_FLAG="--det"
+else
+    CFG_SUFFIX=""
+    DET_FLAG=""
+fi
 
 mkdir -p "$LOG_ROOT"
 
@@ -382,18 +388,22 @@ fi
 # the physical quantity the sweep is actually for. Runs even when rc != 0 so a
 # partially-failed batch still yields a report for the arms that did finish
 # (score_sweep.py skips arms with no checkpoint).
-REPORT="output/chi-mgnflow/saoi_sweepB/sweep_results.md"
+# Scoring reads and writes the DET subtree when DET=1, so a control run
+# cannot overwrite the multi-draw report with one-draw numbers.
+if [ "$DET" = "1" ]; then SCORE_OUT="output/chi-mgnflow/saoi_sweepB/det"; else SCORE_OUT="output/chi-mgnflow/saoi_sweepB"; fi
+REPORT="$SCORE_OUT/sweep_results.md"
 if [ "$SCORE" = "1" ]; then
     echo "Scoring the grid..."
     if "$PYTHON" "$CFG_DIR/score_sweep.py" \
             --arms $ARMS \
+            ${DET_FLAG} \
             --python "$PYTHON" \
-            --out-dir output/chi-mgnflow/saoi_sweepB \
+            --out-dir "$SCORE_OUT" \
             --run-logs "$LOG_ROOT" \
-            > "$LOG_ROOT/score_sweep.log" 2>&1; then
+            > "$LOG_ROOT/score_sweep${CFG_SUFFIX}.log" 2>&1; then
         echo "Scoring complete."
     else
-        echo "Scoring FAILED (exit $?) -- see $LOG_ROOT/score_sweep.log" >&2
+        echo "Scoring FAILED (exit $?) -- see $LOG_ROOT/score_sweep${CFG_SUFFIX}.log" >&2
         rc=1
     fi
     echo ""
@@ -403,7 +413,7 @@ if [ "$SCORE" = "1" ]; then
         echo "==========================================="
         echo ""
         echo "Report   : $REPORT      <-- paste this file to Claude"
-        echo "Raw JSON : output/chi-mgnflow/saoi_sweepB/sweep_results.json"
+        echo "Raw JSON : $SCORE_OUT/sweep_results.json"
     fi
 else
     echo "SCORE=0 -- skipped. Run it later with:"

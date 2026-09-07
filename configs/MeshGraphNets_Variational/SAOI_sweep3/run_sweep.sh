@@ -95,6 +95,9 @@
 #   SCORE         1 = run score_sweep.py when training ends (default); 0 = skip
 #   SCORE_K       draws per geometry for the rank histogram (default: 50)
 #   SCORE_SPLIT   split to score (default: test)
+#   SCORE_SAMPLERS  eval_distribution.py samplers; EMPTY by default,
+#                 which skips that (slow, serial, GPU) stage. Set to
+#                 "prior normal" to include the rank histograms.
 #
 # Usage:
 #   bash configs/MeshGraphNets_Variational/SAOI_sweep3/run_sweep.sh
@@ -121,6 +124,9 @@ INFER_TAGS="${INFER_TAGS:-s26fe_main s26fe_sec sm_l345u}"
 SCORE="${SCORE:-1}"
 SCORE_K="${SCORE_K:-50}"
 SCORE_SPLIT="${SCORE_SPLIT:-test}"
+# Empty = skip eval_distribution.py (see the SCORE stage). Set to
+# "prior normal" to add the rank histograms, at GPU-hours per arm.
+SCORE_SAMPLERS="${SCORE_SAMPLERS:-}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
@@ -142,7 +148,13 @@ STAGGER="${STAGGER:-10}"   # seconds between arm launches
 # training, and it is what tells a shrunk conditional mean (a regression
 # failure) apart from an over-tight ensemble (a sampler failure).
 DET="${DET:-0}"
-if [ "$DET" = "1" ]; then CFG_SUFFIX="_det"; else CFG_SUFFIX=""; fi
+if [ "$DET" = "1" ]; then
+    CFG_SUFFIX="_det"
+    DET_FLAG="--det"
+else
+    CFG_SUFFIX=""
+    DET_FLAG=""
+fi
 
 mkdir -p "$LOG_ROOT"
 
@@ -403,20 +415,39 @@ fi
 # uses, so the sweep is decided by CRPS + wild rate + rank calibration. Runs
 # even when rc != 0 so a partially-failed batch still yields a report for the
 # arms that did finish (score_sweep.py skips arms with no checkpoint).
-REPORT="output/meshgraphnets-v/saoi_sweep3/sweep_results.md"
+# Scoring reads and writes the DET subtree when DET=1, so a control run
+# cannot overwrite the multi-draw report with one-draw numbers.
+if [ "$DET" = "1" ]; then SCORE_OUT="output/meshgraphnets-v/saoi_sweep3/det"; else SCORE_OUT="output/meshgraphnets-v/saoi_sweep3"; fi
+REPORT="$SCORE_OUT/sweep_results.md"
 if [ "$SCORE" = "1" ]; then
-    echo "Scoring the grid (this runs eval_distribution.py per arm, both samplers)..."
+    # SCORE_SAMPLERS empty (the default) skips eval_distribution.py
+    # entirely: it is a serial, per-arm, per-sampler GPU job with an
+    # hour-long timeout per rung of a five-step OOM ladder, so eight
+    # arms can run for GPU-days with seven cards idle. The warpage and
+    # per-scene tables are read from the spread dumps and cost seconds.
+    if [ "$DET" = "1" ]; then
+        # One draw per scene: rank histograms measure nothing here.
+        SCORE_SAMPLERS=""
+    fi
+    if [ -n "$SCORE_SAMPLERS" ]; then
+        echo "Scoring the grid (eval_distribution.py per arm: $SCORE_SAMPLERS -- SLOW, serial)..."
+    else
+        echo "Scoring the grid (warpage + per-scene tables; eval_distribution.py off)..."
+        echo "  set SCORE_SAMPLERS=\"prior normal\" to add the rank histograms (GPU-hours)."
+    fi
     if "$PYTHON" "$CFG_DIR/score_sweep.py" \
             --arms $ARMS \
+            ${DET_FLAG} \
             --split "$SCORE_SPLIT" \
             --k "$SCORE_K" \
+            --samplers $SCORE_SAMPLERS \
             --python "$PYTHON" \
-            --out-dir output/meshgraphnets-v/saoi_sweep3 \
+            --out-dir "$SCORE_OUT" \
             --run-logs "$LOG_ROOT" \
-            > "$LOG_ROOT/score_sweep.log" 2>&1; then
+            > "$LOG_ROOT/score_sweep${CFG_SUFFIX}.log" 2>&1; then
         echo "Scoring complete."
     else
-        echo "Scoring FAILED (exit $?) -- see $LOG_ROOT/score_sweep.log" >&2
+        echo "Scoring FAILED (exit $?) -- see $LOG_ROOT/score_sweep${CFG_SUFFIX}.log" >&2
         rc=1
     fi
     echo ""
@@ -426,7 +457,7 @@ if [ "$SCORE" = "1" ]; then
         echo "==========================================="
         echo ""
         echo "Report   : $REPORT      <-- paste this file to Claude"
-        echo "Raw JSON : output/meshgraphnets-v/saoi_sweep3/sweep_results.json"
+        echo "Raw JSON : $SCORE_OUT/sweep_results.json"
     fi
 else
     echo "SCORE=0 -- skipped. Run it later with:"
