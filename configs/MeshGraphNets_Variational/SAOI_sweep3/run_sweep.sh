@@ -175,7 +175,10 @@ echo ""
 # shortened sweep cannot be mistaken for a complete one.
 # STRICT_PREFLIGHT=1 restores abort-on-any-failure.
 SKIPPED=""
-if [ "$PREFLIGHT" = "1" ]; then
+# Only when training. With TRAIN=0 the checkpoints already exist and the train
+# configs are irrelevant -- validating them would drop an arm (and with it that
+# arm's inference) for a reason inference does not care about.
+if [ "$PREFLIGHT" = "1" ] && [ "$TRAIN" = "1" ]; then
     echo "Preflight (--check) on every arm..."
     ok_arms=""
     for arm in $ARMS; do
@@ -194,19 +197,6 @@ if [ "$PREFLIGHT" = "1" ]; then
         fi
     done
 
-    # Valid train configs say NOTHING about whether the histogram will have
-    # ground truth. rollout.py skips it silently when `eval_dataset` is absent,
-    # and draws against the wrong column when it points at the rollout's own
-    # input instead of the `_compare_` file. Reported here but NOT fatal: it
-    # costs the histogram, not the training.
-    echo ""
-    echo "Preflight (inference + histogram inputs)..."
-    if ! "$PYTHON" "$CFG_DIR/check_eval_inputs.py"; then
-        echo "  ^ the warpage histogram will be wrong or missing. Training is" >&2
-        echo "    unaffected and continues." >&2
-        SKIPPED="$SKIPPED@  (histogram)  eval inputs failed check_eval_inputs.py"
-    fi
-
     ARMS="$(echo $ok_arms)"
     if [ -z "$ARMS" ]; then
         echo "" >&2
@@ -224,6 +214,23 @@ if [ "$PREFLIGHT" = "1" ]; then
         exit 2
     fi
     echo "$(echo "$ARMS" | wc -w) arm(s) validated: $ARMS"
+    echo ""
+fi
+
+# Valid train configs say NOTHING about whether the histogram will have ground
+# truth. rollout.py skips it silently when `eval_dataset` is absent, and draws
+# against the wrong column when it points at the rollout's own input instead of
+# the `_compare_` file. Reported but NOT fatal: it costs the histogram, not the
+# run. Checked on EVERY preflighted run, not just inference ones: catching a
+# broken ground-truth path before a multi-day training batch is the whole point,
+# and a TRAIN=0 run needs it too.
+if [ "$PREFLIGHT" = "1" ]; then
+    echo "Preflight (inference + histogram inputs)..."
+    if ! "$PYTHON" "$CFG_DIR/check_eval_inputs.py"; then
+        echo "  ^ the warpage histogram will be wrong or missing for the" >&2
+        echo "    datasets named above. Everything else continues." >&2
+        SKIPPED="$SKIPPED@  (histogram)  eval inputs failed check_eval_inputs.py"
+    fi
     echo ""
 fi
 
