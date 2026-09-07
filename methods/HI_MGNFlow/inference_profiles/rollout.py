@@ -62,8 +62,14 @@ def _spread_max_minus_min(field_1d):
 
 
 def _eval_dataset_spreads(h5_path, channel=Z_DISP_CHANNEL):
-    """One ground-truth spread value per sample in the eval HDF5."""
-    spreads = []
+    """(spreads, scene_ids): one ground-truth spread per sample in the eval HDF5.
+
+    The ids are returned so the scorer can pair each truth with the ensemble
+    generated for that same scene. Without them the generated side is a pooled
+    marginal, and a model that ignores geometry entirely scores as well as one
+    that conditions correctly.
+    """
+    spreads, ids = [], []
     with h5py.File(h5_path, 'r') as f:
         if 'data' not in f:
             raise RuntimeError(f"No /data group in {h5_path}")
@@ -71,7 +77,8 @@ def _eval_dataset_spreads(h5_path, channel=Z_DISP_CHANNEL):
             spreads.append(
                 _spread_max_minus_min(f[f'data/{sample_id}/nodal_data'][channel, -1, :])
             )
-    return np.asarray(spreads, dtype=np.float64)
+            ids.append(str(sample_id))
+    return np.asarray(spreads, dtype=np.float64), np.asarray(ids, dtype=object)
 
 
 def _open_in_viewer(path):
@@ -648,6 +655,10 @@ def run_rollout(config, config_filename='config.txt'):
     show_histogram = bool(config.get('show_histogram', True))
     z_gen_idx = Z_DISP_CHANNEL - 3  # z_disp is the 3rd output channel (index 2)
     generated_spreads = []  # one spread scalar per generated rollout trajectory
+    # Which scene each of those came from, same order. This is what lets
+    # the scorer split within-scene ensemble width from between-scene
+    # variation of the conditional mean; pooled, the two are inseparable.
+    generated_scene_ids = []
 
     print(f"\nLoading initial conditions...")
     print(f"  Dataset: {dataset_dir}")
@@ -779,6 +790,7 @@ def run_rollout(config, config_filename='config.txt'):
                     generated_spreads.append(
                         _spread_max_minus_min(all_states[b, -1, :, z_gen_idx])
                     )
+                    generated_scene_ids.append(str(sample_id))
 
                 if not save_rollouts:
                     continue
@@ -904,7 +916,7 @@ def run_rollout(config, config_filename='config.txt'):
                   f"(output_var={output_dim} has no z_disp channel).")
         else:
             try:
-                gt = _eval_dataset_spreads(str(eval_dataset))
+                gt, gt_scene = _eval_dataset_spreads(str(eval_dataset))
                 gen = np.asarray(generated_spreads, dtype=np.float64)
                 print(f"  GT spread values  (1 per eval sample): {gt.size:,}")
                 print(f"  Gen spread values (1 per rollout):     {gen.size:,}")
@@ -918,7 +930,12 @@ def run_rollout(config, config_filename='config.txt'):
                 # axis instead of leaving 16 separate PNGs to eyeball.
                 npz_path = os.path.join(output_dir, 'spread_values.npz')
                 os.makedirs(os.path.dirname(os.path.abspath(npz_path)), exist_ok=True)
-                np.savez_compressed(npz_path, gt=gt, gen=gen)
+                # Scene labels alongside the values: see
+                # _eval_dataset_spreads for why they are load-bearing.
+                np.savez_compressed(
+                    npz_path, gt=gt, gen=gen,
+                    gt_scene=np.asarray([str(s) for s in gt_scene]),
+                    gen_scene=np.asarray([str(s) for s in generated_scene_ids]))
                 print(f"  [SPREAD] values -> {npz_path}")
                 hist_path = os.path.join(output_dir, 'histogram_compare.png')
                 _plot_spread_histogram(

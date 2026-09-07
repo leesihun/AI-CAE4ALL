@@ -100,6 +100,10 @@ def arm_tags(arm):
 # Eval sets each arm is inferred on (gen_sweep_configs.INFER_SOURCES).
 INFER_TAGS = ["s26fe_main", "s26fe_sec", "sm_l345u"]
 
+# Set from --det: selects the deterministic-control configs (and therefore
+# their separate det/ output subtree) instead of the multi-draw ones.
+CFG_SUFFIX = ""
+
 # Graph counts tried in order until one does not OOM.
 NGRAPH_LADDER = [0, 64, 32, 16, 8]
 
@@ -367,7 +371,13 @@ def main():
                     help="per eval invocation, seconds")
     ap.add_argument("--samplers", nargs="*", default=["prior", "normal"],
                     choices=["auto", "prior", "normal"])
+    ap.add_argument("--det", action="store_true",
+                    help="score the deterministic-control runs "
+                         "(config_infer_<arm>_<tag>_det.txt) instead of the "
+                         "multi-draw ones")
     args = ap.parse_args()
+    global CFG_SUFFIX
+    CFG_SUFFIX = "_det" if args.det else ""
 
     out_dir = pathlib.Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -566,13 +576,17 @@ def _w1(a, b, n=512):
     return float(np.mean(np.abs(np.quantile(a, qs) - np.quantile(b, qs))))
 
 
-def load_spreads(cfg_dir, arm, tag):
-    """(gt, gen) arrays written by the rollout, or None.
+def load_spreads(cfg_dir, arm, tag, suffix=""):
+    """(gt, gen, gt_scene, gen_scene) written by the rollout, or None.
 
     Reads inference_output_dir out of the generated inference config rather than
     rebuilding the path, so a change in the generator cannot silently desync.
+
+    The two scene-label arrays are OPTIONAL: dumps written before rollout.py
+    started recording them load with both set to None, and every consumer falls
+    back to the pooled-marginal view.
     """
-    cfg_path = cfg_dir / f"config_infer_{arm}_{tag}.txt"
+    cfg_path = cfg_dir / f"config_infer_{arm}_{tag}{suffix}.txt"
     if not cfg_path.exists():
         return None
     out_dir = parse_config(cfg_path).get("inference_output_dir")
@@ -582,12 +596,82 @@ def load_spreads(cfg_dir, arm, tag):
     if not npz.exists():
         return None
     try:
-        with np.load(npz) as z:
-            return np.asarray(z["gt"], float), np.asarray(z["gen"], float)
+        with np.load(npz, allow_pickle=False) as z:
+            gt = np.asarray(z["gt"], float)
+            gen = np.asarray(z["gen"], float)
+            gts = np.asarray([str(v) for v in z["gt_scene"]]) if "gt_scene" in z else None
+            gns = np.asarray([str(v) for v in z["gen_scene"]]) if "gen_scene" in z else None
+            return gt, gen, gts, gns
     except (OSError, KeyError, ValueError) as exc:
         # Narrow on purpose: a bare except here hid a missing numpy import.
         print(f"  [warn] unreadable {npz}: {exc}", flush=True)
         return None
+
+
+def _pearson(a, b):
+    """Pearson r without scipy; None when either side is constant."""
+    a = np.asarray(a, float)
+    b = np.asarray(b, float)
+    if a.size < 3:
+        return None
+    sa, sb = a.std(), b.std()
+    if sa == 0.0 or sb == 0.0:
+        return None
+    return float(((a - a.mean()) * (b - b.mean())).mean() / (sa * sb))
+
+
+def _ks_uniform(u):
+    """KS distance of samples u from Uniform(0,1). 0 = calibrated."""
+    u = np.sort(np.asarray(u, float))
+    n = u.size
+    if n == 0:
+        return None
+    i = np.arange(1, n + 1)
+    return float(max(np.max(i / n - u), np.max(u - (i - 1) / n)))
+
+
+def scene_diagnostics(gt, gen, gt_scene, gen_scene):
+    """Per-scene decomposition, PIT calibration and the conditioning check.
+
+    Returns None when the dump carries no scene labels (older runs) or when no
+    scene id appears on both sides.
+
+    Identity worth checking against the pooled numbers:
+        within^2 + between^2 == Var(gen)   (up to unequal draws per scene)
+    so `between_norm` and `within_norm` decompose `sd_ratio`.
+    """
+    if gt_scene is None or gen_scene is None:
+        return None
+    if gt_scene.size != gt.size or gen_scene.size != gen.size:
+        return None
+
+    per = {}
+    for value, scene in zip(gen, gen_scene):
+        per.setdefault(scene, []).append(float(value))
+    truth = {s: float(v) for s, v in zip(gt_scene, gt)}
+    common = sorted(s for s in per if s in truth)
+    if not common:
+        return None
+
+    means = np.array([np.mean(per[s]) for s in common])
+    within_var = np.array([np.var(per[s]) for s in common])
+    truths = np.array([truth[s] for s in common])
+    draws = np.array([len(per[s]) for s in common])
+    sd = float(gt.std()) or 1.0
+
+    # PIT: where scene s's single truth falls inside scene s's own ensemble.
+    pit = np.array([float(np.mean(np.asarray(per[s]) < truth[s])) for s in common])
+
+    return {
+        "n_scenes": len(common),
+        "draws_per_scene": int(np.median(draws)),
+        "between_norm": float(means.std()) / sd,
+        "within_norm": float(np.sqrt(within_var.mean())) / sd,
+        "corr_mean_truth": _pearson(means, truths),
+        "pit_mean": float(pit.mean()),
+        "pit_ks": _ks_uniform(pit),
+        "pit_extremes": float(np.mean((pit <= 0.02) | (pit >= 0.98))),
+    }
 
 
 def collect_warpage(rows):
@@ -595,10 +679,10 @@ def collect_warpage(rows):
     for r in rows:
         w = {}
         for tag in INFER_TAGS:
-            got = load_spreads(HERE, r["arm"], tag)
+            got = load_spreads(HERE, r["arm"], tag, CFG_SUFFIX)
             if got is None:
                 continue
-            gt, gen = got
+            gt, gen, gt_scene, gen_scene = got
             if gt.size == 0 or gen.size == 0:
                 continue
             sd = float(gt.std()) or 1.0
@@ -612,8 +696,71 @@ def collect_warpage(rows):
                 "dmean_norm": (float(gen.mean()) - float(gt.mean())) / sd,
                 "std_ratio": float(gen.std()) / sd,
             }
+            # Optional, and the reason the labels are dumped: sd_ratio says the
+            # spread distribution is wrong, this says which half is wrong.
+            diag = scene_diagnostics(gt, gen, gt_scene, gen_scene)
+            if diag:
+                w[tag].update(diag)
         if w:
             r["warpage"] = w
+
+
+def render_scene_diagnostics(rows):
+    """Why the spread distribution is wrong, not just that it is.
+
+    Reads the per-scene decomposition attached by collect_warpage. Absent for
+    dumps written before rollout.py recorded scene labels -- re-run inference to
+    populate it.
+
+      between/sd  spread of the model's PER-SCENE MEAN, over GT's own std.
+                  Small = the conditional mean is shrunk toward the global mean.
+                  That is a REGRESSION failure: no prior/sampler change fixes it.
+      within/sd   root-mean per-scene ensemble variance, same units. Small = the
+                  ensemble is too tight, a sampler/objective failure.
+                  between^2 + within^2 decomposes sd_ratio^2.
+      corr        model per-scene mean vs that scene's truth. THE degeneracy
+                  check: near 0 means the model ignores the geometry and just
+                  replays the population marginal -- which scores WELL on W1/sd.
+      PIT mean    fraction of the ensemble below the truth, averaged. 0.5 ideal;
+                  <0.5 the model over-predicts, >0.5 under-predicts.
+      PIT KS      distance of the PIT sample from Uniform(0,1). 0 = calibrated.
+      PIT tails   share of scenes whose truth lands outside the middle 96% of
+                  its ensemble. 0.04 expected; much larger = ensembles too
+                  narrow, which is the direct signature of under-dispersion.
+    """
+    have = []
+    for r in rows:
+        for tag, st in (r.get("warpage") or {}).items():
+            if "between_norm" in st:
+                have.append((r["arm"], tag, st))
+    if not have:
+        return ("## Per-scene diagnostics\n\n"
+                "Not available: the spread dumps carry no scene labels. Re-run "
+                "inference (`TRAIN=0 INFER=1`) with the current rollout.py to "
+                "record them, then re-score.")
+
+    L = ["## Per-scene diagnostics: is the mean shrunk, or the ensemble narrow?",
+         "",
+         "| arm | eval set | scenes | between/sd | within/sd | corr | PIT mean | PIT KS | PIT tails |",
+         "|---|---|---|---|---|---|---|---|---|"]
+    for arm, tag, st in have:
+        c = st.get("corr_mean_truth")
+        L.append(
+            f"| {arm} | {tag} | {st['n_scenes']} | {st['between_norm']:.3f} | "
+            f"{st['within_norm']:.3f} | " + ("n/a" if c is None else f"{c:+.3f}") +
+            f" | {st['pit_mean']:.3f} | {st['pit_ks']:.3f} | {st['pit_extremes']:.3f} |")
+    L += ["", "**How to read it.** Ideal: between/sd and within/sd sum in "
+              "quadrature to 1, corr high and positive, PIT mean 0.5, PIT KS 0, "
+              "PIT tails 0.04.", "",
+          "- `between/sd` near 0 with a decent `corr` -> the model ranks scenes "
+          "correctly but compresses them. Regression shrinkage; train longer or "
+          "strengthen the geometry pathway.",
+          "- `corr` near 0 -> the model is not conditioning at all. A good W1/sd "
+          "here is the degenerate marginal-matching case and must be discarded.",
+          "- `PIT tails` >> 0.04 with `PIT KS` large -> ensembles too narrow. "
+          "This is the sampler/objective side.",
+          "- `PIT mean` far from 0.5 -> systematic bias, consistent with dmean/sd."]
+    return "\n".join(L)
 
 
 def render_warpage(rows):
@@ -675,23 +822,27 @@ def plot_warpage_overlay(rows, out_dir):
         arms = [r for r in have if tag in r["warpage"]]
         if not arms:
             continue
-        loaded = [(r["arm"], load_spreads(HERE, r["arm"], tag)) for r in arms]
-        loaded = [(a, g) for a, g in loaded if g is not None]
+        # load_spreads returns (gt, gen, gt_scene, gen_scene); only the first
+        # two are plotted. Slice positionally so appending further optional
+        # arrays cannot break this again.
+        loaded = [(r["arm"], load_spreads(HERE, r["arm"], tag, CFG_SUFFIX))
+                  for r in arms]
+        loaded = [(a, g[0], g[1]) for a, g in loaded if g is not None]
         if not loaded:
             continue
-        gt = loaded[0][1][0]
+        gt = loaded[0][1]
         ranked = sorted(
             loaded,
             key=lambda ag: next(r["warpage"][tag]["w1_norm"]
                                 for r in arms if r["arm"] == ag[0]))
-        lo = min([gt.min()] + [g.min() for _, (_, g) in ranked])
-        hi = max([gt.max()] + [g.max() for _, (_, g) in ranked])
+        lo = min([gt.min()] + [gen.min() for _, _, gen in ranked])
+        hi = max([gt.max()] + [gen.max() for _, _, gen in ranked])
         edges = np.linspace(lo, hi, 61)
         fig, ax = plt.subplots(figsize=(11, 6))
         ax.hist(gt, bins=edges, density=True, color="0.4", alpha=0.55,
                 label=f"GROUND TRUTH (n={gt.size:,})")
         cmap = plt.get_cmap("viridis")
-        for i, (arm, (_, gen)) in enumerate(ranked):
+        for i, (arm, _, gen) in enumerate(ranked):
             w1 = next(r["warpage"][tag]["w1_norm"] for r in arms if r["arm"] == arm)
             ax.hist(gen, bins=edges, density=True, histtype="step", linewidth=1.3,
                     color=cmap(i / max(len(ranked) - 1, 1)),
@@ -852,6 +1003,8 @@ def render_markdown(rows, args):
     L.append(render_interactions(rows))
     L.append("")
     L.append(render_warpage(rows))
+    L.append("")
+    L.append(render_scene_diagnostics(rows))
     L.append("")
     L.append("## Per-arm detail")
     for r in rows:

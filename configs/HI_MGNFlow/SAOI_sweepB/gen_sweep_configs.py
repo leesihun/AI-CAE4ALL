@@ -318,7 +318,7 @@ def _compare_twin(path_value: str) -> str:
     return '/'.join(p)
 
 
-def render_infer(src_lines, arm, tag, gpu):
+def render_infer(src_lines, arm, tag, gpu, det=False):
     """One inference config: same eval set, this arm's checkpoint.
 
     The architecture comes from the checkpoint's model_config, so the swept
@@ -327,6 +327,14 @@ def render_infer(src_lines, arm, tag, gpu):
     """
     over = {k: v for k, (v, _) in INFER_OVERRIDES.items()}
     notes = {k: n for k, (_, n) in INFER_OVERRIDES.items()}
+    if det:
+        # Deterministic control. flow_predict mean is the conditional mean in
+        # ONE forward -- exact, see flow.py::predict_mean -- so it removes the
+        # sampling variance without touching the trained weights.
+        over['flow_predict'] = 'mean'
+        notes['flow_predict'] = 'DETERMINISTIC CONTROL: E[y|g] in one forward'
+        over['num_vae_samples'] = '1'
+        notes['num_vae_samples'] = 'the mean readout forces a single draw anyway'
     seen, out = set(), []
     for line in src_lines:
         if line.startswith('%') or not line.strip():
@@ -349,11 +357,12 @@ def render_infer(src_lines, arm, tag, gpu):
             continue
         if key == 'log_file_dir':
             out.append(f"log_file_dir\t../../output/chi-mgnflow/saoi_sweepB/"
-                       f"{arm}.infer_{tag}.log")
+                       f"{arm}.infer_{tag}{'_det' if det else ''}.log")
             continue
         if key == 'inference_output_dir':
+            # det runs get their own subtree so the multi-draw dumps survive.
             out.append(f"inference_output_dir\t../../output/chi-mgnflow/saoi_sweepB/"
-                       f"infer/{arm}/{tag}")
+                       f"infer{'/det' if det else ''}/{arm}/{tag}")
             continue
         if key in ('dataset_dir', 'infer_dataset'):
             # Passed through from the production config -- it is the single
@@ -422,6 +431,13 @@ def main():
             (HERE / f'{INFER_PREFIX}{arm}_{tag}.txt').write_text(
                 INFER_HEADER.format(arm=arm, tag=tag, gpu=gpu)
                 + render_infer(infer_src[tag], arm, tag, gpu), encoding='utf-8', newline='\n')
+            # Deterministic control: one forward per scene instead of 2000
+            # draws, written to its own output subtree.
+            (HERE / f'{INFER_PREFIX}{arm}_{tag}_det.txt').write_text(
+                INFER_HEADER.format(arm=arm, tag=tag + ' (deterministic control)',
+                                    gpu=gpu)
+                + render_infer(infer_src[tag], arm, tag, gpu, det=True),
+                encoding='utf-8', newline='\n')
         print(f"  gpu {gpu}  {arm}  (+{len(INFER_SOURCES)} inference configs)")
 
     print(f"\n{len(table)} training + {len(table) * len(INFER_SOURCES)} inference "

@@ -87,6 +87,9 @@
 #   TRAIN         1 = train (default). 0 = SKIP training and go straight to
 #                 inference + scoring on checkpoints that already exist.
 #   STAGGER       seconds between arm launches (default: 10)
+#   DET           1 = run the deterministic-control inference configs
+#                 (one draw, no sampling noise) into output .../infer/det/;
+#                 default 0 = the multi-draw run
 #   INFER         1 = run each arm's inference configs after training (default)
 #   INFER_TAGS    eval sets to infer (default: s26fe_main s26fe_sec sm_l345u)
 #   SCORE         1 = run score_sweep.py when training ends (default); 0 = skip
@@ -133,11 +136,18 @@ LOG_ROOT="${LOG_ROOT:-output/meshgraphnets-v/saoi_sweep3/run_logs}"
 DEFAULT_ARMS="1 2 3 4 5 6 7 8"
 ARMS="${ARMS:-$DEFAULT_ARMS}"
 STAGGER="${STAGGER:-10}"   # seconds between arm launches
+# DET=1 runs the deterministic-control inference configs instead of the
+# multi-draw ones: one draw per scene with the sampling noise off, into a
+# separate det/ output subtree. It reads the SAME checkpoints, so it needs no
+# training, and it is what tells a shrunk conditional mean (a regression
+# failure) apart from an over-tight ensemble (a sampler failure).
+DET="${DET:-0}"
+if [ "$DET" = "1" ]; then CFG_SUFFIX="_det"; else CFG_SUFFIX=""; fi
 
 mkdir -p "$LOG_ROOT"
 
 cfg_for()  { echo "$CFG_DIR/config_train_${1}.txt"; }
-inf_cfg_for() { echo "$CFG_DIR/config_infer_${1}_${2}.txt"; }
+inf_cfg_for() { echo "$CFG_DIR/config_infer_${1}_${2}${CFG_SUFFIX}.txt"; }
 log_for()  { echo "$LOG_ROOT/${1}.log"; }
 
 run_arm() {
@@ -301,7 +311,7 @@ run_infer_arm() {
     local arm=$1 tag cfg log rc=0 irc
     for tag in $INFER_TAGS; do
         cfg="$(inf_cfg_for "$arm" "$tag")"
-        log="$LOG_ROOT/${arm}.infer_${tag}.log"
+        log="$LOG_ROOT/${arm}.infer_${tag}${CFG_SUFFIX}.log"
         if [ ! -f "$cfg" ]; then
             echo "[$arm/$tag] SKIP: no config ($cfg)" >&2
             continue
@@ -345,7 +355,7 @@ if [ "$INFER" = "1" ]; then
                     inf_bad=$((inf_bad + 1))
                     continue
                 fi
-                if "$PYTHON" AI_CAE4ALL_main.py --config "$icfg" --check > "$LOG_ROOT/${arm}.${tag}.check.log" 2>&1; then
+                if "$PYTHON" AI_CAE4ALL_main.py --config "$icfg" --check > "$LOG_ROOT/${arm}.${tag}${CFG_SUFFIX}.check.log" 2>&1; then
                     inf_ok=$((inf_ok + 1))
                 else
                     echo "  $arm/$tag  FAILED -- see $LOG_ROOT/${arm}.${tag}.check.log" >&2

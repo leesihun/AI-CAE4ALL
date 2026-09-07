@@ -250,7 +250,7 @@ def _compare_twin(path_value: str) -> str:
     return '/'.join(p)
 
 
-def render_infer(src_lines, arm, tag, gpu, values):
+def render_infer(src_lines, arm, tag, gpu, values, det=False):
     """One inference config: same eval set, this arm's checkpoint.
 
     `eval_dataset` is the `_compare_` half of the same held-out geometry, NOT
@@ -263,12 +263,29 @@ def render_infer(src_lines, arm, tag, gpu, values):
     model_config overrides them -- it keeps the file self-describing and stops
     the rollout log from printing a wall of "overridden by checkpoint" lines.
     prior_fm_solver is NOT in model_config, so its value here is the live one.
+
+    With ``det=True`` this is the deterministic control instead: one draw per
+    scene with the sampling noise removed, written to a separate ``det/``
+    output dir. It answers whether the per-scene conditional MEAN is already
+    shrunk (a regression failure that no prior change fixes) or whether the
+    stochastic path is washing it out.
     """
     out, skip_pct = [], False
     seen = set()
     over = {k: v for k, (v, _) in INFER_OVERRIDES.items()}
     notes = {k: n for k, (_, n) in INFER_OVERRIDES.items()}
     over.update(values)
+    if det:
+        # One draw, no sampling noise. use_vae cannot be used here: it lives in
+        # the checkpoint's model_config and overrides the config file, so a
+        # config-only flip is silently ignored. prior_temperature scales the FM
+        # prior's initial noise by sqrt(T), so T -> 0 integrates from the origin
+        # to a single deterministic z.
+        over['num_vae_samples'] = '1'
+        notes['num_vae_samples'] = 'DETERMINISTIC CONTROL: one draw per scene'
+        over['prior_temperature'] = '1e-9'
+        notes['prior_temperature'] = ('~0 kills the prior sampling noise; z is the '
+                                      'ODE image of the origin')
     for line in src_lines:
         if skip_pct and line.startswith('%'):
             continue
@@ -292,13 +309,14 @@ def render_infer(src_lines, arm, tag, gpu, values):
             continue
         if key == 'log_file_dir':
             out.append(f"log_file_dir\t../../output/meshgraphnets-v/saoi_sweep3/"
-                       f"{arm}.infer_{tag}.log")
+                       f"{arm}.infer_{tag}{'_det' if det else ''}.log")
             continue
         if key == 'modelpath':
             out.append(f"modelpath\t../../output/meshgraphnets-v/saoi_sweep3/{arm}.pth")
             continue
         if key == 'inference_output_dir':
-            out.append(f"inference_output_dir\t../../output/meshgraphnets-v/saoi_sweep3/infer/{arm}/{tag}")
+            # det runs get their own subtree so the 2000-draw dumps survive.
+            out.append(f"inference_output_dir\t../../output/meshgraphnets-v/saoi_sweep3/infer{'/det' if det else ''}/{arm}/{tag}")
             continue
         if key in ('dataset_dir', 'infer_dataset'):
             # Passed through from the production config -- it is the single
@@ -440,6 +458,16 @@ def main():
             (HERE / f'{INFER_PREFIX}{arm}_{tag}.txt').write_text(
                 INFER_HEADER.format(arm=arm, tag=tag, gpu=gpu)
                 + render_infer(src_lines, arm, tag, gpu, values),
+                encoding='utf-8', newline='\n')
+            n_inf += 1
+            # Deterministic control: one draw, no sampling noise, its own
+            # output subtree. Cheap enough for every arm (1 forward per scene
+            # vs 2000) and it is what separates a shrunk conditional mean from
+            # an over-tight ensemble.
+            (HERE / f'{INFER_PREFIX}{arm}_{tag}_det.txt').write_text(
+                INFER_HEADER.format(arm=arm, tag=tag + ' (deterministic control)',
+                                    gpu=gpu)
+                + render_infer(src_lines, arm, tag, gpu, values, det=True),
                 encoding='utf-8', newline='\n')
             n_inf += 1
         print(f"  gpu {gpu}  {arm}  (+{n_inf} inference configs)")
