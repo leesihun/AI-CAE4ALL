@@ -1,5 +1,30 @@
 # SAOI probabilistic warpage: MeshGraphNets-V vs cHI-MGNflow
 
+> ## Note on the eval design, 2026-09
+>
+> Each eval set is **one geometry with 125 realizations of it**:
+> `infer_dataset` holds that part, `test_<MODEL>_compare_<half>.h5` holds its
+> 125 outcomes. So `gt` IS the true conditional p(spread | geometry) and `gen`
+> is the model's conditional for the same part. The comparison is exact, `sd(gt)`
+> is real, and **`sd_ratio`'s target is 1** — every finding below stands as
+> written.
+>
+> Two things follow for the tooling:
+>
+> - The **between/within decomposition** added in this cycle does not apply
+>   here. With a single condition there is no between-scene term, which is why
+>   the per-scene table reads `scenes 1`. It becomes useful only on a
+>   multi-geometry eval set. Same for the deterministic control: one geometry
+>   gives one point.
+>
+> - The test this design *does* support is a **rank/PIT histogram of the 125
+>   realizations inside the model's own ensemble** (`## Rank calibration`).
+>   It needs no scene labels, so it runs on dumps already on disk. Validated on
+>   synthetic reproductions of this exact design: a calibrated ensemble reports
+>   PIT KS 0.12 / tails 0.016, one that is 2x too narrow reports tails 0.256
+>   against `sd_ratio` 0.574, and a biased one reports PIT mean 0.023. `sd_ratio`
+>   and `PIT tails` are independent views of the same defect and should agree.
+
 **Run 2026-09.** Two probabilistic upsampling models, one 8-arm fractional
 factorial each, trained on `dataset/SAOI/saoi_train_bot.h5` and scored on three
 held-out part families. This is the first head-to-head between the two.
@@ -38,7 +63,9 @@ spread's own standard deviation so the three families are comparable.
 | `dmean/sd` | (mean(gen) − mean(gt)) / sd(gt) — bias | **0** |
 | `sd_ratio` | sd(gen) / sd(gt) — dispersion | **1** |
 
-`sd_ratio < 1` means the generated ensemble is **too narrow**.
+`sd_ratio < 1` means the generated ensemble is **too narrow**. That reading
+is sound here: the 125 eval samples are realizations of the very geometry
+being predicted, so sd(gt) is the part's true process variation.
 
 ## Result
 
@@ -170,14 +197,12 @@ On this data the endpoints evidently matter more.
    group, so the capacity conclusion in particular could flip. Re-run:
    `ARMS="2" TRAIN=1 INFER=1 SCORE=0 bash configs/MeshGraphNets_Variational/SAOI_sweep3/run_sweep.sh`
 
-2. **No per-geometry conditioning check.** `spread_values.npz` stores flat `gt`
-   and `gen` arrays with **no scene labels**, so the generated side pools
-   between-geometry and within-geometry variation and cannot be separated. This
-   matters because `W1/sd` is a *marginal* statistic: a model that ignores the
-   input geometry entirely and samples the population marginal scores ≈ 0. What
-   is missing is (a) rank/PIT calibration per geometry and (b) correlation of
-   per-geometry generated mean against per-geometry truth. Fixing it means
-   dumping scene ids alongside `gen` — inference-only, no retraining.
+2. **Only one geometry per eval set.** `infer_dataset` holds a single part, so
+   the sweep measures each model's conditional for ONE geometry per family, not
+   across a population. The 2.2x ranking and the under-dispersion both hold for
+   those three parts; nothing here says how either model behaves on a fourth.
+   Widening the infer sets is what would let the between/within decomposition
+   and `corr` say anything.
 
 3. **1000 epochs is a budget, not convergence.** Both sweeps anneal a single
    cosine to `eta_min` over the run, so each arm is a finished run at *this*
@@ -210,3 +235,18 @@ the goal is distribution matching and everything is under-dispersed,
 3. **Attack the 2× under-dispersion** — the real blocker. Gap 2 above has to
    land first: it separates "not enough between-geometry variation" from "not
    enough within-geometry noise", and those have different fixes.
+
+## Tooling note
+
+The per-scene decomposition and the deterministic-control configs added in this
+cycle were built on a wrong reading of the data — that each eval set held many
+geometries. It holds one, with 125 realizations, so:
+
+- `scenes 1` in the per-scene table is the data being reported faithfully. That
+  table now says "not applicable" rather than printing degenerate rows.
+- `## Rank calibration` is the test that fits: the 125 realizations ranked
+  inside the 2000-draw ensemble. No scene labels needed, so it can be run on
+  every dump already written.
+
+With one condition there is nothing to decompose: `sd_ratio` alone already says
+whether the ensemble is the right width, and Finding 2 is the answer.

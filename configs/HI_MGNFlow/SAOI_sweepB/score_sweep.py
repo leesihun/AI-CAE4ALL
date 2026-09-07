@@ -299,6 +299,37 @@ def _ks_uniform(u):
     return float(max(np.max(i / n - u), np.max(u - (i - 1) / n)))
 
 
+
+def pooled_pit(gt, gen):
+    """Rank of each ground-truth realization inside the pooled ensemble.
+
+    Valid when the eval set is ONE geometry and `gt` holds its realizations:
+    both sides are then draws from the same conditional, so the ranks of the
+    truths inside the model's ensemble should be uniform.
+
+      pit_mean   0.5 ideal; away from it the model is biased
+      pit_ks     KS distance from Uniform(0,1); 0 = calibrated
+      pit_tails  share of truths outside the middle 96% of the ensemble.
+                 0.04 expected. Much larger = ensemble too narrow, which is the
+                 direct signature of under-dispersion and the reason sd_ratio
+                 and this agree or disagree.
+
+    Keys are prefixed `cal_`, not `pit_`: scene_diagnostics emits its own
+    per-scene `pit_*` and runs afterwards, so sharing the names let it
+    silently overwrite these with a one-scene PIT.
+    """
+    if gt.size < 8 or gen.size < 8:
+        return None
+    order = np.sort(np.asarray(gen, float))
+    # fraction of the ensemble strictly below each truth
+    pit = np.searchsorted(order, np.asarray(gt, float), side="left") / order.size
+    return {
+        "cal_n": int(gt.size),
+        "cal_mean": float(pit.mean()),
+        "cal_ks": _ks_uniform(pit),
+        "cal_tails": float(np.mean((pit <= 0.02) | (pit >= 0.98))),
+    }
+
 def scene_diagnostics(gt, gen, gt_scene, gen_scene):
     """Per-scene decomposition, PIT calibration and the conditioning check.
 
@@ -377,14 +408,52 @@ def collect_warpage(rows):
                 "dmean_norm": (float(gen.mean()) - float(gt.mean())) / sd,
                 "std_ratio": float(gen.std()) / sd,
             }
-            # Optional, and the reason the labels are dumped: sd_ratio says the
-            # spread distribution is wrong, this says which half is wrong.
+            # Rank calibration of the truths inside the ensemble. Needs no
+            # scene labels, and is the test this eval design supports: one
+            # geometry per set, its realizations as ground truth.
+            cal = pooled_pit(gt, gen)
+            if cal:
+                w[tag].update(cal)
+            # Between/within split. Degenerate on a single-geometry eval
+            # set (n_scenes 1) -- kept for multi-geometry sets.
             diag = scene_diagnostics(gt, gen, gt_scene, gen_scene)
             if diag:
                 w[tag].update(diag)
         if w:
             r["warpage"] = w
 
+
+
+def render_calibration(rows):
+    """Rank calibration of the truths inside the model's own ensemble.
+
+    This is the test the SAOI eval design supports: one geometry per eval set,
+    its realizations as ground truth, the model's draws as the ensemble. Needs
+    no scene labels, so it works on every dump ever written.
+    """
+    have = []
+    for r in rows:
+        for tag, st in (r.get("warpage") or {}).items():
+            if "cal_ks" in st:
+                have.append((r["arm"], tag, st))
+    if not have:
+        return ("## Rank calibration\n\n"
+                "No spread dumps with at least 8 ground-truth realizations.")
+    L = ["## Rank calibration: do the truths land uniformly inside the ensemble?",
+         "",
+         "| arm | eval set | truths | PIT mean | PIT KS | PIT tails | sd ratio |",
+         "|---|---|---|---|---|---|---|"]
+    for arm, tag, st in have:
+        L.append(f"| {arm} | {tag} | {st['cal_n']} | {st['cal_mean']:.3f} | "
+                 f"{st['cal_ks']:.3f} | {st['cal_tails']:.3f} | "
+                 f"{st['std_ratio']:.3f} |")
+    L += ["", "Ideal: PIT mean 0.5, PIT KS 0, PIT tails 0.04, sd ratio 1.", "",
+          "- `PIT tails` >> 0.04 together with `sd ratio` < 1 -> the ensemble is "
+          "too narrow: the realizations keep falling outside it. Two independent "
+          "views of the same defect, so they should agree.",
+          "- `PIT mean` far from 0.5 -> systematic bias, matching `dmean/sd`.",
+          "- `PIT KS` small with `sd ratio` near 1 -> calibrated for this geometry."]
+    return "\n".join(L)
 
 def render_scene_diagnostics(rows):
     """Why the spread distribution is wrong, not just that it is.
@@ -421,6 +490,15 @@ def render_scene_diagnostics(rows):
                 "record them, then re-score.")
 
     bad_gt = [(a, t, st) for a, t, st in have if st.get("gt_degenerate")]
+    if have and all(st["n_scenes"] < 3 for _, _, st in have):
+        return ("## Per-scene diagnostics" + chr(10) + chr(10) +
+                "Not applicable: every eval set here is a SINGLE geometry "
+                "(scenes=1), so there is no between-scene term to separate "
+                "from the within-scene one and `corr` has too few points. "
+                "Read `## Rank calibration` instead -- with one condition, "
+                "`sd ratio` and the PIT columns already say whether the "
+                "ensemble is the right width. This table becomes useful on a "
+                "multi-geometry eval set.")
     L = ["## Per-scene diagnostics: is the mean shrunk, or the ensemble narrow?",
          "",
          "| arm | eval set | scenes | between/sd | within/sd | corr | PIT mean | PIT KS | PIT tails |",
@@ -740,6 +818,8 @@ def render_markdown(rows):
     L.append(render_interactions(rows))
     L.append("")
     L.append(render_warpage(rows))
+    L.append("")
+    L.append(render_calibration(rows))
     L.append("")
     L.append(render_scene_diagnostics(rows))
     L.append("")
