@@ -80,7 +80,10 @@
 #   PYTHON        interpreter (default: python)
 #   LOG_ROOT      transcript directory (default: output/meshgraphnets-v/saoi_sweep3/run_logs)
 #   ARMS          space-separated arm names (default: all 8)
-#   PREFLIGHT     1 = --check every arm before launching any (default); 0 = skip
+#   PREFLIGHT     1 = --check every arm before launching any (default); 0 = skip.
+#                 A failing arm is DROPPED; the rest still run.
+#   STRICT_PREFLIGHT 1 = abort the batch if anything fails preflight
+#                 (default 0 = drop the failures, run the remainder)
 #   TRAIN         1 = train (default). 0 = SKIP training and go straight to
 #                 inference + scoring on checkpoints that already exist.
 #   STAGGER       seconds between arm launches (default: 10)
@@ -166,43 +169,61 @@ echo "  ARMS      = $(echo "$ARMS" | wc -w) arms"
 echo ""
 
 # ---- Preflight every arm before committing GPU-days ------------------------
+# A failing arm is DROPPED, not fatal. One arm's bad config or dead card says
+# nothing about the other seven, and losing a whole night to it is the worse
+# outcome. Everything dropped lands in SKIPPED and is reprinted at the end, so a
+# shortened sweep cannot be mistaken for a complete one.
+# STRICT_PREFLIGHT=1 restores abort-on-any-failure.
+SKIPPED=""
 if [ "$PREFLIGHT" = "1" ]; then
     echo "Preflight (--check) on every arm..."
-    pf_bad=0
+    ok_arms=""
     for arm in $ARMS; do
         cfg="$(cfg_for "$arm")"
         if [ ! -f "$cfg" ]; then
-            echo "  $arm  MISSING CONFIG ($cfg)" >&2; pf_bad=1; continue
+            echo "  $arm  MISSING CONFIG ($cfg)" >&2
+            SKIPPED="$SKIPPED@  $arm (train)  no config: $cfg"
+            continue
         fi
         if "$PYTHON" AI_CAE4ALL_main.py --config "$cfg" --check > "$LOG_ROOT/${arm}.check.log" 2>&1; then
             echo "  $arm  ok"
+            ok_arms="$ok_arms $arm"
         else
-            echo "  $arm  FAILED -- see $LOG_ROOT/${arm}.check.log" >&2; pf_bad=1
+            echo "  $arm  FAILED -- see $LOG_ROOT/${arm}.check.log" >&2
+            SKIPPED="$SKIPPED@  $arm (train)  preflight failed: $LOG_ROOT/${arm}.check.log"
         fi
     done
 
     # Valid train configs say NOTHING about whether the histogram will have
     # ground truth. rollout.py skips it silently when `eval_dataset` is absent,
     # and draws against the wrong column when it points at the rollout's own
-    # input instead of the `_compare_` file. Both have happened, neither raises,
-    # and the sweep still reports a clean run. Catch it here -- before the
-    # GPU-days, not on Monday morning.
+    # input instead of the `_compare_` file. Reported here but NOT fatal: it
+    # costs the histogram, not the training.
     echo ""
     echo "Preflight (inference + histogram inputs)..."
     if ! "$PYTHON" "$CFG_DIR/check_eval_inputs.py"; then
-        pf_bad=1
+        echo "  ^ the warpage histogram will be wrong or missing. Training is" >&2
+        echo "    unaffected and continues." >&2
+        SKIPPED="$SKIPPED@  (histogram)  eval inputs failed check_eval_inputs.py"
     fi
 
-    if [ "$pf_bad" != "0" ]; then
+    ARMS="$(echo $ok_arms)"
+    if [ -z "$ARMS" ]; then
         echo "" >&2
-        echo "Preflight failed. Nothing launched. Fix the configs and re-run," >&2
-        echo "or set PREFLIGHT=0 to launch anyway." >&2
-        echo "If every arm reports MISSING CONFIG, the generated configs are" >&2
-        echo "stale or absent -- regenerate them first:" >&2
-        echo "  python configs/MeshGraphNets_Variational/SAOI_sweep3/gen_sweep_configs.py" >&2
+        echo "Every arm failed preflight -- nothing left to run." >&2
+        echo "If they all report MISSING CONFIG the generated configs are stale" >&2
+        echo "or absent; regenerate them first:" >&2
+        echo "  python $CFG_DIR/gen_sweep_configs.py" >&2
         exit 2
     fi
-    echo "All arms validated."
+    if [ -n "$SKIPPED" ] && [ "${STRICT_PREFLIGHT:-0}" = "1" ]; then
+        echo "" >&2
+        echo "STRICT_PREFLIGHT=1 and something failed -- nothing launched." >&2
+        echo "Skipped:" >&2
+        echo "$SKIPPED" | tr '@' '\n' >&2
+        exit 2
+    fi
+    echo "$(echo "$ARMS" | wc -w) arm(s) validated: $ARMS"
     echo ""
 fi
 
@@ -278,6 +299,11 @@ run_infer_arm() {
             echo "[$arm/$tag] SKIP: no config ($cfg)" >&2
             continue
         fi
+        # Dropped by the inference preflight -- launching it would only
+        # reproduce the same error after paying for the process start.
+        case " $INFER_SKIP " in
+            *" $arm/$tag "*) echo "[$arm/$tag] SKIP: failed preflight" >&2; continue ;;
+        esac
         "$PYTHON" AI_CAE4ALL_main.py --config "$cfg" > "$log" 2>&1
         irc=$?
         if [ "$irc" -ne 0 ]; then
@@ -293,35 +319,46 @@ if [ "$INFER" = "1" ]; then
     # the inference configs can be validated in full. Without it a bad infer
     # config is discovered after training has already been thrown away for the
     # night, with nobody watching.
+    # Same rule as the training preflight: a failing (arm, tag) is dropped, not
+    # fatal. An arm whose training died has no checkpoint, so it ALWAYS fails
+    # here -- aborting on that would let one dead card cost the entire inference
+    # phase for the seven arms that trained fine.
+    INFER_SKIP=""
     if [ "$PREFLIGHT" = "1" ]; then
         echo "Preflight (--check) on every inference config..."
+        inf_ok=0
         inf_bad=0
         for arm in $ARMS; do
             for tag in $INFER_TAGS; do
                 icfg="$(inf_cfg_for "$arm" "$tag")"
                 if [ ! -f "$icfg" ]; then
-                    echo "  $arm/$tag  MISSING CONFIG ($icfg)" >&2; inf_bad=1; continue
+                    echo "  $arm/$tag  MISSING CONFIG ($icfg)" >&2
+                    INFER_SKIP="$INFER_SKIP $arm/$tag"
+                    SKIPPED="$SKIPPED@  $arm/$tag (infer)  no config"
+                    inf_bad=$((inf_bad + 1))
+                    continue
                 fi
-                if ! "$PYTHON" AI_CAE4ALL_main.py --config "$icfg" --check                         > "$LOG_ROOT/${arm}.${tag}.check.log" 2>&1; then
+                if "$PYTHON" AI_CAE4ALL_main.py --config "$icfg" --check > "$LOG_ROOT/${arm}.${tag}.check.log" 2>&1; then
+                    inf_ok=$((inf_ok + 1))
+                else
                     echo "  $arm/$tag  FAILED -- see $LOG_ROOT/${arm}.${tag}.check.log" >&2
-                    inf_bad=1
+                    INFER_SKIP="$INFER_SKIP $arm/$tag"
+                    SKIPPED="$SKIPPED@  $arm/$tag (infer)  preflight failed: $LOG_ROOT/${arm}.${tag}.check.log"
+                    inf_bad=$((inf_bad + 1))
                 fi
             done
         done
-        if [ "$inf_bad" != "0" ]; then
-            echo "" >&2
-            echo "Inference preflight failed. No inference launched; the trained" >&2
-            echo "checkpoints are untouched. Fix the configs and re-run with" >&2
-            echo "  TRAIN=0 INFER=1 SCORE=1 bash $0" >&2
-            exit 2
+        echo "  $inf_ok runnable, $inf_bad skipped."
+        if [ "$inf_ok" = "0" ]; then
+            echo "  Nothing to infer -- every config failed. Checkpoints untouched." >&2
         fi
-        echo "All inference configs validated."
         echo ""
     fi
 
     n_tags=$(echo "$INFER_TAGS" | wc -w)
     n_arms=$(echo "$ARMS" | wc -w)
-    echo "Inference: $n_arms arms x $n_tags eval sets = $(( n_arms * n_tags )) runs."
+    n_skip=$(echo "$INFER_SKIP" | wc -w)
+    echo "Inference: $n_arms arms x $n_tags eval sets = $(( n_arms * n_tags - n_skip )) runs ($n_skip skipped)."
     inf_started=$(date +%s)
     inf_pids=(); inf_names=()
     for arm in $ARMS; do
@@ -377,6 +414,15 @@ if [ "$SCORE" = "1" ]; then
 else
     echo "SCORE=0 -- skipped. Run it later with:"
     echo "  $PYTHON $CFG_DIR/score_sweep.py --split $SCORE_SPLIT --k $SCORE_K --run-logs $LOG_ROOT"
+fi
+
+echo ""
+if [ -n "$SKIPPED" ]; then
+    echo ""
+    echo "SKIPPED -- THIS SWEEP IS INCOMPLETE. These were dropped, not run:"
+    echo "$SKIPPED" | tr '@' '\n'
+    echo ""
+    echo "Re-run just those once fixed, e.g.:  ARMS=\"3 7\" bash $0"
 fi
 
 echo ""
