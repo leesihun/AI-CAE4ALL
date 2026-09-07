@@ -657,12 +657,18 @@ def scene_diagnostics(gt, gen, gt_scene, gen_scene):
     within_var = np.array([np.var(per[s]) for s in common])
     truths = np.array([truth[s] for s in common])
     draws = np.array([len(per[s]) for s in common])
-    sd = float(gt.std()) or 1.0
+    # Same trap as collect_warpage: a 1-sample ground truth has no std, and
+    # substituting 1.0 would report raw units under a "/sd" header.
+    gt_sd = float(gt.std())
+    degenerate = gt.size < 2 or gt_sd == 0.0
+    sd = gt_sd if not degenerate else 1.0
 
     # PIT: where scene s's single truth falls inside scene s's own ensemble.
     pit = np.array([float(np.mean(np.asarray(per[s]) < truth[s])) for s in common])
 
     return {
+        "gt_degenerate": degenerate,
+        "n_gt": int(gt.size),
         "n_scenes": len(common),
         "draws_per_scene": int(np.median(draws)),
         "between_norm": float(means.std()) / sd,
@@ -685,8 +691,14 @@ def collect_warpage(rows):
             gt, gen, gt_scene, gen_scene = got
             if gt.size == 0 or gen.size == 0:
                 continue
-            sd = float(gt.std()) or 1.0
+            # A ground truth of one sample has no std to normalize by, and
+            # `or 1.0` would silently turn every "/sd" column into raw units
+            # while still looking plausible. Mark it instead.
+            gt_sd = float(gt.std())
+            degenerate = gt.size < 2 or gt_sd == 0.0
+            sd = gt_sd if not degenerate else 1.0
             w[tag] = {
+                "gt_degenerate": degenerate,
                 "gt_mean": float(gt.mean()), "gt_std": float(gt.std()),
                 "gen_mean": float(gen.mean()), "gen_std": float(gen.std()),
                 "n_gt": int(gt.size), "n_gen": int(gen.size),
@@ -739,6 +751,7 @@ def render_scene_diagnostics(rows):
                 "inference (`TRAIN=0 INFER=1`) with the current rollout.py to "
                 "record them, then re-score.")
 
+    bad_gt = [(a, t, st) for a, t, st in have if st.get("gt_degenerate")]
     L = ["## Per-scene diagnostics: is the mean shrunk, or the ensemble narrow?",
          "",
          "| arm | eval set | scenes | between/sd | within/sd | corr | PIT mean | PIT KS | PIT tails |",
@@ -768,6 +781,17 @@ def render_scene_diagnostics(rows):
           "- `PIT tails` >> 0.04 with `PIT KS` large -> ensembles too narrow. "
           "This is the sampler/objective side.",
           "- `PIT mean` far from 0.5 -> systematic bias, consistent with dmean/sd."]
+    if bad_gt:
+        L += ["",
+              "> **INVALID: the ground truth carries fewer than 2 samples for "
+              + ", ".join(f"arm {a}/{t} (n_gt={st.get('n_gt', '?')})"
+                          for a, t, st in bad_gt) + ".**",
+              ">",
+              "> There is no ground-truth std to normalize by, so every `/sd` "
+              "column above is in RAW UNITS and `sd_ratio` is not a ratio. The "
+              "eval_dataset almost certainly points at a file with one sample; "
+              "check it with `check_eval_inputs.py --inspect` before reading "
+              "any number in this report."]
     if single:
         L += ["", "`-` in the PIT columns marks a run with ONE draw per scene "
                   "(the deterministic control). PIT needs an ensemble; "
@@ -801,6 +825,9 @@ def render_warpage(rows):
                               for t in INFER_TAGS)
     L.append(hdr)
     L.append("|" + "---|" * (1 + 3 * len(INFER_TAGS)))
+    bad_gt = sorted({(r["arm"], t) for r in have
+                     for t, st in r["warpage"].items()
+                     if st.get("gt_degenerate")})
     def key(r):
         v = [d["w1_norm"] for d in r["warpage"].values()]
         return sum(v) / len(v)
