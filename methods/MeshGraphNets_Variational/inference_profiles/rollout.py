@@ -666,6 +666,14 @@ def run_rollout(config, config_filename='config.txt'):
     eval_dataset = config.get('eval_dataset')
     make_histogram = bool(config.get('make_histogram', use_vae and eval_dataset is not None))
     histogram_bins = int(config.get('histogram_bins', 60))
+    # Latent inflation factors for the FM prior (see ConditionalFMPrior.sample_n).
+    # A single value applies to every draw; a list is cycled batch by batch so
+    # ONE inference pass yields the whole lam-vs-spread curve, each generated
+    # spread tagged with the lam that produced it (spread_values.npz: gen_lam).
+    _infl = config.get('latent_inflation', 1.0)
+    latent_inflation = [float(v) for v in (_infl if isinstance(_infl, (list, tuple)) else [_infl])]
+    if any(v <= 0 for v in latent_inflation):
+        raise ValueError(f'latent_inflation must be positive, got {latent_inflation}')
     histogram_clip_quantile = float(config.get('histogram_clip_quantile', 0.0))
     show_histogram = bool(config.get('show_histogram', True))
     z_gen_idx = Z_DISP_CHANNEL - 3  # z_disp is the 3rd output channel (index 2)
@@ -674,6 +682,7 @@ def run_rollout(config, config_filename='config.txt'):
     # the scorer split within-scene ensemble width from between-scene
     # variation of the conditional mean; pooled, the two are inseparable.
     generated_scene_ids = []
+    generated_lams = []       # the inflation factor each draw was produced with
 
     print(f"\nLoading initial conditions...")
     print(f"  Dataset: {dataset_dir}")
@@ -747,6 +756,9 @@ def run_rollout(config, config_filename='config.txt'):
             # partition cannot poison every z-sample of this scene at once.
             ctx.use_hierarchy(batch_index['n'])
             batch_index['n'] += 1
+            # Cycle the inflation list across batches; every draw in this
+            # batch is tagged with it in _save_batch.
+            batch_index['lam'] = latent_inflation[(batch_index['n'] - 1) % len(latent_inflation)]
             B = min(requested_batch_size, num_vae_samples - batch_start)
             states = [initial_state.copy() for _ in range(B)]
             all_states = np.zeros((B, steps + 1, num_nodes, output_dim), dtype=np.float32)
@@ -767,6 +779,7 @@ def run_rollout(config, config_filename='config.txt'):
                                 prior_batch = Batch.from_data_list(graphs)
                                 z_batch = conditional_prior.sample(
                                     prior_batch, temperature=prior_temperature,
+                                    inflation=batch_index['lam'],
                                 ).to(device)
                             else:
                                 # Independent noise PER z-slot, matching how
@@ -801,6 +814,7 @@ def run_rollout(config, config_filename='config.txt'):
                         _spread_max_minus_min(all_states[b, -1, :, z_gen_idx])
                     )
                     generated_scene_ids.append(str(sample_id))
+                    generated_lams.append(float(batch_index['lam']))
 
                 if not save_rollouts:
                     continue
@@ -935,6 +949,13 @@ def run_rollout(config, config_filename='config.txt'):
                 for tag, col in (("GT", gt), ("GEN", gen)):
                     print(f"  [SPREAD] {tag} mean={col.mean():.6e} std={col.std():.6e} "
                           f"min={col.min():.6e} max={col.max():.6e} n={col.size}")
+                lams = np.asarray(generated_lams, dtype=np.float64)
+                if lams.size == gen.size and np.unique(lams).size > 1:
+                    gsd = float(gt.std()) or 1.0
+                    for lam in np.unique(lams):
+                        col = gen[lams == lam]
+                        print(f"  [SPREAD] GEN lam={lam:g} mean={col.mean():.6e} "
+                              f"std={col.std():.6e} sd_ratio={col.std() / gsd:.3f} n={col.size}")
                 # Raw values too: with save_rollouts False this is the ONLY
                 # surviving record, and it lets a report overlay every arm on one
                 # axis instead of leaving 16 separate PNGs to eyeball.
@@ -945,7 +966,8 @@ def run_rollout(config, config_filename='config.txt'):
                 np.savez_compressed(
                     npz_path, gt=gt, gen=gen,
                     gt_scene=np.asarray([str(s) for s in gt_scene]),
-                    gen_scene=np.asarray([str(s) for s in generated_scene_ids]))
+                    gen_scene=np.asarray([str(s) for s in generated_scene_ids]),
+                    gen_lam=np.asarray(generated_lams, dtype=np.float64))
                 print(f"  [SPREAD] values -> {npz_path}")
                 hist_path = os.path.join(output_dir, 'histogram_compare.png')
                 _plot_spread_histogram(

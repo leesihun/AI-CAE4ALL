@@ -87,6 +87,9 @@
 #   TRAIN         1 = train (default). 0 = SKIP training and go straight to
 #                 inference + scoring on checkpoints that already exist.
 #   STAGGER       seconds between arm launches (default: 10)
+#   INFL          1 = run the latent-inflation sweep configs (MGN-V only):
+#                 one pass per arm over lam in {1,1.5,2,2.5,3}, output under
+#                 infer/infl/, and the lam ranking printed at the end.
 #   DET           1 = run the deterministic-control inference configs
 #                 (one draw, no sampling noise) into output .../infer/det/;
 #                 default 0 = the multi-draw run
@@ -148,9 +151,19 @@ STAGGER="${STAGGER:-10}"   # seconds between arm launches
 # training, and it is what tells a shrunk conditional mean (a regression
 # failure) apart from an over-tight ensemble (a sampler failure).
 DET="${DET:-0}"
+# INFL=1 runs the latent-inflation sweep configs instead: one pass per arm
+# cycling lam in {1,1.5,2,2.5,3} across draw batches, dumps tagged by lam,
+# into infer/infl/. The SCORE stage then ranks the lam values in place with
+# configs/campaigns/rank_arms.py -- score_sweep.py is not used there because
+# its report is keyed by arm and would collapse an arm's five lam variants
+# into a single row.
+INFL="${INFL:-0}"
 if [ "$DET" = "1" ]; then
     CFG_SUFFIX="_det"
     DET_FLAG="--det"
+elif [ "$INFL" = "1" ]; then
+    CFG_SUFFIX="_infl"
+    DET_FLAG=""
 else
     CFG_SUFFIX=""
     DET_FLAG=""
@@ -419,7 +432,20 @@ fi
 # cannot overwrite the multi-draw report with one-draw numbers.
 if [ "$DET" = "1" ]; then SCORE_OUT="output/meshgraphnets-v/saoi_sweep3/det"; else SCORE_OUT="output/meshgraphnets-v/saoi_sweep3"; fi
 REPORT="$SCORE_OUT/sweep_results.md"
-if [ "$SCORE" = "1" ]; then
+if [ "$SCORE" = "1" ] && [ "$INFL" = "1" ]; then
+    # Inflation run: rank the lam values, in place.
+    INFL_DIR="output/meshgraphnets-v/saoi_sweep3/infer/infl"
+    echo "================= INFLATION RANKING ================="
+    "$PYTHON" configs/campaigns/rank_arms.py "$INFL_DIR" 2>&1 | tee "$LOG_ROOT/rank_arms_infl.log"
+    echo "===================================================="
+    echo ""
+    echo "Pick the lam whose sd_ratio is nearest 1 on s26fe_main, then read that"
+    echo "same lam on the other two eval sets in the per-set table above."
+    echo "Near 1 on all three = shape was right, only the scale was off: calibrated."
+    echo ""
+    echo "Saved   : $LOG_ROOT/rank_arms_infl.log"
+    echo "Dumps   : $INFL_DIR/<arm>/<eval set>/spread_values.npz"
+elif [ "$SCORE" = "1" ]; then
     # SCORE_SAMPLERS empty (the default) skips eval_distribution.py
     # entirely: it is a serial, per-arm, per-sampler GPU job with an
     # hour-long timeout per rung of a five-step OOM ladder, so eight

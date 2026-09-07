@@ -1,0 +1,9 @@
+{
+  "base_profile_c": null,
+  "delta_c": null,
+  "minimum_setpoint_c": null,
+  "maximum_setpoint_c": null,
+  "reference_minutes": null,
+  "seed": 20260907,
+  "train_repeats_per_family": 2
+}

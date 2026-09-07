@@ -160,6 +160,7 @@ same mesh topology. For this objective, keep `lambda_mmd` low (≈ 0.1) and
 | `prior_cov_rank` | prior (gmm) | Low-rank covariance rank per component. Default `0` (diagonal). |
 | `prior_kl_reg_weight` | training (gmm) | Small analytical-KL stability anchor. Default `0.02`. Ignored for `fm` (no collapse mode to anchor). |
 | `prior_temperature` | inference | `gmm`: divides mixture logits and scales sampled std by `sqrt(temperature)`. `fm`: scales the initial noise std by `sqrt(temperature)`. |
+| `latent_inflation` | inference | `fm` only. After the prior ODE, `z <- c + lam*(z-c)` with `c` the ODE image of the origin, so the latent cloud is `lam` times wider around the same center. Scalar, or a comma list cycled per draw batch so one pass yields the lam-vs-spread curve (each draw tagged in `spread_values.npz: gen_lam`). Default 1.0 = identity. Unlike `prior_temperature` this stays on the trained trajectories. |
 
 Removed legacy keys: `alpha_prior_max`, `alpha_prior_warmup_frac`,
 `prior_loss_type`, `prior_gumbel_temp` (deleted with the FM prior introduction);
@@ -232,6 +233,7 @@ spread modeling the historical starting point is `lambda_mmd 0.1`,
 | `infer_timesteps` | inference | Rollout steps per selected scene. |
 | `num_vae_samples` | inference | Number of stochastic samples per scene when VAE is enabled. |
 | `prior_temperature` | inference | Conditional-prior sampling spread control. |
+| `latent_inflation` | inference | Post-ODE widening of the FM prior's `z` around its center; scalar or cycled list. |
 | `eval_dataset` | inference | Ground-truth eval HDF5 used for the inline z_disp spread-histogram comparison. When set (and VAE enabled), rollout writes `histogram_compare.png` next to the `.h5` outputs. No GT path → comparison skipped. |
 | `make_histogram` | inference | Force the spread histogram on/off. Defaults to `True` when `use_vae` and `eval_dataset` are both set. Alongside the PNG it prints machine-readable `[SPREAD] GT/GEN mean= std= min= max= n=` lines and writes `spread_values.npz` (the raw `gt`/`gen` arrays) into `inference_output_dir` — with `save_rollouts False` that npz is the only surviving record. |
 | `show_histogram` | inference | Open the saved `histogram_compare.png` in the OS default viewer after rollout. Default `True`; best-effort (silently degrades on a headless box). |

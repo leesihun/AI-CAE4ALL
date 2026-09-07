@@ -63,6 +63,8 @@ REMOVED_LATENT_KEYS = frozenset(
         "prior_type", "use_conditional_prior", "prior_family", "prior_nll_weight",
         "prior_fm_steps", "prior_fm_solver", "prior_mp_layers", "prior_hidden_dim",
         "prior_temperature", "prior_kl_reg_weight", "prior_cov_rank",
+        # Inference-only latent inflation for the FM prior; flow has no latent.
+        "latent_inflation",
         "prior_min_std", "prior_mixture_components", "prior_grad_to_encoder",
         "vae_valid_prior_samples",
         "gamma_es", "es_samples", "es_steps", "es_noise_source", "es_start_epoch",

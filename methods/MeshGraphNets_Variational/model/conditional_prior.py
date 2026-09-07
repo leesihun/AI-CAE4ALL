@@ -115,7 +115,10 @@ class ConditionalMixturePrior(_ConditionalPriorBase):
         return out
 
     @torch.no_grad()
-    def sample(self, graph, temperature=1.0):
+    def sample(self, graph, temperature=1.0, inflation=1.0):
+        # `inflation` is accepted for interface parity with the FM prior and
+        # ignored: for a mixture, `temperature` already scales the component
+        # stds directly, which is the same knob done properly.
         params = self.forward(graph)
         return sample_from_mixture(params, temperature=temperature)
 
@@ -222,9 +225,10 @@ class ConditionalFMPrior(_ConditionalPriorBase):
         return z
 
     @torch.no_grad()
-    def sample(self, graph, temperature=1.0):
-        """Sample z of shape [B, num_z, D] — same interface as the mixture."""
-        return self.sample_n(graph, 1, temperature=temperature)[:, 0]
+    def sample(self, graph, temperature=1.0, inflation=1.0):
+        """One z per graph: [B, num_z, D]. See sample_n for `inflation`."""
+        return self.sample_n(graph, 1, temperature=temperature,
+                             inflation=inflation)[:, 0]
 
     @torch.no_grad()
     def sample_n_from_pooled(self, cond, n, steps=None):
@@ -242,20 +246,38 @@ class ConditionalFMPrior(_ConditionalPriorBase):
         return z.view(cond.shape[0], n, self.num_z, self.z_dim).to(cond.dtype)
 
     @torch.no_grad()
-    def sample_n(self, graph, n, temperature=1.0):
-        """Draw n z samples per graph via Euler ODE integration: [B, n, num_z, D].
+    def sample_n(self, graph, n, temperature=1.0, inflation=1.0):
+        """Draw n z samples per graph via ODE integration: [B, n, num_z, D].
 
         The trunk runs once per graph; only the (tiny) velocity net is called
         per step. Temperature scales the initial noise std by sqrt(temperature)
-        — the nearest analog of mixture covariance scaling.
+        — the nearest analog of mixture covariance scaling. Note that it is NOT
+        a clean width knob: the velocity field is only trained along the
+        trajectories N(0,I) produces, so a wider start leaves them.
+
+        `inflation` is the clean width knob. After integration every sample is
+        pulled away from the per-graph center by that factor,
+
+            z <- c + inflation * (z - c),    c = the ODE image of z0 = 0,
+
+        so the decoder sees a latent cloud `inflation` times wider around the
+        same center and the field distribution widens with it. 1.0 is the
+        identity. This is the standard ensemble-inflation fix for a sampler
+        whose distribution has the right shape and location but too little
+        spread -- which is what MGN-V's spread histograms show, uniformly, on
+        every arm and eval set (sd_ratio ~ 0.5 while |dmean|/sd stays < 0.3).
         """
         cond = self.condition(graph)
+        inflation = float(inflation)
         with _autocast_disabled_for(cond):
             c = cond.float().repeat_interleave(n, dim=0)     # [B*n, hidden]
             bn = c.shape[0]
             z = torch.randn(bn, self.flat_dim, device=c.device)
             z = z * math.sqrt(max(float(temperature), 1e-6))
             z = self._integrate(z, c, self.num_steps)
+            if inflation != 1.0:
+                center = self._integrate(torch.zeros_like(z), c, self.num_steps)
+                z = center + inflation * (z - center)
         B = cond.shape[0]
         return z.view(B, n, self.num_z, self.z_dim).to(cond.dtype)
 

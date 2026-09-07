@@ -69,6 +69,10 @@ behaviour — treat the mismatch as something to reconcile, not to ignore.
 - [research/simulgenvae/](research/simulgenvae/) — technical documentation
 - [research/shell_buckling/](research/shell_buckling/) — [benchmark design](research/shell_buckling/BENCHMARK_DESIGN.md): a static one-to-many shell post-buckling dataset with an OOD geometry test set
 
+Reflow equipment identification:
+[11-zone NARX experiment design](research/reflow/REFLOW_NARX_EXPERIMENT_DESIGN.md)
+includes randomized setpoint protocols, duration budgets, and an offline schedule generator.
+
 ## Per-method notes
 
 Authoritative for that method's internals, kept beside the code:

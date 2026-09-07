@@ -250,7 +250,22 @@ def _compare_twin(path_value: str) -> str:
     return '/'.join(p)
 
 
-def render_infer(src_lines, arm, tag, gpu, values, det=False):
+# Inflation factors swept by the `_infl` inference variant. 1.0 is the identity
+# (the unmodified prior) and anchors the curve; the rest widen the latent
+# cloud around its per-graph center. Chosen to bracket the ~2x width deficit
+# the sweep measured (sd_ratio 0.45-0.60 on every arm and eval set).
+INFLATION_LAMS = ['1.0', '1.5', '2.0', '2.5', '3.0']
+
+
+def _variant_suffix(det, infl):
+    return '_det' if det else ('_infl' if infl else '')
+
+
+def _variant_dir(det, infl):
+    return '/det' if det else ('/infl' if infl else '')
+
+
+def render_infer(src_lines, arm, tag, gpu, values, det=False, infl=False):
     """One inference config: same eval set, this arm's checkpoint.
 
     `eval_dataset` is the `_compare_` half of the same held-out geometry, NOT
@@ -286,6 +301,17 @@ def render_infer(src_lines, arm, tag, gpu, values, det=False):
         over['prior_temperature'] = '1e-9'
         notes['prior_temperature'] = ('~0 kills the prior sampling noise; z is the '
                                       'ODE image of the origin')
+    if infl:
+        # Latent inflation sweep. The list is cycled batch by batch inside ONE
+        # inference pass and every draw is tagged with its factor, so this
+        # single run yields the whole lam-vs-sd_ratio curve. 500 draws per lam
+        # is plenty for a std estimate; 2500 total keeps the cost of one
+        # normal run. rank_arms.py groups the dump by lam.
+        over['latent_inflation'] = ','.join(INFLATION_LAMS)
+        notes['latent_inflation'] = ('INFLATION SWEEP: z <- c + lam*(z-c) after the '
+                                     'prior ODE; cycled per batch')
+        over['num_vae_samples'] = str(500 * len(INFLATION_LAMS))
+        notes['num_vae_samples'] = f'{len(INFLATION_LAMS)} lams x 500 draws'
     for line in src_lines:
         if skip_pct and line.startswith('%'):
             continue
@@ -309,14 +335,14 @@ def render_infer(src_lines, arm, tag, gpu, values, det=False):
             continue
         if key == 'log_file_dir':
             out.append(f"log_file_dir\t../../output/meshgraphnets-v/saoi_sweep3/"
-                       f"{arm}.infer_{tag}{'_det' if det else ''}.log")
+                       f"{arm}.infer_{tag}{_variant_suffix(det, infl)}.log")
             continue
         if key == 'modelpath':
             out.append(f"modelpath\t../../output/meshgraphnets-v/saoi_sweep3/{arm}.pth")
             continue
         if key == 'inference_output_dir':
             # det runs get their own subtree so the 2000-draw dumps survive.
-            out.append(f"inference_output_dir\t../../output/meshgraphnets-v/saoi_sweep3/infer{'/det' if det else ''}/{arm}/{tag}")
+            out.append(f"inference_output_dir\t../../output/meshgraphnets-v/saoi_sweep3/infer{_variant_dir(det, infl)}/{arm}/{tag}")
             continue
         if key in ('dataset_dir', 'infer_dataset'):
             # Passed through from the production config -- it is the single
@@ -468,6 +494,14 @@ def main():
                 INFER_HEADER.format(arm=arm, tag=tag + ' (deterministic control)',
                                     gpu=gpu)
                 + render_infer(src_lines, arm, tag, gpu, values, det=True),
+                encoding='utf-8', newline='\n')
+            n_inf += 1
+            # Latent-inflation sweep: the calibration fix under test. One pass,
+            # several lam values, viewer = configs/campaigns/rank_arms.py.
+            (HERE / f'{INFER_PREFIX}{arm}_{tag}_infl.txt').write_text(
+                INFER_HEADER.format(arm=arm, tag=tag + ' (latent inflation sweep)',
+                                    gpu=gpu)
+                + render_infer(src_lines, arm, tag, gpu, values, infl=True),
                 encoding='utf-8', newline='\n')
             n_inf += 1
         print(f"  gpu {gpu}  {arm}  (+{n_inf} inference configs)")

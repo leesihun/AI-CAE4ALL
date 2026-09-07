@@ -226,15 +226,35 @@ has the best dispersion and the best generalization to the third family. When
 the goal is distribution matching and everything is under-dispersed,
 `sd_ratio` is the more direct measure. Arm 7 wins the headline number.
 
-## Next
+## Next — the committed plan
 
-1. Re-run MGN-V arm 2 — without it the factor conclusions cannot be cited.
-2. **Diagnose flow's `sm_l345u_main` bias.** Check first whether that family is
-   represented in the training set at all. A sign-flipping bias is a broken
-   conditional, not a tuning problem.
-3. **Attack the 2× under-dispersion** — the real blocker. Gap 2 above has to
-   land first: it separates "not enough between-geometry variation" from "not
-   enough within-geometry noise", and those have different fixes.
+**MGN-V: latent inflation, then decide.** The 2x width deficit is constant
+across all 7 arms and 3 eval sets while |dmean|/sd stays < 0.3, and the two
+prior-side factors moved it by 0.001-0.023 -- so it is structural, not a prior
+tuning miss. Inflate `z` around its per-graph center after the prior ODE
+(`latent_inflation`, ConditionalFMPrior.sample_n), no retraining. One pass
+sweeps lam in {1, 1.5, 2, 2.5, 3}:
+
+```bash
+INFL=1 ARMS="3 7" TRAIN=0 INFER=1 bash configs/MeshGraphNets_Variational/SAOI_sweep3/run_sweep.sh
+python configs/campaigns/rank_arms.py output/meshgraphnets-v/saoi_sweep3/infer/infl
+```
+
+Pick the lam whose `sd_ratio` is nearest 1 on `s26fe_main`; read that same lam
+on `s26fe_sec` and `sm_l345u`. Near 1 on all three = the shape was right and
+only the scale was off: calibrated, done. If no single lam works across sets,
+or `PITtails` stays high while `sd_ratio` hits 1, the shape is wrong and the
+fix moves to the objective (an auxiliary head that predicts the spread scalar
+directly, so the decoder is trained to keep extremes).
+
+**flow: parked for this task.** All three test parts are held out; both models
+generalize to the S26FE family and only flow fails on SM-L345U, with a
+sign-flipping 1.4-3.6 sigma mean offset. That is a generalization failure of
+the field-space velocity net, not a width problem, and inflation cannot touch
+it. Revisit only if there is a reason to keep flow; its better native
+dispersion (best sd_ratio 0.77) is the one thing worth borrowing.
+
+**Housekeeping:** re-run MGN-V arm 2 before citing any main effect (7/8 design).
 
 ## Tooling note
 
