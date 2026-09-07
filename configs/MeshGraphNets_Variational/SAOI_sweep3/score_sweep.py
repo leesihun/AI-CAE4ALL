@@ -743,12 +743,20 @@ def render_scene_diagnostics(rows):
          "",
          "| arm | eval set | scenes | between/sd | within/sd | corr | PIT mean | PIT KS | PIT tails |",
          "|---|---|---|---|---|---|---|---|---|"]
+    single = False
     for arm, tag, st in have:
         c = st.get("corr_mean_truth")
+        # One draw per scene (the deterministic control): PIT is 0 or 1 by
+        # construction, so its spread and tail columns measure nothing.
+        # between/sd and corr stay valid, and within/sd is exactly 0.
+        one = st.get("draws_per_scene", 0) <= 1
+        single = single or one
+        pit = ("  -  |   -   |   -   " if one else
+               f"{st['pit_mean']:.3f} | {st['pit_ks']:.3f} | {st['pit_extremes']:.3f}")
         L.append(
             f"| {arm} | {tag} | {st['n_scenes']} | {st['between_norm']:.3f} | "
             f"{st['within_norm']:.3f} | " + ("n/a" if c is None else f"{c:+.3f}") +
-            f" | {st['pit_mean']:.3f} | {st['pit_ks']:.3f} | {st['pit_extremes']:.3f} |")
+            f" | {pit} |")
     L += ["", "**How to read it.** Ideal: between/sd and within/sd sum in "
               "quadrature to 1, corr high and positive, PIT mean 0.5, PIT KS 0, "
               "PIT tails 0.04.", "",
@@ -760,6 +768,11 @@ def render_scene_diagnostics(rows):
           "- `PIT tails` >> 0.04 with `PIT KS` large -> ensembles too narrow. "
           "This is the sampler/objective side.",
           "- `PIT mean` far from 0.5 -> systematic bias, consistent with dmean/sd."]
+    if single:
+        L += ["", "`-` in the PIT columns marks a run with ONE draw per scene "
+                  "(the deterministic control). PIT needs an ensemble; "
+                  "`between/sd` and `corr` are the columns to read there, and "
+                  "`within/sd` is 0 by construction."]
     return "\n".join(L)
 
 
