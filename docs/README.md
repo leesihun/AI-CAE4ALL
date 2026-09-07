@@ -65,6 +65,7 @@ behaviour — treat the mismatch as something to reconcile, not to ignore.
 - [research/transolver/](research/transolver/) — foundation-model design
 - [research/sdfflow/](research/sdfflow/) — conditional geometry survey, meshing upgrade, guidance mechanisms, [conditional generation design](research/sdfflow/CONDITIONAL_GENERATION_DESIGN_2026-09.md) (FEA-label conditions, per-dim dropout, C2/E2, the load-unit correction)
 - [research/hi_mgnflow/](research/hi_mgnflow/) — deterministic mode, sweep plan
+- [research/SAOI_PROBABILISTIC_SWEEP_2026-09.md](research/SAOI_PROBABILISTIC_SWEEP_2026-09.md) — cross-method: MeshGraphNets-V vs cHI-MGNflow on SAOI warpage (MGN-V wins 2.2x; flow's bias flips sign across part families; BOTH under-disperse ~2x; two falsified predictions)
 - [research/simulgenvae/](research/simulgenvae/) — technical documentation
 - [research/shell_buckling/](research/shell_buckling/) — [benchmark design](research/shell_buckling/BENCHMARK_DESIGN.md): a static one-to-many shell post-buckling dataset with an OOD geometry test set
 
