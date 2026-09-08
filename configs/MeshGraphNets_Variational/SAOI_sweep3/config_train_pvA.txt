@@ -123,3 +123,4 @@ time_integration	ar_ot  # ar_ot = one-step/teacher-forced (default); ar_rt = ful
 %   Sweep-only keys (absent from the production config)
 hierarchy_cache_keep	True  # REQUIRED: all 8 arms share one cache; a finishing arm must not delete it
 best_by	crps  # select on the GENERATIVE metric, not the posterior recon loss
+val_batch_size	16  # the rank-0 validation loader is NOT sharded, so it must keep the single-GPU batch rather than inherit the per-rank one

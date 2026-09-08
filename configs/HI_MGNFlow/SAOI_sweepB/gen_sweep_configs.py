@@ -430,13 +430,17 @@ def long_extra(epochs, val):
                        f'measured b16 < b32 by 0.288, so the GLOBAL value is what '
                        f'must be held, not this one'),
         'training_epochs': (
-            'PROBE: 3 epochs with one ODE validation -- timing only'
-            if epochs <= 3 else
+            'PROBE: 4 epochs, validating on 2 of them -- timing only'
+            if epochs <= 4 else
             f'{epochs}',
-            'probe' if epochs <= 3 else
+            'probe' if epochs <= 4 else
             '3x the sweep budget. No resume exists and cosine_T0 = epochs - '
             'warmup, so the 1000-epoch run annealed to 1e-8 and cannot be '
             'continued: its flat tail is the SCHEDULE, not convergence'),
+        'val_batch_size': ('16',
+                           'the rank-0 validation loader is NOT sharded and every '
+                           'other rank blocks while it runs, so it must keep the '
+                           'single-GPU batch rather than inherit the per-rank one'),
         'val_interval': (str(val),
                          'each validation integrates the ODE (val_num_samples x '
                          'flow_steps x 2 forwards under heun) -- the dominant '
@@ -454,15 +458,15 @@ def long_main():
     # ODE (val_num_samples x flow_steps x 2 forwards under heun) and is the
     # dominant non-training cost, so including one makes the measured per-epoch
     # figure an OVER-estimate and the derived budget conservative.
-    for name, epochs, val in (('long', LONG_EPOCHS, 30), ('long_probe', 3, 3)):
+    for name, epochs, val in (('long', LONG_EPOCHS, 30), ('long_probe', 4, 2)):
         extra = long_extra(epochs, val)
         extra['training_epochs'] = (str(epochs), extra['training_epochs'][1])
         axis = ['%     base                arm 1 (b16 tu k0 lr1) -- the design\'s '
                 'best arm AND its best direction',
                 f'%     parallelism         8-way DDP, batch {LONG_BATCH}/rank '
                 f'= global {LONG_BATCH * 8}']
-        if epochs <= 3:
-            axis.append('%     PROBE               3 epochs, one validation: '
+        if epochs <= 4:
+            axis.append('%     PROBE               4 epochs, 2 validations: '
                         'read s/epoch and the ODE validation cost, then set '
                         'training_epochs')
         (HERE / f'{TRAIN_PREFIX}{name}.txt').write_text(

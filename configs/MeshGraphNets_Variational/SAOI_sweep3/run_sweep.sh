@@ -215,13 +215,11 @@ echo ""
 # ---- Probe: size the epoch budget before committing the GPUs ---------------
 # Neither tree can resume, and cosine_T0 = training_epochs - warmup, so the
 # epoch count has to be right before the first real step -- a wrong one is a
-# full restart, not an early stop. Three epochs are timed and BUDGET_H divided
-# by the measured cost.
-#
-# The measurement deliberately OVER-estimates: the probe's wall time carries
-# process start, dataset load, the multiscale cache build and one validation, while the real
-# run validates every 30. So the derived budget errs toward finishing early,
-# which is the only safe direction when the alternative is losing the run.
+# full restart, not an early stop. Four epochs are run, validating on two of
+# them, and the intervals BETWEEN epoch lines are measured: the shortest is a
+# bare epoch, the longest an epoch plus a validation. Start-up, dataset load and
+# a cold hierarchy-cache rebuild all land before the first line and are
+# therefore excluded, which the first version got wrong.
 #
 # It also warms the shared cache, so the real arms do not queue behind whichever
 # one would have built it.
@@ -233,23 +231,38 @@ if [ "$PROBE" = "1" ] && [ "$TRAIN" = "1" ]; then
     USABLE=$("$PYTHON" -c "print(int($BUDGET_H * 3600 * $HEADROOM))")
     PROBE_CFG="$CFG_DIR/config_train_pvA_probe.txt"
     PROBE_LOG="$LOG_ROOT/pvA_probe.stdout"
-    echo "---- PROBE: 3 epochs to size a ${BUDGET_H}h budget (${USABLE}s usable) ----"
+    echo "---- PROBE: 4 epochs to size a ${BUDGET_H}h budget (${USABLE}s usable) ----"
     if [ ! -f "$PROBE_CFG" ]; then
         echo "  missing $PROBE_CFG -- run: $PYTHON $CFG_DIR/gen_sweep_configs.py --pv" >&2
         exit 1
     fi
-    T0=$(date +%s)
+    printf '%s PROBE_START\n' "$(date +%s)" > "$PROBE_LOG"
+    # Timestamp only the epoch lines: stderr is merged in, so tqdm's progress
+    # output would otherwise cost one `date` process per redraw.
     PYTHONUNBUFFERED=1 "$PYTHON" "$REPO_ROOT/AI_CAE4ALL_main.py" \
-        --config "$PROBE_CFG" 2>&1 | tee "$PROBE_LOG"
+        --config "$PROBE_CFG" 2>&1 \
+      | while IFS= read -r line; do
+            case "$line" in
+                Epoch\ *) printf '%s %s\n' "$(date +%s)" "$line" ;;
+                *)        printf '%s\n' "$line" ;;
+            esac
+        done | tee -a "$PROBE_LOG"
     PROBE_RC=${PIPESTATUS[0]}
-    ELAPSED=$(( $(date +%s) - T0 ))
     if [ "$PROBE_RC" != "0" ]; then
         echo "  PROBE FAILED (exit $PROBE_RC) -- nothing launched. Log: $PROBE_LOG" >&2
         exit "$PROBE_RC"
     fi
-    DERIVED=$("$PYTHON" -c "print(max(1, int($USABLE / ($ELAPSED / 3.0))))")
-    echo ""
-    echo "  ${ELAPSED}s / 3 epochs  ->  $(( ELAPSED / 3 ))s per epoch (over-estimate)"
+    # Measured BETWEEN epoch lines, so process start, dataset load and a cold
+    # hierarchy-cache rebuild are excluded instead of being charged to the
+    # epochs -- dividing total wall time was the first version and it derived
+    # 29 epochs for a run that had already completed 1000.
+    DERIVED=$("$PYTHON" "$REPO_ROOT/configs/campaigns/probe_epochs.py" "$PROBE_LOG" \
+              --budget-s "$USABLE" --val-interval 30 \
+              --baseline-s-per-epoch 346)
+    if [ -z "$DERIVED" ]; then
+        echo "  Could not time the probe -- see $PROBE_LOG" >&2
+        exit 1
+    fi
     echo "  -> PV_EPOCHS=$DERIVED for ${BUDGET_H}h"
     # What weight would put the peak-to-valley term at 30% of the objective.
     # Reported, NOT applied: pvB's beta_aux is a chosen value, and the point of

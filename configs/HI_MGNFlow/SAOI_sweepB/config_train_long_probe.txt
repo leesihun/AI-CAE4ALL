@@ -10,7 +10,7 @@
 %   ARM: long_probe
 %     base                arm 1 (b16 tu k0 lr1) -- the design's best arm AND its best direction
 %     parallelism         8-way DDP, batch 2/rank = global 16
-%     PROBE               3 epochs, one validation: read s/epoch and the ODE validation cost, then set training_epochs
+%     PROBE               4 epochs, 2 validations: read s/epoch and the ODE validation cost, then set training_epochs
 %     gpu 0,1,2,3,4,5,6,7 -- one arm per card (8-way DDP)
 %
 %   Everything else is ../SAOI_all_input/config_train_bot.txt.
@@ -48,7 +48,7 @@ positional_features	4
 
 %   Network parameters
 message_passing_num	15  # ignored when use_multiscale=True
-training_epochs	3  # probe
+training_epochs	4  # probe
 %   target y-z0 carries irreducible noise of size Var(y|g). The multiple is
 %   NOT the integration step count -- measure it by comparing against a
 %   deterministic run on 20% of the data before committing the full budget.
@@ -68,7 +68,7 @@ use_amp	True
 use_ema	True
 ema_decay	0.99
 test_interval	100  # periodic plots; 5 over the run
-val_interval	3  # each validation integrates the ODE (val_num_samples x flow_steps x 2 forwards under heun) -- the dominant non-training cost, so read it off the probe
+val_interval	2  # each validation integrates the ODE (val_num_samples x flow_steps x 2 forwards under heun) -- the dominant non-training cost, so read it off the probe
 
 %   Node types / world edges
 use_node_types	False
@@ -114,3 +114,4 @@ time_integration	ar_ot
 %   Sweep-only keys (absent from the production config)
 flow_t_sampling	uniform  # SWEPT AXIS
 hierarchy_cache_keep	True  # REQUIRED: all 8 arms share ONE cache; a finishing arm must not delete it
+val_batch_size	16  # the rank-0 validation loader is NOT sharded and every other rank blocks while it runs, so it must keep the single-GPU batch rather than inherit the per-rank one

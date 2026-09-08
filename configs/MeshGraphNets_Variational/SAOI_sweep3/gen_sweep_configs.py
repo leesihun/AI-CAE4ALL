@@ -501,12 +501,15 @@ def pv_extra(beta, epochs, val, note):
                        f'PER-RANK: x3 ranks = global {PV_BATCH * 3}. The sweep '
                        f'measured b16 < b32 by 0.288, so the global value is '
                        f'what must be held, not this one'),
-        'Training_epochs': (str(epochs), 'PROBE: 3 epochs with one validation -- timing only' if epochs <= 3 else
+        'Training_epochs': (str(epochs), 'PROBE: 4 epochs, validating on 2 of them -- timing only' if epochs <= 4 else
                             'sized to a 16h wall clock at 3 GPUs; no resume '
                             'exists and cosine_T0 = epochs - warmup, so this '
                             'is a COMPLETE run at its own schedule, not a '
                             'truncated 1000-epoch one'),
         'val_interval': (str(val), 'CRPS is the selection metric'),
+        'val_batch_size': ('16',
+                           'the rank-0 validation loader is NOT sharded, so it must keep the '
+                           'single-GPU batch rather than inherit the per-rank one'),
     }
 
 
@@ -521,13 +524,13 @@ def pv_main():
         # The probe validates once in three epochs: including a validation makes
         # the measured per-epoch cost an OVER-estimate (the real run validates
         # every PV_VAL), so the derived budget errs toward finishing early.
-        for suffix, epochs, val in (('', PV_EPOCHS, PV_VAL), ('_probe', 3, 3)):
+        for suffix, epochs, val in (('', PV_EPOCHS, PV_VAL), ('_probe', 4, 2)):
             name = arm + suffix
             head = HEADER.format(
                 arm=name, gpu=gpus, mate='no card-sharing arm',
                 axis_lines=(f"%     beta_aux              {beta:<6}{note}" + '\n' +
                             f"%     base                  arm 3 (cc g1 c0 r100)" +
-                            ('\n%     PROBE: 3 epochs, one validation -- read '
+                            ('\n%     PROBE: 4 epochs, 2 validations -- the mix is what '
                              's/epoch and the aux/recon balance, then set '
                              'Training_epochs' if suffix else '')))
             (HERE / f'{TRAIN_PREFIX}{name}.txt').write_text(

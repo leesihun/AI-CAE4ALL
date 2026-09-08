@@ -113,3 +113,4 @@ time_integration	ar_ot
 %   Sweep-only keys (absent from the production config)
 flow_t_sampling	uniform  # SWEPT AXIS
 hierarchy_cache_keep	True  # REQUIRED: all 8 arms share ONE cache; a finishing arm must not delete it
+val_batch_size	16  # the rank-0 validation loader is NOT sharded and every other rank blocks while it runs, so it must keep the single-GPU batch rather than inherit the per-rank one

@@ -8,7 +8,7 @@
 %   ARM: pvB_probe
 %     beta_aux              100   peak-to-valley MSE on the decoded field
 %     base                  arm 3 (cc g1 c0 r100)
-%     PROBE: 3 epochs, one validation -- read s/epoch and the aux/recon balance, then set Training_epochs
+%     PROBE: 4 epochs, 2 validations -- the mix is what s/epoch and the aux/recon balance, then set Training_epochs
 %     gpu 4,5,6 -- one arm per card (no card-sharing arm)
 %
 %   Everything else is config_train_bot.txt, except the sweep-scoped keys
@@ -49,7 +49,7 @@ positional_features	4  # Rotation-invariant node features: [centroid_dist, mean_
 
 %   Network parameters
 message_passing_num	15  # Only used for non-multiscale modes (vanilla MeshGraphNets only)
-Training_epochs	3  # PROBE: 3 epochs with one validation -- timing only
+Training_epochs	4  # PROBE: 4 epochs, validating on 2 of them -- timing only
 Batch_size	5  # PER-RANK: x3 ranks = global 15. The sweep measured b16 < b32 by 0.288, so the global value is what must be held, not this one
 LearningR	0.0001
 Latent_dim	128  # SWEPT AXIS
@@ -64,7 +64,7 @@ use_amp	True  # Mixed precision training with bfloat16
 use_ema	True  # EMA shadow model for validation/inference
 ema_decay	0.99  # EMA decay factor
 test_interval	100  # periodic plots; 5 over the run
-val_interval	3  # CRPS is the selection metric
+val_interval	2  # CRPS is the selection metric
 
 %   Node types
 use_node_types	False  # Add one-hot encoded node types to node features (Boundary condition, part No, Material assignments, etc.)
@@ -124,3 +124,4 @@ time_integration	ar_ot  # ar_ot = one-step/teacher-forced (default); ar_rt = ful
 %   Sweep-only keys (absent from the production config)
 hierarchy_cache_keep	True  # REQUIRED: all 8 arms share one cache; a finishing arm must not delete it
 best_by	crps  # select on the GENERATIVE metric, not the posterior recon loss
+val_batch_size	16  # the rank-0 validation loader is NOT sharded, so it must keep the single-GPU batch rather than inherit the per-rank one

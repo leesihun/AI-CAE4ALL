@@ -145,10 +145,16 @@ def _train_worker_inner(rank, world_size, config, gpu_ids, config_filename):
         multiprocessing_context=mp_context,
     )
 
+    # The validation loader is rank-0 only and NOT sharded: every other rank
+    # blocks on the broadcast below while it runs, so its cost does not fall
+    # with world_size. `batch_size` is PER RANK, so a DDP run that lowers it to
+    # hold the global batch would also shrink this loader and multiply the
+    # number of validation batches. val_batch_size keeps the two independent.
+    val_batch_size = int(config.get('val_batch_size', config['batch_size']))
     if rank == 0:
         val_loader = DataLoader(
             val_dataset,
-            batch_size=config['batch_size'],
+            batch_size=val_batch_size,
             shuffle=True,
             num_workers=num_workers,
             pin_memory=pin_memory,
