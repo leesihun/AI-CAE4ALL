@@ -59,6 +59,10 @@
 #   rm dataset/SAOI/saoi_train_bot.mscache.*.h5
 #
 # Environment overrides:
+#   PROBE         1 = time 3 epochs and size training_epochs to BUDGET_H
+#                 before launching (default); 0 = use the config as generated
+#   BUDGET_H      wall-clock target in hours for the sized run (default: 16)
+#   HEADROOM      fraction of BUDGET_H kept back (default: 0.90)
 #   PYTHON        interpreter (default: python)
 #   LOG_ROOT      transcript directory (default: output/chi-mgnflow/saoi_sweepB/run_logs)
 #   ARMS          space-separated arm names (default: all 8)
@@ -111,7 +115,12 @@ LOG_ROOT="${LOG_ROOT:-output/chi-mgnflow/saoi_sweepB/run_logs}"
 
 # Must match gen_sweep_configs.arms() exactly -- it prints this line, so if the
 # generator changes, re-paste its ARMS= output here rather than hand-editing.
-DEFAULT_ARMS="1 2 3 4 5 6 7 8"
+# The convergence run, not the 8-arm factorial. flow_t_sampling (0.333) and
+# batch_size (0.288) both point at arm 1, which was also the best arm, and
+# learningr (0.083) and capacity (0.074) are ties -- the open question is
+# budget, not configuration.
+# Regenerate with: gen_sweep_configs.py --long   (the old grid: no flag)
+DEFAULT_ARMS="long"
 ARMS="${ARMS:-$DEFAULT_ARMS}"
 STAGGER="${STAGGER:-10}"   # seconds between arm launches
 # DET=1 runs the deterministic-control inference configs instead of the
@@ -155,12 +164,55 @@ run_arm() {
     return 1
 }
 
-echo "cHI-MGNflow Wave B -- 2^(4-1) resolution IV: batch x t-sched x capacity x lr"
+echo "cHI-MGNflow convergence run -- arm 1 config, 8-way DDP, 3x the budget"
 echo "  REPO_ROOT = $REPO_ROOT"
 echo "  PYTHON    = $PYTHON"
 echo "  LOG_ROOT  = $LOG_ROOT"
 echo "  ARMS      = $(echo "$ARMS" | wc -w) arms"
 echo ""
+
+# ---- Probe: size the epoch budget before committing the GPUs ---------------
+# Neither tree can resume, and cosine_T0 = training_epochs - warmup, so the
+# epoch count has to be right before the first real step -- a wrong one is a
+# full restart, not an early stop. Three epochs are timed and BUDGET_H divided
+# by the measured cost.
+#
+# The measurement deliberately OVER-estimates: the probe's wall time carries
+# process start, dataset load, the dataset load and one validation, while the real
+# run validates every 30. So the derived budget errs toward finishing early,
+# which is the only safe direction when the alternative is losing the run.
+#
+# It also warms the shared cache, so the real arms do not queue behind whichever
+# one would have built it.
+PROBE="${PROBE:-1}"
+BUDGET_H="${BUDGET_H:-16}"
+HEADROOM="${HEADROOM:-0.90}"
+
+if [ "$PROBE" = "1" ] && [ "$TRAIN" = "1" ]; then
+    USABLE=$("$PYTHON" -c "print(int($BUDGET_H * 3600 * $HEADROOM))")
+    PROBE_CFG="$CFG_DIR/config_train_long_probe.txt"
+    PROBE_LOG="$LOG_ROOT/long_probe.stdout"
+    echo "---- PROBE: 3 epochs to size a ${BUDGET_H}h budget (${USABLE}s usable) ----"
+    if [ ! -f "$PROBE_CFG" ]; then
+        echo "  missing $PROBE_CFG -- run: $PYTHON $CFG_DIR/gen_sweep_configs.py --long" >&2
+        exit 1
+    fi
+    T0=$(date +%s)
+    PYTHONUNBUFFERED=1 "$PYTHON" "$REPO_ROOT/AI_CAE4ALL_main.py" \
+        --config "$PROBE_CFG" 2>&1 | tee "$PROBE_LOG"
+    PROBE_RC=${PIPESTATUS[0]}
+    ELAPSED=$(( $(date +%s) - T0 ))
+    if [ "$PROBE_RC" != "0" ]; then
+        echo "  PROBE FAILED (exit $PROBE_RC) -- nothing launched. Log: $PROBE_LOG" >&2
+        exit "$PROBE_RC"
+    fi
+    DERIVED=$("$PYTHON" -c "print(max(1, int($USABLE / ($ELAPSED / 3.0))))")
+    echo ""
+    echo "  ${ELAPSED}s / 3 epochs  ->  $(( ELAPSED / 3 ))s per epoch (over-estimate)"
+    echo "  -> LONG_EPOCHS=$DERIVED for ${BUDGET_H}h"
+    env LONG_EPOCHS="$DERIVED" "$PYTHON" "$CFG_DIR/gen_sweep_configs.py" --long || exit 1
+    echo ""
+fi
 
 # ---- Preflight every arm before committing GPU-days ------------------------
 # A failing arm is DROPPED, not fatal. One arm's bad config or dead card says
@@ -197,7 +249,7 @@ if [ "$PREFLIGHT" = "1" ] && [ "$TRAIN" = "1" ]; then
         echo "Every arm failed preflight -- nothing left to run." >&2
         echo "If they all report MISSING CONFIG the generated configs are stale" >&2
         echo "or absent; regenerate them first:" >&2
-        echo "  python $CFG_DIR/gen_sweep_configs.py" >&2
+        echo "  python $CFG_DIR/gen_sweep_configs.py --long" >&2
         exit 2
     fi
     if [ -n "$SKIPPED" ] && [ "${STRICT_PREFLIGHT:-0}" = "1" ]; then

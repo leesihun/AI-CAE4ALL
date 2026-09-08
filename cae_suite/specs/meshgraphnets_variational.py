@@ -53,7 +53,7 @@ VAR_KEYS = frozenset(
         "mmd_gather_ranks",
         "vae_batch_size", "vae_batch_size_max", "vae_batch_size_min",
         "vae_batch_vram_fraction", "vae_valid_prior_samples", "recon_loss",
-        "alpha_recon", "beta_aux", "lambda_mmd", "mmd_bandwidth",
+        "alpha_recon", "beta_aux", "pv_channel", "lambda_mmd", "mmd_bandwidth",
         "posterior_min_std", "num_z", "num_vae_samples", "prior_type",
         "use_conditional_prior", "prior_family", "prior_nll_weight",
         "prior_fm_steps", "prior_fm_solver", "prior_mp_layers", "prior_hidden_dim",
@@ -145,6 +145,25 @@ def validate_variational(ctx: SpecValidationContext) -> None:
                 "prior_grad_to_encoder must be a number in [0, 1].",
                 field_name="prior_grad_to_encoder",
             )
+        # The peak-to-valley term is computed on the decoder output. The
+        # model_split pipeline runs the VAE stage before the decoder and returns
+        # a zero there, so beta_aux would silently drop out of the objective.
+        if str(values.get("parallel_mode", "ddp")).lower().strip() == "model_split":
+            try:
+                b_aux = float(values.get("beta_aux", 1.0) or 0)
+            except (TypeError, ValueError):
+                b_aux = 0.0
+            if b_aux > 0.0:
+                ctx.add(
+                    "MGNV-AUX-PIPELINE",
+                    Severity.ERROR,
+                    "beta_aux weights a peak-to-valley loss on the DECODED field, "
+                    "but parallel_mode model_split computes the VAE stage before "
+                    "the decoder and cannot evaluate it -- the term would silently "
+                    "be zero.",
+                    field_name="beta_aux",
+                    hint="Use parallel_mode ddp, or set beta_aux 0.",
+                )
         if grad_enc > 0.0:
             try:
                 beta_aux = float(values.get("beta_aux", 1.0) or 0)
@@ -157,7 +176,9 @@ def validate_variational(ctx: SpecValidationContext) -> None:
                     "prior_grad_to_encoder > 0 pressures the posterior to be "
                     "predictable from the graph alone. MMD does not guard against "
                     "that (a deterministic z = h(g) matches N(0,I) perfectly); "
-                    "beta_aux is the I(z;y) floor that does, and it is 0 here.",
+                    "beta_aux is the I(z;y) floor that does -- it makes the decoded "
+                    "field reproduce each realization's own peak-to-valley, which "
+                    "a z independent of y cannot do -- and it is 0 here.",
                     field_name="beta_aux",
                     hint="Keep beta_aux > 0 (1.0 is the native default) while the "
                          "encoder-side coupling is open.",

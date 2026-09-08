@@ -993,15 +993,12 @@ class ModelSplitStage(nn.Module):
         z_per_node = z[:, 0, :][batch_bc] if z.dim() == 3 else z[batch_bc]
         z_full = z if (self.use_multiscale and self._num_z > 1) else None
 
+        # The auxiliary term is now a peak-to-valley loss on the DECODED field
+        # (MeshGraphNets._pv_loss). This stage runs before the decoder, so it
+        # cannot be computed here; it stays zero and the spec refuses
+        # beta_aux > 0 under pipeline parallelism rather than silently
+        # dropping the term from the objective.
         aux_loss = torch.zeros((), device=device, dtype=dtype)
-        if self.training and use_posterior and original_y is not None:
-            # Aux decoder uses fine-level slot (slot 0).
-            z_for_aux = z[:, 0, :] if z.dim() == 3 else z
-            y_mean = scatter(original_y, batch_bc, dim=0, dim_size=B, reduce='mean')
-            y_centered = original_y - y_mean[batch_bc]
-            y_std = scatter(y_centered.pow(2), batch_bc, dim=0, dim_size=B, reduce='mean').sqrt()
-            aux_target = torch.cat([y_mean, y_std], dim=-1)
-            aux_loss = torch.nn.functional.mse_loss(self.model.aux_decoder(z_for_aux), aux_target)
 
         return z_per_node, z_full, vae_losses, aux_loss
 

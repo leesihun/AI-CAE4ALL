@@ -64,6 +64,7 @@ GPU PACKING
   no complement-pairing logic is needed.
 """
 import itertools
+import os
 # newline='\n' on EVERY write: the default (None) translates to CRLF on
 # Windows, and a CRLF run_sweep.sh dies on Linux with `bad interpreter: ^M`.
 import pathlib
@@ -243,11 +244,16 @@ def _key_of(line):
     return line.split('\t')[0].split()[0] if '\t' in line else line.split()[0]
 
 
-def render(base_lines, values, arm, gpu, mate):
+def render(base_lines, values, arm, gpu, mate, extra=None):
+    """`extra` is {key: (value, note)} for keys this run sets that are not
+    part of the factorial design -- they must not be labelled SWEPT AXIS."""
+    extra = extra or {}
     swept = set(values)
     overrides = dict(values)
     overrides.update({k: v for k, (v, _) in FIXED_TRAIN.items()})
     notes = {k: n for k, (_, n) in FIXED_TRAIN.items()}
+    overrides.update({k: v for k, (v, _) in extra.items()})
+    notes.update({k: n for k, (_, n) in extra.items()})
     seen, out, skip_pct = set(), [], False
     for line in base_lines:
         if skip_pct and line.startswith('%'):
@@ -272,7 +278,10 @@ def render(base_lines, values, arm, gpu, mate):
                               flags=re.IGNORECASE))
             continue
         if key == 'gpu_ids':
-            out.append(f"gpu_ids\t{gpu}  # one GPU; {mate} shares it")
+            n = str(gpu).count(',') + 1
+            note = (f"{n}-way DDP; {mate}" if n > 1
+                    else f"one GPU; {mate} shares it")
+            out.append(f"gpu_ids\t{gpu}  # {note}")
             continue
         if key == 'log_file_dir':
             out.append(f"log_file_dir\t../../output/chi-mgnflow/saoi_sweepB/{arm}.log")
@@ -400,6 +409,90 @@ def render_infer(src_lines, arm, tag, gpu, det=False):
     return '\n'.join(out)
 
 
+# ── the convergence run (1 arm, 8 GPUs; NOT part of the design) ──────────────
+#
+# Arm 1 (b16 tu k0 lr1) is both the design's best direction and its best arm.
+# The open question is budget: at a MEASURED 113 s/epoch -- the config's
+# 500 s/epoch was 4.4x pessimistic -- 8-way DDP fits ~3x the previous 1000
+# epochs into 16 hours.
+# Overridable: run_16h.sh measures a probe and re-runs this generator with the
+# measured value. The default is only an estimate (113 s/epoch at eta(8)=6.5).
+LONG_EPOCHS = int(os.environ.get('LONG_EPOCHS', 2980))
+LONG_BATCH = 2        # x 8 ranks = global 16. Per-rank -- 16 here would be a global 128.
+LONG_GPUS = '0,1,2,3,4,5,6,7'
+LONG_BASE_ARM = 0     # index of arm '1' in arms()
+
+
+def long_extra(epochs, val):
+    return {
+        'batch_size': (str(LONG_BATCH),
+                       f'PER-RANK: x8 ranks = global {LONG_BATCH * 8}. The sweep '
+                       f'measured b16 < b32 by 0.288, so the GLOBAL value is what '
+                       f'must be held, not this one'),
+        'training_epochs': (
+            'PROBE: 3 epochs with one ODE validation -- timing only'
+            if epochs <= 3 else
+            f'{epochs}',
+            'probe' if epochs <= 3 else
+            '3x the sweep budget. No resume exists and cosine_T0 = epochs - '
+            'warmup, so the 1000-epoch run annealed to 1e-8 and cannot be '
+            'continued: its flat tail is the SCHEDULE, not convergence'),
+        'val_interval': (str(val),
+                         'each validation integrates the ODE (val_num_samples x '
+                         'flow_steps x 2 forwards under heun) -- the dominant '
+                         'non-training cost, so read it off the probe'),
+    }
+
+
+def long_main():
+    base_lines = BASE.read_text(encoding='utf-8').split('\n')
+    while base_lines and base_lines[0].startswith('%'):
+        base_lines.pop(0)
+    values = arms()[LONG_BASE_ARM][2]
+
+    # The probe validates once in three epochs. A flow validation integrates the
+    # ODE (val_num_samples x flow_steps x 2 forwards under heun) and is the
+    # dominant non-training cost, so including one makes the measured per-epoch
+    # figure an OVER-estimate and the derived budget conservative.
+    for name, epochs, val in (('long', LONG_EPOCHS, 30), ('long_probe', 3, 3)):
+        extra = long_extra(epochs, val)
+        extra['training_epochs'] = (str(epochs), extra['training_epochs'][1])
+        axis = ['%     base                arm 1 (b16 tu k0 lr1) -- the design\'s '
+                'best arm AND its best direction',
+                f'%     parallelism         8-way DDP, batch {LONG_BATCH}/rank '
+                f'= global {LONG_BATCH * 8}']
+        if epochs <= 3:
+            axis.append('%     PROBE               3 epochs, one validation: '
+                        'read s/epoch and the ODE validation cost, then set '
+                        'training_epochs')
+        (HERE / f'{TRAIN_PREFIX}{name}.txt').write_text(
+            TRAIN_HEADER.format(arm=name, gpu=LONG_GPUS, mate='8-way DDP',
+                                axis_lines='\n'.join(axis))
+            + render(base_lines, values, name, LONG_GPUS, 'no card-sharing arm',
+                     extra=extra),
+            encoding='utf-8', newline='\n')
+
+    # Inference is a single forward per ODE step; one GPU, no DDP.
+    gpu0 = LONG_GPUS.split(',')[0]
+    for tag, src in INFER_SOURCES.items():
+        lines = (PROD / src).read_text(encoding='utf-8').split('\n')
+        while lines and lines[0].startswith('%'):
+            lines.pop(0)
+        for suffix, det in (('', False), ('_det', True)):
+            (HERE / f'{INFER_PREFIX}long_{tag}{suffix}.txt').write_text(
+                INFER_HEADER.format(arm='long', tag=tag + (' (deterministic control)'
+                                                           if det else ''), gpu=gpu0)
+                + render_infer(lines, 'long', tag, gpu0, det=det),
+                encoding='utf-8', newline='\n')
+
+    print('convergence run:')
+    print(f"  long        gpu_ids {LONG_GPUS}  batch {LONG_BATCH}/rank "
+          f"(global {LONG_BATCH * 8})  epochs {LONG_EPOCHS}  val_interval 30")
+    print(f"  long_probe  same, 3 epochs with one validation (timing only)")
+    print(f"  + {len(INFER_SOURCES) * 2} inference configs (stochastic + det)")
+    print('ARMS="long"')
+
+
 def main():
     base_lines = BASE.read_text(encoding='utf-8').split('\n')
     while base_lines and base_lines[0].startswith('%'):
@@ -450,4 +543,8 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    import sys
+    if '--long' in sys.argv:
+        long_main()
+    else:
+        main()

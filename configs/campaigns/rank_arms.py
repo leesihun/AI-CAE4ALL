@@ -96,6 +96,70 @@ def collect(roots):
     return rows
 
 
+
+def lam_response(arms):
+    """sd_ratio vs lambda per (base arm, eval set), with gain and the lam that
+    would reach sd_ratio 1.
+
+    Returns [] unless the dumps carry more than one lambda.
+    """
+    by_base = {}
+    for arm, tags in arms.items():
+        if "@lam" not in arm:
+            continue
+        base, lam = arm.split("@lam")
+        for tag, m in tags.items():
+            if "error" in m:
+                continue
+            by_base.setdefault((base, tag), {})[float(lam)] = m["sd_ratio"]
+    return [(b, t, dict(sorted(d.items()))) for (b, t), d in sorted(by_base.items())
+            if len(d) > 1]
+
+
+def render_lam_response(arms):
+    rows = lam_response(arms)
+    if not rows:
+        return
+    lams = sorted({l for _, _, d in rows for l in d})
+    print()
+    print("LAMBDA RESPONSE   sd_ratio per inflation factor   (target 1.000)")
+    head = f"{'arm':<6}{'eval set':<16}" + "".join(f"{('lam=' + f'{l:g}'):>9}" for l in lams)
+    print(head + f"{'gain':>8}{'linear':>8}{'lam*':>8}")
+    print("-" * len(head + " " * 24))
+    star = {}
+    for base, tag, d in rows:
+        cells = "".join(f"{d[l]:>9.3f}" if l in d else f"{'-':>9}" for l in lams)
+        lo, hi = min(d), max(d)
+        gain = d[hi] / d[lo] if d[lo] else float("nan")
+        # local slope through the two outermost points, extrapolated to 1.0
+        slope = (d[hi] - d[lo]) / (hi - lo) if hi != lo else 0.0
+        lam_star = (lo + (1.0 - d[lo]) / slope) if slope > 1e-9 else float("nan")
+        star.setdefault(base, []).append((tag, lam_star))
+        ls = f"{lam_star:>8.2f}" if lam_star == lam_star else f"{'n/a':>8}"
+        print(f"{base:<6}{tag:<16}{cells}{gain:>8.2f}{hi / lo:>8.2f}{ls}")
+    print()
+    print("gain   = sd_ratio(lam_max)/sd_ratio(lam_min) actually observed")
+    print("linear = what it would be if the decoder passed width through "
+          "proportionally")
+    print("lam*   = the lam that set would need to reach sd_ratio 1")
+    for base, pairs in star.items():
+        vals = [v for _, v in pairs if v == v]
+        if len(vals) < 2:
+            continue
+        spread = max(vals) / min(vals)
+        print()
+        if spread > 1.4:
+            print(f"arm {base}: the eval sets need DIFFERENT lam "
+                  f"({', '.join(f'{t} {v:.2f}' for t, v in pairs if v == v)}) -- "
+                  f"a {spread:.1f}x disagreement.")
+            print(f"  Inflation is a single global multiplier, so no one value "
+                  f"calibrates them all. The width error is geometry-dependent, "
+                  f"not a scale constant: inflation is ruled out as the fix.")
+        else:
+            print(f"arm {base}: the eval sets agree on lam ~ "
+                  f"{sum(vals) / len(vals):.2f} (within {spread:.2f}x) -- "
+                  f"a single global factor calibrates them. Use it.")
+
 def fmt(v, w=8, p=3):
     return f"{v:>{w}.{p}f}" if isinstance(v, (int, float)) else f"{'-':>{w}}"
 
@@ -158,6 +222,9 @@ def main():
                     "pit_tails": np.mean([v["pit_tails"] for v in vals]),
                     "pit_ks": np.mean([v["pit_ks"] for v in vals]),
                 }))
+
+        # ---- lambda response (inflation sweeps only) ----
+        render_lam_response(arms)
 
         # ---- ranking ----
         if not summary:

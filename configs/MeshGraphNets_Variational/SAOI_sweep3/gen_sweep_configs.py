@@ -76,6 +76,7 @@ GPU PACKING
   the old two-per-GPU design carried disappears along with the wall time.
 """
 import itertools
+import os
 # newline='\n' on EVERY write: the default (None) translates to CRLF on
 # Windows, and a CRLF run_sweep.sh dies on Linux with `bad interpreter: ^M`.
 import pathlib
@@ -405,11 +406,16 @@ INFER_HEADER = """%   ==========================================================
 """
 
 
-def render(base_lines, values, arm, gpu, mate):
+def render(base_lines, values, arm, gpu, mate, extra=None):
+    """`extra` is {key: (value, note)} for keys this run sets that are not
+    part of the factorial design -- they must not be labelled SWEPT AXIS."""
+    extra = extra or {}
     swept = set(values)
     overrides = dict(values)
     overrides.update({k: v for k, (v, _) in FIXED.items()})
     notes = {k: n for k, (_, n) in FIXED.items()}
+    overrides.update({k: v for k, (v, _) in extra.items()})
+    notes.update({k: n for k, (_, n) in extra.items()})
     seen = set()
 
     out, skip_pct = [], False
@@ -436,7 +442,9 @@ def render(base_lines, values, arm, gpu, mate):
                               flags=re.IGNORECASE))
             continue
         if key == 'gpu_ids':
-            out.append(f"gpu_ids\t{gpu}  # one GPU; {mate}")
+            n = str(gpu).count(',') + 1
+            note = (f"{n}-way DDP; {mate}" if n > 1 else f"one GPU; {mate}")
+            out.append(f"gpu_ids\t{gpu}  # {note}")
             continue
         if key == 'log_file_dir':
             out.append(f"log_file_dir\t../../output/meshgraphnets-v/saoi_sweep3/{arm}.log")
@@ -453,6 +461,97 @@ def render(base_lines, values, arm, gpu, mate):
         out += ['', '%   Sweep-only keys (absent from the production config)']
         out += [f"{k}\t{overrides[k]}  # {notes.get(k, '')}" for k in missing]
     return '\n'.join(out)
+
+
+# ── the peak-to-valley run (2 arms, 3 GPUs each; NOT part of the design) ─────
+#
+# `beta_aux` no longer weights the old z-readout head that regressed per-graph
+# [mean, std]; it weights an MSE on the per-graph PEAK-TO-VALLEY of the DECODED
+# field (MeshGraphNets._pv_loss) -- the statistic the warpage report actually
+# scores. The old head could not move `sd_ratio` (0.449-0.526 on every arm)
+# because it read `z` rather than the decoder output, used a node-axis std
+# rather than an extreme-value statistic, and at beta_aux 1.0 against
+# alpha_recon 1000 was ~1% of the objective.
+#
+# Two arms, because the head was DELETED: without a beta_aux 0 control there is
+# no way to separate the new term's effect from the removal of the old one.
+# Overridable: run_16h.sh measures a probe and re-runs this generator with the
+# measured value. The default is only an estimate (346 s/epoch at eta(3)=2.6).
+PV_EPOCHS = int(os.environ.get('PV_EPOCHS', 390))
+PV_BATCH = 5          # x 3 ranks = global 15. Per-rank -- 16 here would be a global 48.
+PV_VAL = 30
+PV_BASE_ARM = 2       # index of arm '3' in arms(): best sd_ratio, and the arm
+                      # the latent-inflation curve was measured on
+PV_ARMS = [
+    ('pvA', '0', '0,2,3',
+     'CONTROL: no auxiliary term at all (isolates the deleted head)'),
+    # 100, chosen: alpha_recon is 1000 and the peak-to-valley term is a per-graph
+    # scalar against a per-node-per-feature mean, so matching the weights would
+    # let it dominate per element. The probe prints what weight would put it at
+    # a target share of the objective -- read it, do not let it overwrite this.
+    ('pvB', os.environ.get('PV_BETA', '100'), '4,5,6',
+     'peak-to-valley MSE on the decoded field'),
+]
+
+
+def pv_extra(beta, epochs, val, note):
+    return {
+        'beta_aux': (beta, note),
+        'Batch_size': (str(PV_BATCH),
+                       f'PER-RANK: x3 ranks = global {PV_BATCH * 3}. The sweep '
+                       f'measured b16 < b32 by 0.288, so the global value is '
+                       f'what must be held, not this one'),
+        'Training_epochs': (str(epochs), 'PROBE: 3 epochs with one validation -- timing only' if epochs <= 3 else
+                            'sized to a 16h wall clock at 3 GPUs; no resume '
+                            'exists and cosine_T0 = epochs - warmup, so this '
+                            'is a COMPLETE run at its own schedule, not a '
+                            'truncated 1000-epoch one'),
+        'val_interval': (str(val), 'CRPS is the selection metric'),
+    }
+
+
+def pv_main():
+    base_lines = BASE.read_text(encoding='utf-8').split('\n')
+    while base_lines and base_lines[0].startswith('%'):
+        base_lines.pop(0)
+    values = arms()[PV_BASE_ARM][2]
+
+    written = []
+    for arm, beta, gpus, note in PV_ARMS:
+        # The probe validates once in three epochs: including a validation makes
+        # the measured per-epoch cost an OVER-estimate (the real run validates
+        # every PV_VAL), so the derived budget errs toward finishing early.
+        for suffix, epochs, val in (('', PV_EPOCHS, PV_VAL), ('_probe', 3, 3)):
+            name = arm + suffix
+            head = HEADER.format(
+                arm=name, gpu=gpus, mate='no card-sharing arm',
+                axis_lines=(f"%     beta_aux              {beta:<6}{note}" + '\n' +
+                            f"%     base                  arm 3 (cc g1 c0 r100)" +
+                            ('\n%     PROBE: 3 epochs, one validation -- read '
+                             's/epoch and the aux/recon balance, then set '
+                             'Training_epochs' if suffix else '')))
+            (HERE / f'{TRAIN_PREFIX}{name}.txt').write_text(
+                head + render(base_lines, values, name, gpus, 'no card-sharing arm',
+                              extra=pv_extra(beta, epochs, val, note)),
+                encoding='utf-8', newline='\n')
+            written.append(name)
+        # Inference is a single forward per draw; one GPU, no DDP.
+        for tag, src in INFER_SOURCES.items():
+            src_lines = (PROD / src).read_text(encoding='utf-8').split('\n')
+            while src_lines and src_lines[0].startswith('%'):
+                src_lines.pop(0)
+            (HERE / f'{INFER_PREFIX}{arm}_{tag}.txt').write_text(
+                INFER_HEADER.format(arm=arm, tag=tag, gpu=gpus.split(',')[0])
+                + render_infer(src_lines, arm, tag, gpus.split(',')[0], values),
+                encoding='utf-8', newline='\n')
+    print('peak-to-valley run:')
+    for arm, beta, gpus, note in PV_ARMS:
+        print(f"  {arm:<6} gpu_ids {gpus:<8} beta_aux {beta:<6} {note}")
+    print(f"  + {len(PV_ARMS)} probe configs and "
+          f"{len(PV_ARMS) * len(INFER_SOURCES)} inference configs")
+    print(f"  epochs {PV_EPOCHS}, batch {PV_BATCH}/rank "
+          f"(global {PV_BATCH * 3}), val_interval {PV_VAL}")
+    print('PV_ARMS="' + ' '.join(a for a, _, _, _ in PV_ARMS) + '"')
 
 
 def main():
@@ -514,4 +613,8 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    import sys
+    if '--pv' in sys.argv:
+        pv_main()
+    else:
+        main()

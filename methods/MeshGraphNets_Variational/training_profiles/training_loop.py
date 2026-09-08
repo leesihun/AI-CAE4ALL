@@ -191,7 +191,21 @@ class _ObjectiveTerms:
         self.use_vae = config.get('use_vae', False)
         self.alpha_recon = float(config.get('alpha_recon', 1.0))
         self.lambda_mmd = float(config.get('lambda_mmd', 1.0))
+        # beta_aux weights a peak-to-valley loss on the DECODED field
+        # (MeshGraphNets._pv_loss), replacing the z-readout head that regressed
+        # per-graph [mean, std]. Prediction and target are the same
+        # representation, so the comparison is self-consistent either way. In the
+        # STATIC case that representation IS the field (mesh_dataset sets
+        # target_delta = y_raw), so the term optimises exactly the warpage
+        # peak-to-valley the report scores. For T > 1 it optimises the step
+        # INCREMENT's peak-to-valley -- a coherent objective, but no longer the
+        # scored statistic, so say so rather than refuse.
         self.beta_aux = float(config.get('beta_aux', 1.0))
+        n_steps = int(config.get('num_timesteps', 1) or 1)
+        if self.beta_aux > 0.0 and n_steps > 1:
+            print(f'  [pv] num_timesteps={n_steps}: graph.y is a step delta, so '
+                  f'beta_aux optimises the INCREMENT peak-to-valley, not the '
+                  f'field peak-to-valley the warpage report scores.')
         prior_type = str(config.get('prior_type', '')).lower().strip()
         self.inner_model = inner_model
         self.has_gnn_prior = (

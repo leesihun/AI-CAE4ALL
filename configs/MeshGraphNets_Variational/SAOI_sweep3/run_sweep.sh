@@ -77,6 +77,10 @@
 #   ARMS="<the one arm>" PREFLIGHT=0 TRAIN=1 INFER=0 SCORE=0 bash .../run_sweep.sh
 #
 # Environment overrides:
+#   PROBE         1 = time 3 epochs and size training_epochs to BUDGET_H
+#                 before launching (default); 0 = use the config as generated
+#   BUDGET_H      wall-clock target in hours for the sized run (default: 16)
+#   HEADROOM      fraction of BUDGET_H kept back (default: 0.90)
 #   PYTHON        interpreter (default: python)
 #   LOG_ROOT      transcript directory (default: output/meshgraphnets-v/saoi_sweep3/run_logs)
 #   ARMS          space-separated arm names (default: all 8)
@@ -142,7 +146,12 @@ LOG_ROOT="${LOG_ROOT:-output/meshgraphnets-v/saoi_sweep3/run_logs}"
 
 # Must match gen_sweep_configs.arms() exactly -- it prints this line, so if the
 # generator changes, re-paste its ARMS= output here rather than hand-editing.
-DEFAULT_ARMS="1 2 3 4 5 6 7 8"
+# The peak-to-valley run, not the 8-arm factorial. Every factor that grid
+# swept moved W1/sd by 0.001-0.054 against a 0.10 arm-to-arm range, so none
+# of them was worth a GPU; beta_aux is the only live axis, and pvA (0) is
+# the control that separates the new term from the deleted aux head.
+# Regenerate with: gen_sweep_configs.py --pv   (the old grid: no flag)
+DEFAULT_ARMS="pvA pvB"
 ARMS="${ARMS:-$DEFAULT_ARMS}"
 STAGGER="${STAGGER:-10}"   # seconds between arm launches
 # DET=1 runs the deterministic-control inference configs instead of the
@@ -196,12 +205,63 @@ run_arm() {
     return 1
 }
 
-echo "SAOI wave 3 -- 2^(4-1) resolution IV: zcond x rate coupling x capacity x reg"
+echo "SAOI peak-to-valley run -- beta_aux 0 (control) vs 100, 3 GPUs each"
 echo "  REPO_ROOT = $REPO_ROOT"
 echo "  PYTHON    = $PYTHON"
 echo "  LOG_ROOT  = $LOG_ROOT"
 echo "  ARMS      = $(echo "$ARMS" | wc -w) arms"
 echo ""
+
+# ---- Probe: size the epoch budget before committing the GPUs ---------------
+# Neither tree can resume, and cosine_T0 = training_epochs - warmup, so the
+# epoch count has to be right before the first real step -- a wrong one is a
+# full restart, not an early stop. Three epochs are timed and BUDGET_H divided
+# by the measured cost.
+#
+# The measurement deliberately OVER-estimates: the probe's wall time carries
+# process start, dataset load, the multiscale cache build and one validation, while the real
+# run validates every 30. So the derived budget errs toward finishing early,
+# which is the only safe direction when the alternative is losing the run.
+#
+# It also warms the shared cache, so the real arms do not queue behind whichever
+# one would have built it.
+PROBE="${PROBE:-1}"
+BUDGET_H="${BUDGET_H:-16}"
+HEADROOM="${HEADROOM:-0.90}"
+
+if [ "$PROBE" = "1" ] && [ "$TRAIN" = "1" ]; then
+    USABLE=$("$PYTHON" -c "print(int($BUDGET_H * 3600 * $HEADROOM))")
+    PROBE_CFG="$CFG_DIR/config_train_pvA_probe.txt"
+    PROBE_LOG="$LOG_ROOT/pvA_probe.stdout"
+    echo "---- PROBE: 3 epochs to size a ${BUDGET_H}h budget (${USABLE}s usable) ----"
+    if [ ! -f "$PROBE_CFG" ]; then
+        echo "  missing $PROBE_CFG -- run: $PYTHON $CFG_DIR/gen_sweep_configs.py --pv" >&2
+        exit 1
+    fi
+    T0=$(date +%s)
+    PYTHONUNBUFFERED=1 "$PYTHON" "$REPO_ROOT/AI_CAE4ALL_main.py" \
+        --config "$PROBE_CFG" 2>&1 | tee "$PROBE_LOG"
+    PROBE_RC=${PIPESTATUS[0]}
+    ELAPSED=$(( $(date +%s) - T0 ))
+    if [ "$PROBE_RC" != "0" ]; then
+        echo "  PROBE FAILED (exit $PROBE_RC) -- nothing launched. Log: $PROBE_LOG" >&2
+        exit "$PROBE_RC"
+    fi
+    DERIVED=$("$PYTHON" -c "print(max(1, int($USABLE / ($ELAPSED / 3.0))))")
+    echo ""
+    echo "  ${ELAPSED}s / 3 epochs  ->  $(( ELAPSED / 3 ))s per epoch (over-estimate)"
+    echo "  -> PV_EPOCHS=$DERIVED for ${BUDGET_H}h"
+    # What weight would put the peak-to-valley term at 30% of the objective.
+    # Reported, NOT applied: pvB's beta_aux is a chosen value, and the point of
+    # the control arm is that the comparison is between two fixed weights.
+    if [ -f configs/campaigns/pv_weight.py ]; then
+        "$PYTHON" configs/campaigns/pv_weight.py "$PROBE_LOG" \
+            --config "$PROBE_CFG" --fraction 0.30 >/dev/null 2>"$LOG_ROOT/pv_weight.txt"
+        [ -s "$LOG_ROOT/pv_weight.txt" ] && sed 's/^/  /' "$LOG_ROOT/pv_weight.txt"
+    fi
+    env PV_EPOCHS="$DERIVED" "$PYTHON" "$CFG_DIR/gen_sweep_configs.py" --pv || exit 1
+    echo ""
+fi
 
 # ---- Preflight every arm before committing GPU-days ------------------------
 # A failing arm is DROPPED, not fatal. One arm's bad config or dead card says
@@ -238,7 +298,7 @@ if [ "$PREFLIGHT" = "1" ] && [ "$TRAIN" = "1" ]; then
         echo "Every arm failed preflight -- nothing left to run." >&2
         echo "If they all report MISSING CONFIG the generated configs are stale" >&2
         echo "or absent; regenerate them first:" >&2
-        echo "  python $CFG_DIR/gen_sweep_configs.py" >&2
+        echo "  python $CFG_DIR/gen_sweep_configs.py --pv" >&2
         exit 2
     fi
     if [ -n "$SKIPPED" ] && [ "${STRICT_PREFLIGHT:-0}" = "1" ]; then

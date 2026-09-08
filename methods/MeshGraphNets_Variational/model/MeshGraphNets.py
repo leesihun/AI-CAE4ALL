@@ -70,7 +70,8 @@ class MeshGraphNets(nn.Module):
             predicted:     [N, output_var] posterior-path prediction
             target:        [N, output_var] graph.y (possibly noised)
             vae_losses:    dict from the posterior-path VAE encoder
-            aux_loss:      scalar aux loss (0 if not training)
+            aux_loss:      scalar peak-to-valley loss on the decoded field
+                           (0 if not training or use_vae is off)
             prior_outputs: None, or dict with exactly one of:
                 'prior_params': {'logits', 'mu', 'log_std'[, 'cov_factor']}
                                 (prior_family gmm)
@@ -286,11 +287,13 @@ class EncoderProcessorDecoder(nn.Module):
                     self._build_z_conditioners(self.mp_per_level[2 * L - i]))
             self.ms_z_fusers_coarsest = self._build_z_conditioners(self.mp_per_level[L])
 
-        self.aux_decoder = build_mlp(
-            self.vae_latent_dim, self.latent_dim,
-            2 * self.node_output_size,
-            layer_norm=False
-        )
+        # Which field row the peak-to-valley term scores. 2 = z_disp in the
+        # (x_disp, y_disp, z_disp) state block, the row the warpage metric reads.
+        self.pv_channel = int(self.config.get('pv_channel', 2))
+        if not 0 <= self.pv_channel < self.node_output_size:
+            raise ValueError(
+                f'pv_channel {self.pv_channel} is outside the '
+                f'{self.node_output_size} output rows.')
         print(f"  VAE: ENABLED (z_dim={self.vae_latent_dim}, vae_mp_layers={vae_mp_layers})")
 
     # ── VAE helpers ──────────────────────────────────────────────────────────
@@ -349,25 +352,52 @@ class EncoderProcessorDecoder(nn.Module):
         z = torch.randn(B, self.num_z, self.vae_latent_dim, device=device, dtype=dtype)
         return z, empty_losses
 
-    def _aux_loss(self, z, original_y, original_batch, N, device):
-        """MSE from z (fine slot) to per-graph target mean/std — anchors z to
-        output statistics and prevents posterior collapse."""
-        batch = (original_batch if original_batch is not None
-                 else torch.zeros(N, dtype=torch.long, device=device))
-        z_for_aux = z[:, 0, :] if z.dim() == 3 else z
-        B = z_for_aux.shape[0]
-        y_mean = scatter(original_y, batch, dim=0, dim_size=B, reduce='mean')
-        y_centered = original_y - y_mean[batch]
-        y_std = scatter(y_centered.pow(2), batch, dim=0, dim_size=B, reduce='mean').sqrt()
-        aux_target = torch.cat([y_mean, y_std], dim=-1)
-        return torch.nn.functional.mse_loss(self.aux_decoder(z_for_aux), aux_target)
+    def _pv_loss(self, predicted, original_y, batch, B):
+        """MSE on the per-graph PEAK-TO-VALLEY of the DECODED field.
+
+        The scored statistic is max(z_disp) - min(z_disp) over a part's nodes.
+        This puts gradient directly on it rather than hoping a node-wise MSE
+        reaches the extremes on its own.
+
+        It replaces a head that regressed per-graph [mean, std] FROM z. That
+        head could not move the measured dispersion for three reasons, and this
+        term fixes each: it reads the DECODER OUTPUT (nothing tied a z-readout
+        to the field the rollout writes), it uses the extreme-value statistic
+        that is actually scored (not a node-axis std), and because each
+        posterior sample comes from a DIFFERENT realization of the part,
+        tracking that realization's own peak-to-valley is what creates the
+        z -> spread sensitivity that `sd_ratio` measures.
+
+        `graph.y` is a channel-wise z-score of the field and the mean cancels in
+        a difference, so max-min here is the true peak-to-valley divided by that
+        channel's sigma -- a constant, absorbed into `beta_aux`. No
+        denormalization needed, and no extra forward: `predicted` is already
+        materialised for the reconstruction term.
+
+        Valid only where the model predicts the ABSOLUTE field, i.e. the static
+        (num_timesteps == 1) case where mesh_dataset sets
+        `target_delta = y_raw.copy()`. For T > 1 `graph.y` is a step delta and
+        its peak-to-valley is not the field's; the training loop refuses that
+        combination rather than scoring the wrong quantity.
+        """
+        if original_y is None or not self.training:
+            return 0.0
+        c = self.pv_channel
+        pred_c = predicted[:, c].float()
+        true_c = original_y[:, c].float()
+        pv_pred = (scatter(pred_c, batch, dim=0, dim_size=B, reduce='max')
+                   - scatter(pred_c, batch, dim=0, dim_size=B, reduce='min'))
+        pv_true = (scatter(true_c, batch, dim=0, dim_size=B, reduce='max')
+                   - scatter(true_c, batch, dim=0, dim_size=B, reduce='min'))
+        return torch.nn.functional.mse_loss(pv_pred, pv_true)
 
     def _prepare_z(self, graph, original_y, original_x, original_edge_index,
                    original_edge_attr, original_batch, use_posterior, fixed_z):
         """Shared VAE step for both processor paths.
 
         Returns (z [B, num_z, D], z_per_node for slot 0, batch index,
-        vae_losses dict, aux_loss scalar).
+        vae_losses dict). The peak-to-valley term needs the decoded field, so
+        it is computed by the callers after `self.decoder(...)`, not here.
         """
         N = graph.x.shape[0]
         device = graph.x.device
@@ -378,10 +408,7 @@ class EncoderProcessorDecoder(nn.Module):
             original_batch, N, device, graph.x.dtype, use_posterior, fixed_z=fixed_z,
         )
         z_per_node = z[:, 0, :][batch_bc] if z.dim() == 3 else z[batch_bc]
-        aux_loss = 0.0
-        if self.training and original_y is not None:
-            aux_loss = self._aux_loss(z, original_y, original_batch, N, device)
-        return z, z_per_node, batch_bc, vae_losses, aux_loss
+        return z, z_per_node, batch_bc, vae_losses
 
     # ── Forward ──────────────────────────────────────────────────────────────
 
@@ -405,8 +432,10 @@ class EncoderProcessorDecoder(nn.Module):
         vae_losses = {'mmd': torch.zeros((), device=graph.x.device, dtype=torch.float32)}
         aux_loss = 0.0
         z_per_node = None
+        z = None
+        batch_bc = None
         if self.use_vae:
-            _, z_per_node, _, vae_losses, aux_loss = self._prepare_z(
+            z, z_per_node, batch_bc, vae_losses = self._prepare_z(
                 graph, original_y, original_x, original_edge_index,
                 original_edge_attr, original_batch, use_posterior, fixed_z,
             )
@@ -424,7 +453,10 @@ class EncoderProcessorDecoder(nn.Module):
                 self.z_fusers if self.use_vae else None, z_per_node,
             )
 
-        return self.decoder(graph), vae_losses, aux_loss
+        predicted = self.decoder(graph)
+        if self.use_vae:
+            aux_loss = self._pv_loss(predicted, original_y, batch_bc, z.shape[0])
+        return predicted, vae_losses, aux_loss
 
     def _forward_multiscale(self, graph, use_posterior, fixed_z):
         L = self.multiscale_levels
@@ -446,7 +478,7 @@ class EncoderProcessorDecoder(nn.Module):
         current_z_per_node = None
         current_batch = None
         if self.use_vae:
-            z, current_z_per_node, current_batch, vae_losses, aux_loss = self._prepare_z(
+            z, current_z_per_node, current_batch, vae_losses = self._prepare_z(
                 graph, original_y, original_x, original_edge_index,
                 original_edge_attr, original_batch, use_posterior, fixed_z,
             )
@@ -521,7 +553,10 @@ class EncoderProcessorDecoder(nn.Module):
                 self.post_blocks[i], current_graph, z_fusers_post, level_z_per_node
             )
 
-        return self.decoder(current_graph), vae_losses, aux_loss
+        predicted = self.decoder(current_graph)
+        if self.use_vae:
+            aux_loss = self._pv_loss(predicted, original_y, current_batch, z.shape[0])
+        return predicted, vae_losses, aux_loss
 
     def _extract_level_data(self, graph, L):
         """Extract per-level coarsening topology from graph before encoder drops custom attrs."""

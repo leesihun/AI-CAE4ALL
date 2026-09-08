@@ -60,6 +60,9 @@ REMOVED_LATENT_KEYS = frozenset(
         "use_vae", "vae_latent_dim", "vae_mp_layers", "vae_graph_aware",
         "posterior_min_std", "num_z", "z_conditioning", "mmd_bandwidth",
         "mmd_gather_ranks", "lambda_mmd", "beta_aux", "alpha_recon", "recon_loss",
+        # Field row the peak-to-valley auxiliary term scores; that term lives
+        # on the variational decoder, which this method does not have.
+        "pv_channel",
         "prior_type", "use_conditional_prior", "prior_family", "prior_nll_weight",
         "prior_fm_steps", "prior_fm_solver", "prior_mp_layers", "prior_hidden_dim",
         "prior_temperature", "prior_kl_reg_weight", "prior_cov_rank",

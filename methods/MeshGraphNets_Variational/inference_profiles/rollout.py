@@ -475,6 +475,25 @@ def _save_rollout_h5(output_path, sample_id, all_states, ctx, part_ids, output_d
         f.flush()
 
 
+def _load_weights(model, state_dict, source):
+    """Load weights, dropping tensors the current model no longer defines.
+
+    Checkpoints trained before the auxiliary term became a peak-to-valley loss
+    on the decoded field carry `aux_decoder.*` parameters. That head is gone, so
+    a strict load rejects them and every pre-change checkpoint -- including the
+    trained sweep arms a new run is compared against -- becomes unloadable. The
+    head was training-only and never ran at inference, so dropping its weights
+    changes no prediction.
+    """
+    stale = [k for k in state_dict if k.startswith('aux_decoder.')]
+    if stale:
+        state_dict = {k: v for k, v in state_dict.items() if k not in stale}
+        print(f'  Dropped {len(stale)} legacy aux_decoder tensor(s) '
+              f'(training-only head, no longer in the model)')
+    model.load_state_dict(state_dict)
+    print(f'  Loaded {source} from checkpoint')
+
+
 def _load_model_from_checkpoint(config, checkpoint, device):
     """Rebuild MeshGraphNets from a checkpoint and load (EMA-preferred) weights."""
     model = MeshGraphNets(config, str(device)).to(device)
@@ -485,11 +504,10 @@ def _load_model_from_checkpoint(config, checkpoint, device):
         # avoiding a fragile AveragedModel reconstruction at inference.
         ema_sd = checkpoint['ema_state_dict']
         model_sd = {k[len('module.'):]: v for k, v in ema_sd.items() if k.startswith('module.')}
-        model.load_state_dict(model_sd)
-        print("  Loaded EMA weights from checkpoint")
+        _load_weights(model, model_sd, 'EMA weights')
     else:
-        model.load_state_dict(checkpoint['model_state_dict'])
-        print("  Loaded training weights from checkpoint (no EMA available)")
+        _load_weights(model, checkpoint['model_state_dict'],
+                      'training weights (no EMA available)')
     model.eval()
 
     total_params = sum(p.numel() for p in model.parameters())
