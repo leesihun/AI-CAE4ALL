@@ -56,7 +56,13 @@ def single_worker(config, config_filename='config.txt'):
     # ---- DataLoaders ----
     print("\nCreating dataloaders...")
     num_workers = int(config.get('num_workers', 0))
-    pin_memory = torch.cuda.is_available()
+    # Page-locking is serialized in the CUDA driver and these batches are large,
+    # variable-size graphs, so the pinned-buffer cache does not get reused. With
+    # several ranks x several workers all pinning, that lock can cost more than
+    # the faster host-to-device copy buys -- measured at 0.17x a single GPU on an
+    # 8-rank run. Default is the historical behaviour; set pin_memory False in the
+    # config to take it out of the path.
+    pin_memory = bool(config.get('pin_memory', torch.cuda.is_available()))
     config['_pin_memory'] = pin_memory
     mp_context = 'spawn' if num_workers > 0 else None
     train_prefetch = int(config.get('prefetch_factor', 4)) if num_workers > 0 else None

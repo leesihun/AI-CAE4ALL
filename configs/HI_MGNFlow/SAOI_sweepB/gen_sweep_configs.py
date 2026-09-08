@@ -409,93 +409,98 @@ def render_infer(src_lines, arm, tag, gpu, det=False):
     return '\n'.join(out)
 
 
-# ── the convergence run (1 arm, 8 GPUs; NOT part of the design) ──────────────
+
+# ── the long run: 2 sections x learningr, one GPU per arm ───────────────────
 #
-# Arm 1 (b16 tu k0 lr1) is both the design's best direction and its best arm.
-# The open question is budget: at a MEASURED 113 s/epoch -- the config's
-# 500 s/epoch was 4.4x pessimistic -- 8-way DDP fits ~3x the previous 1000
-# epochs into 16 hours.
-# Overridable: run_16h.sh measures a probe and re-runs this generator with the
-# measured value. The default is only an estimate (113 s/epoch at eta(8)=6.5).
-LONG_EPOCHS = int(os.environ.get('LONG_EPOCHS', 2980))
-LONG_BATCH = 2        # x 8 ranks = global 16. Per-rank -- 16 here would be a global 128.
-LONG_GPUS = '0,1,2,3,4,5,6,7'
-LONG_BASE_ARM = 0     # index of arm '1' in arms()
+# The open question is BUDGET, not configuration. flow_t_sampling (0.333) and
+# batch_size (0.288) both point at arm 1, which was also the best arm, and
+# capacity is a 0.074 tie -- while the config's own comment and the README both
+# say 1000 epochs was budget-limited. At a MEASURED 113 s/epoch (the 500 s/epoch
+# estimate was 4.4x pessimistic) 3000 epochs is ~94 h on one card.
+#
+# ONE GPU PER ARM, not DDP: 8-way DDP measured 0.17x a single card, six times
+# SLOWER. So nothing here overrides batch, workers or pin_memory -- 113 s/epoch
+# was measured with the profile's own values.
+#
+# learningr is the axis, because it is the one whose interaction with the budget
+# is direct: the previous run annealed a cosine from 1e-4 to 1e-8 across 1000
+# epochs, and stretching that schedule over 3000 changes which starting rate is
+# right. Capacity was the other candidate and was dropped: latent_dim 192 costs
+# ~1.5x per epoch, so those arms would stop finishing with the rest.
+LONG_EPOCHS = int(os.environ.get('LONG_EPOCHS', 3000))
+LONG_VAL = 30
+LONG_BASE_ARM = 0     # index of arm '1' in arms(): b16 tu k0
+# (arm, section, learningr, gpu). Both methods share ONE eight-card box: these
+# take 0-3 and the four MeshGraphNets-V arms take 4-7, one arm per card.
+LONG_ARMS = [
+    ('long_bot_lr1', 'bot', '0.0001', '0'),
+    ('long_bot_lr3', 'bot', '0.0003', '1'),
+    ('long_top_lr1', 'top', '0.0001', '2'),
+    ('long_top_lr3', 'top', '0.0003', '3'),
+]
 
 
-def long_extra(epochs, val):
+def _half_sources(half):
+    """INFER_SOURCES retargeted at one board section."""
+    return {tag: src.replace('_bot.txt', f'_{half}.txt')
+            for tag, src in INFER_SOURCES.items()}
+
+
+def long_extra(lr, epochs, val):
     return {
-        'batch_size': (str(LONG_BATCH),
-                       f'PER-RANK: x8 ranks = global {LONG_BATCH * 8}. The sweep '
-                       f'measured b16 < b32 by 0.288, so the GLOBAL value is what '
-                       f'must be held, not this one'),
+        'learningr': (lr, 'THE AXIS: which starting rate a cosine stretched over '
+                          f'{epochs} epochs wants'),
         'training_epochs': (
-            'PROBE: 4 epochs, validating on 2 of them -- timing only'
-            if epochs <= 4 else
-            f'{epochs}',
-            'probe' if epochs <= 4 else
+            str(epochs),
+            'PROBE: 4 epochs, validating on 2 -- timing only' if epochs <= 4 else
             '3x the sweep budget. No resume exists and cosine_T0 = epochs - '
             'warmup, so the 1000-epoch run annealed to 1e-8 and cannot be '
             'continued: its flat tail is the SCHEDULE, not convergence'),
-        'val_batch_size': ('16',
-                           'the rank-0 validation loader is NOT sharded and every '
-                           'other rank blocks while it runs, so it must keep the '
-                           'single-GPU batch rather than inherit the per-rank one'),
         'val_interval': (str(val),
                          'each validation integrates the ODE (val_num_samples x '
-                         'flow_steps x 2 forwards under heun) -- the dominant '
-                         'non-training cost, so read it off the probe'),
+                         'flow_steps x 2 forwards per graph) and runs on one card '
+                         'alone -- the dominant non-training cost'),
     }
 
 
 def long_main():
-    base_lines = BASE.read_text(encoding='utf-8').split('\n')
-    while base_lines and base_lines[0].startswith('%'):
-        base_lines.pop(0)
-    values = arms()[LONG_BASE_ARM][2]
-
-    # The probe validates once in three epochs. A flow validation integrates the
-    # ODE (val_num_samples x flow_steps x 2 forwards under heun) and is the
-    # dominant non-training cost, so including one makes the measured per-epoch
-    # figure an OVER-estimate and the derived budget conservative.
-    for name, epochs, val in (('long', LONG_EPOCHS, 30), ('long_probe', 4, 2)):
-        extra = long_extra(epochs, val)
-        extra['training_epochs'] = (str(epochs), extra['training_epochs'][1])
-        axis = ['%     base                arm 1 (b16 tu k0 lr1) -- the design\'s '
-                'best arm AND its best direction',
-                f'%     parallelism         8-way DDP, batch {LONG_BATCH}/rank '
-                f'= global {LONG_BATCH * 8}']
-        if epochs <= 4:
-            axis.append('%     PROBE               4 epochs, 2 validations: '
-                        'read s/epoch and the ODE validation cost, then set '
-                        'training_epochs')
-        (HERE / f'{TRAIN_PREFIX}{name}.txt').write_text(
-            TRAIN_HEADER.format(arm=name, gpu=LONG_GPUS, mate='8-way DDP',
-                                axis_lines='\n'.join(axis))
-            + render(base_lines, values, name, LONG_GPUS, 'no card-sharing arm',
-                     extra=extra),
-            encoding='utf-8', newline='\n')
-
-    # Inference is a single forward per ODE step; one GPU, no DDP.
-    gpu0 = LONG_GPUS.split(',')[0]
-    for tag, src in INFER_SOURCES.items():
-        lines = (PROD / src).read_text(encoding='utf-8').split('\n')
-        while lines and lines[0].startswith('%'):
-            lines.pop(0)
-        for suffix, det in (('', False), ('_det', True)):
-            (HERE / f'{INFER_PREFIX}long_{tag}{suffix}.txt').write_text(
-                INFER_HEADER.format(arm='long', tag=tag + (' (deterministic control)'
-                                                           if det else ''), gpu=gpu0)
-                + render_infer(lines, 'long', tag, gpu0, det=det),
+    for arm, half, lr, gpu in LONG_ARMS:
+        base = (PROD / f'config_train_{half}.txt').read_text(encoding='utf-8').split('\n')
+        while base and base[0].startswith('%'):
+            base.pop(0)
+        for suffix, epochs, val in (('', LONG_EPOCHS, LONG_VAL),):
+            name = arm + suffix
+            axis = [f"%     section             {half:<8}config_train_{half}.txt",
+                    f"%     learningr           {lr:<8}THE AXIS",
+                    f"%     base                arm 1 (b16 tu k0) -- the design's best",
+                    f"%     gpu {gpu} -- ONE GPU PER ARM (8-way DDP measured 0.17x)"]
+            if suffix:
+                axis.append('%     PROBE: 4 epochs, 2 validations -- read s/epoch and '
+                            'project the finish before committing four days')
+            (HERE / f'{TRAIN_PREFIX}{name}.txt').write_text(
+                TRAIN_HEADER.format(arm=name, gpu=gpu, mate='no card-sharing arm',
+                                    axis_lines='\n'.join(axis))
+                + render(base, arms()[LONG_BASE_ARM][2], name, gpu,
+                         'no card-sharing arm', extra=long_extra(lr, epochs, val)),
                 encoding='utf-8', newline='\n')
-
-    print('convergence run:')
-    print(f"  long        gpu_ids {LONG_GPUS}  batch {LONG_BATCH}/rank "
-          f"(global {LONG_BATCH * 8})  epochs {LONG_EPOCHS}  val_interval 30")
-    print(f"  long_probe  same, 3 epochs with one validation (timing only)")
-    print(f"  + {len(INFER_SOURCES) * 2} inference configs (stochastic + det)")
-    print('ARMS="long"')
-
+        for tag, src in _half_sources(half).items():
+            lines = (PROD / src).read_text(encoding='utf-8').split('\n')
+            while lines and lines[0].startswith('%'):
+                lines.pop(0)
+            for isuffix, det in (('', False), ('_det', True)):
+                (HERE / f'{INFER_PREFIX}{arm}_{tag}{isuffix}.txt').write_text(
+                    INFER_HEADER.format(
+                        arm=arm, gpu=gpu,
+                        tag=f'{tag} ({half})' + (' deterministic control' if det else ''))
+                    + render_infer(lines, arm, tag, gpu, det=det),
+                    encoding='utf-8', newline='\n')
+    print('long run -- 2 sections x learningr, one GPU per arm:')
+    for arm, half, lr, gpu in LONG_ARMS:
+        print(f"  {arm:<14} gpu {gpu}  {half}  learningr {lr}")
+    print(f"  {LONG_EPOCHS} epochs x ~113 s/epoch = ~{LONG_EPOCHS * 113 / 3600:.0f} h")
+    print(f"  + {len(LONG_ARMS)} probes and "
+          f"{len(LONG_ARMS) * len(INFER_SOURCES) * 2} inference configs")
+    print('ARMS="' + ' '.join(a for a, _, _, _ in LONG_ARMS) + '"')
 
 def main():
     base_lines = BASE.read_text(encoding='utf-8').split('\n')

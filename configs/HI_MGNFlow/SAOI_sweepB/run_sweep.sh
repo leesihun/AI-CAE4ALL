@@ -59,10 +59,6 @@
 #   rm dataset/SAOI/saoi_train_bot.mscache.*.h5
 #
 # Environment overrides:
-#   PROBE         1 = time 3 epochs and size training_epochs to BUDGET_H
-#                 before launching (default); 0 = use the config as generated
-#   BUDGET_H      wall-clock target in hours for the sized run (default: 16)
-#   HEADROOM      fraction of BUDGET_H kept back (default: 0.90)
 #   PYTHON        interpreter (default: python)
 #   LOG_ROOT      transcript directory (default: output/chi-mgnflow/saoi_sweepB/run_logs)
 #   ARMS          space-separated arm names (default: all 8)
@@ -113,14 +109,12 @@ cd "$REPO_ROOT" || exit 1
 CFG_DIR="$SCRIPT_DIR"
 LOG_ROOT="${LOG_ROOT:-output/chi-mgnflow/saoi_sweepB/run_logs}"
 
-# Must match gen_sweep_configs.arms() exactly -- it prints this line, so if the
-# generator changes, re-paste its ARMS= output here rather than hand-editing.
-# The convergence run, not the 8-arm factorial. flow_t_sampling (0.333) and
-# batch_size (0.288) both point at arm 1, which was also the best arm, and
-# learningr (0.083) and capacity (0.074) are ties -- the open question is
-# budget, not configuration.
-# Regenerate with: gen_sweep_configs.py --long   (the old grid: no flag)
-DEFAULT_ARMS="long"
+# The long convergence run: BOT and TOP sections x learningr {1e-4, 3e-4},
+# ONE GPU PER ARM. 8-way DDP measured 0.17x a single card. The design's other
+# axes are spent; lr is the one coupled to the BUDGET, since a cosine stretched
+# from 1000 to 3000 epochs changes which starting rate is right.
+# Regenerate with: gen_sweep_configs.py --long   (the old 8-arm grid: no flag)
+DEFAULT_ARMS="long_bot_lr1 long_bot_lr3 long_top_lr1 long_top_lr3"
 ARMS="${ARMS:-$DEFAULT_ARMS}"
 STAGGER="${STAGGER:-10}"   # seconds between arm launches
 # DET=1 runs the deterministic-control inference configs instead of the
@@ -170,62 +164,6 @@ echo "  PYTHON    = $PYTHON"
 echo "  LOG_ROOT  = $LOG_ROOT"
 echo "  ARMS      = $(echo "$ARMS" | wc -w) arms"
 echo ""
-
-# ---- Probe: size the epoch budget before committing the GPUs ---------------
-# Neither tree can resume, and cosine_T0 = training_epochs - warmup, so the
-# epoch count has to be right before the first real step -- a wrong one is a
-# full restart, not an early stop. Four epochs are run, validating on two of
-# them, and the intervals BETWEEN epoch lines are measured: the shortest is a
-# bare epoch, the longest an epoch plus a validation. Start-up, dataset load and
-# a cold hierarchy-cache rebuild all land before the first line and are
-# therefore excluded, which the first version got wrong.
-#
-# It also warms the shared cache, so the real arms do not queue behind whichever
-# one would have built it.
-PROBE="${PROBE:-1}"
-BUDGET_H="${BUDGET_H:-16}"
-HEADROOM="${HEADROOM:-0.90}"
-
-if [ "$PROBE" = "1" ] && [ "$TRAIN" = "1" ]; then
-    USABLE=$("$PYTHON" -c "print(int($BUDGET_H * 3600 * $HEADROOM))")
-    PROBE_CFG="$CFG_DIR/config_train_long_probe.txt"
-    PROBE_LOG="$LOG_ROOT/long_probe.stdout"
-    echo "---- PROBE: 4 epochs to size a ${BUDGET_H}h budget (${USABLE}s usable) ----"
-    if [ ! -f "$PROBE_CFG" ]; then
-        echo "  missing $PROBE_CFG -- run: $PYTHON $CFG_DIR/gen_sweep_configs.py --long" >&2
-        exit 1
-    fi
-    printf '%s PROBE_START\n' "$(date +%s)" > "$PROBE_LOG"
-    # Timestamp only the epoch lines: stderr is merged in, so tqdm's progress
-    # output would otherwise cost one `date` process per redraw.
-    PYTHONUNBUFFERED=1 "$PYTHON" "$REPO_ROOT/AI_CAE4ALL_main.py" \
-        --config "$PROBE_CFG" 2>&1 \
-      | while IFS= read -r line; do
-            case "$line" in
-                Epoch\ *) printf '%s %s\n' "$(date +%s)" "$line" ;;
-                *)        printf '%s\n' "$line" ;;
-            esac
-        done | tee -a "$PROBE_LOG"
-    PROBE_RC=${PIPESTATUS[0]}
-    if [ "$PROBE_RC" != "0" ]; then
-        echo "  PROBE FAILED (exit $PROBE_RC) -- nothing launched. Log: $PROBE_LOG" >&2
-        exit "$PROBE_RC"
-    fi
-    # Measured BETWEEN epoch lines, so process start, dataset load and a cold
-    # hierarchy-cache rebuild are excluded instead of being charged to the
-    # epochs -- dividing total wall time was the first version and it derived
-    # 29 epochs for a run that had already completed 1000.
-    DERIVED=$("$PYTHON" "$REPO_ROOT/configs/campaigns/probe_epochs.py" "$PROBE_LOG" \
-              --budget-s "$USABLE" --val-interval 30 \
-              --baseline-s-per-epoch 113)
-    if [ -z "$DERIVED" ]; then
-        echo "  Could not time the probe -- see $PROBE_LOG" >&2
-        exit 1
-    fi
-    echo "  -> LONG_EPOCHS=$DERIVED for ${BUDGET_H}h"
-    env LONG_EPOCHS="$DERIVED" "$PYTHON" "$CFG_DIR/gen_sweep_configs.py" --long || exit 1
-    echo ""
-fi
 
 # ---- Preflight every arm before committing GPU-days ------------------------
 # A failing arm is DROPPED, not fatal. One arm's bad config or dead card says
@@ -459,16 +397,27 @@ if [ "$DET" = "1" ]; then SCORE_OUT="output/chi-mgnflow/saoi_sweepB/det"; else S
 REPORT="$SCORE_OUT/sweep_results.md"
 if [ "$SCORE" = "1" ]; then
     echo "Scoring the grid..."
-    if "$PYTHON" "$CFG_DIR/score_sweep.py" \
-            --arms $ARMS \
-            ${DET_FLAG} \
-            --python "$PYTHON" \
-            --out-dir "$SCORE_OUT" \
-            --run-logs "$LOG_ROOT" \
-            > "$LOG_ROOT/score_sweep${CFG_SUFFIX}.log" 2>&1; then
-        echo "Scoring complete."
+    # rank_arms.py reads ONLY the spread dumps, so the arm naming is irrelevant
+    # to it -- unlike score_sweep.py, which keys arms to positions in the retired
+    # 2^(4-1) design table and would produce empty main-effect tables here.
+    echo "================= RANKING ================="
+    "$PYTHON" configs/campaigns/rank_arms.py "output/chi-mgnflow/saoi_sweepB/infer" 2>&1 | tee "$LOG_ROOT/rank_arms.log"
+    echo "=========================================="
+    echo ""
+    # The document: roster, every metric, the ranking, and a COMPUTED verdict on
+    # the convergence question this run was launched to answer.
+    if "$PYTHON" configs/campaigns/write_report.py \
+            --kind flow --axis learningr \
+            --label "cHI-MGNflow convergence (learningr)" \
+            --infer "output/chi-mgnflow/saoi_sweepB/infer" \
+            --logs "$SCORE_OUT" \
+            --configs "$CFG_DIR" \
+            --arms "$ARMS" \
+            --out "docs/research/SAOI_LONG_RUN_FLOW.md" > "$LOG_ROOT/write_report.log" 2>&1; then
+        cp "docs/research/SAOI_LONG_RUN_FLOW.md" "$REPORT" 2>/dev/null || true
+        echo "Report written."
     else
-        echo "Scoring FAILED (exit $?) -- see $LOG_ROOT/score_sweep${CFG_SUFFIX}.log" >&2
+        echo "Report FAILED -- see $LOG_ROOT/write_report.log" >&2
         rc=1
     fi
     echo ""
@@ -477,12 +426,14 @@ if [ "$SCORE" = "1" ]; then
         cat "$REPORT"
         echo "==========================================="
         echo ""
-        echo "Report   : $REPORT      <-- paste this file to Claude"
-        echo "Raw JSON : $SCORE_OUT/sweep_results.json"
+        echo "Document : docs/research/SAOI_LONG_RUN_FLOW.md   <-- committed with the repo"
+        echo "Copy     : $REPORT"
+        echo "Ranking  : $LOG_ROOT/rank_arms.log"
     fi
 else
     echo "SCORE=0 -- skipped. Run it later with:"
-    echo "  $PYTHON $CFG_DIR/score_sweep.py --run-logs $LOG_ROOT"
+    echo "  $PYTHON configs/campaigns/rank_arms.py output/chi-mgnflow/saoi_sweepB/infer"
+    echo "  SCORE=1 TRAIN=0 INFER=0 bash $0"
 fi
 
 echo ""

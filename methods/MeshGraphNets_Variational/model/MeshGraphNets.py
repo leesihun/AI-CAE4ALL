@@ -382,6 +382,15 @@ class EncoderProcessorDecoder(nn.Module):
         """
         if original_y is None or not self.training:
             return 0.0
+        # `batch` must index the FINE level, the same rows as `predicted`. On the
+        # multiscale path the caller has a variable that gets coarsened per level,
+        # and passing that one silently scores the wrong nodes whenever the sizes
+        # happen to agree. Say so instead.
+        if batch.shape[0] != predicted.shape[0]:
+            raise RuntimeError(
+                f"_pv_loss got a batch index of {batch.shape[0]} for "
+                f"{predicted.shape[0]} predicted nodes. It needs the FINE-level "
+                f"index (batch_bc from _prepare_z), not a coarsened one.")
         c = self.pv_channel
         pred_c = predicted[:, c].float()
         true_c = original_y[:, c].float()
@@ -477,11 +486,16 @@ class EncoderProcessorDecoder(nn.Module):
         z = None
         current_z_per_node = None
         current_batch = None
+        # Held separately because the descending arm COARSENS current_batch at
+        # every level; the decoder output is fine-level, so anything scoring it
+        # needs the index as it was before that loop ran.
+        fine_batch = None
         if self.use_vae:
             z, current_z_per_node, current_batch, vae_losses = self._prepare_z(
                 graph, original_y, original_x, original_edge_index,
                 original_edge_attr, original_batch, use_posterior, fixed_z,
             )
+            fine_batch = current_batch
 
         # Descending arm (fine → coarse)
         skip_states = []
@@ -555,7 +569,7 @@ class EncoderProcessorDecoder(nn.Module):
 
         predicted = self.decoder(current_graph)
         if self.use_vae:
-            aux_loss = self._pv_loss(predicted, original_y, current_batch, z.shape[0])
+            aux_loss = self._pv_loss(predicted, original_y, fine_batch, z.shape[0])
         return predicted, vae_losses, aux_loss
 
     def _extract_level_data(self, graph, L):

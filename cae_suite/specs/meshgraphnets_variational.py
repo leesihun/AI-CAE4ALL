@@ -27,6 +27,10 @@ VAR_KEYS = frozenset(
         # Batch for the rank-0 (unsharded) validation loader. Defaults to
         # batch_size; set it when a DDP run lowers batch_size per rank.
         "val_batch_size",
+        # False takes page-locking out of the data path. Worth it when several
+        # DDP ranks contend for the driver-serialized pin, which is the
+        # documented bottleneck for large variable-size graph batches.
+        "pin_memory",
         "display_trainset", "display_testset", "use_node_types", "use_world_edges",
         "world_radius_multiplier", "world_max_num_neighbors", "world_edge_backend",
         "coarse_world_edges", "use_parallel_stats", "static_cache_per_worker",

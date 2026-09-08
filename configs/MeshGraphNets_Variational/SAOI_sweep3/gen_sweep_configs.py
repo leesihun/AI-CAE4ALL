@@ -463,99 +463,94 @@ def render(base_lines, values, arm, gpu, mate, extra=None):
     return '\n'.join(out)
 
 
-# ── the peak-to-valley run (2 arms, 3 GPUs each; NOT part of the design) ─────
+
+# ── the long run: 2 sections x beta_aux, one GPU per arm ────────────────────
 #
-# `beta_aux` no longer weights the old z-readout head that regressed per-graph
-# [mean, std]; it weights an MSE on the per-graph PEAK-TO-VALLEY of the DECODED
-# field (MeshGraphNets._pv_loss) -- the statistic the warpage report actually
-# scores. The old head could not move `sd_ratio` (0.449-0.526 on every arm)
-# because it read `z` rather than the decoder output, used a node-axis std
-# rather than an extreme-value statistic, and at beta_aux 1.0 against
-# alpha_recon 1000 was ~1% of the objective.
+# `beta_aux` weights an MSE on the per-graph PEAK-TO-VALLEY of the DECODED field
+# (MeshGraphNets._pv_loss) -- the statistic the warpage report scores. It
+# replaced a head that regressed per-graph [mean, std] FROM z, which could not
+# move sd_ratio (0.449-0.526 on every arm of the 8-arm sweep) because it read z
+# rather than the decoder output, used a node-axis std rather than an
+# extreme-value statistic, and at beta_aux 1.0 against alpha_recon 1000 was ~1%
+# of the objective.
 #
-# Two arms, because the head was DELETED: without a beta_aux 0 control there is
-# no way to separate the new term's effect from the removal of the old one.
-# Overridable: run_16h.sh measures a probe and re-runs this generator with the
-# measured value. The default is only an estimate (346 s/epoch at eta(3)=2.6).
-PV_EPOCHS = int(os.environ.get('PV_EPOCHS', 390))
-PV_BATCH = 5          # x 3 ranks = global 15. Per-rank -- 16 here would be a global 48.
+# ONE GPU PER ARM, not DDP: 8-way DDP measured 0.17x a single card. So nothing
+# here overrides batch, workers or pin_memory -- 346 s/epoch was measured with
+# the profile's own values and this run has to stay comparable to it.
+PV_EPOCHS = int(os.environ.get('PV_EPOCHS', 1000))
 PV_VAL = 30
-PV_BASE_ARM = 2       # index of arm '3' in arms(): best sd_ratio, and the arm
-                      # the latent-inflation curve was measured on
+PV_BASE_ARM = 2       # index of arm '3' in arms(): best sd_ratio of the sweep,
+                      # and the arm the latent-inflation curve was measured on
+# (arm, section, beta_aux, gpu). Both methods share ONE eight-card box: the
+# four cHI-MGNflow arms take 0-3 and these take 4-7, one arm per card with
+# nothing shared. That also keeps this method off GPU 1, which it cannot use.
 PV_ARMS = [
-    ('pvA', '0', '0,2,3',
-     'CONTROL: no auxiliary term at all (isolates the deleted head)'),
-    # 100, chosen: alpha_recon is 1000 and the peak-to-valley term is a per-graph
-    # scalar against a per-node-per-feature mean, so matching the weights would
-    # let it dominate per element. The probe prints what weight would put it at
-    # a target share of the objective -- read it, do not let it overwrite this.
-    ('pvB', os.environ.get('PV_BETA', '100'), '4,5,6',
-     'peak-to-valley MSE on the decoded field'),
+    ('pv_bot_a0',   'bot', '0',   '4'),
+    ('pv_bot_a100', 'bot', '100', '5'),
+    ('pv_top_a0',   'top', '0',   '6'),
+    ('pv_top_a100', 'top', '100', '7'),
 ]
+PV_NOTE = {
+    '0':   'CONTROL: no auxiliary term at all (isolates the deleted head)',
+    '100': 'peak-to-valley MSE on the decoded field',
+}
 
 
-def pv_extra(beta, epochs, val, note):
+def _half_sources(half):
+    """INFER_SOURCES retargeted at one board section."""
+    return {tag: src.replace('_bot.txt', f'_{half}.txt')
+            for tag, src in INFER_SOURCES.items()}
+
+
+def pv_extra(beta, epochs, val):
     return {
-        'beta_aux': (beta, note),
-        'Batch_size': (str(PV_BATCH),
-                       f'PER-RANK: x3 ranks = global {PV_BATCH * 3}. The sweep '
-                       f'measured b16 < b32 by 0.288, so the global value is '
-                       f'what must be held, not this one'),
-        'Training_epochs': (str(epochs), 'PROBE: 4 epochs, validating on 2 of them -- timing only' if epochs <= 4 else
-                            'sized to a 16h wall clock at 3 GPUs; no resume '
-                            'exists and cosine_T0 = epochs - warmup, so this '
-                            'is a COMPLETE run at its own schedule, not a '
-                            'truncated 1000-epoch one'),
+        'beta_aux': (beta, PV_NOTE[beta]),
+        'Training_epochs': (
+            str(epochs),
+            'PROBE: 4 epochs, validating on 2 -- timing only' if epochs <= 4 else
+            'no resume exists and cosine_T0 = epochs - warmup, so this is a '
+            'COMPLETE run at its own schedule; ~346 s/epoch measured on one card'),
         'val_interval': (str(val), 'CRPS is the selection metric'),
-        'val_batch_size': ('16',
-                           'the rank-0 validation loader is NOT sharded, so it must keep the '
-                           'single-GPU batch rather than inherit the per-rank one'),
     }
 
 
 def pv_main():
-    base_lines = BASE.read_text(encoding='utf-8').split('\n')
-    while base_lines and base_lines[0].startswith('%'):
-        base_lines.pop(0)
-    values = arms()[PV_BASE_ARM][2]
-
     written = []
-    for arm, beta, gpus, note in PV_ARMS:
-        # The probe validates once in three epochs: including a validation makes
-        # the measured per-epoch cost an OVER-estimate (the real run validates
-        # every PV_VAL), so the derived budget errs toward finishing early.
-        for suffix, epochs, val in (('', PV_EPOCHS, PV_VAL), ('_probe', 4, 2)):
+    for arm, half, beta, gpu in PV_ARMS:
+        base = (PROD / f'config_train_{half}.txt').read_text(encoding='utf-8').split('\n')
+        while base and base[0].startswith('%'):
+            base.pop(0)
+        for suffix, epochs, val in (('', PV_EPOCHS, PV_VAL),):
             name = arm + suffix
-            head = HEADER.format(
-                arm=name, gpu=gpus, mate='no card-sharing arm',
-                axis_lines=(f"%     beta_aux              {beta:<6}{note}" + '\n' +
-                            f"%     base                  arm 3 (cc g1 c0 r100)" +
-                            ('\n%     PROBE: 4 epochs, 2 validations -- the mix is what '
-                             's/epoch and the aux/recon balance, then set '
-                             'Training_epochs' if suffix else '')))
+            axis = [f"%     section               {half:<6}config_train_{half}.txt",
+                    f"%     beta_aux              {beta:<6}{PV_NOTE[beta]}",
+                    f"%     base                  arm 3 (cc g1 c0 r100)",
+                    f"%     gpu {gpu} -- ONE GPU PER ARM (8-way DDP measured 0.17x)"]
+            if suffix:
+                axis.append('%     PROBE: 4 epochs, 2 validations -- read s/epoch and '
+                            'project the finish before committing four days')
             (HERE / f'{TRAIN_PREFIX}{name}.txt').write_text(
-                head + render(base_lines, values, name, gpus, 'no card-sharing arm',
-                              extra=pv_extra(beta, epochs, val, note)),
+                HEADER.format(arm=name, gpu=gpu, mate='no card-sharing arm',
+                              axis_lines='\n'.join(axis))
+                + render(base, arms()[PV_BASE_ARM][2], name, gpu,
+                         'no card-sharing arm', extra=pv_extra(beta, epochs, val)),
                 encoding='utf-8', newline='\n')
             written.append(name)
-        # Inference is a single forward per draw; one GPU, no DDP.
-        for tag, src in INFER_SOURCES.items():
-            src_lines = (PROD / src).read_text(encoding='utf-8').split('\n')
-            while src_lines and src_lines[0].startswith('%'):
-                src_lines.pop(0)
+        for tag, src in _half_sources(half).items():
+            lines = (PROD / src).read_text(encoding='utf-8').split('\n')
+            while lines and lines[0].startswith('%'):
+                lines.pop(0)
             (HERE / f'{INFER_PREFIX}{arm}_{tag}.txt').write_text(
-                INFER_HEADER.format(arm=arm, tag=tag, gpu=gpus.split(',')[0])
-                + render_infer(src_lines, arm, tag, gpus.split(',')[0], values),
+                INFER_HEADER.format(arm=arm, tag=f'{tag} ({half})', gpu=gpu)
+                + render_infer(lines, arm, tag, gpu, arms()[PV_BASE_ARM][2]),
                 encoding='utf-8', newline='\n')
-    print('peak-to-valley run:')
-    for arm, beta, gpus, note in PV_ARMS:
-        print(f"  {arm:<6} gpu_ids {gpus:<8} beta_aux {beta:<6} {note}")
-    print(f"  + {len(PV_ARMS)} probe configs and "
-          f"{len(PV_ARMS) * len(INFER_SOURCES)} inference configs")
-    print(f"  epochs {PV_EPOCHS}, batch {PV_BATCH}/rank "
-          f"(global {PV_BATCH * 3}), val_interval {PV_VAL}")
-    print('PV_ARMS="' + ' '.join(a for a, _, _, _ in PV_ARMS) + '"')
-
+    print('long run -- 2 sections x beta_aux, one GPU per arm:')
+    for arm, half, beta, gpu in PV_ARMS:
+        print(f"  {arm:<12} gpu {gpu}  {half}  beta_aux {beta:<4} {PV_NOTE[beta]}")
+    print(f"  {PV_EPOCHS} epochs x ~346 s/epoch = ~{PV_EPOCHS * 346 / 3600:.0f} h")
+    print(f"  + {len(PV_ARMS)} probes and {len(PV_ARMS) * len(INFER_SOURCES)} "
+          f"inference configs")
+    print('ARMS="' + ' '.join(a for a, _, _, _ in PV_ARMS) + '"')
 
 def main():
     base_lines = BASE.read_text(encoding='utf-8').split('\n')
