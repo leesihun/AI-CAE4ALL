@@ -4,7 +4,7 @@
 %
 %   arm        2_2
 %   eval set   sm_l345u (bot)   (also used as `eval_dataset`: it carries the true fields)
-%   gpu        9   (the GPU this arm trained on)
+%   gpu        3   (the GPU this arm trained on)
 %
 %   Writes NO trajectory files. What it produces, per arm and eval set:
 %     histogram_compare.png   GT vs generated z_disp spread (max - min)
@@ -13,7 +13,7 @@
 %   ============================================================
 model	MeshGraphNets-V  # MeshGraphNets, MeshGraphNets-V, point_deeponet, deeponet, fno, gino, transolver, sdfflow
 mode	inference  # Train / Inference
-gpu_ids	9  # the GPU this arm trained on
+gpu_ids	3  # the GPU this arm trained on
 log_file_dir	../../output/meshgraphnets-v/saoi_sweep3/2_2.infer_sm_l345u.log
 modelpath	../../output/meshgraphnets-v/saoi_sweep3/2_2.pth
 inference_output_dir	../../output/meshgraphnets-v/saoi_sweep3/infer/2_2/sm_l345u

@@ -11,8 +11,8 @@
 %     section             bot     config_train_bot.txt
 %     learningr           0.0001  THE AXIS
 %     base                arm 1 (b16 tu k0) -- the design's best
-%     gpu 14 -- ONE GPU PER ARM (8-way DDP measured 0.17x)
-%     gpu 14 -- one arm per card (no card-sharing arm)
+%     gpu 0 -- ONE GPU PER ARM (8-way DDP measured 0.17x)
+%     gpu 0 -- one arm per card (no card-sharing arm)
 %
 %   Everything else is ../SAOI_all_input/config_train_bot.txt.
 %
@@ -22,7 +22,7 @@
 %   ============================================================
 model	chi-mgnflow  # MeshGraphNets, MeshGraphNets-V, chi-mgnflow, transolver, ...
 mode	train  # train / inference
-gpu_ids	14  # one GPU; no card-sharing arm shares it
+gpu_ids	0  # one GPU; no card-sharing arm shares it
 parallel_mode	ddp
 log_file_dir	../../output/chi-mgnflow/saoi_sweepB/2_1.log
 modelpath	../../output/chi-mgnflow/saoi_sweepB/2_1.pth

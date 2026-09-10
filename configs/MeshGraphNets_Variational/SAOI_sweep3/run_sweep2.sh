@@ -29,6 +29,18 @@
 #   the scoring step, so the document covers the whole ladder instead of six
 #   rungs of ten. Arms with no dump yet are printed as such, not dropped.
 #
+# CARDS
+#   The arms pin their own cards via gpu_ids, set when the configs were
+#   generated. The default assumes a SECOND eight-card box numbered 0-7:
+#   cHI-MGNflow takes 0-1 and the six MeshGraphNets-V rungs take 2-7.
+#
+#   The first attempt wrote them as 8-15, as though the added GPUs extended
+#   one machine's numbering, and preflight refused every arm with
+#   ENV-CUDA-002 before any of them ran. If the real layout differs,
+#   regenerate with the cards you have -- nothing else changes:
+#
+#     DOE2_GPUS="<ids>" python <this folder>/gen_sweep_configs.py --pv
+#
 # Environment overrides (everything else is run_sweep.sh's):
 #   PYTHON     interpreter (default: python)
 #   STAGGER    seconds between arm launches (default: 10)

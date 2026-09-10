@@ -9,8 +9,8 @@
 %     section               bot   config_train_bot.txt
 %     beta_aux              10    dose-response: at the estimated balance point
 %     base                  arm 3 (cc g1 c0 r100)
-%     gpu 9 -- ONE GPU PER ARM (8-way DDP measured 0.17x)
-%     gpu 9 -- one arm per card (no card-sharing arm)
+%     gpu 3 -- ONE GPU PER ARM (8-way DDP measured 0.17x)
+%     gpu 3 -- one arm per card (no card-sharing arm)
 %
 %   Everything else is config_train_bot.txt, except the sweep-scoped keys
 %   (batch, workers, epochs, intervals, cache-keep, best_by, vae_latent_dim)
@@ -18,7 +18,7 @@
 %   ============================================================
 model	MeshGraphNets-V  # MeshGraphNets, MeshGraphNets-V, point_deeponet, deeponet, fno, gino, transolver, sdfflow
 mode	train  # Train / Inference
-gpu_ids	9  # one GPU; no card-sharing arm
+gpu_ids	3  # one GPU; no card-sharing arm
 parallel_mode	ddp  # ddp, model_split
 log_file_dir	../../output/meshgraphnets-v/saoi_sweep3/2_2.log
 modelpath	../../output/meshgraphnets-v/saoi_sweep3/2_2.pth

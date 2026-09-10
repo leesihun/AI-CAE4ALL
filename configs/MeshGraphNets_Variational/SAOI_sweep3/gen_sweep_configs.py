@@ -484,6 +484,14 @@ PV_BASE_ARM = 2       # index of arm '3' in arms(): best sd_ratio of the sweep,
 # (arm, section, beta_aux, gpu). Both methods share ONE eight-card box: the
 # four cHI-MGNflow arms take 0-3 and these take 4-7, one arm per card with
 # nothing shared. That also keeps this method off GPU 1, which it cannot use.
+# The six DOE-2 rungs' cards. Default fills a second eight-card box together
+# with the two cHI-MGNflow arms (which take 0-1), and keeps this method off
+# card 1 -- the one it could not use on the first box.
+DOE2_GPUS = os.environ.get('DOE2_GPUS', '2 3 4 5 6 7').replace(',', ' ').split()
+if len(DOE2_GPUS) < 6:
+    raise SystemExit(
+        f'DOE2_GPUS needs 6 card ids for the dose-response rungs, '
+        f'got {len(DOE2_GPUS)}: {DOE2_GPUS}')
 PV_ARMS = [
     # Cards 4-7 are already running: the control and the weight under
     # suspicion. Cards 8-13 are the dose-response, because two points cannot
@@ -497,12 +505,17 @@ PV_ARMS = [
     # inference subtree are all built from, so 2_1 gives config_train_2_1.txt
     # and 2_1.pth. The design point of each is in its own header, in the
     # generator's printed map, and in the report's roster table.
-    ('2_1', 'bot', '3',   '8'),
-    ('2_2', 'bot', '10',  '9'),
-    ('2_3', 'bot', '30',  '10'),
-    ('2_4', 'top', '3',   '11'),
-    ('2_5', 'top', '10',  '12'),
-    ('2_6', 'top', '30',  '13'),
+    #
+    # Cards come from DOE2_GPUS because the first assignment guessed 8-13, as
+    # though the added GPUs extended one machine's numbering; a separate box
+    # numbers its own from 0, and preflight rejected every arm with
+    # ENV-CUDA-002 before any of them ran.
+    ('2_1', 'bot', '3',   DOE2_GPUS[0]),
+    ('2_2', 'bot', '10',  DOE2_GPUS[1]),
+    ('2_3', 'bot', '30',  DOE2_GPUS[2]),
+    ('2_4', 'top', '3',   DOE2_GPUS[3]),
+    ('2_5', 'top', '10',  DOE2_GPUS[4]),
+    ('2_6', 'top', '30',  DOE2_GPUS[5]),
 ]
 # The rungs not yet under way, so they can be launched without disturbing the
 # four arms already training.

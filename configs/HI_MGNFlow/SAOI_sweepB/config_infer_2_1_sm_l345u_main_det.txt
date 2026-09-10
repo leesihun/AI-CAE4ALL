@@ -4,7 +4,7 @@
 %
 %   arm        2_1
 %   eval set   sm_l345u_main (bot) deterministic control   (also `eval_dataset`: it carries the true fields)
-%   gpu        14   (the GPU this arm trained on)
+%   gpu        0   (the GPU this arm trained on)
 %
 %   Writes NO trajectory files. Per arm and eval set it produces:
 %     histogram_compare.png   GT vs generated z_disp spread (max - min)
@@ -13,7 +13,7 @@
 %   ============================================================
 model	chi-mgnflow
 mode	inference  # Train / Inference
-gpu_ids	14  # the GPU this arm trained on
+gpu_ids	0  # the GPU this arm trained on
 log_file_dir	../../output/chi-mgnflow/saoi_sweepB/2_1.infer_sm_l345u_main_det.log
 modelpath	../../output/chi-mgnflow/saoi_sweepB/2_1.pth
 inference_output_dir	../../output/chi-mgnflow/saoi_sweepB/infer/det/2_1/sm_l345u_main

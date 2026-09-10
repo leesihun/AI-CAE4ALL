@@ -4,7 +4,7 @@
 %
 %   arm        2_2
 %   eval set   s26fe_sec (top) deterministic control   (also `eval_dataset`: it carries the true fields)
-%   gpu        15   (the GPU this arm trained on)
+%   gpu        1   (the GPU this arm trained on)
 %
 %   Writes NO trajectory files. Per arm and eval set it produces:
 %     histogram_compare.png   GT vs generated z_disp spread (max - min)
@@ -13,7 +13,7 @@
 %   ============================================================
 model	chi-mgnflow
 mode	inference  # Train / Inference
-gpu_ids	15  # the GPU this arm trained on
+gpu_ids	1  # the GPU this arm trained on
 log_file_dir	../../output/chi-mgnflow/saoi_sweepB/2_2.infer_s26fe_sec_det.log
 modelpath	../../output/chi-mgnflow/saoi_sweepB/2_2.pth
 inference_output_dir	../../output/chi-mgnflow/saoi_sweepB/infer/det/2_2/s26fe_sec

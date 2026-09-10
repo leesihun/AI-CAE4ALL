@@ -448,6 +448,13 @@ LONG_BASE_ARM = 0     # index of arm '1' in arms(): b16 tu k0
 # (finalize_moments floors std at 1e-8), so dropping one would have measured
 # nothing. The useful fact is what remains -- flow's conditioning is
 # thickness plus the mesh, and nothing else.
+# The two DOE-2 arms' cards. Default puts them at the bottom of a second
+# eight-card box; the six MeshGraphNets-V rungs take 2-7 of the same box.
+DOE2_GPUS = os.environ.get('DOE2_GPUS', '0 1').replace(',', ' ').split()
+if len(DOE2_GPUS) < 2:
+    raise SystemExit(
+        f'DOE2_GPUS needs 2 card ids for the capacity arms, '
+        f'got {len(DOE2_GPUS)}: {DOE2_GPUS}')
 LONG_CAP = {'latent_dim': '192', 'mp_per_level': '6, 8, 12, 8, 6'}
 LONG_ARMS = [
     ('long_bot_lr1', 'bot', '0.0001', '0',  None),
@@ -456,8 +463,12 @@ LONG_ARMS = [
     ('long_top_lr3', 'top', '0.0003', '3',  None),
     # DOE-2, numbered: 2_1 gives config_train_2_1.txt and 2_1.pth. Which is
     # which is in each config's header and in the report's roster table.
-    ('2_1', 'bot', '0.0001', '14', LONG_CAP),
-    ('2_2', 'top', '0.0001', '15', LONG_CAP),
+    #
+    # Cards come from DOE2_GPUS: the first assignment guessed 14-15, as though
+    # the added GPUs extended one machine's numbering, and preflight rejected
+    # both arms with ENV-CUDA-002 before either ran.
+    ('2_1', 'bot', '0.0001', DOE2_GPUS[0], LONG_CAP),
+    ('2_2', 'top', '0.0001', DOE2_GPUS[1], LONG_CAP),
 ]
 # Not yet under way, so they launch without disturbing the first four.
 LONG_NEW = [a for a, _, _, _, x in LONG_ARMS if x is not None]
