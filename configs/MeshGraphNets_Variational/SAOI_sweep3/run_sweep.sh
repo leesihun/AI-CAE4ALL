@@ -146,6 +146,10 @@ LOG_ROOT="${LOG_ROOT:-output/meshgraphnets-v/saoi_sweep3/run_logs}"
 # aux head was DELETED, so without it the new term cannot be separated from
 # that removal.
 # Regenerate with: gen_sweep_configs.py --pv   (the old 8-arm grid: no flag)
+# DOE-1, the four arms on cards 0-7. The DOE-2 rungs added later live on
+# cards 8-15 and are launched by its folder's run_sweep2.sh, which
+# passes ARMS= explicitly -- so running this bare cannot relaunch an arm
+# that is already mid-flight.
 DEFAULT_ARMS="pv_bot_a0 pv_bot_a100 pv_top_a0 pv_top_a100"
 ARMS="${ARMS:-$DEFAULT_ARMS}"
 STAGGER="${STAGGER:-10}"   # seconds between arm launches

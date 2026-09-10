@@ -114,6 +114,10 @@ LOG_ROOT="${LOG_ROOT:-output/chi-mgnflow/saoi_sweepB/run_logs}"
 # axes are spent; lr is the one coupled to the BUDGET, since a cosine stretched
 # from 1000 to 3000 epochs changes which starting rate is right.
 # Regenerate with: gen_sweep_configs.py --long   (the old 8-arm grid: no flag)
+# DOE-1, the four arms on cards 0-7. The DOE-2 rungs added later live on
+# cards 8-15 and are launched by its folder's run_sweep2.sh, which
+# passes ARMS= explicitly -- so running this bare cannot relaunch an arm
+# that is already mid-flight.
 DEFAULT_ARMS="long_bot_lr1 long_bot_lr3 long_top_lr1 long_top_lr3"
 ARMS="${ARMS:-$DEFAULT_ARMS}"
 STAGGER="${STAGGER:-10}"   # seconds between arm launches

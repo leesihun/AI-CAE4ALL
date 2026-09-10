@@ -432,12 +432,35 @@ LONG_VAL = 30
 LONG_BASE_ARM = 0     # index of arm '1' in arms(): b16 tu k0
 # (arm, section, learningr, gpu). Both methods share ONE eight-card box: these
 # take 0-3 and the four MeshGraphNets-V arms take 4-7, one arm per card.
+# (arm, section, learningr, gpu, extra overrides). None = the profile's own
+# values.
+#
+# The k1 arms raise capacity to the sweep's own upper level. That axis
+# measured 0.074 on W1/sd -- nothing -- while batch_size (the step count)
+# measured 0.288, and a dead capacity axis beside a live step axis is what a
+# run that could not train the model it had looks like. At 3x the budget the
+# ranking can invert. Same 3000 epochs as the lr arms, deliberately: a
+# capacity comparison at a different budget answers a different question.
+# They cost ~1.5x per epoch, so they finish roughly two days later.
+#
+# A cond_var arm was considered and dropped: Part No. and stress are both
+# identically 0 in this data, a constant channel normalizes to exactly 0
+# (finalize_moments floors std at 1e-8), so dropping one would have measured
+# nothing. The useful fact is what remains -- flow's conditioning is
+# thickness plus the mesh, and nothing else.
+LONG_CAP = {'latent_dim': '192', 'mp_per_level': '6, 8, 12, 8, 6'}
 LONG_ARMS = [
-    ('long_bot_lr1', 'bot', '0.0001', '0'),
-    ('long_bot_lr3', 'bot', '0.0003', '1'),
-    ('long_top_lr1', 'top', '0.0001', '2'),
-    ('long_top_lr3', 'top', '0.0003', '3'),
+    ('long_bot_lr1', 'bot', '0.0001', '0',  None),
+    ('long_bot_lr3', 'bot', '0.0003', '1',  None),
+    ('long_top_lr1', 'top', '0.0001', '2',  None),
+    ('long_top_lr3', 'top', '0.0003', '3',  None),
+    # DOE-2, numbered: 2_1 gives config_train_2_1.txt and 2_1.pth. Which is
+    # which is in each config's header and in the report's roster table.
+    ('2_1', 'bot', '0.0001', '14', LONG_CAP),
+    ('2_2', 'top', '0.0001', '15', LONG_CAP),
 ]
+# Not yet under way, so they launch without disturbing the first four.
+LONG_NEW = [a for a, _, _, _, x in LONG_ARMS if x is not None]
 
 
 def _half_sources(half):
@@ -446,8 +469,12 @@ def _half_sources(half):
             for tag, src in INFER_SOURCES.items()}
 
 
-def long_extra(lr, epochs, val):
-    return {
+def long_extra(lr, epochs, val, over=None):
+    extra = {}
+    for k, v in (over or {}).items():
+        extra[k] = (v, 'CAPACITY ARM: the sweep upper level, retested at 3x '
+                       'the budget that made the axis look dead')
+    extra.update({
         'learningr': (lr, 'THE AXIS: which starting rate a cosine stretched over '
                           f'{epochs} epochs wants'),
         'training_epochs': (
@@ -460,11 +487,12 @@ def long_extra(lr, epochs, val):
                          'each validation integrates the ODE (val_num_samples x '
                          'flow_steps x 2 forwards per graph) and runs on one card '
                          'alone -- the dominant non-training cost'),
-    }
+    })
+    return extra
 
 
 def long_main():
-    for arm, half, lr, gpu in LONG_ARMS:
+    for arm, half, lr, gpu, over in LONG_ARMS:
         base = (PROD / f'config_train_{half}.txt').read_text(encoding='utf-8').split('\n')
         while base and base[0].startswith('%'):
             base.pop(0)
@@ -481,7 +509,7 @@ def long_main():
                 TRAIN_HEADER.format(arm=name, gpu=gpu, mate='no card-sharing arm',
                                     axis_lines='\n'.join(axis))
                 + render(base, arms()[LONG_BASE_ARM][2], name, gpu,
-                         'no card-sharing arm', extra=long_extra(lr, epochs, val)),
+                         'no card-sharing arm', extra=long_extra(lr, epochs, val, over)),
                 encoding='utf-8', newline='\n')
         for tag, src in _half_sources(half).items():
             lines = (PROD / src).read_text(encoding='utf-8').split('\n')
@@ -495,12 +523,14 @@ def long_main():
                     + render_infer(lines, arm, tag, gpu, det=det),
                     encoding='utf-8', newline='\n')
     print('long run -- 2 sections x learningr, one GPU per arm:')
-    for arm, half, lr, gpu in LONG_ARMS:
-        print(f"  {arm:<14} gpu {gpu}  {half}  learningr {lr}")
+    for arm, half, lr, gpu, over in LONG_ARMS:
+        tail = "  capacity k1 (latent 192, deeper)" if over else ""
+        print(f"  {arm:<14} gpu {gpu:<3} {half}  learningr {lr}{tail}")
     print(f"  {LONG_EPOCHS} epochs x ~113 s/epoch = ~{LONG_EPOCHS * 113 / 3600:.0f} h")
-    print(f"  + {len(LONG_ARMS)} probes and "
-          f"{len(LONG_ARMS) * len(INFER_SOURCES) * 2} inference configs")
-    print('ARMS="' + ' '.join(a for a, _, _, _ in LONG_ARMS) + '"')
+    print(f"  + {len(LONG_ARMS) * len(INFER_SOURCES) * 2} inference configs "
+          f"(stochastic + deterministic control)")
+    print('ARMS="' + ' '.join(a for a, _, _, _, _ in LONG_ARMS) + '"')
+    print('NEW_ARMS="' + ' '.join(LONG_NEW) + '"   # not yet running')
 
 def main():
     base_lines = BASE.read_text(encoding='utf-8').split('\n')

@@ -485,13 +485,33 @@ PV_BASE_ARM = 2       # index of arm '3' in arms(): best sd_ratio of the sweep,
 # four cHI-MGNflow arms take 0-3 and these take 4-7, one arm per card with
 # nothing shared. That also keeps this method off GPU 1, which it cannot use.
 PV_ARMS = [
+    # Cards 4-7 are already running: the control and the weight under
+    # suspicion. Cards 8-13 are the dose-response, because two points cannot
+    # separate 'the mechanism fails' from 'the weight was wrong' -- and 100 is
+    # ~13x the balance point estimated from realistic recon/aux magnitudes.
     ('pv_bot_a0',   'bot', '0',   '4'),
     ('pv_bot_a100', 'bot', '100', '5'),
     ('pv_top_a0',   'top', '0',   '6'),
     ('pv_top_a100', 'top', '100', '7'),
+    # DOE-2, numbered: the name is what the config file, log, checkpoint and
+    # inference subtree are all built from, so 2_1 gives config_train_2_1.txt
+    # and 2_1.pth. The design point of each is in its own header, in the
+    # generator's printed map, and in the report's roster table.
+    ('2_1', 'bot', '3',   '8'),
+    ('2_2', 'bot', '10',  '9'),
+    ('2_3', 'bot', '30',  '10'),
+    ('2_4', 'top', '3',   '11'),
+    ('2_5', 'top', '10',  '12'),
+    ('2_6', 'top', '30',  '13'),
 ]
+# The rungs not yet under way, so they can be launched without disturbing the
+# four arms already training.
+PV_DOSE = [a for a, _, b, _ in PV_ARMS if b not in ('0', '100')]
 PV_NOTE = {
     '0':   'CONTROL: no auxiliary term at all (isolates the deleted head)',
+    '3':   'dose-response: a decade below the estimated balance point',
+    '10':  'dose-response: at the estimated balance point',
+    '30':  'dose-response: a half-decade above it',
     '100': 'peak-to-valley MSE on the decoded field',
 }
 
@@ -546,11 +566,11 @@ def pv_main():
                 encoding='utf-8', newline='\n')
     print('long run -- 2 sections x beta_aux, one GPU per arm:')
     for arm, half, beta, gpu in PV_ARMS:
-        print(f"  {arm:<12} gpu {gpu}  {half}  beta_aux {beta:<4} {PV_NOTE[beta]}")
+        print(f"  {arm:<12} gpu {gpu:<3} {half}  beta_aux {beta:<4} {PV_NOTE[beta]}")
     print(f"  {PV_EPOCHS} epochs x ~346 s/epoch = ~{PV_EPOCHS * 346 / 3600:.0f} h")
-    print(f"  + {len(PV_ARMS)} probes and {len(PV_ARMS) * len(INFER_SOURCES)} "
-          f"inference configs")
+    print(f"  + {len(PV_ARMS) * len(INFER_SOURCES)} inference configs")
     print('ARMS="' + ' '.join(a for a, _, _, _ in PV_ARMS) + '"')
+    print('DOSE_ARMS="' + ' '.join(PV_DOSE) + '"   # the rungs not yet running')
 
 def main():
     base_lines = BASE.read_text(encoding='utf-8').split('\n')
