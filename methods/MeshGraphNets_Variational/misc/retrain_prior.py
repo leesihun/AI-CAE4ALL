@@ -2,7 +2,7 @@
 
     cd methods/MeshGraphNets_Variational
     python misc/retrain_prior.py \
-        --config ../../configs/MeshGraphNets_Variational/SAOI_sweep3/config_train_pv_top_a100.txt \
+        --config ../../configs/MeshGraphNets_Variational/SAOI_sweep/config_train_8.txt \
         [--epochs 300] [--lr 3e-4] [--prior-hidden 512] [--prior-layers 8] \
         [--no-whiten] [--no-ema] [--out <modelpath stem>_priorfit.pth]
 
@@ -132,10 +132,11 @@ def cosine_lr(step, total, base, floor=1e-6):
 
 # ─────────────────────────────────────────────────────────────────────────────
 
-def resolve_device(cfg):
+def resolve_device(cfg, override=None):
+    """The card to run on: --gpu if given, else the config's gpu_ids."""
     if not torch.cuda.is_available():
         return torch.device('cpu')
-    gid = cfg.get('gpu_ids', 0)
+    gid = cfg.get('gpu_ids', 0) if override is None else override
     if isinstance(gid, list):
         gid = gid[0] if gid else 0
     try:
@@ -190,12 +191,16 @@ def main():
     ap.add_argument('--val-draws', type=int, default=4,
                     help='prior draws per val graph for the spread-ratio proxy')
     ap.add_argument('--out', default=None)
+    ap.add_argument('--gpu', type=int, default=None,
+                    help="card to run on; default is the config's gpu_ids, "
+                         "which is the card the arm TRAINED on and may still "
+                         "be busy")
     a = ap.parse_args()
 
     cfg = load_config(a.config)
     cfg['num_timesteps'] = 1
     cfg['hierarchy_cache_keep'] = True
-    dev = resolve_device(cfg)
+    dev = resolve_device(cfg, a.gpu)
     torch.manual_seed(1234)
 
     # ---- data: same split, same normalizers, NO augmentation --------------

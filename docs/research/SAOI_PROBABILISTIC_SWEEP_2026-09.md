@@ -29,8 +29,11 @@
 factorial each, trained on `dataset/SAOI/saoi_train_bot.h5` and scored on three
 held-out part families. This is the first head-to-head between the two.
 
-Configs: [configs/MeshGraphNets_Variational/SAOI_sweep3/](../../configs/MeshGraphNets_Variational/SAOI_sweep3/),
-[configs/HI_MGNFlow/SAOI_sweepB/](../../configs/HI_MGNFlow/SAOI_sweepB/).
+Configs: `SAOI_sweep3/` and `SAOI_sweepB/`, both **since replaced** by
+[configs/MeshGraphNets_Variational/SAOI_sweep/](../../configs/MeshGraphNets_Variational/SAOI_sweep/)
+and [configs/HI_MGNFlow/SAOI_sweep/](../../configs/HI_MGNFlow/SAOI_sweep/),
+whose arms and axes are different. The numbers below belong to the old
+grids and are not reproducible from the current configs.
 
 > Design context, not implementation truth. Where this and the code disagree,
 > the code is authoritative.
@@ -195,7 +198,7 @@ On this data the endpoints evidently matter more.
    design is 7/8, so main effects are computed 4-vs-3 (the `n=3` groups above)
    and `2^(4-1)` resolution IV does not hold. Arm 2 sits in the losing `c1`
    group, so the capacity conclusion in particular could flip. Re-run:
-   `ARMS="2" TRAIN=1 INFER=1 SCORE=0 bash configs/MeshGraphNets_Variational/SAOI_sweep3/run_sweep.sh`
+   (that sweep's runner is gone; the arm was never re-run)
 
 2. **Only one geometry per eval set.** `infer_dataset` holds a single part, so
    the sweep measures each model's conditional for ONE geometry per family, not
@@ -236,7 +239,7 @@ tuning miss. Inflate `z` around its per-graph center after the prior ODE
 sweeps lam in {1, 1.5, 2, 2.5, 3}:
 
 ```bash
-INFL=1 ARMS="3 7" TRAIN=0 INFER=1 bash configs/MeshGraphNets_Variational/SAOI_sweep3/run_sweep.sh
+(the inflation sweep's runner is gone -- latent inflation was ruled out, see below)
 python configs/campaigns/rank_arms.py output/meshgraphnets-v/saoi_sweep3/infer/infl
 ```
 

@@ -2,8 +2,8 @@
 
     cd methods/MeshGraphNets_Variational
     python misc/posterior_vs_prior.py \
-        --config ../../configs/MeshGraphNets_Variational/SAOI_sweep3/config_infer_pv_top_a100_s26fe_main.txt \
-        [--n-prior 500] [--chunk 16] [--out ../../output/meshgraphnets-v/saoi_sweep3/diag]
+        --config ../../configs/MeshGraphNets_Variational/SAOI_sweep/config_infer_8_s26fe_main.txt \
+        [--n-prior 500] [--chunk 16] [--out ../../output/meshgraphnets-v/saoi_sweep/diag]
 
 THE QUESTION
     Posterior reconstruction is excellent while the generated distribution is
@@ -203,10 +203,11 @@ def verdict(ens, lat):
 # the run
 # ─────────────────────────────────────────────────────────────────────────────
 
-def resolve_device(cfg):
+def resolve_device(cfg, override=None):
+    """The card to run on: --gpu if given, else the config's gpu_ids."""
     if not torch.cuda.is_available():
         return torch.device('cpu')
-    gid = cfg.get('gpu_ids', 0)
+    gid = cfg.get('gpu_ids', 0) if override is None else override
     if isinstance(gid, list):
         gid = gid[0] if gid else 0
     try:
@@ -238,13 +239,17 @@ def main():
     ap.add_argument('--chunk', type=int, default=16,
                     help='graphs decoded per forward; bounds memory only')
     ap.add_argument('--out', default=None, help='directory for the JSON dump')
+    ap.add_argument('--gpu', type=int, default=None,
+                    help="card to run on; default is the config's gpu_ids, "
+                         "which is the card the arm TRAINED on and may still "
+                         "be busy")
     a = ap.parse_args()
 
     cfg = load_config(a.config)
     cfg['num_timesteps'] = 1
     if a.modelpath:
         cfg['modelpath'] = a.modelpath
-    dev = resolve_device(cfg)
+    dev = resolve_device(cfg, a.gpu)
     torch.manual_seed(1234)
 
     # ---- normalizers from the TRAINING split, exactly as the trainer fit them

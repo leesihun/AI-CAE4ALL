@@ -57,7 +57,7 @@ Training_epochs	400
 %   was 4. At flow_det_prob 0.25 a batch of 4 pins only ~1 graph per step to
 %   t=0 -- and best_by det selects on exactly that slice. 16 gives 4 graphs.
 Batch_size	16
-%   was 0.0005. configs/HI_MGNFlow/SAOI_sweepB explores 1e-4..3e-4 and 5e-4 sat
+%   was 0.0005. configs/HI_MGNFlow/SAOI_sweep explores 1e-4..3e-4 and 5e-4 sat
 %   outside it. That sweep is SAOI not DeepJEB -- reasoned, not measured here.
 LearningR	0.0001
 Latent_dim	96

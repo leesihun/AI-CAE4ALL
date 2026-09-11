@@ -3,7 +3,7 @@
 # Diagnose, fix and re-measure MeshGraphNets-V's conditional prior, in one run.
 #
 #   cd methods/MeshGraphNets_Variational
-#   nohup bash misc/fix_prior.sh pv_top_a100 > ../../output/meshgraphnets-v/fix_prior.out 2>&1 &
+#   nohup bash misc/fix_prior.sh 8 > ../../output/meshgraphnets-v/fix_prior.out 2>&1 &
 #
 # The argument is an ARM NAME in --cfg-dir; the train config is
 # config_train_<arm>.txt and the eval sets are its config_infer_<arm>_<tag>.txt.
@@ -39,7 +39,7 @@
 # modelpath at it and the ordinary run_sweep.sh pipeline runs unchanged.
 #
 # Environment:
-#   CFG_DIR       config folder (default: the SAOI_sweep3 arm folder)
+#   CFG_DIR       config folder (default: the SAOI_sweep arm folder)
 #   TAGS          eval sets (default: s26fe_main s26fe_sec sm_l345u)
 #   EPOCHS        prior epochs (default 300)
 #   LR            prior learning rate (default 3e-4)
@@ -47,12 +47,14 @@
 #   PRIOR_LAYERS  rebuild depth, 0 = keep (default 8)
 #   N_PRIOR       prior draws per eval geometry in the diagnostic (default 500)
 #   SKIP_BEFORE   1 = do not re-measure the baseline
+#   GPU           card to run on (default: the config's gpu_ids -- which is the
+#                 card the arm TRAINED on, so set this if that run is still live)
 #   TRAIN_H5      training file for the realization count (default: the config's)
 set -uo pipefail
 
 ARM="${1:-}"
 if [ -z "$ARM" ]; then
-    echo "usage: bash misc/fix_prior.sh <arm name>   e.g. pv_top_a100" >&2
+    echo "usage: bash misc/fix_prior.sh <arm name>   e.g. 8" >&2
     exit 2
 fi
 
@@ -61,7 +63,7 @@ cd "$HERE/.." || exit 1          # methods/MeshGraphNets_Variational
 export PYTHONUNBUFFERED=1
 
 PYTHON="${PYTHON:-python}"
-CFG_DIR="${CFG_DIR:-../../configs/MeshGraphNets_Variational/SAOI_sweep3}"
+CFG_DIR="${CFG_DIR:-../../configs/MeshGraphNets_Variational/SAOI_sweep}"
 TAGS="${TAGS:-s26fe_main s26fe_sec sm_l345u}"
 EPOCHS="${EPOCHS:-300}"
 LR="${LR:-3e-4}"
@@ -69,6 +71,9 @@ PRIOR_HIDDEN="${PRIOR_HIDDEN:-512}"
 PRIOR_LAYERS="${PRIOR_LAYERS:-8}"
 N_PRIOR="${N_PRIOR:-500}"
 SKIP_BEFORE="${SKIP_BEFORE:-0}"
+GPU="${GPU:-}"
+GPU_ARG=""
+[ -n "$GPU" ] && GPU_ARG="--gpu $GPU"
 
 TRAIN_CFG="$CFG_DIR/config_train_${ARM}.txt"
 [ -f "$TRAIN_CFG" ] || { echo "no such train config: $TRAIN_CFG" >&2; exit 1; }
@@ -87,6 +92,7 @@ echo "  train config : $TRAIN_CFG"
 echo "  checkpoint   : $SRC_CKPT"
 echo "  will write   : $NEW_CKPT"
 echo "  eval sets    : $TAGS"
+echo "  card         : ${GPU:-from config (gpu_ids)}"
 echo ""
 
 rc=0
@@ -111,7 +117,7 @@ else
             continue
         fi
         "$PYTHON" misc/posterior_vs_prior.py --config "$cfg" \
-            --n-prior "$N_PRIOR" --tag "${ARM}_${tag}_before" --out "$DIAG_DIR" || rc=1
+            --n-prior "$N_PRIOR" $GPU_ARG --tag "${ARM}_${tag}_before" --out "$DIAG_DIR" || rc=1
     done
 fi
 echo ""
@@ -121,7 +127,7 @@ echo "---- 2. retrain the prior (encoder + decoder frozen) -------------"
 "$PYTHON" misc/retrain_prior.py --config "$TRAIN_CFG" \
     --epochs "$EPOCHS" --lr "$LR" \
     --prior-hidden "$PRIOR_HIDDEN" --prior-layers "$PRIOR_LAYERS" \
-    --out "$NEW_CKPT"
+    --out "$NEW_CKPT" $GPU_ARG
 if [ $? -ne 0 ] || [ ! -f "$NEW_CKPT" ]; then
     echo "  prior retrain FAILED -- no AFTER measurement to make." >&2
     exit 1
@@ -134,7 +140,7 @@ for tag in $TAGS; do
     cfg="$CFG_DIR/config_infer_${ARM}_${tag}.txt"
     [ -f "$cfg" ] || continue
     "$PYTHON" misc/posterior_vs_prior.py --config "$cfg" --modelpath "$NEW_CKPT" \
-        --n-prior "$N_PRIOR" --tag "${ARM}_${tag}_after" --out "$DIAG_DIR" || rc=1
+        --n-prior "$N_PRIOR" $GPU_ARG --tag "${ARM}_${tag}_after" --out "$DIAG_DIR" || rc=1
 done
 
 echo ""

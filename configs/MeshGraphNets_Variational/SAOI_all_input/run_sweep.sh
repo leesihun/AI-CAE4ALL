@@ -2,7 +2,7 @@
 # One-click runner for the SAOI "all input" TOP/BOT production run.
 #
 # This is NOT a hyperparameter sweep (unlike the sibling SAOI_sweep2/
-# SAOI_sweep3 directories, which searched over training recipes). Every config
+# SAOI_sweep directories, which searched over training recipes). Every config
 # here shares ONE fixed recipe; the only thing that varies is:
 #
 #   TRAIN  config_train_top.txt / config_train_bot.txt

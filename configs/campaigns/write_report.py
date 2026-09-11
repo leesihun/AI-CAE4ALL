@@ -3,12 +3,12 @@
 
     python configs/campaigns/write_report.py \
         --label "MeshGraphNets-V peak-to-valley" \
-        --infer output/meshgraphnets-v/saoi_sweep3/infer \
-        --logs  output/meshgraphnets-v/saoi_sweep3 \
-        --configs configs/MeshGraphNets_Variational/SAOI_sweep3 \
-        --arms "pv_bot_a0 pv_bot_a100 pv_top_a0 pv_top_a100" \
+        --infer output/meshgraphnets-v/saoi_sweep/infer \
+        --logs  output/meshgraphnets-v/saoi_sweep \
+        --configs configs/MeshGraphNets_Variational/SAOI_sweep \
+        --arms "1 2 3 4 5 6 7 8" \
         --axis beta_aux \
-        --out docs/research/SAOI_LONG_RUN.md
+        --out docs/research/SAOI_SWEEP_MGNV.md
 
 Everything in the output comes from the dumps and the logs. The two questions
 the run exists to answer get computed verdicts rather than prose:

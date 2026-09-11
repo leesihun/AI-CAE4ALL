@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Rank sweep arms from their spread dumps. Nothing else is read.
 
-    python configs/campaigns/rank_arms.py output/meshgraphnets-v/saoi_sweep3
-    python configs/campaigns/rank_arms.py output/chi-mgnflow/saoi_sweepB
-    python configs/campaigns/rank_arms.py output/meshgraphnets-v/saoi_sweep3 output/chi-mgnflow/saoi_sweepB
+    python configs/campaigns/rank_arms.py output/meshgraphnets-v/saoi_sweep
+    python configs/campaigns/rank_arms.py output/chi-mgnflow/saoi_sweep
+    python configs/campaigns/rank_arms.py output/meshgraphnets-v/saoi_sweep output/chi-mgnflow/saoi_sweep
 
 Finds every spread_values.npz under the given directories, computes the
 metrics from the two arrays inside (gt = ground-truth spreads, gen = generated
