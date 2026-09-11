@@ -205,7 +205,24 @@ def single_worker(config, config_filename='config.txt'):
                     and 'crps' in valid_learned_prior_metrics):
                 select_loss = float(valid_learned_prior_metrics['crps'])
 
-            if use_vae:
+            in_prior_tail = bool(prior_freeze and epoch >= prior_freeze)
+            if in_prior_tail:
+                # The tail optimises ONLY the prior's flow-matching loss, so the
+                # recon / mmd / aux slots are genuinely not being trained. Printing
+                # them as 0.00e+00 on the joint line would read as "reconstruction
+                # is perfect" to anyone tailing the log.
+                crps_str = ''
+                if (do_val and valid_learned_prior_metrics is not None
+                        and 'crps' in valid_learned_prior_metrics):
+                    crps_str = f" | CRPS  {valid_learned_prior_metrics['crps']:.2e}"
+                val_str = f" | Valid  recon={valid_loss:.2e}" if do_val else ''
+                print(
+                    f"Epoch {epoch}/{total_epochs} LR: {current_lr:.2e} | "
+                    f"PRIOR-FIT  fm={train_metrics.get('prior_loss_mean', 0.0):.2e} "
+                    f"(simulator frozen)"
+                    f"{val_str}{crps_str}{vram_str}"
+                )
+            elif use_vae:
                 train_mmd   = train_metrics.get('mmd_mean', 0.0)
                 train_aux   = train_metrics.get('aux_mean', 0.0)
                 train_total = train_metrics.get('total_mean', train_loss)
