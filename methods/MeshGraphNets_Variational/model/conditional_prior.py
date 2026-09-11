@@ -179,6 +179,27 @@ class ConditionalFMPrior(_ConditionalPriorBase):
         self.register_buffer('z_scale', torch.ones(self.flat_dim))
         self.apply(init_weights)
 
+    @torch.no_grad()
+    def fit_standardization(self, mu, logvar, eps=1e-6):
+        """Set z_shift / z_scale from posterior parameters over a dataset.
+
+        mu, logvar: [N, num_z, D] (or already flat [N, flat_dim]).
+
+        A posterior SAMPLE is mu + sigma*eps, so across the set its mean is
+        E[mu] and its variance Var(mu) + E[sigma^2]. Standardizing by those is
+        what puts the FM path's endpoint at unit scale -- the target the
+        velocity net actually regresses -- while sample_n undoes it, so callers
+        keep decoder units. Returns (shift, scale) for logging.
+        """
+        flat_mu = mu.reshape(mu.shape[0], -1).double()
+        flat_var = logvar.reshape(logvar.shape[0], -1).double().exp()
+        shift = flat_mu.mean(dim=0)
+        scale = (flat_mu.var(dim=0, unbiased=False) + flat_var.mean(dim=0)).sqrt()
+        scale = scale.clamp(min=eps)
+        self.z_shift.copy_(shift.to(self.z_shift))
+        self.z_scale.copy_(scale.to(self.z_scale))
+        return shift.float(), scale.float()
+
     def _t_embed(self, t):
         ang = t * self.t_freqs.view(1, -1)
         return torch.cat([torch.sin(ang), torch.cos(ang)], dim=-1)

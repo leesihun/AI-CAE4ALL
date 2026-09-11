@@ -8,6 +8,11 @@ hold bit-identical frozen latents and normalization statistics. The latent batch
 is then sharded and gradients are shared. Rank 0 owns validation, the generation
 test, and checkpoints. FSDP is the intended "model split" for a large velocity
 DiT.
+
+With `fm_best_modelpath` set, the best-so-far validation model is additionally
+checkpointed there, carrying the same complete payload (the frozen VAE embedded)
+as the final save; the final save to `fm_modelpath` is unchanged and remains the
+pipeline's completeness signal.
 """
 
 import os
@@ -230,6 +235,16 @@ def fm_worker(config, config_filename='config.txt'):
     val_interval = int(config.get('val_interval', 10))
     test_interval = int(config.get('test_interval', 250))
     modelpath = config.get('fm_modelpath', '../../output/geometry_generation/sdfflow_fm.pth')
+    # Optional best-validation checkpoint (rank 0 writes; the decision is
+    # broadcast so the FSDP state-dict gather below stays collective).
+    #
+    # No warmup guard here, unlike `vae_best_modelpath`: the FM objective is the
+    # SAME quantity at every epoch -- there is no KL/beta ramp, and
+    # `fm_warmup_epochs` moves the learning rate only -- so every ValidFM value
+    # is comparable and its minimum is a genuine minimum rather than an artifact
+    # of a partially applied loss term.
+    best_modelpath = config.get('fm_best_modelpath')
+    best_valid_loss = float('inf')
     params = [p for p in train_model.parameters() if p.requires_grad]
 
     log_file = init_log_file(config, config_filename) if rank0 else None
@@ -325,6 +340,25 @@ def fm_worker(config, config_filename='config.txt'):
                 append_log(log_file, f'Elapsed: {elapsed:.2f}s Epoch {epoch} '
                                      f'TrainFM {train_loss:.4e} {val_str} LR: {current_lr:.4e}')
 
+            # Best-validation checkpoint. `do_val` is identical on every rank;
+            # only rank 0 knows the loss, so its verdict is broadcast before the
+            # (FSDP-collective) state-dict gather. The payload is the same
+            # `checkpoint_payload` the final save uses, so the best file is a
+            # complete, self-contained inference artifact with the frozen VAE
+            # embedded -- and the FM is the terminal stage, so nothing
+            # downstream is coupled to which epoch it comes from.
+            if best_modelpath and do_val:
+                improved = 1.0 if (rank0 and valid_loss < best_valid_loss) else 0.0
+                if D.is_dist():
+                    improved = D.broadcast_scalar(improved, device)
+                if improved > 0.5:
+                    best_payload = checkpoint_payload(epoch)
+                    if rank0:
+                        best_valid_loss = valid_loss
+                        save_checkpoint(best_modelpath, best_payload)
+                        print(f'  [best] ValidFM {valid_loss:.4e} at epoch {epoch} -> {best_modelpath}')
+                    del best_payload
+
             if epoch % test_interval == 0 or epoch == total_epochs - 1:
                 if rank0:
                     run_generation_test(eval_model, vae, device, config, epoch,
@@ -336,6 +370,8 @@ def fm_worker(config, config_filename='config.txt'):
         maybe_save(total_epochs - 1)
         if rank0:
             print(f'\nTraining finished. FM saved to {modelpath} (val FM loss {valid_loss:.2e})')
+            if best_modelpath:
+                print(f'Best-validation FM (val FM loss {best_valid_loss:.2e}) at {best_modelpath}')
     except KeyboardInterrupt:
         if rank0:
             print('\nTraining interrupted by user. Saving checkpoint...')

@@ -95,6 +95,15 @@ model with the best validation SDF loss so far, in the same payload format as
 the final checkpoint. The final save to `vae_modelpath` is unchanged and stays
 the file the pipeline's completeness check and the FM stage read.
 
+Optional `fm_best_modelpath` does the same for the FM stage, writing the full
+checkpoint payload (the frozen VAE embedded, so the file is a stand-alone
+inference artifact) whenever the validation loss improves; `fm_modelpath` still
+gets the final epoch. Selecting an FM epoch is safe because the FM is the last
+stage and its objective has no warmup ramp, so every validation value is
+comparable. Do not try the same trick on the VAE: the FM embeds and normalizes
+against the exact VAE it trained on, so a different VAE epoch means retraining
+the FM. Set the VAE's epoch budget instead.
+
 ## Pipeline restart behavior
 
 `skip_completed_stages True` is safe to use when relaunching

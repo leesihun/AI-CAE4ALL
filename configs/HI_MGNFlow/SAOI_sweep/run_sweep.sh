@@ -6,11 +6,13 @@
 #       > output/chi-mgnflow/saoi_sweep/run.out 2>&1 &
 #   tail -f output/chi-mgnflow/saoi_sweep/run.out
 #
-# EIGHT ARMS, ONE PER CARD 0-7: a 2^3 FULL factorial over section x learningr
-# x capacity, so no effect is confounded with another. Arms 1..4 are bot,
-# 5..8 are top; within each, lr1/lr3 x k0/k1. Each arm pins its own card in
-# its config, so this script only launches them and never sets
-# CUDA_VISIBLE_DEVICES.
+# EIGHT ARMS, ONE PER CARD 0-7: a 2^3 FULL factorial over section x head x
+# capacity, so no effect is confounded with another. The fix under test is
+# the head -- whether the network emits the velocity (v) or the clean field
+# (x, converted to velocity inside the model). Arms 1..4 are bot, 5..8 are
+# top; within each, head v/x x capacity k0/k1. learningr is fixed at 1e-4.
+# Each arm pins its own card in its config, so this script only launches them
+# and never sets CUDA_VISIBLE_DEVICES.
 #
 # 2000 epochs at a measured ~113 s/epoch is ~63 h for a k0 arm; the four k1
 # arms cost roughly 1.5x per epoch and land about a day later. The budget is
@@ -38,6 +40,9 @@
 #   STRICT_PREFLIGHT  1 = abort the batch if anything fails preflight
 #   TRAIN / INFER     1 = run that stage (default 1 each)
 #   SCORE             1 = rank the arms and write the document (default 1)
+#   DET               1 = also run each arm's deterministic control after its
+#                     inference (flow_predict mean, the one-forward E[y|g]);
+#                     its offset from the truths is pure bias (default 1)
 #   STAGGER           seconds between arm launches (default 10)
 #   LOG_ROOT          transcript directory
 set -uo pipefail
@@ -62,6 +67,7 @@ STRICT_PREFLIGHT="${STRICT_PREFLIGHT:-0}"
 TRAIN="${TRAIN:-1}"
 INFER="${INFER:-1}"
 SCORE="${SCORE:-1}"
+DET="${DET:-1}"                    # deterministic control after each inference
 STAGGER="${STAGGER:-10}"
 
 mkdir -p "$LOG_ROOT"
@@ -69,7 +75,7 @@ rc=0
 SKIPPED=""
 
 echo "=================================================================="
-echo " cHI-MGNflow SAOI sweep -- 2^3 full factorial (section x lr x capacity)"
+echo " cHI-MGNflow SAOI sweep -- 2^3 full factorial (section x head x capacity)"
 echo "=================================================================="
 echo "  arms      : $ARMS"
 echo "  eval sets : $INFER_TAGS"
@@ -149,6 +155,21 @@ if [ "$INFER" = "1" ]; then
                 echo "  arm $arm  $tag  FAILED -- $LOG_ROOT/${arm}.infer_${tag}.log"
                 rc=1
             fi
+            # Deterministic control: the one-forward mean readout E[y|g]. Its
+            # offset from the truths is pure BIAS, which is what tells a shrunk
+            # conditional mean (no width fix can repair it) apart from an
+            # over-tight ensemble -- the previous grid's sm_l345u failure was
+            # ~85% bias. One forward per scene, so it always runs.
+            if [ "$DET" = "1" ] && [ -f "$CFG_DIR/config_infer_${arm}_${tag}_det.txt" ]; then
+                if "$PYTHON" AI_CAE4ALL_main.py \
+                        --config "$CFG_DIR/config_infer_${arm}_${tag}_det.txt" \
+                        > "$LOG_ROOT/${arm}.infer_${tag}_det.log" 2>&1; then
+                    echo "  arm $arm  $tag  det control done"
+                else
+                    echo "  arm $arm  $tag  det control FAILED -- $LOG_ROOT/${arm}.infer_${tag}_det.log"
+                    rc=1
+                fi
+            fi
         done
     done
     echo ""
@@ -162,8 +183,8 @@ if [ "$SCORE" = "1" ]; then
     echo "==========================================="
     echo ""
     if "$PYTHON" configs/campaigns/write_report.py \
-            --kind flow --axis learningr \
-            --label "cHI-MGNflow SAOI sweep (section x lr x capacity)" \
+            --kind flow --axis flow_head \
+            --label "cHI-MGNflow SAOI sweep (section x head x capacity)" \
             --infer "$OUT_ROOT/infer" --logs "$OUT_ROOT" --configs "$CFG_DIR" \
             --arms "$ARMS" --out "$DOC" > "$LOG_ROOT/write_report.log" 2>&1; then
         echo "Document : $DOC"

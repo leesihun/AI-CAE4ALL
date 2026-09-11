@@ -42,6 +42,10 @@ FLOW_ONLY_KEYS = frozenset(
         # Inference readout: 'sample' (integrate), 'mean' (1 forward at t=0) or
         # 'ensemble_mean' (average of num_vae_samples draws).
         "flow_predict",
+        # What the network output MEANS: 'v' velocity (default) or 'x' the clean
+        # field, converted to velocity by the exact path identity inside the
+        # model. flow_head_eps floors the conversion's denominator near t=1.
+        "flow_head", "flow_head_eps",
         # Validation sampling: how many ODE steps and how many ensemble members.
         # Cheaper than inference on purpose -- validation runs every val_interval.
         "val_flow_steps", "val_num_samples",
@@ -175,6 +179,22 @@ def validate_chi_mgnflow(ctx: SpecValidationContext) -> None:
                 "flow_loss_weighting must be 'uniform' or 'x0'.",
                 field_name="flow_loss_weighting")
 
+    if ("flow_head" in values
+            and str(values["flow_head"]).lower().strip() not in {"v", "x"}):
+        ctx.add("FLOW-HEAD-001", Severity.ERROR,
+                "flow_head must be 'v' (network emits velocity) or 'x' (network "
+                "emits the clean field, converted to velocity inside the model).",
+                field_name="flow_head")
+    if "flow_head_eps" in values:
+        try:
+            eps = float(values["flow_head_eps"])
+        except (TypeError, ValueError):
+            eps = -1.0
+        if not 0.0 < eps < 1.0:
+            ctx.add("FLOW-HEAD-002", Severity.ERROR,
+                    "flow_head_eps floors the x-head denominator (1 - s*t) and must "
+                    "be in (0, 1); 0.05 is the default.",
+                    field_name="flow_head_eps")
     if ("flow_predict" in values
             and str(values["flow_predict"]).lower().strip()
             not in {"sample", "mean", "ensemble_mean"}):

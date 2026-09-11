@@ -3,9 +3,10 @@
 %
 %   The 1000-epoch FM in config_train_v3.txt overfits hard on 1,713 train
 %   latents: validation bottomed at 0.660 (epoch 200) then climbed to 2.127 by
-%   epoch 999 while train fell to 0.194. fm_modelpath saves the FINAL epoch and
-%   train_fm.py has no best-checkpoint mechanism at all, so that run shipped its
-%   worst model -- visible as blobby, low-diversity samples.
+%   epoch 999 while train fell to 0.194. fm_modelpath saves the FINAL epoch, so
+%   that run shipped its worst model -- visible as blobby, low-diversity samples.
+%   (train_fm.py had no best-checkpoint mechanism at all when that run went out;
+%   it now honours fm_best_modelpath, written below.)
 %
 %   Stopping at 250 is the zero-code fix, and it is sound HERE specifically
 %   because the FM has NO objective warmup (no KL, no beta -- fm_warmup_epochs is
@@ -74,6 +75,18 @@ output_dir	../../output/geometry_generation/ex4  # Base dir for periodic reconst
 vae_modelpath	../../output/geometry_generation/ex4/sdfflow_vae.pth  # Final VAE checkpoint (last epoch); also the FM stage's frozen encoder
 vae_best_modelpath	../../output/geometry_generation/ex4/sdfflow_vae_best.pth  # Best-validation VAE checkpoint (same payload format, 'epoch' = the epoch it was taken at)
 fm_modelpath	../../output/geometry_generation/ex4/sdfflow_fm_e250.pth  # new name: keeps the 1000-epoch FM for comparison
+
+%   fm_best_modelpath: the best-validation FM epoch, saved next to the final one
+%   after every validation with the same complete payload (the frozen VAE is
+%   embedded), so it is a stand-alone inference artifact. Selecting an epoch is
+%   free HERE because the FM is the terminal stage -- nothing downstream is
+%   coupled to it -- and its validation loss is the same quantity at every epoch
+%   (no KL/beta ramp; fm_warmup_epochs is LR-only), so the minimum is real.
+%   The VAE cannot be selected the same way: the FM embeds the specific VAE it
+%   trained against and normalizes its latents against it, so swapping in a
+%   different VAE epoch would force a full FM retrain. The final save to
+%   fm_modelpath is unchanged and stays the pipeline's completeness signal.
+fm_best_modelpath	../../output/geometry_generation/ex4/sdfflow_fm_e250_best.pth
 
 %   Reproducibility
 seed	0  # Global run seed: each stage worker seeds torch/numpy/python and the train DataLoader shuffle with seed + rank (model construction is put back on the rank-independent base seed). Absent = legacy unseeded run. The arms sweep shares this value; arms/A9.txt repeats A0 at seed 1 to measure the run-to-run noise floor

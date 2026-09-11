@@ -27,6 +27,10 @@ VAR_KEYS = frozenset(
         # Batch for the rank-0 (unsharded) validation loader. Defaults to
         # batch_size; set it when a DDP run lowers batch_size per rank.
         "val_batch_size",
+        # Epoch at which a joint run freezes the simulator and trains ONLY the
+        # conditional prior for the rest (latent standardization fitted, fresh
+        # cosine). 0 = never. Single-GPU only.
+        "prior_freeze_epoch",
         # False takes page-locking out of the data path. Worth it when several
         # DDP ranks contend for the driver-serialized pin, which is the
         # documented bottleneck for large variable-size graph batches.
@@ -171,6 +175,36 @@ def validate_variational(ctx: SpecValidationContext) -> None:
                     field_name="beta_aux",
                     hint="Use parallel_mode ddp, or set beta_aux 0.",
                 )
+        # prior_freeze_epoch: an epoch index inside the run, single card only.
+        raw_freeze = values.get("prior_freeze_epoch", 0)
+        try:
+            freeze = int(float(raw_freeze or 0))
+        except (TypeError, ValueError):
+            freeze = -1
+        if freeze < 0:
+            ctx.add("MGNV-PRIOR-FREEZE-001", Severity.ERROR,
+                    "prior_freeze_epoch must be a non-negative integer (0 = never).",
+                    field_name="prior_freeze_epoch")
+        elif freeze > 0:
+            try:
+                epochs = int(float(values.get("training_epochs", 0) or 0))
+            except (TypeError, ValueError):
+                epochs = 0
+            if epochs and freeze >= epochs:
+                ctx.add("MGNV-PRIOR-FREEZE-002", Severity.ERROR,
+                        f"prior_freeze_epoch {freeze} is not inside the run "
+                        f"(training_epochs {epochs}); the prior-only tail would be empty.",
+                        field_name="prior_freeze_epoch")
+            gpus = values.get("gpu_ids", 0)
+            n_gpu = len(gpus) if isinstance(gpus, (list, tuple)) else 1
+            if n_gpu > 1:
+                ctx.add("MGNV-PRIOR-FREEZE-003", Severity.ERROR,
+                        "prior_freeze_epoch is implemented for a single GPU only: the "
+                        "prior-only tail rebuilds the optimizer over a parameter subset "
+                        "and fits buffers from a full training-set pass, neither of "
+                        "which is wired through DDP ranks.",
+                        field_name="gpu_ids",
+                        hint="one arm per card, or prior_freeze_epoch 0")
         if grad_enc > 0.0:
             try:
                 beta_aux = float(values.get("beta_aux", 1.0) or 0)

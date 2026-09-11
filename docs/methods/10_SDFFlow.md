@@ -262,6 +262,7 @@ FEA-conditioned `ex5` track (untrained; design in
 | `skip_completed_stages` | Reuse a complete, config-compatible stage checkpoint |
 | `vae_modelpath` / `fm_modelpath` | VAE / FM checkpoint paths |
 | `vae_best_modelpath` | Optional: best-validation VAE checkpoint, saved after each validation (final save unchanged) |
+| `fm_best_modelpath` | Optional: best-validation FM checkpoint, same complete payload as the final save (frozen VAE embedded), written after each validation that improves. Free to select on -- the FM is the terminal stage and its objective has no warmup ramp, so every `ValidFM` is comparable; the VAE is controlled by its epoch budget instead, because the FM embeds and normalizes against the VAE it trained on |
 | `dataset_dir` / `split_seed` | SDF HDF5 dataset / split seed |
 | `split_by_parent` | Group shapes by parent geometry (`source` basename before the first `_`) before the 80/10/10 split; default `False` |
 | `seed` | Optional run seed for the training modes: each rank seeds torch/numpy/python and its train DataLoader shuffle with `seed + rank`, while model construction is put back on the rank-independent base seed. Absent = legacy unseeded run; without it a sweep has no noise floor |

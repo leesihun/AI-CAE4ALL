@@ -2,43 +2,58 @@
 
     python configs/HI_MGNFlow/SAOI_sweep/gen_configs.py
 
-THE DESIGN: a 2^3 FULL factorial -- section x learningr x capacity.
+THE DESIGN: a 2^3 FULL factorial -- section x head x capacity.
 
     Eight arms is exactly the full grid of three two-level factors, so nothing
-    is confounded with anything. The previous SAOI grid was a 2^(4-1) half
-    fraction whose two-factor effects came in confounded pairs; at eight arms
-    for three factors that compromise is unnecessary.
+    is confounded with anything.
 
       section     bot | top          the board's two halves, independent models
-      learningr   1e-4 | 3e-4        cosine to 1e-8 over the whole run
+      head        v | x              the network emits the velocity | the CLEAN FIELD
       capacity    k0 | k1            128 / mp 4,6,8,6,4  |  192 / mp 6,8,12,8,6
 
-WHY THESE THREE
-    The earlier grid resolved its other two axes: `flow_t_sampling` uniform beat
-    logit-normal by its largest margin (0.333) and batch 16 beat 32 (0.288).
-    Both are fixed here at the winner.
+THE FIX UNDER TEST: what the network output means.
+    flow's headline failure is a bias on held-out geometry -- on sm_l345u the
+    error was ~85% pure mean offset, with a sign that flips between families.
+    That is a wrong CONDITIONAL MEAN, not a wrong width, and it points at what
+    the network is asked to represent rather than at the sampler.
 
-    It could NOT resolve learningr (0.083) or capacity (0.074) -- and those two
-    ties are the interesting part. A dead capacity axis sitting next to a live
-    step-count axis is the signature of a run that could not train the model it
-    had: a bigger network cannot show its capacity until it can be trained. The
-    budget doubles here, which is the condition under which that ranking can
-    invert. learningr is the other factor coupled to budget, since stretching a
-    cosine changes which starting rate is right.
+    With a velocity head, at small t the output is dominated by the term that
+    cancels the initial noise field, node by node. A hierarchy built from pooled
+    features has to carry that per-node information down through every level
+    and back up to emit it again -- capacity spent on plumbing, not on the
+    field. The `x` head predicts the clean field instead and converts to
+    velocity with the exact path identity inside the model:
+
+        v = (h - s*y_t) / (1 - s*t),    s = 1 - sigma_min
+
+    so the loss, the integrator and the mean readout are untouched. The loss
+    stays in velocity space on purpose: that isolates the parameterization from
+    the objective weighting. The image-generation result behind this
+    (Li & He, "Back to Basics", 2025) is a hypothesis for a graph hierarchy,
+    which is exactly why it is an arm and not a default.
+
+WHY CAPACITY STAYS
+    In the previous grid capacity moved W1/sd by 0.074 -- nothing -- while
+    batch_size, i.e. the optimizer step count, moved it by 0.288. A dead
+    capacity axis beside a live step axis is the signature of a run that could
+    not train the model it had; the budget doubles here. And if the x head
+    frees capacity from plumbing, the bigger trunk is where that shows.
+
+WHAT IS HELD FIXED
+    learningr 1e-4, flow_t_sampling uniform, batch_size 16 -- the previous
+    grid's marginal winner and its two resolved axes (uniform beat logit-normal
+    by 0.333, b16 beat b32 by 0.288). The lr tie (0.083) is not worth a factor
+    against a fix.
 
 BUDGET
-    2000 epochs at a MEASURED 113 s/epoch on one card -- the config's old
-    500 s/epoch estimate was 4.4x pessimistic. That is ~63 h for a k0 arm.
-    k1 costs roughly 1.5x per epoch, so those four arms land about a day later.
-    The epoch count is held identical on purpose: a capacity comparison at a
-    different budget answers a different question.
+    2000 epochs at a MEASURED 113 s/epoch on one card (~63 h for a k0 arm; the
+    old 500 s/epoch estimate was 4.4x pessimistic). k1 costs ~1.5x per epoch and
+    lands about a day later. Held identical on purpose.
 
 READ THE MIDDLE OF THE RUN
-    cosine_T0 = epochs - warmup with eta_min 1e-8, so the learning rate is
-    essentially zero by the last epoch and every curve flattens there whether
-    or not the model converged. Convergence is decided by how much
-    `det(1fwd) mse` improved through the MIDDLE of the run; the report
-    computes that as a fraction and prints it.
+    cosine_T0 = epochs - warmup with eta_min 1e-8, so every curve flattens at
+    the end whether or not it converged. The report computes the fractional
+    gain in det(1fwd) mse through the middle half, where it is decided.
 """
 import pathlib
 import sys
@@ -55,16 +70,24 @@ K0 = {'latent_dim': ('128', 'capacity k0'),
       'mp_per_level': ('4, 6, 8, 6, 4', 'capacity k0')}
 K1 = {'latent_dim': ('192', 'capacity k1 -- retested now the budget doubled'),
       'mp_per_level': ('6, 8, 12, 8, 6', 'capacity k1 -- ~1.5x per epoch')}
+HEAD_V = {'flow_head': ('v', 'network emits the velocity (the existing model)')}
+HEAD_X = {'flow_head': ('x',
+                        'network emits the CLEAN FIELD; converted to velocity inside '
+                        'the model by v = (h - s*y_t)/(1 - s*t). Loss stays in '
+                        'velocity space, so only the parameterization changes'),
+          'flow_head_eps': ('0.05',
+                            'floor on (1 - s*t) so the last ~5% of the path is '
+                            'regressed with bounded gain instead of 1/sigma_min')}
 
 ARMS = []
 _n = 0
 for half in ('bot', 'top'):
-    for lr, lr_tag in (('0.0001', 'lr1'), ('0.0003', 'lr3')):
+    for head, head_tag in ((HEAD_V, 'v'), (HEAD_X, 'x')):
         for cap, cap_tag in ((K0, 'k0'), (K1, 'k1')):
             _n += 1
-            over = {'learningr': (lr, f'THE AXIS {lr_tag}')}
+            over = dict(head)
             over.update(cap)
-            ARMS.append((str(_n), half, over, f'{half} {lr_tag} {cap_tag}'))
+            ARMS.append((str(_n), half, over, f'{half} head-{head_tag} {cap_tag}'))
 
 BANNER = """%   ============================================================
 %   SAOI warpage, cHI-MGNflow -- arm {arm}   ({note})
@@ -73,10 +96,11 @@ BANNER = """%   ============================================================
 {axis}
 %   gpu {gpu} -- one arm per card, nothing shared
 %
-%   A 2^3 FULL factorial over section x learningr x capacity: eight arms is
-%   exactly the full grid, so no effect is confounded with another. The grid's
-%   other two axes are already resolved and fixed at their winners --
-%   flow_t_sampling uniform (margin 0.333) and batch_size 16 (0.288).
+%   A 2^3 FULL factorial over section x head x capacity: eight arms is exactly
+%   the full grid, so no effect is confounded with another. The fix under test
+%   is the head -- whether the network emits the velocity or the clean field.
+%   learningr 1e-4, flow_t_sampling uniform and batch_size 16 are fixed at the
+%   previous grid's winners.
 %
 %   GENERATED by gen_configs.py from ../SAOI_all_input/config_train_{half}.txt.
 %   Do not hand-edit -- regenerate.
@@ -90,7 +114,8 @@ INFER_BANNER = """%   ==========================================================
 %   part in `infer_dataset`. That pairing is what makes sd_ratio's target 1.
 %
 %   A draw here is NOT one forward: it integrates the ODE, so it costs
-%   flow_steps x 2 network evaluations under Heun.
+%   flow_steps x 2 network evaluations under Heun. The head conversion happens
+%   inside the model, so the integrator is identical for both heads.
 %
 %   gpu {gpu}. GENERATED by gen_configs.py -- do not hand-edit.
 %   ============================================================
@@ -101,7 +126,7 @@ SPEC = dict(
     prod_dir=HERE.parent / 'SAOI_all_input',
     out_root=OUT_ROOT,
     slug='chi-mgnflow',
-    title='cHI-MGNflow SAOI sweep -- 2^3 full factorial, one card each:',
+    title='cHI-MGNflow SAOI sweep -- 2^3 (section x head x capacity), one card each:',
     banner=BANNER,
     infer_banner=INFER_BANNER,
     arms=ARMS,
@@ -111,13 +136,16 @@ SPEC = dict(
         's26fe_sec':     'config_infer_s26fe_sec_{half}.txt',
         'sm_l345u_main': 'config_infer_sm_l345u_main_{half}.txt',
     },
-    arch_keys={'latent_dim', 'mp_per_level'},
+    # the head is part of the architecture: the checkpoint's velocity is only
+    # a velocity if inference converts the same way training did
+    arch_keys={'latent_dim', 'mp_per_level', 'flow_head', 'flow_head_eps'},
     train_fixed={
         'training_epochs': (EPOCHS,
                             'no resume exists and cosine_T0 = epochs - warmup, so '
                             'this is a COMPLETE run at its own schedule; '
                             '~113 s/epoch measured on one card at k0'),
         'batch_size': ('16', 'the grid measured b16 < b32 by 0.288'),
+        'learningr': ('0.0001', 'FIXED at the previous grid marginal winner (tie, 0.083)'),
         'flow_t_sampling': ('uniform',
                             'RESOLVED: beat logit-normal by 0.333, the grid largest '
                             'margin. The SD3 result is image-domain and did not '
@@ -147,6 +175,17 @@ SPEC = dict(
         'hierarchy_seed': ('0, 1, 2, 3',
                            'build one partition per seed and rotate across draw '
                            'batches, so one unlucky partition cannot poison a scene'),
+    },
+    # The deterministic control, written beside every stochastic inference
+    # config as config_infer_<arm>_<tag>_det.txt and dumped under infer/det/.
+    det_fixed={
+        'num_vae_samples': ('1', 'DETERMINISTIC CONTROL: the mean readout is one draw'),
+        'flow_predict': ('mean',
+                         'E[y|g] in ONE forward: at t=0 the path point is the noise '
+                         'field itself, so one Euler step of dt=1 lands on the '
+                         'conditional mean to within sigma_min. Its error against '
+                         'the truths is pure BIAS, separated from any sampling '
+                         'question -- the previous grid found sm_l345u ~85% bias'),
     },
 )
 

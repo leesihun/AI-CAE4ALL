@@ -13,6 +13,7 @@ PATH_KEYS = frozenset({
     'vae_modelpath',
     'vae_best_modelpath',
     'fm_modelpath',
+    'fm_best_modelpath',
     'descriptor_calibration_path',
     'log_file_dir',
     'vae_log_file_dir',

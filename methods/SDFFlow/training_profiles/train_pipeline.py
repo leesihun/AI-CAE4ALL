@@ -26,9 +26,10 @@ _STAGE_SETTING_SUFFIXES = (
     'num_test_shapes',
     'mc_resolution_test',
 )
-# `vae_best_modelpath` is deliberately NOT a stage-suffixed key: it reaches the
-# VAE worker unchanged (train_vae.py reads it by its full name) and the FM
-# worker simply ignores it.
+# `vae_best_modelpath` / `fm_best_modelpath` are deliberately NOT stage-suffixed
+# keys: `best_modelpath` is not a suffix above, so each reaches both workers
+# unchanged under its full name (train_vae.py / train_fm.py read them that way)
+# and the other stage simply ignores it.
 
 _VAE_COMPATIBILITY_KEYS = (
     'dataset_dir', 'split_seed', 'num_encoder_points', 'num_query_points',

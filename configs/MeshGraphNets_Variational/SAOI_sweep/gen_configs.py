@@ -2,38 +2,58 @@
 
     python configs/MeshGraphNets_Variational/SAOI_sweep/gen_configs.py
 
-THE AXIS: beta_aux, 0 / 10 / 100 / 1000 on each board section.
+THE DESIGN: a 2^3 FULL factorial over the PRIOR -- section x prior fit x trunk.
 
-    `beta_aux` weights an MSE on the per-graph PEAK-TO-VALLEY of the DECODED
-    field -- the statistic the warpage report scores. It replaced a head that
-    regressed per-graph [mean, std] from z, which could not move `sd_ratio`
-    (0.449-0.526 across the entire previous 8-arm grid) for three structural
-    reasons: it read z rather than the decoder output, it used a node-axis
-    standard deviation rather than an extreme-value statistic, and at
-    beta_aux 1.0 against alpha_recon 1000 it carried ~1% of the objective.
+    Eight arms is exactly the full grid of three two-level factors, so nothing
+    is confounded with anything.
 
-    Four weights spanning three decades, because the natural scale is not
-    knowable in advance: with realistic recon/aux magnitudes the weight that
-    puts the term at ~30% of the objective came out near 8. Two points could
-    not separate "the mechanism fails" from "the weight crushed the
-    reconstruction"; a curve can. 0 is the control -- the old head was
-    DELETED, so without it nothing separates the new term's effect from that
-    removal.
+      section      bot | top          the board's two halves, independent models
+      prior fit    joint | tail       prior_freeze_epoch 0  |  700 of 1000
+      prior trunk  small | large      hidden 256 / 5 MP    |  512 / 8 MP
 
-WHY NOTHING ELSE IS SWEPT
-    The previous 2^(4-1) grid moved W1/sd by 0.001-0.054 across all four of
-    its factors, against a 0.10 arm-to-arm range. z_conditioning,
-    prior_grad_to_encoder, capacity and lambda_mmd are not where this model's
-    deficit lives, and spending cards on them again would re-measure noise.
+WHY THE PRIOR, AND NOT THE DECODER
+    Posterior reconstruction is excellent while the generated distribution is
+    ~2x too narrow (sd_ratio 0.45-0.53 on every arm of the previous grid).
+    Training decodes z ~ q(z | y, g); deployment decodes z ~ p(z | g). The
+    decoder is common to both paths, so if the posterior path reproduces a
+    part's spread and the prior path does not, the prior's conditional for
+    that part is what is wrong. Three mechanisms can make it so, and the two
+    factors here address all three:
 
-BOT AND TOP
-    The board's two sections, independent models over one schema. Both carry
-    the same ladder, so the curve's SHAPE is replicated rather than fitted
-    once -- the previous sweep had no replication at all, which is why its
-    factor effects could not support a claim either way.
+      1. a MOVING target -- the encoder keeps receiving reconstruction
+         gradients, so q drifts for the whole run and the prior chases it.
+         The `tail` level freezes the simulator at epoch 700 and fits the prior
+         alone for the last 300, against a posterior that has stopped moving,
+         on a fresh cosine over the prior's own parameters;
+      2. an ILL-SCALED target -- MMD pins the AGGREGATE q(z) to N(0,I), and
+         with ~100 realizations of each of a few parts that aggregate is a
+         mixture: unit total variance is compatible with every per-part cloud
+         being far smaller and off-origin. The `tail` level also fits latent
+         standardization (z_shift / z_scale) from the frozen posterior, so the
+         velocity net regresses a unit-scale target;
+      3. an UNDERSIZED trunk -- prior_hidden_dim 256 / prior_mp_layers 5 is
+         much smaller than the main network. If the trunk cannot separate
+         parts, the prior learns a conditional smeared across neighbours.
 
-    The `top` numbers are the weaker half in every previous measurement, so a
-    fix that only works on `bot` is not a fix.
+    prior_grad_to_encoder is closed on every arm: open, the FM objective can
+    lower itself by shrinking the target distribution (integrated CFM loss is
+    pi*a/2 for target scale a), and nothing here should be moving the target.
+
+WHAT IS HELD FIXED
+    beta_aux 10 on every arm -- the peak-to-valley term on the decoded field at
+    the balance point estimated from realistic recon/aux magnitudes. It is the
+    I(z;y) floor that keeps z informative (the old z-readout head is gone), so
+    it stays ON, and it stays CONSTANT so it is not a factor. Its own
+    dose-response is a different sweep.
+
+    The previous 2^(4-1) grid moved W1/sd by 0.001-0.054 across
+    z_conditioning, prior_grad_to_encoder, capacity and lambda_mmd, against a
+    0.10 arm-to-arm range. None of those is spent again.
+
+BUDGET
+    1000 epochs at a measured ~346 s/epoch. The `tail` arms are CHEAPER, not
+    dearer: their last 300 epochs run the posterior encoder under no_grad and
+    the small prior only -- no decoder forward, no decoder backward.
 """
 import pathlib
 import sys
@@ -45,42 +65,48 @@ from sweep_common import write_sweep      # noqa: E402
 
 OUT_ROOT = '../../output/meshgraphnets-v/saoi_sweep'
 EPOCHS = '1000'
+FREEZE_AT = '700'
 
-# (arm, section, {key: (value, comment)}, note)
-BETAS = ['0', '10', '100', '1000']
-NOTE = {
-    '0':    'CONTROL: no auxiliary term at all (isolates the deleted head)',
-    '10':   'near the balance point estimated from recon/aux magnitudes',
-    '100':  'one decade above it',
-    '1000': 'at alpha_recon scale -- the strongest the term can reasonably be',
-}
+SMALL = {'prior_hidden_dim': ('256', 'prior trunk: small (production)'),
+         'prior_mp_layers': ('5', 'prior trunk: small (production)')}
+LARGE = {'prior_hidden_dim': ('512', 'prior trunk: LARGE -- can it separate parts?'),
+         'prior_mp_layers': ('8', 'prior trunk: LARGE')}
+JOINT = {'prior_freeze_epoch': ('0', 'prior fit: joint to the end (the baseline recipe)')}
+TAIL = {'prior_freeze_epoch': (FREEZE_AT,
+                               f'prior fit: TAIL -- simulator frozen at {FREEZE_AT}, '
+                               f'latent standardization fitted, prior alone on a fresh '
+                               f'cosine for the remaining {1000 - int(FREEZE_AT)} epochs')}
+
 ARMS = []
-for i, half in enumerate(('bot', 'top')):
-    for j, b in enumerate(BETAS):
-        ARMS.append((str(i * 4 + j + 1), half,
-                     {'beta_aux': (b, NOTE[b])}, NOTE[b]))
+_n = 0
+for half in ('bot', 'top'):
+    for fit, fit_tag in ((JOINT, 'joint'), (TAIL, 'tail')):
+        for trunk, trunk_tag in ((SMALL, 'small'), (LARGE, 'large')):
+            _n += 1
+            over = dict(fit)
+            over.update(trunk)
+            ARMS.append((str(_n), half, over, f'{half} {fit_tag} {trunk_tag}'))
 
 BANNER = """%   ============================================================
-%   SAOI warpage, MeshGraphNets-V -- arm {arm}
+%   SAOI warpage, MeshGraphNets-V -- arm {arm}   ({note})
 %
 %   section   {half}
 {axis}
 %   gpu {gpu} -- one arm per card, nothing shared
 %
-%   The axis is beta_aux: an MSE on the DECODED field's peak-to-valley, the
-%   statistic the warpage report scores. 0 is the control. Four weights over
-%   three decades, because the natural scale is not knowable in advance and
-%   two points cannot separate a failed mechanism from a crushed one.
+%   A 2^3 FULL factorial over the PRIOR: section x prior fit (joint | frozen
+%   tail with latent standardization) x prior trunk (small | large). The
+%   decoder is common to the posterior and prior paths; the posterior path
+%   reproduces a part's spread and the prior path does not, so the prior is
+%   what this sweep varies. beta_aux is held at 10 on every arm.
 %
 %   GENERATED by gen_configs.py from ../SAOI_all_input/config_train_{half}.txt.
-%   Do not hand-edit -- regenerate, and change the production profile when a
-%   non-swept key needs to move.
+%   Do not hand-edit -- regenerate.
 %   ============================================================
 """
 
 INFER_BANNER = """%   ============================================================
-%   SAOI inference -- arm {arm} ({half}, beta_aux per its train config),
-%   eval set {tag}.
+%   SAOI inference -- arm {arm} ({note}), eval set {tag}.
 %
 %   `eval_dataset` is the `_compare_` file: the 125 realizations of the ONE
 %   part in `infer_dataset`. That pairing is what makes sd_ratio's target 1 --
@@ -88,7 +114,9 @@ INFER_BANNER = """%   ==========================================================
 %
 %   Architecture keys mirror the train config. rollout.py overrides them from
 %   checkpoint['model_config'] at load time, so the checkpoint always wins;
-%   they are kept in sync so this file documents what runs.
+%   they are kept in sync so this file documents what runs. The latent
+%   standardization a `tail` arm fitted rides inside the checkpoint as prior
+%   buffers and needs nothing here.
 %
 %   gpu {gpu}. GENERATED by gen_configs.py -- do not hand-edit.
 %   ============================================================
@@ -99,7 +127,7 @@ SPEC = dict(
     prod_dir=HERE.parent / 'SAOI_all_input',
     out_root=OUT_ROOT,
     slug='meshgraphnets-v',
-    title='MeshGraphNets-V SAOI sweep -- beta_aux ladder x 2 sections, one card each:',
+    title='MeshGraphNets-V SAOI sweep -- 2^3 over the prior (section x fit x trunk), one card each:',
     banner=BANNER,
     infer_banner=INFER_BANNER,
     arms=ARMS,
@@ -111,7 +139,7 @@ SPEC = dict(
     },
     # Keys whose value must be identical in the train and inference configs,
     # or the inference file documents a model the checkpoint is not.
-    arch_keys={'beta_aux'},
+    arch_keys={'prior_hidden_dim', 'prior_mp_layers'},
     train_fixed={
         'Training_epochs': (EPOCHS,
                             'no resume exists and cosine_T0 = epochs - warmup, so '
@@ -128,17 +156,19 @@ SPEC = dict(
                        'MSE penalizes extreme-node error far more than Huber, which '
                        'caps it -- and peak-to-valley IS an extreme-value statistic'),
         'alpha_recon': ('1000', 'reconstruction multiplier'),
+        'beta_aux': ('10',
+                     'HELD CONSTANT: peak-to-valley MSE on the decoded field at the '
+                     'balance point estimated from recon/aux magnitudes. It is the '
+                     'I(z;y) floor that keeps z informative now the z-readout head is '
+                     'gone, so it stays on; it stays fixed so it is not a factor'),
         'num_vae_samples': ('10000', 'draws per scene; unused in train mode'),
         'prior_grad_to_encoder': (
             '0.0',
-            'CLOSED for every arm. Open, the FM objective reaches the encoder and '
+            'CLOSED on every arm. Open, the FM objective reaches the encoder and '
             'can lower itself by SHRINKING the target distribution (integrated CFM '
-            'loss is pi*a/2 for target scale a, so smaller is cheaper even with a '
-            'perfectly matched prior). beta_aux is the I(z;y) floor that resists that, '
-            'and the CONTROL arm has beta_aux 0 -- nothing would hold its posterior '
-            'open, shrinking the control specifically and flattering every other arm. '
-            'The previous grid measured this flag at delta 0.001 on W1/sd, so closing '
-            'it costs nothing measured'),
+            'loss is pi*a/2 for target scale a). This sweep is about fitting the '
+            'prior to the posterior, so nothing may be moving the posterior toward '
+            'the prior. The previous grid measured the flag at delta 0.001'),
     },
     infer_fixed={
         'num_vae_samples': ('2000',
@@ -152,6 +182,16 @@ SPEC = dict(
         'hierarchy_seed': ('0, 1, 2, 3',
                            'build one partition per seed and rotate across draw '
                            'batches, so one unlucky partition cannot poison a scene'),
+    },
+    # The deterministic control, written beside every stochastic inference
+    # config as config_infer_<arm>_<tag>_det.txt and dumped under infer/det/.
+    det_fixed={
+        'num_vae_samples': ('1', 'DETERMINISTIC CONTROL: one draw per scene'),
+        'prior_temperature': ('1e-9',
+                              '~0 kills the prior sampling noise: z is the ODE image '
+                              'of the origin, the conditional centre. Its spread '
+                              'against the 125 truths is pure BIAS -- what no width '
+                              'fix can repair'),
     },
 )
 

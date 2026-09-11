@@ -1,0 +1,86 @@
+%   ============================================================
+%   Closed-loop design search on the ex4 generator with the RETRAINED
+%   HI-MGN surrogate standing in for the FEA solve.
+%
+%   Differences from config_optimize_surrogate.txt (the ex1 original):
+%     - generator is ex4 (the v3 recipe) rather than ex1, and the FM is the
+%       250-epoch checkpoint. The 1000-epoch FM overfit 3.2x (val 0.660 at
+%       epoch 200 -> 2.127 at 999) and shipped its worst model.
+%     - surrogate is deepjeb_himgn_fixed.pth: retrained on 301 brackets after
+%       build_deepjeb_mgn.py was fixed. The previous checkpoint was trained on
+%       a dataset whose node indexing was scrambled (surface area came out 92x
+%       DeepJEB's own label), so it could only learn the marginal p(y).
+%       The old header's "trained on 40 brackets" note is obsolete.
+%     - opt_length_scale 0.1021111 = 0.1838 m / 1.8 units, the extent implied
+%       by bracket_labels.csv, instead of 0.1055556 (= 0.19 m / 1.8). The 0.19
+%       figure is 3.4% above the dataset's 183.8 mm mean longest extent and
+%       biases mass and stress high. Relative ranking is unaffected either way,
+%       but this run is being compared against DeepJEB's own labels, so the
+%       calibrated extent is the honest choice.
+%     - budget 240 over popsize 12 (CMA-ES default for 12 dims is ~11), against
+%       the original's 24/6. That config was explicitly sized to demo the loop
+%       interactively; this one is meant to actually find a design.
+%     - baseline_size 24 rather than 8: the allowables are the population
+%       medians, so a wider population makes the constraint calibration and the
+%       reported comparison baseline less noisy.
+%
+%   Absolute stress and deflection remain RELATIVE-ONLY: tet4 is stiff, the
+%   measure is the 99.5th-percentile von Mises rather than a true max, and the
+%   surrogate's own accuracy is bounded by its held-out score.
+%   ============================================================
+model	SDFFlow  # SDF-VAE + latent flow-matching geometry generator
+mode	optimize  # closed loop: generate -> AI surrogate analysis -> CMA-ES search
+gpu_ids	0
+'
+%   Trained generator that defines the design space
+vae_modelpath	../../output/geometry_generation/ex4/sdfflow_vae.pth
+fm_modelpath	../../output/geometry_generation/ex4/sdfflow_fm_e250.pth
+output_dir	../../output/geometry_generation/ex4/optimization_surrogate
+'
+%   Shape parameterization (same subspace as the FEA config)
+opt_subspace_dim	12
+opt_subspace_seed	0
+opt_condition_dims	volume,area
+opt_shell_scale	1.25
+opt_latent_range	1.25
+seed	0
+ode_steps	50
+mc_resolution	128
+'
+%   Analysis backend: HI-MGN forward pass replaces gmsh + the linear solve.
+%   See methods/SDFFlow/CLAUDE.md and the run's report.md for the measured
+%   accuracy of this checkpoint (trained on 40 brackets; not yet solver-grade).
+opt_analysis	surrogate
+opt_surrogate_checkpoint	../../output/deepjeb_himgn/deepjeb_himgn_fixed.pth
+opt_surrogate_config	../../configs/HI_MGNFlow/deepjeb/config_infer.txt
+opt_surrogate_target_nodes	5000
+'
+%   Structural problem (same GE load cases and material as the FEA config)
+opt_load_cases	vertical,diagonal
+opt_length_scale	0.1021111
+opt_material_e	113.8e9
+opt_material_nu	0.342
+opt_material_rho	4430.0
+opt_yield_stress	903.0e6
+opt_stress_percentile	99.5
+'
+%   Objective
+opt_baseline_size	24
+opt_stress_margin	1.0
+opt_disp_margin	1.0
+opt_stress_weight	6.0
+opt_disp_weight	3.0
+'
+%   Search: small budget -- the surrogate's value here is speed, and this
+%   config is sized to demonstrate the closed loop interactively, not to
+%   replace the FEA config's production 200-evaluation search.
+opt_budget	240
+opt_popsize	12
+opt_sigma0	1.0
+opt_seed	0
+'
+%   Verification (same resolution knobs; target_faces/mesh_size_max are unused
+%   on the surrogate path but kept so the config is a drop-in mode switch)
+opt_verify_resolution	128
+opt_verify_target_faces	12000
+opt_verify_mesh_size_max	0.05

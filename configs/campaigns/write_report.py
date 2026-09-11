@@ -188,9 +188,13 @@ def main():
 
     # ---- distribution metrics --------------------------------------------
     dumps = rank_arms.collect([a.infer])
-    per_arm = {}
-    for (_sweep, _mode, arm), tags in dumps.items():
-        per_arm.setdefault(arm, {}).update(tags)
+    # The deterministic control (infer/det/, one draw per scene) is a bias
+    # check, not a distribution. Pooling it with the stochastic ensemble of the
+    # same arm would silently overwrite one with the other, so it is kept apart
+    # and reported in its own section.
+    per_arm, det_arm = {}, {}
+    for (_sweep, mode, arm), tags in dumps.items():
+        (det_arm if mode == 'det' else per_arm).setdefault(arm, {}).update(tags)
 
     L += ['## Distribution metrics', '',
           'Each eval set is ONE geometry with 125 realizations of it, so `gt` is the '
@@ -241,67 +245,110 @@ def main():
                        for i, (arm, s) in enumerate(summary, 1)])
         L += ['']
 
+    # ---- deterministic control: location error with sampling removed ------
+    if det_arm:
+        L += ['## Deterministic control', '',
+              'One draw per scene with the sampling noise off (MGN-V: prior at '
+              'temperature ~0, the conditional centre; flow: the one-forward mean '
+              'readout). Its offset from the truths is **pure bias** -- a location '
+              'error that no width fix can repair -- and `sd_ratio` here has no '
+              'meaning, since there is no ensemble.', '']
+        det_rows = []
+        for arm in arms:
+            for tag in sorted(det_arm.get(arm, {})):
+                m = det_arm[arm][tag]
+                if 'error' in m:
+                    det_rows.append([arm, tag, 'INVALID: ' + m['error'], ''])
+                    continue
+                det_rows.append([arm, tag, fnum(m['dmean']), fnum(m['w1'])])
+        L += md_table(['arm', 'eval set', 'dmean/sd (0)', 'W1/sd (0)'], det_rows)
+        L += ['', 'Read `dmean/sd` against the stochastic table above: an arm whose '
+                  'stochastic `W1/sd` is mostly explained by this bias has a '
+                  'regression problem, not a calibration one.', '']
+
     # ---- the verdict this run exists for ----------------------------------
     L += ['## Verdict', '']
     ranked = dict(summary)
     if a.kind == 'mgnv':
-        L += ['The question: does an MSE on the decoded field\'s peak-to-valley widen '
-              'the ensemble? The 8-arm sweep\'s best `sd_ratio` was **0.526** against '
-              'a target of 1, with the old z-readout aux head active at '
-              '`beta_aux 1.0`.', '']
+        # The verdict is generic over the axis: within each section, the arm
+        # whose axis value is 0 is the control and EVERY other arm is compared
+        # against it on sd_ratio (target 1; the previous grid's best was 0.526).
+        # With a 2^3 design that gives two rows per section -- one per level of
+        # the other factor -- so the interaction is visible, not averaged away.
+        axis_word = {'beta_aux': 'the peak-to-valley term (`beta_aux`)',
+                     'prior_freeze_epoch': 'the prior-only tail (`prior_freeze_epoch`: '
+                                           'simulator frozen, latent standardization '
+                                           'fitted, prior refit on a fresh cosine)'}
+        what = axis_word.get(a.axis, f'`{a.axis}`')
+        L += [f'The question: does {what} widen the ensemble? `sd_ratio` has target 1; '
+              f'the previous 8-arm grid never exceeded **0.526**. Each section\'s '
+              f'`{a.axis} = 0` arm is the control; every other arm of that section is '
+              f'compared against it.', '']
         pairs = []
         for section in ('bot', 'top'):
             ctrl = next((r['arm'] for r in rows
                          if r['section'] == section and str(r['axis']) in ('0', '0.0')), None)
-            test = next((r['arm'] for r in rows
-                         if r['section'] == section and str(r['axis']) not in ('0', '0.0')), None)
-            if ctrl in ranked and test in ranked:
+            if ctrl not in ranked:
+                continue
+            for r in rows:
+                test = r['arm']
+                if r['section'] != section or test == ctrl or test not in ranked:
+                    continue
                 c, t = ranked[ctrl]['sd_ratio'], ranked[test]['sd_ratio']
-                pairs.append([section, ctrl, fnum(c), test, fnum(t),
-                              fnum(t - c), fnum(ranked[test]['w1'] - ranked[ctrl]['w1'])])
+                pairs.append([section, ctrl, fnum(c), f"{test} ({a.axis} {r['axis']})",
+                              fnum(t), fnum(t - c),
+                              fnum(ranked[test]['w1'] - ranked[ctrl]['w1'])])
         if pairs:
-            L += md_table(['section', 'control', 'sd_ratio', 'weighted', 'sd_ratio',
+            L += md_table(['section', 'control', 'sd_ratio', 'arm', 'sd_ratio',
                            'Δ sd_ratio', 'Δ W1/sd'], pairs)
             deltas = [float(p[5]) for p in pairs if p[5] != '—']
             L += ['']
             if deltas and min(deltas) > 0.05:
-                L += [f'**The term widens the ensemble in both sections** '
+                L += [f'**It widens the ensemble in both sections** '
                       f'(Δ sd_ratio +{min(deltas):.3f} to +{max(deltas):.3f}). '
                       f'Whether that is enough is the `sd_ratio` column against 1.']
             elif deltas and max(deltas) < 0.02:
-                L += [f'**The term does not widen the ensemble** (Δ sd_ratio '
-                      f'{min(deltas):+.3f} to {max(deltas):+.3f}). Weight, not '
-                      f'mechanism, is the first thing to check — see the objective '
-                      f'balance below; if the term is a small share of the total, it '
-                      f'was not tested at strength.']
+                L += [f'**It does not widen the ensemble** (Δ sd_ratio '
+                      f'{min(deltas):+.3f} to {max(deltas):+.3f}).'
+                      + (' Weight, not mechanism, is the first thing to check — see the '
+                         'objective balance below; if the term is a small share of the '
+                         'total, it was not tested at strength.'
+                         if a.axis == 'beta_aux' else
+                         ' If the posterior path reproduces the truth\'s spread '
+                         '(misc/posterior_vs_prior.py), the prior\'s conditional is still '
+                         'mis-shaped rather than mis-scaled: read that tool\'s PCA table.')]
             else:
                 L += [f'**Mixed** (Δ sd_ratio {min(deltas):+.3f} to {max(deltas):+.3f}). '
                       f'A result that changes sign between two sections of one board '
                       f'is not a mechanism, and needs the per-eval-set table above '
                       f'before it is read as one.']
-        L += ['', '### Objective balance', '',
-              'The peak-to-valley term is computed whenever the VAE path runs, so the '
-              '`beta_aux 0` control reports `aux=` too — its magnitude there is the '
-              'weight-free measurement.', '']
-        bal = []
-        for r in rows:
-            log = find_log(a.logs, r['arm'])
-            t = mgnv_terms(log) if log else None
-            if t:
+        if a.axis == 'beta_aux':
+            L += ['', '### Objective balance', '',
+                  'The peak-to-valley term is computed whenever the VAE path runs, so the '
+                  '`beta_aux 0` control reports `aux=` too — its magnitude there is the '
+                  'weight-free measurement.', '']
+            bal = []
+            for r in rows:
+                log = find_log(a.logs, r['arm'])
+                t = mgnv_terms(log) if log else None
+                if not t:
+                    continue
                 recon, mmd, aux, total = t
-                alpha = float(cfg_value(os.path.join(a.configs,
-                                                     f"config_train_{r['arm']}.txt"),
-                                        'alpha_recon', 1.0) or 1.0)
-                beta = float(r['axis'] or 0)
+                cfg_path = os.path.join(a.configs, f"config_train_{r['arm']}.txt")
+                alpha = float(cfg_value(cfg_path, 'alpha_recon', 1.0) or 1.0)
+                try:
+                    beta = float(cfg_value(cfg_path, 'beta_aux', 0.0) or 0.0)
+                except (TypeError, ValueError):
+                    continue          # config missing: no balance row, no crash
                 pv_share = (beta * aux / total) if total else float('nan')
                 bal.append([r['arm'], f'{recon:.3e}', f'{aux:.3e}', f'{total:.3e}',
                             f'{alpha * recon / total:.1%}' if total else '—',
                             f'{pv_share:.1%}' if pv_share == pv_share else '—'])
-        if bal:
-            L += md_table(['arm', 'recon', 'aux (pv)', 'total',
-                           'recon share', 'pv share'], bal)
-        else:
-            L += ['_No `Train recon=... aux=...` line found in the logs._']
+            if bal:
+                L += md_table(['arm', 'recon', 'aux (pv)', 'total',
+                               'recon share', 'pv share'], bal)
+            else:
+                L += ['_No `Train recon=... aux=...` line found in the logs._']
     else:
         L += ['The question: has it converged, or is 3000 epochs still budget-limited? '
               '`cosine_T0 = epochs − warmup` and `eta_min 1e-8`, so the LR is '

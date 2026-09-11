@@ -32,7 +32,7 @@ from model.blocks import AdaLNZero, UnpoolBlock, apply_adaln
 from model.checkpointing import process_with_checkpointing
 from model.coarsening import pool_features
 from model.encoder_decoder import Decoder, Encoder, GnBlock
-from model.flow import TimeEmbedding, resolve_flow_config
+from model.flow import SIGMA_MIN, TimeEmbedding, resolve_flow_config
 from model.mlp import build_mlp, init_weights
 
 
@@ -67,8 +67,40 @@ class CHiMGNFlow(nn.Module):
 
         Returns:
             v: [N, output_var] predicted velocity.
+
+        `flow_head` chooses what the NETWORK OUTPUT means; the return is always
+        a velocity, so the loss, the integrator and predict_mean are untouched:
+
+            v   (default)  the output is the velocity itself.
+            x              the output is the CLEAN FIELD h, converted with the
+                           exact path identity  y1 = s*y_t + (1 - s*t) * u:
+
+                               v = (h - s*y_t) / (1 - s*t),   s = 1 - sigma_min
+
+        Why offer x: at small t the velocity is dominated by the term that
+        cancels the initial noise, node by node, and a hierarchy built from
+        pooled features has to carry that per-node information through every
+        level to emit it again. A head that predicts the clean field leaves
+        that cancellation to the identity above and lets the network spend its
+        capacity on the field. Same loss space (velocity), so this isolates the
+        parameterization from the objective weighting.
+
+        The denominator reaches sigma_min at t=1, so it is floored at
+        flow_head_eps (default 0.05): above t = (1 - eps)/s the conversion is
+        the floored one. Training samples t uniformly, so that last ~5% of the
+        path is regressed with a bounded gain instead of a 1e4 one.
         """
-        return self.model(graph, y_t, t)
+        out = self.model(graph, y_t, t)
+        cfg = self.model.config
+        if str(cfg.get('flow_head', 'v')).lower().strip() != 'x':
+            return out
+        s = 1.0 - SIGMA_MIN
+        eps = float(cfg.get('flow_head_eps', 0.05))
+        batch = getattr(graph, 'batch', None)
+        if batch is None:
+            batch = torch.zeros(graph.x.shape[0], dtype=torch.long, device=graph.x.device)
+        denom = (1.0 - s * t.to(out.dtype)).clamp(min=eps)      # [B, 1]
+        return (out - s * y_t.to(out.dtype)) / denom[batch]
 
 
 class EncoderProcessorDecoder(nn.Module):

@@ -19,9 +19,11 @@ from training_profiles.setup import (
 from training_profiles.training_loop import (
     evaluate_vae_learned_prior_epoch,
     evaluate_vae_posterior_epoch,
+    freeze_for_prior_fit,
     log_training_config,
     run_periodic_test,
     train_epoch,
+    train_prior_epoch,
     validate_epoch,
 )
 
@@ -140,10 +142,24 @@ def single_worker(config, config_filename='config.txt'):
     mem_recording = start_memory_history()
 
     try:
+        # prior_freeze_epoch > 0 turns the last epochs into a prior-only tail:
+        # simulator frozen, latent standardization fitted, fresh cosine over
+        # the prior alone. See training_loop.freeze_for_prior_fit.
+        prior_freeze = int(config.get('prior_freeze_epoch', 0) or 0)
         for epoch in range(total_epochs):
-            train_metrics = train_epoch(
-                model, train_loader, optimizer, device, config, epoch, ema_model=ema_model,
-            )
+            if prior_freeze and epoch == prior_freeze:
+                optimizer, scheduler = freeze_for_prior_fit(
+                    model, ema_model, train_loader, device, config,
+                    remaining_epochs=total_epochs - epoch,
+                )
+            if prior_freeze and epoch >= prior_freeze:
+                train_metrics = train_prior_epoch(
+                    model, train_loader, optimizer, device, config, epoch, ema_model=ema_model,
+                )
+            else:
+                train_metrics = train_epoch(
+                    model, train_loader, optimizer, device, config, epoch, ema_model=ema_model,
+                )
 
             train_loss = train_metrics['mean']
             scheduler.step()

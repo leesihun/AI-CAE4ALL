@@ -38,6 +38,7 @@ PATH_KEYS = frozenset({
     "vae_modelpath",
     "vae_best_modelpath",
     "fm_modelpath",
+    "fm_best_modelpath",
     "descriptor_calibration_path",
     "lc_modelpath",
     "input_mesh",

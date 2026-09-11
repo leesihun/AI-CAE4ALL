@@ -270,6 +270,14 @@ def _train_worker_inner(rank, world_size, config, gpu_ids, config_filename):
         # Set epoch for distributed sampler (important for shuffling)
         train_sampler.set_epoch(epoch)
 
+        if int(config.get('prior_freeze_epoch', 0) or 0) > 0:
+            # The prior-only tail rebuilds the optimizer over a parameter subset
+            # and fits buffers from a full pass over the training set; neither
+            # is wired through the DDP ranks. Preflight refuses this too; this
+            # is the last line of defence.
+            raise NotImplementedError(
+                'prior_freeze_epoch is supported on a single GPU only (one arm per '
+                'card); set gpu_ids to one card or prior_freeze_epoch 0')
         train_metrics = train_epoch(ddp_model, train_loader, optimizer, device, config, epoch, ema_model=ema_model)
 
         # Synchronize stop decision across all ranks — if ANY rank wants to stop,

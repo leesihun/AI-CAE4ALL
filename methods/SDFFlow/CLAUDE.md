@@ -152,6 +152,28 @@ that epoch. The final save to `vae_modelpath` is unchanged, and it is the
 final checkpoint -- not the best one -- that the pipeline's completeness check
 and the FM stage read. Point `config_evaluate.txt` at whichever you want scored.
 
+`fm_best_modelpath` is its FM-stage twin, and follows the same rules: optional,
+unprefixed (`best_modelpath` is not in `_STAGE_SETTING_SUFFIXES`, so
+`build_stage_config` hands it to the FM worker under its full name and the VAE
+worker ignores it), written after every validation that improves, with the same
+complete `checkpoint_payload` as the final save -- the frozen VAE embedded, so
+the best file is a stand-alone inference artifact. The final save to
+`fm_modelpath` is unchanged and stays the pipeline's completeness signal.
+
+Unlike the VAE's, the FM's best epoch is **free to select**, and the asymmetry is
+structural rather than stylistic. The FM is the terminal stage, so no later stage
+is welded to which epoch it came from -- whereas `train_fm.py` reads
+`vae_modelpath`, derives `latent_mean`/`latent_std` from the latents THAT VAE
+produces, and embeds that VAE inside its own checkpoint, so swapping the VAE for
+a different epoch invalidates the FM completely and forces a full FM retrain.
+The FM also needs no warmup guard: it has no KL or beta ramp (`fm_warmup_epochs`
+is learning-rate only), so ValidFM is the same quantity at every epoch and its
+minimum is a real minimum, where ValidSDF is not comparable across the VAE's KL
+warmup (which is why `vae_best_modelpath` refuses pre-warmup epochs). Control the
+VAE with its epoch budget instead. Measured on ex4, this matters: the FM
+validation bottomed at 0.660 (epoch 200) and climbed to 2.127 by epoch 999 while
+train fell to 0.194, so the 1000-epoch run shipped its worst model.
+
 ## Data and condition invariants
 
 The HDF5 layout is
@@ -803,8 +825,10 @@ modes have values `SDF-REFINE-002` accepts (an lr of 0 is rejected).
 `cae_suite/preflight.py::_probe_dataset` counts `evaluate` among the modes whose
 dataset comes from `dataset_dir`; without that the `sdf_hdf5` schema probe never
 ran for it and a wrong-contract dataset preflighted clean, then died on a
-`KeyError: 'shapes'` inside the native run. `vae_best_modelpath` and
-`descriptor_calibration_path` are in both `PATH_KEYS` sets. `train_pipeline.py`
+`KeyError: 'shapes'` inside the native run. `vae_best_modelpath`,
+`fm_best_modelpath` and `descriptor_calibration_path` are in both `PATH_KEYS`
+sets, and the two best-checkpoint keys have an `OUTPUT_FILE` `PathRule` for the
+modes that train their stage (`train`/`train_vae`, `train`/`train_fm`). `train_pipeline.py`
 treats `encoder_query_type`, `posterior_min_std_rel`, and `split_by_parent` as
 VAE compatibility keys and `split_by_parent` as an FM compatibility key.
 

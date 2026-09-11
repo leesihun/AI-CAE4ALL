@@ -66,6 +66,12 @@ SDFFLOW_KEYS = frozenset(
         # posterior-std floor; parent-grouped dataset split; best-val checkpoint
         "encoder_query_type", "posterior_min_std_rel", "split_by_parent",
         "vae_best_modelpath",
+        # Best-validation FM checkpoint. Unlike the VAE's, this one is free to
+        # use: the FM is the terminal stage, so no later stage is welded to the
+        # epoch it comes from (the FM embeds the VAE it trained against, which
+        # is exactly why selecting a VAE epoch instead would force an FM
+        # retrain). Its payload is the same complete inference artifact.
+        "fm_best_modelpath",
         # decoder-frozen latent refinement (reconstruct + evaluate)
         "latent_refine_steps", "latent_refine_lr", "latent_refine_prior_weight",
         # mode `evaluate`: held-out reconstruction metrics
@@ -990,6 +996,7 @@ def build_sdfflow_spec() -> MethodSpec:
             PathRule("vae_best_modelpath", PathKind.OUTPUT_FILE, frozenset({"train", "train_vae"})),
             PathRule("vae_modelpath", PathKind.INPUT_FILE, frozenset({"train_fm", "sample", "reconstruct", "interpolate", "optimize", "evaluate"})),
             PathRule("fm_modelpath", PathKind.OUTPUT_FILE, frozenset({"train", "train_fm"})),
+            PathRule("fm_best_modelpath", PathKind.OUTPUT_FILE, frozenset({"train", "train_fm"})),
             # evaluate reads the FM only for eval_task descriptor_calibration / conditional;
             # SDF-EVAL-004 makes the key mandatory there, and this rule checks the file
             # whenever the key is present (a reconstruction config simply omits it).

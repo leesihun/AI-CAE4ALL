@@ -407,6 +407,130 @@ def log_training_config(config):
         print(f"Multi-Scale: disabled (flat GNN, message_passing_num={config.get('message_passing_num')})")
 
 
+def _bare(model):
+    """The MeshGraphNets module under a torch.compile or DDP wrapper."""
+    m = getattr(model, '_orig_mod', model)
+    return getattr(m, 'module', m)
+
+
+@torch.no_grad()
+def freeze_for_prior_fit(model, ema_model, dataloader, device, config, remaining_epochs):
+    """Switch a joint run into its prior-only tail. Returns (optimizer, scheduler).
+
+    Three things happen, and they are one intervention:
+
+      1. Every simulator parameter (encoder, processor, decoder, posterior
+         encoder) is frozen. From here the posterior q(z | y, g) stops moving,
+         so the prior fits a FIXED target instead of chasing one that drifts
+         under reconstruction gradients for the whole run.
+
+      2. z_shift / z_scale are fitted from the frozen posterior over the
+         training set. MMD pins the AGGREGATE q(z) to N(0,I); with many
+         realizations of a few parts that aggregate is a mixture, and unit total
+         variance is compatible with every per-part cloud -- what the prior must
+         hit -- being far smaller and off-origin. The velocity net now regresses
+         a unit-scale target and sample_n undoes the transform, so nothing
+         downstream changes units.
+
+      3. A fresh optimizer and cosine schedule over ONLY the prior's parameters
+         and ONLY the remaining epochs. The joint run's cosine is near its floor
+         by the time the tail begins; inheriting it would fit the prior at a
+         dying learning rate.
+
+    The EMA shadow does not track buffers (AveragedModel default), so the
+    fitted standardization is copied into it explicitly -- rollout loads EMA
+    weights, and a prior trained on whitened targets sampled through identity
+    buffers would be wrong in a way nothing would flag.
+    """
+    from training_profiles.setup import build_optimizer_scheduler
+
+    bare = _bare(model)
+    inner, prior = bare.model, bare.prior
+    if prior is None:
+        raise RuntimeError('prior_freeze_epoch set but the model has no conditional prior')
+
+    for p in bare.parameters():
+        p.requires_grad_(False)
+    n_prior = 0
+    for p in prior.parameters():
+        p.requires_grad_(True)
+        n_prior += p.numel()
+
+    # posterior over the training set, exactly as _encode_vae computes it
+    was_training = bare.training
+    bare.eval()
+    mus, lvs = [], []
+    for g in dataloader:
+        g = _move_graph_to_device(g, device, config)
+        batch = g.batch if getattr(g, 'batch', None) is not None else \
+            torch.zeros(g.x.shape[0], dtype=torch.long, device=device)
+        _, mu, lv = inner.vae_encoder(
+            g.y, g.edge_index, g.edge_attr, batch,
+            x=(g.x if inner.vae_graph_aware else None),
+        )
+        mus.append(mu.float())
+        lvs.append(lv.float())
+    if was_training:
+        bare.train()
+    shift, scale = prior.fit_standardization(torch.cat(mus), torch.cat(lvs))
+    if ema_model is not None:
+        ema_prior = _bare(ema_model.module).prior
+        ema_prior.z_shift.copy_(prior.z_shift)
+        ema_prior.z_scale.copy_(prior.z_scale)
+
+    optimizer, scheduler, _, _ = build_optimizer_scheduler(
+        config, prior.parameters(), max(int(remaining_epochs), 1))
+    print(f"\n  [prior-fit] simulator FROZEN; training {n_prior:,} prior parameters "
+          f"for {remaining_epochs} epochs on a fresh cosine")
+    print(f"  [prior-fit] latent standardization: |shift| rms "
+          f"{float(shift.norm() / shift.numel() ** 0.5):.4f}, scale min {float(scale.min()):.4f} "
+          f"max {float(scale.max()):.4f}  (far from 1 = the mis-scaling this removes)")
+    return optimizer, scheduler
+
+
+def train_prior_epoch(model, dataloader, optimizer, device, config, epoch, ema_model=None):
+    """One epoch of the prior-only tail. Same return contract as train_epoch.
+
+    Per batch: the FROZEN posterior encoder gives (mu, logvar) under no_grad, a
+    fresh sample mu + sigma*eps is the FM target -- the cloud the decoder was
+    trained on -- and only prior.fm_loss(prior.condition(g), z) is optimised.
+    No decoder forward at all, so an epoch here costs a fraction of a joint one.
+    """
+    bare = _bare(model)
+    inner, prior = bare.model, bare.prior
+    prior.train()
+    weight = float(config.get('prior_nll_weight', 1.0))
+    total = torch.zeros((), device=device, dtype=torch.float32)
+    n_graphs = 0
+    pbar = tqdm.tqdm(dataloader, desc=f'PriorFit {epoch}')
+    for batch_idx, g in enumerate(pbar):
+        g = _move_graph_to_device(g, device, config)
+        batch = g.batch if getattr(g, 'batch', None) is not None else \
+            torch.zeros(g.x.shape[0], dtype=torch.long, device=device)
+        with torch.no_grad():
+            _, mu, lv = inner.vae_encoder(
+                g.y, g.edge_index, g.edge_attr, batch,
+                x=(g.x if inner.vae_graph_aware else None),
+            )
+            z1 = mu + torch.exp(0.5 * lv) * torch.randn_like(mu)
+        loss = weight * prior.fm_loss(prior.condition(g), z1)
+        optimizer.zero_grad(set_to_none=True)
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(prior.parameters(), max_norm=3.0)
+        optimizer.step()
+        if ema_model is not None:
+            ema_model.update_parameters(_bare(model))
+        total += loss.detach().float()
+        n_graphs += int(getattr(g, 'num_graphs', 1))
+        if batch_idx % 10 == 0:
+            pbar.set_postfix({'fm_p': f'{float(loss):.2e}', 'mem': _mem_str()})
+    peak_gb, reserved_gb = _mem_gb()
+    fm = float(total) / max(len(dataloader), 1)
+    return {'mean': 0.0, 'total_mean': fm, 'sum': 0.0, 'count': max(n_graphs, 1),
+            'mmd_mean': 0.0, 'aux_mean': 0.0, 'prior_loss_mean': fm,
+            'peak_gb': peak_gb, 'reserved_gb': reserved_gb}
+
+
 def train_epoch(model, dataloader, optimizer, device, config, epoch, ema_model=None):
     model.train()
     total_loss_sum = 0.0

@@ -6,11 +6,14 @@
 #       > output/meshgraphnets-v/saoi_sweep/run.out 2>&1 &
 #   tail -f output/meshgraphnets-v/saoi_sweep/run.out
 #
-# EIGHT ARMS, ONE PER CARD 0-7. The axis is beta_aux -- an MSE on the DECODED
-# field's peak-to-valley, the statistic the warpage report scores -- at
-# 0 / 10 / 100 / 1000 on each of the board's two sections. Arm 1..4 are bot,
-# 5..8 are top; each arm pins its own card in its config, so this script only
-# launches them and never sets CUDA_VISIBLE_DEVICES.
+# EIGHT ARMS, ONE PER CARD 0-7: a 2^3 FULL factorial over the PRIOR --
+# section x prior fit (joint | frozen tail with latent standardization) x
+# prior trunk (small | large) -- so no effect is confounded with another. The
+# decoder is common to the posterior and prior paths, and it is the prior path
+# that comes out ~2x too narrow, so the prior is what this sweep varies;
+# beta_aux is held at 10 everywhere. Arms 1..4 are bot, 5..8 are top; each
+# arm pins its own card in its config, so this script only launches them and
+# never sets CUDA_VISIBLE_DEVICES.
 #
 # ~1000 epochs at a measured ~346 s/epoch is about four days per arm, all
 # eight in parallel. There is no resume and cosine_T0 = epochs - warmup, so a
@@ -32,6 +35,9 @@
 #   STRICT_PREFLIGHT  1 = abort the batch if anything fails preflight
 #   TRAIN / INFER     1 = run that stage (default 1 each)
 #   SCORE             1 = rank the arms and write the document (default 1)
+#   DET               1 = also run each arm's deterministic control after its
+#                     inference (one draw per scene, prior at temperature ~0);
+#                     its offset from the truths is pure bias (default 1)
 #   STAGGER           seconds between arm launches (default 10)
 #   LOG_ROOT          transcript directory
 set -uo pipefail
@@ -56,6 +62,7 @@ STRICT_PREFLIGHT="${STRICT_PREFLIGHT:-0}"
 TRAIN="${TRAIN:-1}"
 INFER="${INFER:-1}"
 SCORE="${SCORE:-1}"
+DET="${DET:-1}"                    # deterministic control after each inference
 STAGGER="${STAGGER:-10}"
 
 mkdir -p "$LOG_ROOT"
@@ -63,7 +70,7 @@ rc=0
 SKIPPED=""
 
 echo "=================================================================="
-echo " MeshGraphNets-V SAOI sweep -- beta_aux 0/10/100/1000 x bot,top"
+echo " MeshGraphNets-V SAOI sweep -- 2^3 over the prior: section x fit x trunk"
 echo "=================================================================="
 echo "  arms      : $ARMS"
 echo "  eval sets : $INFER_TAGS"
@@ -143,6 +150,20 @@ if [ "$INFER" = "1" ]; then
                 echo "  arm $arm  $tag  FAILED -- $LOG_ROOT/${arm}.infer_${tag}.log"
                 rc=1
             fi
+            # Deterministic control: one draw per scene, sampling noise off. Its
+            # offset from the truths is pure BIAS, which is what tells a shrunk
+            # conditional mean (no width fix can repair it) apart from an
+            # over-tight ensemble. One forward per scene, so it always runs.
+            if [ "$DET" = "1" ] && [ -f "$CFG_DIR/config_infer_${arm}_${tag}_det.txt" ]; then
+                if "$PYTHON" AI_CAE4ALL_main.py \
+                        --config "$CFG_DIR/config_infer_${arm}_${tag}_det.txt" \
+                        > "$LOG_ROOT/${arm}.infer_${tag}_det.log" 2>&1; then
+                    echo "  arm $arm  $tag  det control done"
+                else
+                    echo "  arm $arm  $tag  det control FAILED -- $LOG_ROOT/${arm}.infer_${tag}_det.log"
+                    rc=1
+                fi
+            fi
         done
     done
     echo ""
@@ -156,8 +177,8 @@ if [ "$SCORE" = "1" ]; then
     echo "==========================================="
     echo ""
     if "$PYTHON" configs/campaigns/write_report.py \
-            --kind mgnv --axis beta_aux \
-            --label "MeshGraphNets-V SAOI sweep (beta_aux)" \
+            --kind mgnv --axis prior_freeze_epoch \
+            --label "MeshGraphNets-V SAOI sweep (prior: section x fit x trunk)" \
             --infer "$OUT_ROOT/infer" --logs "$OUT_ROOT" --configs "$CFG_DIR" \
             --arms "$ARMS" --out "$DOC" > "$LOG_ROOT/write_report.log" 2>&1; then
         echo "Document : $DOC"

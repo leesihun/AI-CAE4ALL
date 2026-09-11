@@ -35,12 +35,17 @@ def _key_of(line):
 
 
 def render(prod_lines, overrides, arm, gpu, out_root, slug, mode,
-           tag=None, extra_tail=None):
+           tag=None, extra_tail=None, det=False):
     """One config file's text.
 
     overrides : {key: (value, comment)} applied on top of the production file
     mode      : 'train' or 'infer' -- decides which run-scoped paths are set
     tag       : eval-set name, for inference
+    det       : the deterministic-control variant of an inference config. Its
+                dumps go to a separate `infer/det/` subtree, which rank_arms.py
+                recognises as a different run mode -- one draw per scene is a
+                bias check, not a distribution, and must never be pooled with
+                the stochastic ensemble of the same arm.
     """
     out, skip_pct, seen = [], False, set()
     for line in prod_lines:
@@ -62,15 +67,20 @@ def render(prod_lines, overrides, arm, gpu, out_root, slug, mode,
             out.append(f"gpu_ids\t{gpu}  # one arm per card, nothing shared")
             continue
         if key == 'log_file_dir':
-            name = f"{arm}.log" if mode == 'train' else f"{arm}.infer_{tag}.log"
+            if mode == 'train':
+                name = f"{arm}.log"
+            else:
+                name = f"{arm}.infer_{tag}{'_det' if det else ''}.log"
             out.append(f"log_file_dir\t{out_root}/{name}")
             continue
         if key == 'modelpath':
             out.append(f"modelpath\t{out_root}/{arm}.pth")
             continue
         if key == 'inference_output_dir':
-            # rank_arms.py / write_report.py read <arm>/<eval set> off this path.
-            out.append(f"inference_output_dir\t{out_root}/infer/{arm}/{tag}")
+            # rank_arms.py / write_report.py read <arm>/<eval set> off this path,
+            # and a `det/` component before them marks the deterministic run.
+            sub = 'infer/det' if det else 'infer'
+            out.append(f"inference_output_dir\t{out_root}/{sub}/{arm}/{tag}")
             continue
         if key in ('dataset_dir', 'infer_dataset', 'eval_dataset'):
             out.append(SAOI_DIR.sub('/dataset/SAOI/', line))
@@ -122,14 +132,31 @@ def write_sweep(spec):
             # config that contradicts the checkpoint misdocuments the run.
             infer_over.update({k: v for k, v in over.items()
                                if k in spec['arch_keys']})
+            src_lines = strip_banner(prod / src.format(half=half))
             (here / f"config_infer_{arm}_{tag}.txt").write_text(
                 spec['infer_banner'].format(arm=arm, half=half, tag=tag, gpu=gpu,
                                             note=note)
-                + render(strip_banner(prod / src.format(half=half)),
-                         infer_over, arm, gpu, out_root, spec['slug'], 'infer',
-                         tag=tag),
+                + render(src_lines, infer_over, arm, gpu, out_root, spec['slug'],
+                         'infer', tag=tag),
                 encoding='utf-8', newline='\n')
             n_infer += 1
+
+            # Deterministic control: one draw per scene with the sampling noise
+            # off. It is what separates a shrunk conditional MEAN (a regression
+            # failure no width fix can repair) from an over-tight ensemble (a
+            # sampler failure). Costs one forward per scene against the
+            # stochastic run's thousands, so it always ships alongside.
+            if spec.get('det_fixed'):
+                det_over = dict(infer_over)
+                det_over.update(spec['det_fixed'])
+                (here / f"config_infer_{arm}_{tag}_det.txt").write_text(
+                    spec['infer_banner'].format(
+                        arm=arm, half=half, gpu=gpu, note=note,
+                        tag=f"{tag} -- DETERMINISTIC CONTROL, one draw, no noise")
+                    + render(src_lines, det_over, arm, gpu, out_root, spec['slug'],
+                             'infer', tag=tag, det=True),
+                    encoding='utf-8', newline='\n')
+                n_infer += 1
 
     print(spec['title'])
     for arm, half, over, note in spec['arms']:
