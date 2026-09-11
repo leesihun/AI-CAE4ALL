@@ -1,0 +1,132 @@
+{
+  "review_date": "2026-09-11",
+  "git_head": "1c2beabcf1df9212d814576dded096a48ff565d7",
+  "files": [
+    {
+      "path": "methods/MeshGraphNets_Variational/model/MeshGraphNets.py",
+      "sha256": "11610206ac6a98e37a19e7a5b969a1341902636bf6c8538e7e2ed2ca919a3d0b",
+      "lines": 627
+    },
+    {
+      "path": "methods/MeshGraphNets_Variational/model/vae.py",
+      "sha256": "452a7804bbf827389fb753a9c03722a5d5a640521944eb15280ebacde4847da3",
+      "lines": 180
+    },
+    {
+      "path": "methods/MeshGraphNets_Variational/model/conditional_prior.py",
+      "sha256": "9b98ec47e2e9eb610ebf58f1641bf01aadc4bc8b4a90bded20e4c088d986d56d",
+      "lines": 488
+    },
+    {
+      "path": "methods/MeshGraphNets_Variational/training_profiles/training_loop.py",
+      "sha256": "1a46b2bf58124b8e3c5b31f57e18b227e0c84bb31ce0d1c39218f1bf3ff2a6a4",
+      "lines": 1021
+    },
+    {
+      "path": "methods/MeshGraphNets_Variational/inference_profiles/rollout.py",
+      "sha256": "f9fd4925e1c405d1ee1f17b8f7af5d7ec8c649ccb02a4d3120a02418df43411d",
+      "lines": 998
+    },
+    {
+      "path": "methods/HI_MGNFlow/model/flow.py",
+      "sha256": "7b648a291ac65f075dfdf333be25318ad537e6590e2ebeccc0945435295e8763",
+      "lines": 265
+    },
+    {
+      "path": "methods/HI_MGNFlow/model/CHiMGNFlow.py",
+      "sha256": "047a140ea7ed60c6770770167e1e8598985bca7120535e4eaf0513d781f800e5",
+      "lines": 377
+    },
+    {
+      "path": "methods/HI_MGNFlow/model/coarsening.py",
+      "sha256": "658f7a51a3d1ccb598379b708227d34d48903139cdce297ea1494a8f0a88c9ca",
+      "lines": 552
+    },
+    {
+      "path": "methods/HI_MGNFlow/training_profiles/training_loop.py",
+      "sha256": "4788dc5961c46be312aae21f28adef1e1a3c44d8147fbb6fe4679a48e749dc05",
+      "lines": 538
+    },
+    {
+      "path": "methods/HI_MGNFlow/inference_profiles/rollout.py",
+      "sha256": "49188c67ed32edf4c81482c33dc63b29157938d4f926db743d1894329412fb3b",
+      "lines": 948
+    },
+    {
+      "path": "methods/HI_MGNFlow/general_modules/mesh_dataset.py",
+      "sha256": "8e4034c8802ee4542f6d803c67dd1ef72500bca3384a5b7d0f515f92e090e1cf",
+      "lines": 1102
+    },
+    {
+      "path": "configs/MeshGraphNets_Variational/SAOI_all_input/config_train_bot.txt",
+      "sha256": "800680ba5bdd0dfe7e674486697def9b4eb4f53e916c6c19fb811e493606cd05",
+      "lines": 137
+    },
+    {
+      "path": "configs/HI_MGNFlow/SAOI_all_input/config_train_bot.txt",
+      "sha256": "386cae2c0fcc92609c5b08738603ed50ef6098032c127c7d320cd72a57732f13",
+      "lines": 105
+    },
+    {
+      "path": "configs/MeshGraphNets_Variational/SAOI_all_input/config_infer_s26fe_main_bot.txt",
+      "sha256": "89c7734de2887de83d17df838d19ce2f92c854c27299f10b88b2f16676158c76",
+      "lines": 99
+    },
+    {
+      "path": "configs/HI_MGNFlow/SAOI_all_input/config_infer_s26fe_main_bot.txt",
+      "sha256": "d0646ea77c4aa139f02ddfa50d4f812b5558ef86682482f23e730056af016c93",
+      "lines": 56
+    },
+    {
+      "path": "docs/research/SAOI_PROBABILISTIC_SWEEP_2026-09.md",
+      "sha256": "0024b751dab30937a514ed454b11e5a234a390f5f23d859d8369c15e39faafc6",
+      "lines": 272
+    },
+    {
+      "path": "output/meshgraphnets-v/saoi_sweep3/sweep_results.md",
+      "sha256": "8e1a29a5ef3768a0526c438854b7462ac932400bdf2f5ff78174d630e4174156",
+      "lines": 67
+    }
+  ],
+  "data_and_dump_availability": {
+    "dataset/SAOI": false,
+    "output/meshgraphnets-v/saoi_sweep3/infer": false,
+    "output/chi-mgnflow/saoi_sweepB/infer": false
+  },
+  "method_output_artifacts": {
+    "output/meshgraphnets-v": [
+      "output/meshgraphnets-v/saoi_sweep3/run_logs/2_1.check.log",
+      "output/meshgraphnets-v/saoi_sweep3/run_logs/2_2.check.log",
+      "output/meshgraphnets-v/saoi_sweep3/run_logs/2_3.check.log",
+      "output/meshgraphnets-v/saoi_sweep3/run_logs/2_4.check.log",
+      "output/meshgraphnets-v/saoi_sweep3/run_logs/2_5.check.log",
+      "output/meshgraphnets-v/saoi_sweep3/run_logs/2_6.check.log",
+      "output/meshgraphnets-v/saoi_sweep3/run_logs/pvA.check.log",
+      "output/meshgraphnets-v/saoi_sweep3/run_logs/pvB.check.log",
+      "output/meshgraphnets-v/saoi_sweep3/run_logs/pv_bot_a0.check.log",
+      "output/meshgraphnets-v/saoi_sweep3/run_logs/pv_bot_a10.check.log",
+      "output/meshgraphnets-v/saoi_sweep3/run_logs/pv_bot_a100.check.log",
+      "output/meshgraphnets-v/saoi_sweep3/run_logs/pv_bot_a3.check.log",
+      "output/meshgraphnets-v/saoi_sweep3/run_logs/pv_bot_a30.check.log",
+      "output/meshgraphnets-v/saoi_sweep3/run_logs/pv_top_a0.check.log",
+      "output/meshgraphnets-v/saoi_sweep3/run_logs/pv_top_a10.check.log",
+      "output/meshgraphnets-v/saoi_sweep3/run_logs/pv_top_a100.check.log",
+      "output/meshgraphnets-v/saoi_sweep3/run_logs/pv_top_a3.check.log",
+      "output/meshgraphnets-v/saoi_sweep3/run_logs/pv_top_a30.check.log",
+      "output/meshgraphnets-v/saoi_sweep3/run_logs/rank_arms.log",
+      "output/meshgraphnets-v/saoi_sweep3/run_logs/write_report.log",
+      "output/meshgraphnets-v/saoi_sweep3/sweep_results.md"
+    ],
+    "output/chi-mgnflow": [
+      "output/chi-mgnflow/saoi_sweepB/run_logs/2_1.check.log",
+      "output/chi-mgnflow/saoi_sweepB/run_logs/2_2.check.log",
+      "output/chi-mgnflow/saoi_sweepB/run_logs/long.check.log",
+      "output/chi-mgnflow/saoi_sweepB/run_logs/long_bot_k1.check.log",
+      "output/chi-mgnflow/saoi_sweepB/run_logs/long_bot_lr1.check.log",
+      "output/chi-mgnflow/saoi_sweepB/run_logs/long_bot_lr3.check.log",
+      "output/chi-mgnflow/saoi_sweepB/run_logs/long_top_k1.check.log",
+      "output/chi-mgnflow/saoi_sweepB/run_logs/long_top_lr1.check.log",
+      "output/chi-mgnflow/saoi_sweepB/run_logs/long_top_lr3.check.log"
+    ]
+  }
+}

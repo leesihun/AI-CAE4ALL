@@ -50,7 +50,8 @@ def run_decoupled_inference(config, config_filename='config.txt'):
             elapsed = time.time() - start
 
             ref_pos = graph.pos.cpu().numpy()
-            part_ids = graph.part_ids.cpu().numpy() if graph.part_ids is not None else None
+            part_ids_tensor = getattr(graph, 'part_ids', None)
+            part_ids = part_ids_tensor.cpu().numpy() if part_ids_tensor is not None else None
             output_states = pred_denorm[np.newaxis, :, :]
 
             _write_sample_hdf5(

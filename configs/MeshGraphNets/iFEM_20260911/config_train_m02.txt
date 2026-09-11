@@ -1,0 +1,60 @@
+% AI-CAE4ALL native iFEM config.
+% Launch from the suite root with AI_CAE4ALL_main.py --config <this file>.
+% Native method cwd resolves ../../dataset and ../../output below.
+
+% Run
+model	meshgraphnets
+gpu_ids	2
+parallel_mode	ddp
+mode	train
+
+% Native dataset and checkpoint
+dataset_dir	../../dataset/iFEM_20260911/train_mgn_m02.h5
+modelpath	../../output/iFEM_20260911/M02/model.pth
+log_file_dir	../../output/iFEM_20260911/M02/train.log
+split_seed	42
+
+% Data contract
+input_var	4
+output_var	4
+cond_var	13
+positional_features	0
+use_node_types	False
+feature_loss_weights	1.0, 1.0, 1.0, 1.0
+time_integration	ar_ot
+use_world_edges	False
+use_multiscale	False
+
+% Model
+latent_dim	256
+message_passing_num	16
+edge_var	8
+
+% Optimization
+training_epochs	1000
+batch_size	16
+learningr	0.0001
+weight_decay	0.00001
+warmup_epochs	10
+grad_accum_steps	1
+num_workers	4
+prefetch_factor	4
+
+% Runtime
+std_noise	0.0
+noise_gamma	1
+augment_geometry	False
+use_amp	False
+use_ema	False
+use_compile	False
+use_checkpointing	False
+use_parallel_stats	False
+
+% Validation and reconstruction
+val_interval	1
+test_interval	100
+test_max_batches	8
+test_batch_idx	0, 1, 2, 3
+display_trainset	True
+display_testset	True
+write_test_predictions	True

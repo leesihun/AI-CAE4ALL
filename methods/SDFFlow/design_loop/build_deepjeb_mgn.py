@@ -353,17 +353,28 @@ def main(argv=None):
               f'({len(test_records) // len(LOAD_CASES)} brackets)')
         return 0
 
-    split_index, mean, std = write_contract(args.out, records, split_of)
-    # Repo convention: <name>.h5 carries every split, <name>_infer.h5 is the
-    # held-out set on its own, which is what the native inference mode reads.
-    infer_path = args.out.replace('.h5', '_infer.h5')
+    # <name>.h5 and <name>_infer.h5 must be physically disjoint brackets, not
+    # just differently tagged rows in the same file: the native trainer's own
+    # train/val/test split (general_modules/mesh_dataset.py::_resolve_split_ids)
+    # reshuffles every sample id in dataset_dir with its own seed and ratios,
+    # ignoring any split tag written here entirely. A held-out bracket that is
+    # merely tagged 'test' inside <name>.h5 still gets ~80% of its own load-case
+    # rows drawn into the trainer's 'train' partition -- so "held-out" scoring
+    # against a same-file tag is not held out at all. Excluding test brackets
+    # from the training file outright is what actually prevents that leak.
     test_records = [r for r in records if split_of.get(r['item']) == 'test']
+    train_records = [r for r in records if split_of.get(r['item']) != 'test']
+    train_split_of = {k: v for k, v in split_of.items() if v != 'test'}
+    split_index, mean, std = write_contract(args.out, train_records, train_split_of)
+    infer_path = args.out.replace('.h5', '_infer.h5')
     if test_records:
         write_contract(infer_path, test_records,
                        {r['item']: 'test' for r in test_records})
-        print(f'wrote {infer_path}: {len(test_records)} held-out samples')
-    print(f'\nwrote {args.out}: {len(records)} samples '
-          f'({len(records) // len(LOAD_CASES)} brackets x {len(LOAD_CASES)} load cases)')
+        print(f'wrote {infer_path}: {len(test_records)} held-out samples '
+              f'({len(test_records) // len(LOAD_CASES)} brackets, physically '
+              f'absent from {args.out})')
+    print(f'\nwrote {args.out}: {len(train_records)} samples '
+          f'({len(train_records) // len(LOAD_CASES)} brackets x {len(LOAD_CASES)} load cases)')
     print(f'  splits: ' + ', '.join(f'{k}={len(v)}' for k, v in split_index.items()))
     if skipped:
         print(f'  skipped {len(skipped)} brackets:')

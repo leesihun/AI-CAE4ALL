@@ -1,0 +1,52 @@
+% AI-CAE4ALL native iFEM config.
+% Launch from the suite root with AI_CAE4ALL_main.py --config <this file>.
+% Native method cwd resolves ../../dataset and ../../output below.
+
+% Run
+model	transolver
+gpu_ids	1
+parallel_mode	ddp
+mode	inference
+
+% Held-out inference and checkpoint
+infer_dataset	../../dataset/iFEM_20260911/infer.h5
+modelpath	../../output/iFEM_20260911/T02/model.pth
+log_file_dir	../../output/iFEM_20260911/T02/infer.log
+inference_output_dir	../../output/iFEM_20260911/T02/infer
+infer_timesteps	1
+
+% Data contract
+input_var	4
+output_var	4
+cond_var	13
+positional_features	0
+use_node_types	False
+feature_loss_weights	1.0, 1.0, 1.0, 1.0
+time_integration	ar_ot
+use_world_edges	False
+use_multiscale	False
+
+% Architecture restored from checkpoint
+latent_dim	256
+num_layers	16
+num_heads	8
+mlp_ratio	2
+slice_num	64
+dropout	0.0
+attention_kernel	naive
+chunk_size	0
+coordinate_normalization	centered_isotropic
+small_output_init	True
+temperature_init	0.5
+temperature_min	0.1
+temperature_max	5.0
+amortized_training	False
+infer_mode	direct
+infer_chunk_size	0
+
+% Inference runtime
+batch_size	16
+use_amp	False
+use_compile	False
+display_trainset	True
+write_test_predictions	True

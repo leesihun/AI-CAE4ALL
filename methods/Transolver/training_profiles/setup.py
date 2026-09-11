@@ -216,6 +216,9 @@ def save_checkpoint(
     modelpath: str,
 ) -> None:
     """Build and write a checkpoint dict to modelpath."""
+    # torch.compile adds an OptimizedModule wrapper whose state_dict prefixes
+    # every key with '_orig_mod.'. Inference constructs the native model.
+    bare_model = getattr(bare_model, '_orig_mod', bare_model)
     save_dict = {
         'checkpoint_version': CHECKPOINT_VERSION,
         'epoch': epoch,

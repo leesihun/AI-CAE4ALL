@@ -1,0 +1,38 @@
+model	SDFFlow  # SDF-VAE + latent flow-matching geometry generator
+mode	interpolate  # reproduce two FM samples, interpolate between them, decode all three to STL
+gpu_ids	0  # SDFFlow is single-process; only the first GPU ID is used
+'
+%   ============================================================
+%   Interpolation on the **ex4** (v3 recipe) DeepJEB checkpoints.
+%
+%   config_interpolate.txt is the ex1 (tier-1 control) twin. This one exists
+%   because the v3 recipe writes to ex4, so pointing the ex1 config at these
+%   checkpoints would either fail preflight or silently mix a v3 VAE with an
+%   ex1 FM. Architecture is rebuilt from the checkpoint's own saved config, so
+%   nothing here overrides the trained model -- only the run settings.
+%   ============================================================
+vae_modelpath	../../output/geometry_generation/ex4/sdfflow_vae.pth  # Frozen VAE checkpoint (decodes latents to SDF)
+fm_modelpath	../../output/geometry_generation/ex4/sdfflow_fm.pth  # Trained FM checkpoint (must match the sampling batch being reproduced)
+output_dir	../../output/geometry_generation/ex4/interpolation  # STLs, triptych PNG, and *_meta.json are written here
+'
+%   No ex4 sampling run has been made yet, so there is no existing batch to line
+%   up with. slerp_noise draws the source noise explicitly from `seed`, so this
+%   run is self-consistent on its own; keep seed/source_num_samples fixed if a
+%   later config_sample run on ex4 should reproduce the same endpoints.
+seed	0  # RNG seed; fixes the reproduced unconditional source batch
+source_num_samples	32  # Batch size the endpoint indices are drawn from
+sample_index_a	0  # First endpoint's index within the reproduced source batch
+sample_index_b	1  # Second endpoint's index within the reproduced source batch
+alpha	0.5  # Interpolation position in [0, 1]; 0 = sample_index_a, 1 = sample_index_b
+%   slerp_noise (default): spherically interpolate the two endpoints' FM source noise
+%   and integrate all three through the ODE, so the midpoint is an on-manifold sample
+%   and the endpoints reproduce the original STLs bit-for-bit. lerp_latent is the
+%   legacy torch.lerp in normalized latent space (a straight line the FM never
+%   trained on; midpoints tend to blend or grow extra bodies).
+interpolation_space	slerp_noise  # slerp_noise | lerp_latent
+'
+ode_steps	50  # Euler integration steps for reproducing the source FM batch
+mc_resolution	128  # Marching Cubes grid resolution for the decoded SDF
+plot_dpi	180  # DPI for the triptych comparison PNG
+%   0 renders every face so the comparison surfaces have no plotting holes.
+plot_max_faces	0  # Max triangles rendered per mesh in the plot (0 = render every face)

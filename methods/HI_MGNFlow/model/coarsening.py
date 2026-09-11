@@ -26,6 +26,8 @@ Multi-level support:
   The model uses a V-cycle architecture with per-level GnBlocks.
 """
 
+from __future__ import annotations
+
 import re
 from collections import deque
 

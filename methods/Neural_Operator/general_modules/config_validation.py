@@ -28,7 +28,7 @@ COMMON_KEYS = {
     "augment_geometry",
     "use_amp", "use_checkpointing", "use_ema", "ema_decay", "use_compile",
     "val_interval", "test_interval", "test_max_batches", "test_batch_idx",
-    "plot_feature_idx", "display_trainset", "display_testset",
+    "plot_feature_idx", "display_trainset", "display_testset", "write_test_predictions",
     "checkpoint_interval",
     "train_query_chunk_size", "infer_query_chunk_size",
     "write_preprocessing",

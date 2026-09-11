@@ -1,0 +1,7 @@
+candidate	model	purpose	gpu	batch_size	epochs	learningr	weight_decay	train_config	infer_config	modelpath
+T01	transolver	User-selected Transolver architecture	1	16	1000	0.0003	0.00001	configs/Transolver/iFEM_20260911/config_train_t01.txt	configs/Transolver/iFEM_20260911/config_infer_t01.txt	../../output/iFEM_20260911/T01/model.pth
+M02	meshgraphnets	MeshGraphNets capacity-matched baseline	2	16	1000	0.0001	0.00001	configs/MeshGraphNets/iFEM_20260911/config_train_m02.txt	configs/MeshGraphNets/iFEM_20260911/config_infer_m02.txt	../../output/iFEM_20260911/M02/model.pth
+D02	deeponet	DeepONet operator baseline	3	16	1000	0.0003	0.00001	configs/Neural_Operator/iFEM_20260911/config_train_d02.txt	configs/Neural_Operator/iFEM_20260911/config_infer_d02.txt	../../output/iFEM_20260911/D02/model.pth
+T02	transolver	Stage-1 learning-rate sweep (only LR changed)	1	16	1000	0.001	0.00001	configs/Transolver/iFEM_20260911/config_train_t02.txt	configs/Transolver/iFEM_20260911/config_infer_t02.txt	../../output/iFEM_20260911/T02/model.pth
+M03	meshgraphnets	Stage-1 learning-rate sweep (only LR changed)	2	16	1000	0.0003	0.00001	configs/MeshGraphNets/iFEM_20260911/config_train_m03.txt	configs/MeshGraphNets/iFEM_20260911/config_infer_m03.txt	../../output/iFEM_20260911/M03/model.pth
+D03	deeponet	Stage-1 weight-decay sweep (only WD changed)	3	16	1000	0.0003	0.0001	configs/Neural_Operator/iFEM_20260911/config_train_d03.txt	configs/Neural_Operator/iFEM_20260911/config_infer_d03.txt	../../output/iFEM_20260911/D03/model.pth

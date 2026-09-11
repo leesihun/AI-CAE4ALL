@@ -167,7 +167,8 @@ def _run_static_direct(model, dataset, device, output_dir, config, modelpath, co
             elapsed = time.time() - start
 
             ref_pos = graph.pos.cpu().numpy()
-            part_ids = graph.part_ids.cpu().numpy() if graph.part_ids is not None else None
+            part_ids_tensor = getattr(graph, 'part_ids', None)
+            part_ids = part_ids_tensor.cpu().numpy() if part_ids_tensor is not None else None
             output_states = pred_denorm[np.newaxis, :, :]  # [1, N, output_dim]
 
             _write_sample_hdf5(

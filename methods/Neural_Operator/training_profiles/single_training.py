@@ -38,6 +38,11 @@ def single_worker(config, config_filename='config.txt'):
     # ---- Dataset ----
     print("\nLoading dataset...")
     split_seed = int(config.get('split_seed', 42))
+    # Keep paired sweep arms on the same initial weights and batch order.
+    torch.manual_seed(split_seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(split_seed)
+    print(f'Training RNG seed: {split_seed}')
     train_dataset, val_dataset, test_dataset = build_dataset_splits(config, split_seed)
     if torch.cuda.is_available():
         print(f'After dataset load: {torch.cuda.memory_allocated()/1e9:.2f}GB')

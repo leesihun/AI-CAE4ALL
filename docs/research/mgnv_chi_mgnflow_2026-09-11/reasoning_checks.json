@@ -1,0 +1,76 @@
+{
+  "scope": "Analytical examples; no empirical claims about trained models or SAOI",
+  "cfm_is_not_kl": [
+    {
+      "target_std": 0.25,
+      "optimal_cfm_mse": 0.3926990817075783,
+      "analytic_cfm_mse": 0.39269908169872414,
+      "matching_prior_kl": 0.0
+    },
+    {
+      "target_std": 0.5,
+      "optimal_cfm_mse": 0.785398163407865,
+      "analytic_cfm_mse": 0.7853981633974483,
+      "matching_prior_kl": 0.0
+    },
+    {
+      "target_std": 1.0,
+      "optimal_cfm_mse": 1.5707963268115634,
+      "analytic_cfm_mse": 1.5707963267948966,
+      "matching_prior_kl": 0.0
+    },
+    {
+      "target_std": 2.0,
+      "optimal_cfm_mse": 3.14159265363146,
+      "analytic_cfm_mse": 3.141592653589793,
+      "matching_prior_kl": 0.0
+    }
+  ],
+  "crps_with_one_truth_per_case": [
+    {
+      "forecast_std": 0.0,
+      "expected_crps": 0.7978845608028654
+    },
+    {
+      "forecast_std": 0.5,
+      "expected_crps": 0.6099672663025075
+    },
+    {
+      "forecast_std": 1.0,
+      "expected_crps": 0.5641895835477565
+    },
+    {
+      "forecast_std": 2.0,
+      "expected_crps": 0.6557449490572587
+    }
+  ],
+  "clean_readout_max_abs_error": 4.440892098500626e-16,
+  "proposed_gaussian_preconditioner_variance_max_abs_error": 1.3322676295501878e-15,
+  "self_normalized_time_weight_single_graph": [
+    {
+      "time_weight": 1.0,
+      "self_normalized_loss": 2.3333333333333335
+    },
+    {
+      "time_weight": 0.25,
+      "self_normalized_loss": 2.3333333333333335
+    },
+    {
+      "time_weight": 0.01,
+      "self_normalized_loss": 2.3333333333333335
+    }
+  ],
+  "iid_unit_noise_cluster_mean_variance": {
+    "1": 1.0,
+    "10": 0.1,
+    "100": 0.01,
+    "1000": 0.001
+  },
+  "nonlinear_decoder_inflation": {
+    "setup": "Z~N(0,1), D(z)=z^2; latent mean remains zero",
+    "mean_D_Z": 1.0,
+    "mean_D_2Z": 4.0,
+    "meaning": "Even mean-preserving latent inflation need not preserve the decoded field mean"
+  },
+  "largest_time_embedding_frequency_cycles_over_unit_interval": 16384
+}

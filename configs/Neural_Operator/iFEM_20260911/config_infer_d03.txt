@@ -1,0 +1,56 @@
+% AI-CAE4ALL native iFEM config.
+% Launch from the suite root with AI_CAE4ALL_main.py --config <this file>.
+% Native method cwd resolves ../../dataset and ../../output below.
+
+% Run
+model	deeponet
+gpu_ids	3
+parallel_mode	ddp
+mode	inference
+
+% Held-out inference and checkpoint
+infer_dataset	../../dataset/iFEM_20260911/infer.h5
+modelpath	../../output/iFEM_20260911/D03/model.pth
+log_file_dir	../../output/iFEM_20260911/D03/infer.log
+inference_output_dir	../../output/iFEM_20260911/D03/infer
+infer_timesteps	1
+
+% Data contract
+input_var	4
+output_var	4
+cond_var	13
+positional_features	0
+use_node_types	False
+feature_loss_weights	1.0, 1.0, 1.0, 1.0
+time_integration	ar_ot
+use_world_edges	False
+use_multiscale	False
+
+% Architecture restored from checkpoint
+coordinate_normalization	centered_isotropic
+operator_dim	2
+grid_padding	0.0
+dimension_tolerance	0.0001
+out_of_bounds_policy	error
+sdf_source	none
+sdf_sidecar	none
+global_condition_features	none
+integration_weight_source	none
+deeponet_branch_source	fixed_sensors
+deeponet_sensor_resolution	9, 9
+deeponet_hidden_channels	256
+deeponet_branch_depth	3
+deeponet_trunk_depth	3
+deeponet_basis_dim	128
+deeponet_activation	silu
+deeponet_multi_output	split_both
+deeponet_max_branch_params	100000000
+infer_query_chunk_size	0
+
+% Inference runtime
+batch_size	16
+use_amp	False
+use_compile	False
+display_trainset	True
+display_testset	True
+write_test_predictions	True
