@@ -93,7 +93,6 @@ fm_best_modelpath	../../output/geometry_generation/ex4/sdfflow_fm_best.pth
 %   trained against and normalizes its latents against it, so swapping in a
 %   different VAE epoch would force a full FM retrain. The final save to
 %   fm_modelpath is unchanged and stays the pipeline's completeness signal.
-fm_best_modelpath	../../output/geometry_generation/ex4/sdfflow_fm_e250_best.pth
 
 %   Reproducibility
 seed	0  # Global run seed: each stage worker seeds torch/numpy/python and the train DataLoader shuffle with seed + rank (model construction is put back on the rank-independent base seed). Absent = legacy unseeded run. The arms sweep shares this value; arms/A9.txt repeats A0 at seed 1 to measure the run-to-run noise floor
