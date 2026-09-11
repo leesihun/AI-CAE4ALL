@@ -49,11 +49,42 @@ COND_VAR = 4
 RAW_ROOT = os.environ.get('DEEPJEB_RAW', 'D:/CAE_datasets_raw/deepjeb')
 
 
+def boundary_faces_from_cells(cells):
+    """Boundary triangles of a tet mesh, in the file's *volume* node numbering.
+
+    The `faces` dataset cannot be used for this. It is a boundary triangulation
+    written in its OWN compacted numbering -- `np.unique(faces)` on a DeepJEB
+    FieldMesh comes back as exactly 0..86167 while `vertices` holds 270276 nodes
+    -- so indexing `vertices`/`nodal_variables` with it silently selects an
+    arbitrary block of *interior* nodes (DeepJEB numbers interior-first). Doing
+    that put the extracted surface at 5,323,396 mm^2 against DeepJEB's own label
+    of 58,092 mm^2 (92x), left nodes 1.6 mm from the centroid of a supposedly
+    hollow shell, and scrambled the node->field pairing, which is why a surrogate
+    trained on it could only ever learn the marginal p(y).
+
+    Rebuilding the boundary from `cells` avoids the whole problem: tet
+    connectivity is already in volume numbering, so the result indexes
+    `vertices` and `nodal_variables` correctly. A triangle on the boundary is
+    one that exactly one tet claims. Checked against bracket 101_428: 57,988
+    mm^2 vs the 58,092 mm^2 label (0.18%), extents 109 x 185 x 65 mm against the
+    ~183.8 mm mean long axis, and a minimum centroid distance of 10.3 mm.
+
+    Winding is whatever the owning tet gave it, which is not globally
+    consistent -- fine for undirected graph edges and nodal features, but do not
+    compute signed volume or outward normals from these without reorienting.
+    """
+    corners = cells[:, :4]
+    tri = corners[:, [[0, 1, 2], [0, 1, 3], [0, 2, 3], [1, 2, 3]]].reshape(-1, 3)
+    _, first, count = np.unique(np.sort(tri, axis=1), axis=0,
+                               return_index=True, return_counts=True)
+    return tri[first[count == 1]]
+
+
 def surface_from_fieldmesh(path):
     """Closed surface mesh, its nodal fields, and the constrained-node mask."""
     with h5py.File(path, 'r') as f:
         vertices = f['vertices'][...].astype(np.float64)
-        faces = f['faces'][...].astype(np.int64)
+        cells = f['cells'][...].astype(np.int64)
         nv = f['nodal_variables']
         fields = {}
         for case in LOAD_CASES:
@@ -63,6 +94,7 @@ def surface_from_fieldmesh(path):
             ])
         resultant = np.stack([nv[f'{c}_resultant_disp(mm)'][...] for c in LOAD_CASES])
 
+    faces = boundary_faces_from_cells(cells)
     used, faces_local = np.unique(faces, return_inverse=True)
     return {
         'vertices': vertices[used],

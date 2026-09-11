@@ -490,7 +490,19 @@ def _load_weights(model, state_dict, source):
         state_dict = {k: v for k, v in state_dict.items() if k not in stale}
         print(f'  Dropped {len(stale)} legacy aux_decoder tensor(s) '
               f'(training-only head, no longer in the model)')
-    model.load_state_dict(state_dict)
+    # Checkpoints written before latent standardization existed carry no
+    # prior.z_shift / prior.z_scale. Their defaults ARE the old behaviour
+    # (identity), so absence is not an error -- but only for these two.
+    missing, unexpected = model.load_state_dict(state_dict, strict=False)
+    allowed = {'prior.z_shift', 'prior.z_scale'}
+    unresolved = [k for k in missing if k not in allowed]
+    if unresolved or unexpected:
+        raise RuntimeError(
+            f'checkpoint does not match the model: missing {unresolved}, '
+            f'unexpected {list(unexpected)}')
+    if missing:
+        print(f'  Legacy checkpoint: {len(missing)} latent-standardization '
+              f'buffer(s) defaulted to identity')
     print(f'  Loaded {source} from checkpoint')
 
 

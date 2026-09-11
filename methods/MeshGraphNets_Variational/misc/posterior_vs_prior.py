@@ -230,6 +230,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--config', required=True,
                     help='an INFERENCE config: modelpath + infer_dataset + eval_dataset')
+    ap.add_argument('--modelpath', default=None,
+                    help="score this checkpoint instead of the config's modelpath; "
+                         "lets a retrained prior be measured with no new configs")
+    ap.add_argument('--tag', default=None, help='label for the output filename')
     ap.add_argument('--n-prior', type=int, default=500)
     ap.add_argument('--chunk', type=int, default=16,
                     help='graphs decoded per forward; bounds memory only')
@@ -238,6 +242,8 @@ def main():
 
     cfg = load_config(a.config)
     cfg['num_timesteps'] = 1
+    if a.modelpath:
+        cfg['modelpath'] = a.modelpath
     dev = resolve_device(cfg)
     torch.manual_seed(1234)
 
@@ -338,9 +344,10 @@ def main():
     lat['posterior_sigma_rms'] = float(np.sqrt(np.mean(np.exp(post_logvar))))
     lines = verdict(ens, lat)
 
-    tag = os.path.splitext(os.path.basename(a.config))[0]
+    tag = a.tag or os.path.splitext(os.path.basename(a.config))[0]
     print()
     print(f"POSTERIOR vs PRIOR -- {tag}")
+    print(f"  checkpoint: {cfg['modelpath']}")
     print(f"{'ensemble':<18}{'n':>6}{'mean spread':>14}{'sd':>10}{'sd_ratio (1)':>14}{'dmean/sd (0)':>14}")
     print('-' * 76)
     for name in ('truth', 'posterior_mean', 'posterior_sample', 'prior'):

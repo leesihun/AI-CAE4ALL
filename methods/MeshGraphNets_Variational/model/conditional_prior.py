@@ -166,6 +166,17 @@ class ConditionalFMPrior(_ConditionalPriorBase):
             self.flat_dim,
             layer_norm=False,
         )
+        # Latent standardization. The FM path runs on (z - shift)/scale and
+        # integration output is mapped back, so the velocity net always works
+        # in a unit-scale space while callers keep decoder units. Identity by
+        # default: a prior fitted without it behaves exactly as before.
+        #
+        # It matters because MMD pins the AGGREGATE q(z) to N(0,I), and with
+        # many realizations of a few parts that aggregate is a mixture: total
+        # variance 1 is compatible with every per-part cloud -- what the prior
+        # must hit -- being far smaller and off-origin.
+        self.register_buffer('z_shift', torch.zeros(self.flat_dim))
+        self.register_buffer('z_scale', torch.ones(self.flat_dim))
         self.apply(init_weights)
 
     def _t_embed(self, t):
@@ -193,6 +204,7 @@ class ConditionalFMPrior(_ConditionalPriorBase):
         """
         with _autocast_disabled_for(cond):
             z1 = target_z.reshape(target_z.shape[0], -1).float()
+            z1 = (z1 - self.z_shift) / self.z_scale
             c = cond.float()
             z0 = torch.randn_like(z1)
             t = torch.rand(z1.shape[0], 1, device=z1.device)
@@ -243,6 +255,7 @@ class ConditionalFMPrior(_ConditionalPriorBase):
         c = cond.float().repeat_interleave(n, dim=0)
         z = torch.randn(c.shape[0], self.flat_dim, device=c.device)
         z = self._integrate(z, c, steps)
+        z = z * self.z_scale + self.z_shift
         return z.view(cond.shape[0], n, self.num_z, self.z_dim).to(cond.dtype)
 
     @torch.no_grad()
@@ -278,6 +291,7 @@ class ConditionalFMPrior(_ConditionalPriorBase):
             if inflation != 1.0:
                 center = self._integrate(torch.zeros_like(z), c, self.num_steps)
                 z = center + inflation * (z - center)
+            z = z * self.z_scale + self.z_shift
         B = cond.shape[0]
         return z.view(B, n, self.num_z, self.z_dim).to(cond.dtype)
 

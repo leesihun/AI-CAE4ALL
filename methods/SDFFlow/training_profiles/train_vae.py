@@ -347,6 +347,13 @@ def vae_worker(config, config_filename='config.txt'):
     # broadcast so the FSDP state-dict gather below stays collective).
     best_modelpath = config.get('vae_best_modelpath')
     best_valid_loss = float('inf')
+    # First epoch at which ValidSDF is comparable across epochs: both ramps have
+    # reached full strength (see the eligibility comment at the selection site).
+    best_eligible_epoch = deterministic_warmup_epochs + max(
+        posterior_noise_warmup_epochs, kl_warmup_epochs)
+    if rank0 and best_modelpath and best_eligible_epoch > 0:
+        print(f'Best-validation selection starts at epoch {best_eligible_epoch} '
+              f'(warmup completes there; earlier ValidSDF is not comparable)')
 
     log_file = init_log_file(config, config_filename) if rank0 else None
     if rank0:
@@ -491,7 +498,17 @@ def vae_worker(config, config_filename='config.txt'):
             # Best-validation checkpoint. `do_val` is identical on every rank;
             # only rank 0 knows the loss, so its verdict is broadcast before the
             # (FSDP-collective) state-dict gather.
-            if best_modelpath and do_val:
+            #
+            # Epochs inside the warmup are NOT eligible. ValidSDF is a
+            # reconstruction-only metric (`_validate` encodes on the mean, so the
+            # posterior-noise ramp does not enter it) -- but the KL ramp does,
+            # through the weights: while `effective_kl_weight` is still climbing
+            # the encoder is barely regularized, so an early epoch can post the
+            # lowest ValidSDF of the whole run purely for being unregularized,
+            # and comparing it against a fully-pressured epoch is not the same
+            # objective twice. That checkpoint is also the wrong one to hand the
+            # FM stage, whose latents must come from the regime it samples under.
+            if best_modelpath and do_val and epoch >= best_eligible_epoch:
                 improved = 1.0 if (rank0 and valid_loss < best_valid_loss) else 0.0
                 if D.is_dist():
                     improved = D.broadcast_scalar(improved, device)

@@ -1,0 +1,111 @@
+%   ============================================================
+%   DeepJEB bracket surrogate -- RETRAIN on the corrected dataset.
+%
+%   The previous 400-epoch run is void. build_deepjeb_mgn.py indexed the
+%   270,276-node `vertices`/`nodal_variables` arrays with indices from the
+%   `faces` array's own compacted 0..86,167 space, so it silently selected
+%   interior volume nodes (DeepJEB numbers interior-first) and paired them with
+%   those nodes' fields. Measured on bracket 101_428: surface area 5,323,396
+%   mm^2 against DeepJEB's own 58,092 mm^2 label, and a node 1.6 mm from the
+%   centroid of a supposedly hollow shell. Geometry and fields were both wrong
+%   and mutually scrambled -- which is why that run's deterministic readout
+%   never beat a constant predictor. It could only learn the marginal p(y).
+%
+%   The builder now derives the boundary from `cells` (tet connectivity, already
+%   in volume numbering): area 57,988 mm^2 vs the 58,092 label (0.18% off),
+%   extents 109 x 185 x 65 mm, and the constrained-node mask finds 174
+%   bolt-interface nodes per bracket where it previously found zero in all 1684
+%   samples. Decimation now starts from ~13-16k real surface nodes instead of
+%   86k wrong ones, lifting peak_retention from a 0.863 median to 0.937.
+%   ============================================================
+%   ============================================================
+%   DeepJEB bracket surrogate -- HI-MGN replaces the FEA solver.
+%
+%   Input : bracket surface graph (5k nodes) + a one-hot load case
+%   Output: per-node stress (MPa) and resultant displacement (mm)
+%
+%   This is the analysis stage of the closed design loop: SDFFlow generates a
+%   bracket, the mesh bridge turns it into this contract, and this model
+%   predicts the fields that would otherwise cost a full solve.
+%
+%   Data: DeepJEB (Hong et al., ASME JMD 147(4) 041703, 2025; ODC-By v1.0),
+%   converted by dataset/build_deepjeb_mgn.py. 57 brackets x 4 load cases,
+%   split BY BRACKET so the four cases of one geometry never straddle a split.
+%   ============================================================
+model	chi-mgnflow
+mode	train
+gpu_ids	0
+parallel_mode	ddp
+log_file_dir	../../output/deepjeb_himgn/train_fixed.log
+%   new name: keeps the pre-fix checkpoint for comparison
+modelpath	../../output/deepjeb_himgn/deepjeb_himgn_fixed.pth
+dataset_dir	../../dataset/deepjeb_mgn.h5
+split_seed	42
+
+%   Static problem: one timestep, no autoregressive rollout. The state block is
+%   zeroed on input, so the model sees geometry + connectivity + load case and
+%   must produce the field -- which is exactly the surrogate we want.
+input_var	2
+output_var	2
+cond_var	4
+feature_loss_weights	1.0, 1.0
+edge_var	8
+positional_features	4
+
+message_passing_num	12
+Training_epochs	400
+%   was 4. At flow_det_prob 0.25 a batch of 4 pins only ~1 graph per step to
+%   t=0 -- and best_by det selects on exactly that slice. 16 gives 4 graphs.
+Batch_size	16
+%   was 0.0005. configs/HI_MGNFlow/SAOI_sweepB explores 1e-4..3e-4 and 5e-4 sat
+%   outside it. That sweep is SAOI not DeepJEB -- reasoned, not measured here.
+LearningR	0.0001
+Latent_dim	96
+num_workers	2
+std_noise	0.0
+augment_geometry	False
+grad_accum_steps	1
+
+use_checkpointing	True
+use_amp	True
+use_ema	True
+%   was 0.99 = a ~100-update averaging window, too short to smooth anything over
+%   a 24k-update run. 0.999 -> ~1000 updates; (1-d)*24000 = 24 >= 10 so it still
+%   clears the retained-init rule.
+ema_decay	0.999
+val_interval	5
+test_interval	1000
+
+use_node_types	False
+use_world_edges	False
+
+%   Multiscale: 5k-node surface graphs, so two coarse levels of ~500 and ~100.
+use_multiscale	True
+coarsening_type	voronoi_seedmean
+voronoi_clusters	500, 100
+multiscale_levels	2
+mp_per_level	3, 4, 6, 4, 3
+hierarchy_variants	1
+hierarchy_seed	1234
+hierarchy_cache_keep	True
+
+%   Flow matching tuned for the DETERMINISTIC mode: this stage stands in for a
+%   solver, so the conditional mean is what matters. x0 weighting concentrates
+%   the budget at t~0 and flow_det_prob pins a quarter of graphs there exactly;
+%   best_by det then selects the checkpoint on that same quantity. The sampler
+%   remains available and gives a free uncertainty estimate for screening.
+flow_steps	20
+flow_solver	heun
+flow_time_freqs	16
+flow_t_sampling	uniform
+flow_loss_weighting	x0
+flow_det_prob	0.25
+flow_predict	mean
+val_flow_steps	8
+val_num_samples	4
+best_by	det
+
+test_batch_idx	0, 1
+plot_feature_idx	0
+display_testset	False
+display_trainset	False
