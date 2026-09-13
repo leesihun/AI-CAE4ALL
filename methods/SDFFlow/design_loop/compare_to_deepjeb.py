@@ -116,9 +116,18 @@ def main(argv=None):
               + ', '.join(sorted(summary)), file=sys.stderr)
         return 1
 
-    def val(rec, *names):
+    def val(rec, *names, case=None):
+        """Summary records use explicit-unit keys (mass_kg, peak_von_mises_MPa,
+        max_displacement_mm) already in kg / MPa / mm, so nothing is rescaled
+        here. `case` reads the per-load-case block when one is present."""
         if not isinstance(rec, dict):
             return None
+        if case:
+            blk = (rec.get('cases') or {}).get(case)
+            if isinstance(blk, dict):
+                for n in names:
+                    if n in blk and isinstance(blk[n], (int, float)):
+                        return float(blk[n])
         for n in names:
             if n in rec and isinstance(rec[n], (int, float)):
                 return float(rec[n])
@@ -136,7 +145,7 @@ def main(argv=None):
     print('=' * 76)
 
     # --- mass: the one directly comparable axis ---------------------------- #
-    m_opt = val(opt, 'mass')
+    m_opt = val(opt, 'mass_kg', 'mass')
     masses = [r['mass'] for r in labels]
     qs = quantiles(masses)
     if m_opt is not None:
@@ -152,23 +161,21 @@ def main(argv=None):
         rel = 100.0 * (m_opt - qs['median']) / qs['median']
         print(f'  vs median            {rel:+.1f}%')
         for name, rec in (('baseline (best of population)', base), ('typical (median-mass)', typical)):
-            v = val(rec, 'mass')
+            v = val(rec, 'mass_kg', 'mass')
             if v is not None:
                 print(f'  loop {name:<30s} {v:.4f}   '
                       f'(optimized is {100.0 * (m_opt - v) / v:+.1f}% vs this)')
                 out['axes']['mass_kg'].setdefault('loop_reference', {})[name] = v
 
     # --- stress / displacement: ordering only ------------------------------ #
-    s_opt = val(opt, 'peak_von_mises', 'peak_stress')
-    if s_opt is not None and s_opt > 1e4:      # loop stores Pa; labels are MPa
-        s_opt = s_opt / 1e6
-    d_opt = val(opt, 'max_displacement')
-    if d_opt is not None and d_opt < 0.05:     # loop stores m; labels are mm
-        d_opt = d_opt * 1000.0
 
     for case in cases:
         if case not in CASE_COLUMNS:
             continue
+        short = {'vertical': 'ver', 'horizontal': 'hor',
+                 'diagonal': 'dia', 'torsional': 'tor'}[case]
+        s_opt = val(opt, 'peak_von_mises_MPa', case=short)
+        d_opt = val(opt, 'max_displacement_mm', case=short)
         svals = [r[case + '_stress'] for r in labels]
         dvals = [r[case + '_disp'] for r in labels]
         sq, dq = quantiles(svals), quantiles(dvals)

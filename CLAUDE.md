@@ -216,6 +216,31 @@ method-local `outputs/`.
 `init_log_file` records `config['log_dir']`, and the periodic train/test
 prediction dumps write under it, so every artifact of one run lands together.
 
+### Periodic visualization (every method that trains)
+
+`test_interval` gates a periodic pass that writes a picture into the **log
+file's directory**, so every artifact of a run lands together. `display_testset`
+(default True everywhere) turns it on; `display_trainset` additionally runs the
+pass over a few training samples under a `train/` prefix, which is what
+separates underfitting from a generalization gap. What gets drawn follows what
+the method predicts:
+
+| method | picture |
+| --- | --- |
+| MeshGraphNets, MGN-V, HI-MGNflow, Neural_Operator, **Transolver** | mesh HDF5 + a 2×2 PNG (predicted vs truth × normalized vs denormalized) on the reconstructed surface, coloured by `plot_feature_idx` |
+| MLP | parity plot of the held-out split, one panel per output column |
+| SimulGenVAE | truth / reconstruction / \|error\| field images (VAE) and a latent parity plot (LC) |
+| SDFFlow | a strip of the reconstructed (VAE) or generated (FM) shapes, beside the STLs |
+| GeometryIngest | `preview` renders the first ingested samples; in `mode inspect` it is the only output |
+
+Two rules hold across all of them. **The renderer needs triangles** --
+`edges_to_triangles_*` reconstructs the surface from `edge_index` alone, and on
+a quad/hex mesh (zero 3-cycles) `quads_to_triangles` splits 4-cycles instead;
+with no surface at all the scalars are drawn per node. And **every plotting
+backend is imported lazily**: a missing matplotlib or pyvista prints a note and
+the run continues. PyVista renders off-screen with no DISPLAY (VTK warns about
+the X server, then writes a correct PNG).
+
 ### Config value parsing (shared with the native repos)
 
 The parser in [config_parser.py](cae_suite/config_parser.py) is faithful to the

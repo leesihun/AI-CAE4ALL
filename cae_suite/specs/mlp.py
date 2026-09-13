@@ -32,6 +32,8 @@ MLP_KEYS = frozenset(
         # Runtime / EMA / evaluation
         "use_amp", "use_ema", "ema_decay", "use_compile",
         "val_interval", "checkpoint_interval",
+        # Periodic visualization: a held-out parity plot beside the log file.
+        "test_interval", "display_testset", "plot_dpi", "plot_max_points",
     }
 )
 

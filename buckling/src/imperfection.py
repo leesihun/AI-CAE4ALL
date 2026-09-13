@@ -99,14 +99,36 @@ class SpectralImperfection:
 
 
 # ------------------------------------------------------------------ component A
-def process_signature(theta, z, L, t, n_panels, rms_over_t=0.30, seed=0):
+def critical_wavenumber(r_over_t):
+    """Empirical critical circumferential wavenumber, n ~= 0.86*sqrt(R/t).
+
+    Measured across 320 production draws spanning R/t = 110..230; the constant
+    held to within 3% at every corner (0.868, 0.868, 0.864, 0.844).
+    """
+    return 0.86 * float(r_over_t) ** 0.5
+
+
+def process_signature(theta, z, L, t, n_panels, rms_over_t=0.30, seed=0,
+                      critical_n=None, guard=3.0):
     """Deterministic per-family signature: ovalization + weld pattern.
 
     One axial half-wave only (NASA SP-8007 Rev 2 section 4.3: components with
     k > 4 are typically small in cylinders without circumferential joints).
     Amplitudes decay monotonically in l. Phases are fixed per family.
+
+    `critical_n` / `guard`: any harmonic within `guard` wavenumbers of the
+    critical one is DROPPED. This is not cosmetic. With N_p = 8 the weld
+    harmonic l = 8 sits on the critical wavenumber n ~ 9 at R/t = 110, and a
+    direct amplitude sweep showed it does not merely break symmetry, it selects
+    the outcome: n=8 occurred 0/12 times with this component off, and 12/12
+    times at 0.10*t. Ovalization (l = 2, 3) is far from the critical band at
+    every geometry in the box and is what actually does the symmetry breaking.
     """
     ls = [2, 3] + [j * n_panels for j in (1, 2, 3, 4)]
+    if critical_n is not None:
+        ls = [l for l in ls if abs(l - critical_n) > guard]
+        if not ls:
+            raise ValueError("every harmonic was inside the critical guard band")
     rng = np.random.default_rng(seed)
     psi = rng.uniform(0.0, 2.0 * np.pi, size=len(ls))
 
@@ -131,8 +153,10 @@ def apply_imperfection(mesh, sigma_hat, a_bar, nu, n_panels, seed,
     wB = fieldB.evaluate(mesh.theta, mesh.z)
 
     if with_component_a:
+        n_crit = critical_wavenumber(mesh.r_over_t)
         wA, infoA = process_signature(mesh.theta, mesh.z, mesh.L, mesh.t,
-                                      n_panels, comp_a_rms_over_t, seed=n_panels)
+                                      n_panels, comp_a_rms_over_t, seed=n_panels,
+                                      critical_n=n_crit)
     else:
         wA, infoA = np.zeros_like(wB), dict(l_list=[], psi=[], rms=0.0)
 

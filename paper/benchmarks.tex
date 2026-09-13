@@ -1,246 +1,260 @@
-% =====================================================================
-%  Benchmark landscape survey + our benchmark construction
-%  Requires: references.bib, booktabs
-% =====================================================================
+﻿% Benchmark scope and verified local dataset contracts.
+% Compile through main.tex.
 
 \section{The benchmark landscape for one-to-many simulation}
 \label{sec:bench}
 
-\subsection{The admission criterion}
+\subsection{Match the dataset to the statistical claim}
 \label{sec:bench:criterion}
 
-A dataset can validate a distributional claim only if it supplies
-\emph{multiple ground-truth realisations at a single model-visible condition}.
-This is a harder requirement than it sounds, and most datasets described as
-``stochastic'' in the neural-PDE literature fail it. Chaos is not sufficient: a
-chaotic system with one trajectory per parameter setting still gives one draw
-from the conditional, and a distance to one draw is not a divergence between
-distributions. Nor is visual variability sufficient. We surveyed
-$87$ candidate datasets across curated PDE suites, weather and climate
-ensembles, turbulence archives, solid-mechanics and fracture sets, engineering
-CAE collections, stochastic-PDE benchmarks and adjacent generative domains, and
-classified each by three properties: replicate count at a fixed condition, the
-representation (mesh, graph, or structured grid), and \emph{what is hidden from
-the model} that creates the spread.
+A distributional task must specify the model-visible condition $g$, the source
+of random variation and the outcome being scored. Repeated outcomes at fixed
+$g$ permit direct empirical checks of that conditional distribution. They are
+not a prerequisite for proper-score evaluation: one outcome at each of many
+test conditions can estimate an average predictive score. Such an evaluation
+does not, without additional assumptions or observations, resolve calibration
+separately at every individual condition~\cite{gneiting2007strictly}.
 
-Table~\ref{tab:landscape} summarises the outcome. The organising finding is
-negative and, we argue, publishable in itself.
+We therefore distinguish the suitability of a dataset for a specific
+hidden-variable experiment from its validity as a probabilistic benchmark.
+Table~\ref{tab:landscape} identifies the different claims supported by common
+sampling designs. The examples below are a targeted review and an audit of
+three local conversions, not an exhaustive census of all available datasets.
 
 \begin{table}[t]
 \centering
 \small
-\caption{The partition of failure modes. No surveyed dataset has all three of
-(a)~an unstructured mesh with nodal fields, (b)~Monte-Carlo replicates at a
-fixed condition, and (c)~many distinct conditions.}
+\caption{Sampling designs and their interpretation. Representation, conditioning
+and dependence must be specified separately from the number of samples.}
 \label{tab:landscape}
-\begin{tabular}{@{}llp{0.30\linewidth}@{}}
+\begin{tabular}{@{}p{0.27\linewidth}p{0.32\linewidth}p{0.32\linewidth}@{}}
 \toprule
-\textbf{Has} & \textbf{Missing} & \textbf{Exemplar} \\
+\textbf{Design} & \textbf{Can evaluate} & \textbf{Main limitation} \\
 \midrule
-Replicates $+$ many conditions   & unstructured mesh & The Well (all subsets), PBFM, StocBench \\
-Replicates $+$ real CAE mesh     & many conditions   & SimJEB ($381 \times 1$ condition) \\
-Many conditions $+$ real CAE mesh & replicates       & DrivAerNet++, CFDBench, Mechanical MNIST \\
-Replicates $+$ real CAE physics  & the mesh itself   & Airfoil RANS ($25\times5{,}000$, regridded to Cartesian) \\
-Many ground-truth realisations   & condition diversity & CESM2 LENS2 ($100$ truths, ${\sim}2$ conditions) \\
+One outcome per condition &
+Average proper score across test cases &
+Few direct checks of each individual conditional law \\
+Replicates at many conditions &
+Within-condition distributions and transfer between conditions &
+Independent reference samples and a declared condition split are needed \\
+Many outcomes at one condition &
+A distribution at that fixed condition &
+No evidence of transfer between conditions \\
+Snapshots from one long run &
+A stationary distribution under justified sampling assumptions &
+Serial dependence reduces effective sample size \\
+Several solver or model variants &
+A declared mixture over model choices &
+Not automatically physical replicate variability \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-Weather supplies \emph{many conditions $\times$ one truth}; large climate
-initial-condition ensembles supply \emph{many truths $\times$ two conditions}.
-Nobody has built many conditions $\times$ many truths on a mesh.
+Mesh-based generative fluid benchmarks already contain multiple physical
+states for varying geometries~\cite{lino2025diffusiongraphnets,
+lino2026scaleautoregressive}. Those states represent statistically developed
+flow and need not be independent nonlinear solves with a withheld imperfection.
+The distinction motivates our shell construction; it does not justify claiming
+that no many-condition, many-outcome mesh benchmark exists.
 
-\subsection{What is admissible today}
+\subsection{Examples from a public simulation collection}
 \label{sec:bench:tier1}
 
-Only a handful of obtainable datasets clear the criterion with a replicate
-count adequate for a fair-CRPS estimate, and four of them belong to a single
-collection~---~The Well~\cite{ohana2024well}~---~which is the only corpus that
-systematically ships seed ensembles.
+The Well includes several useful seed ensembles, with different conditioning
+contracts~\cite{ohana2024well}. Its source documentation must be read at the
+level of each subset rather than assuming that every trajectory in the
+collection has the same uncertainty mechanism.
 
-\paragraph{Turbulence-gravity-cooling ($100$ seeds $\times$ $27$ conditions).}
-The only combination in the survey supporting \emph{both} a stable per-condition
-CRPS and rank histogram \emph{and} a held-out-condition calibration test. This
-is the headline conditional result. Its cost is storage
-($\sim\!829$\,GB) and a free-fall-time-normalised cadence that must be
-reconciled before pairing seeds.
+\paragraph{Turbulence--gravity--cooling.}
+The documented ensemble has $2{,}700$ trajectories: $100$ random seeds for
+each of $27$ combinations of initial density, temperature and metallicity.
+The public fields are supplied on a structured grid. These counts
+describe the simulation design; an evaluation must still declare which initial
+fields are exposed to the model and align physical output
+times.\footnote{\url{https://polymathic-ai.org/the_well/datasets/turbulence_gravity_cooling/}}
 
-\paragraph{Rayleigh--B\'enard ($10$ seeds $\times$ $35$ conditions).}
-Chebyshev-graded wall-normal spacing makes it the most mesh-like structured set
-available and mildly mis-specifies uniform-grid CNN baselines. Ten replicates
-suffice for CRPS but are thin for rank histograms. At high Rayleigh and Prandtl
-number the spread collapses, so per-condition spread must be reported rather
-than a pooled number.
+\paragraph{Rayleigh--B\'enard convection.}
+The documented design combines five Rayleigh numbers, seven Prandtl numbers,
+five initial buoyancy amplitudes and ten noise seeds, giving $1{,}750$
+trajectories. If all three non-seed parameters are visible, there are $175$
+conditions with ten seeds each. Grouping only by Rayleigh and Prandtl number
+instead gives $35$ groups and marginalises over the five buoyancy amplitudes;
+these are different prediction tasks. The collection also distinguishes the
+original graded grid from a uniformly resampled
+version.\footnote{\url{https://polymathic-ai.org/the_well/datasets/rayleigh_benard/}}
 
-\paragraph{Turbulent radiative layer 2D ($10$ seeds $\times$ $9$ conditions).}
-At $6.9$\,GB this is the ablation harness, not a result: nearly one-dimensional
-conditioning makes it a strong calibration test and a weak expressivity test,
-and $90$ trajectories is a small training set for a generative mesh model.
+\paragraph{Turbulent radiative layer.}
+The two-dimensional subset supplies ten seeds for each of nine cooling times.
+Our local conversion retains $72$ training trajectories and $18$ inference
+trajectories. Its state channels include the velocity perturbation that varies
+between seeds; Section~\ref{sec:bench:negative} explains why the visible input
+changes the interpretation of this ensemble.
 
-\paragraph{Viscoelastic instability (four coexisting attractors).}
-The only genuinely \emph{multimodal-with-discrete-modes} dataset available, and
-therefore the direct empirical answer to ``why a flow-matching prior instead of
-a heteroscedastic Gaussian head'': a unimodal head provably cannot represent
-four attractors. It is unconditional, so conditional calibration is untestable
-here, and unequal mode counts and trajectory lengths must be reweighted
-explicitly or a sampler will confuse mode weight with sampling artefact.
+\paragraph{Viscoelastic instability.}
+The source describes coexisting dynamical states. A multimodal field law
+motivates richer models than a single Gaussian distribution over the output
+field, but does not prove that flow matching is necessary: nonlinear latent
+decoders and other mixture or generative models can also represent multiple
+modes. Any comparison must specify the distribution of initialisations and how
+trajectory lengths affect mode
+weights.\footnote{\url{https://polymathic-ai.org/the_well/datasets/viscoelastic_instability/}}
 
-\paragraph{Airfoil RANS ensembles.}
-The only entry whose uncertainty mechanism~---~solver non-convergence plus
-turbulence-closure deficiency~---~is the one a CAE practitioner actually meets,
-and the only one whose conditioning variable \emph{is a geometry}. It is
-distributed regridded to a Cartesian lattice, so exercising a mesh hierarchy
-requires re-running the cases or obtaining the raw mesh.
+None of these counts gives a universal threshold for reliable CRPS or rank
+histograms. Precision depends on the target distribution, effect size,
+dependence and aggregation rule, as well as the number of generated members
+and reference outcomes.
 
-\subsection{Instructive rejections}
+\subsection{Common mismatches between data and claims}
 \label{sec:bench:reject}
 
-Several datasets are cited in probabilistic work as though they satisfied the
-criterion. They do not, and the reasons are worth naming.
+Several distinctions prevent misleading benchmark conclusions.
 
 \begin{itemize}
-  \item \textbf{One realisation per model-visible condition.} PDEBench and
-    PDEArena sample the governing parameter continuously, so no two runs share
-    a condition; the ACDM scenarios ship one trajectory per Reynolds or Mach
-    number, which is why their ``posterior sampling'' is scored against physics
-    statistics rather than a ground-truth divergence~\cite{kohl2026acdm}; JHTDB
-    stores exactly one DNS per configuration; DrivAerNet++ one CFD run per
-    geometry~\cite{elrefaie2024drivaernetpp}.
-  \item \textbf{Temporally correlated snapshots posed as an ensemble.} Several
-    archives present $N$ snapshots of \emph{one} trajectory as $N$ samples.
-    That is a decorrelation-time question, not an uncertainty question, and it
-    is the most common silent error in this area.
-  \item \textbf{Averaged targets.} Where a benchmark releases the \emph{mean}
-    of a small initial-condition ensemble as its target, an emulator wins by
-    suppressing variability, and RMSE against a three-member mean is
-    substantially scoring noise.
-  \item \textbf{Model-form variation mistaken for aleatory spread.} Sets whose
-    ``repeats'' are alternative energy decompositions, alternative constitutive
-    models, or \emph{neural-network training seeds} are varying model form, not
-    the physical law's randomness. Pooling them into a spread estimate is a
-    category error.
+  \item \textbf{Visible variability versus hidden variability.}
+    Two runs with different material maps or initial velocity fields do not
+    share a model-visible condition when those fields are inputs. They can
+    still form a valid conditional prediction dataset, but are not replicate
+    outcomes at identical inputs.
+  \item \textbf{Time samples versus independent realisations.}
+    Correlated snapshots may estimate stationary statistics under appropriate
+    stationarity and ergodicity assumptions. Treating them as independent
+    replicates overstates precision; it does not make the stationary
+    distribution itself invalid.
+  \item \textbf{An ensemble mean versus a realised field.}
+    If the released target is an average over solver runs, its distribution is
+    the distribution of that average. Evaluating it does not recover the
+    variability of individual runs.
+  \item \textbf{Physical variability versus model uncertainty.}
+    Alternative constitutive models, solver settings and neural training seeds
+    can define useful uncertainty ensembles. Their mixture and weighting must
+    be explicit, and should not be labelled independent physical repeats.
 \end{itemize}
 
-The most instructive rejection is the canonical near-miss. Mechanical MNIST
-Crack Path exhibits dramatic path sensitivity under an identical loading
-protocol, and is regularly invoked as evidence of stochastic behaviour. But as
-published, the realised inclusion centres are handed to the network as a
-$64\times64$ rigidity array and the resulting map is solved deterministically at
-$\mathrm{F}_1 = 0.870$~\cite{mohammadzadeh2022crackpath}. \emph{Sensitivity is
-not uncertainty.} Three separate recent fracture and damage benchmarks shipped
-with visually dramatic stochastic-looking behaviour and zero aleatory
-replicates. Naming this confusion, we think, is overdue.
+Mechanical MNIST Crack Path illustrates the first distinction: the original
+problem relates microstructural input to mechanically driven
+fields~\cite{mohammadzadeh2022crackpath}. Withholding that input changes the
+task, but does not automatically make the remaining observed state identical
+between cases.
 
-\subsection{Our construction, and its measured information floor}
+\subsection{A withholding construction and its input boundary}
 \label{sec:bench:construction}
 
-We turn the canonical near-miss into an admissible benchmark by an explicit,
-declared act of information withholding. The rigid-inclusion field is
-\emph{not} converted; the model sees reference coordinates, the damage and
-displacement state, and nothing else. Every case then presents a bit-identical
-visible input, so the released samples are draws from a single conditional and
-the empirical conditional distribution is directly observable.
+The local Mechanical MNIST conversion omits the inclusion field and stores
+coordinates, damage and two displacement components on a $256\times256$
+regular grid, connected by non-periodic grid edges. It contains $1{,}750$
+training cases and $250$ inference cases, each with $20$ stored frames. These
+are grid samples of finite-element results, not the original finite-element
+mesh. The construction differs from the shell dataset of
+Section~\ref{sec:results:buckling}, where the visible and hidden imperfection
+components are specified before simulation.
 
-We report four properties measured on the converted data, because a
-withholding construction is only defensible if its consequences are stated
-rather than assumed.
+Crucially, the converted crack dataset does \emph{not} have bit-identical
+model-visible initial states. A direct comparison of the first two numerically
+indexed cases in each HDF5 split finds differences in all three state channels
+at the first stored frame. The maximum absolute damage difference is
+approximately $0.00881$ in that training pair and $0.0780$ in that inference
+pair; both displacement channels differ as well. These counterexamples are
+enough to reject identical-input replication, but do not measure how much
+information about the final crack is available from that frame.
 
-\paragraph{The spread is large and continuous.}
-Pairwise relative $L^2$ of the damage field rises from $0.047$ at the first
-stored step to $0.948$ at the last; final-crack IoU averages $0.283$ with a
-$95$th percentile of $0.473$. A PCA of the final damage fields requires $43$
-components for $90\%$ of variance, and no sample has a nearest-neighbour crack
-IoU above $0.9$. There is no discrete mode structure: the outcome distribution
-is continuous and high-dimensional, which is precisely why a
-descriptor-histogram acceptance test would be inadequate and a proper score is
-required.
+Thus, $p(y_{\mathrm{future}}\mid \text{stored state})$ and
+$p(y_{\mathrm{trajectory}}\mid \text{geometry, loading protocol})$ are
+different targets. Omitting the explicit inclusion channel does not remove the
+inclusions' mechanical effects from the observed state. Under the current
+autoregressive input contract, the stored state is part of the condition.
+A genuinely common-state construction would require defining and validating a
+common initial input, together with a compatible loading-time convention.
+That variant is not supplied by simply dropping the inclusion channel.
 
-\paragraph{The latent is structured, not i.i.d.}
-Inclusion centres are seeded on bitmap pixels above an intensity threshold,
-with sub-pixel jitter and a minimum-spacing rejection rule. The hidden variable
-is therefore a structured, class-clustered prior with a genuinely random
-realisation drawn on top of it~---~not white noise. Any paper using this
-construction should say so; the distinction changes what a well-calibrated
-prior is expected to look like.
+The local audit establishes this input-contract limitation. It does not
+establish a numerical information-leak floor, the residual conditional
+dimension, or a precise branching window. Such results require a reproducible
+analysis with specified sample selection, split membership, distance
+normalisation and uncertainty estimates. Per-step diagnostics would be
+appropriate for locating any branching interval, but are not presented here
+as completed measurements.
 
-\paragraph{The withholding is not perfect, and we quantify the leak.}
-The first stored frame is not the pristine notch but an early loading step, so
-the recorded displacements already encode the \emph{elastic response} to the
-hidden inclusions. Nearest-neighbour retrieval on that first frame predicts the
-final crack at IoU $0.2726$ against a random baseline of $0.1833$
-($z = +24.7$; Spearman $\rho = +0.240$, reproducing held-out and on the test
-split, and surviving a crack-size control at partial $\rho = +0.199$). The
-latent partially images itself into the visible state. The practical size of
-the leak is small~---~a best guess moves from $0.18$ to $0.27$ against a mean
-pairwise IoU of $0.283$~---~so the conditional remains broad, but we report
-this as a measured \emph{floor} on achievable sharpness rather than claiming a
-clean hidden-variable setup.
-
-\paragraph{The branching window is narrow.}
-The stochasticity is concentrated in roughly three of nineteen stored steps.
-The earliest steps are frozen (per-step change below the cross-sample spread,
-so an autoregressive model wins by copying), a short window branches sharply
-(nearest neighbours diverge by factors of $3.1$, $9.1$ and $4.9$ over
-consecutive steps), and thereafter the outcome is locked (top-$1$
-nearest-neighbour retention returns to $40/40$). A one-step score averaged over
-the trajectory therefore dilutes the real signal roughly six-fold, and must be
-reported step-resolved.
-
-\subsection{Two negative results on candidate slots}
+\subsection{Two candidate slots with different targets}
 \label{sec:bench:negative}
 
-We record two datasets we prepared and then rejected, because both failures are
-general.
+\paragraph{A radiative-layer seed ensemble.}
+The local radiative-layer files contain nodal arrays of shape
+$[8,101,49152]$: three coordinates, density, pressure, two velocity components
+and cooling time. Each of the nine cooling times has eight training seeds and
+two inference seeds. Comparing two seeds at the same cooling time shows
+bit-identical initial density and pressure but different initial velocities.
+The model therefore receives at least part of the seed-dependent perturbation.
 
-\paragraph{A chaotic ensemble is not an aleatory one.}
-A radiative-mixing-layer ensemble with nine cooling-time values and ten seeds
-appears ideal. It is not, for the task an autoregressive simulator actually
-trains: the seeds differ \emph{only} in an initial velocity perturbation, and
-density and pressure at the first step are bitwise identical across seeds. That
-perturbation is stored in the state rows the model reads as input. The seed is
-therefore fully observed, and $p(u_{t+1} \mid u_t, c)$ is a point mass for a
-deterministic solver on a fully resolved state. Genuine spread exists only for
-the trajectory-given-condition map, where cross-seed spread grows to exceed the
-cross-condition spread by the final step. The dataset is a legitimate
-\emph{chaotic ensemble-spread} benchmark; it is not an aleatory-uncertainty
-benchmark, and one-step CRPS on it degenerates toward mean absolute error. Two
-replicates per condition in a standard $80/10/10$ split~---~a $75.6\%$ relative
-standard error on the spread estimate and a three-bin rank histogram~---~would
-in any case not support a calibration claim.
+For a deterministic solver with a complete state, conditioning on that state
+removes uncertainty about the next step. This observation does not prove that
+the stored fields are a complete Markov state or that a learned predictor has
+zero residual uncertainty. It does show why a cross-seed ensemble conditioned
+only on cooling time cannot be used directly as the reference conditional law
+for a model that also observes the realised velocity field.
 
-\paragraph{An unconditional generative task is not a UQ benchmark, and grain
-labels are not a field.}
-A Potts kinetic Monte Carlo grain-growth set with one thousand seeds is a
-textbook stochastic process, but it carries no conditioning variable at all:
-every sample presents an identical input, so $p(y \mid x) \equiv p(y)$. Worse,
-the target is a labelling, not a field. Relabelling a sample by a permutation
-that provably preserves the partition (boundary-indicator IoU exactly $1.0$)
-scores a mean squared error statistically indistinguishable from comparing two
-\emph{genuinely different} microstructures, while a constant field scores twice
-as well as either. Under a pointwise loss, mode collapse is the global optimum.
-This survives the obvious repair: even on a permutation-invariant $0/1$
-grain-boundary target, a spatially constant predictor attains a Brier score of
-$0.2469$ against the true ensemble's $0.2624$~---~the constant \emph{beats} the
-truth by $5.9\%$~---~and a spatially scrambled ensemble ties it, because the
-per-node marginal standard deviation ($0.1568$) sits at the independent-Bernoulli
-null ($0.1572$). Per-node scoring here is not weak but anti-informative. The
-generative-microstructure community's choice of morphological-distribution
-metrics~\cite{torquato2002random, hoffman2025grainpaint} is correct, and a
-pointwise proper score is simply the wrong instrument.
+The two reference seeds per cooling time are a small sample for estimating a
+condition-specific distribution. This reference count does not determine the
+number of rank-histogram bins: a histogram for an ensemble of $M$ generated
+members has $M+1$ possible ranks, with tie handling specified. Reference count
+controls how many rank observations are available, and nodes or timesteps
+within a trajectory cannot simply be counted as independent observations.
 
-\subsection{The benchmark that should exist}
+\paragraph{Grain growth and the meaning of a Brier score.}
+The local SPPARKS conversion has $900$ training and $100$ inference samples,
+each storing a static $100^3$ grain-identifier array. Numeric grain IDs are
+arbitrary labels: a bijective relabelling leaves the partition unchanged
+while altering a squared error on the IDs. A separate crop converter provides
+a $50^3$ boundary-indicator representation using open faces and a
+six-neighbour stencil. The invariant target resolves label symmetry, although
+it does not alone specify an adequate morphology metric.
+
+A spatially constant \emph{probability forecast} must not be confused with a
+constant generated microstructure. If a boundary event at a node has
+probability $p$, the expected Brier score of a forecast probability $q$ is
+\begin{equation}
+  \mathbb{E}(q-Y)^2 = p(1-p)+(q-p)^2,\qquad Y\sim\operatorname{Bernoulli}(p).
+  \label{eq:brier-marginal}
+\end{equation}
+It is minimised at $q=p$. If a probability is instead estimated as the mean
+$\hat q$ of $M$ independent Bernoulli samples with success probability $q$,
+independent of the verifying outcome, the expected score gains the term
+$q(1-q)/M$. A known probability can therefore outperform the empirical
+probability from a finite ensemble sampled from the same law. This is the
+finite-ensemble effect addressed by fair scores~\cite{ferro2014fair}, not
+evidence against Brier propriety.
+
+If two field distributions have identical probabilities at every node,
+summing marginal Brier scores cannot distinguish their spatial dependence.
+Scrambling can preserve marginal probabilities while destroying grains.
+The appropriate conclusion is to supplement valid marginal probability
+scores with joint or morphology-sensitive diagnostics, not to call marginal
+scores anti-informative. A proper score applied to a descriptor assesses its
+induced distribution; it is strictly informative about the full field only
+when the representation and score identify that field law.
+
+At fixed physical settings this is a legitimate distributional task. It can
+measure variability at those settings, but supplies no test of conditioning
+on varying geometries or process parameters.
+
+\subsection{Design requirements for the shell benchmark}
 \label{sec:bench:missing}
 
-We state the design requirements explicitly, each traceable to a failure above.
-A one-to-many CAE benchmark needs: (1)~at least $50$ members at each of at
-least $50$ conditions, with fair-CRPS reported under the finite-ensemble
-correction~\cite{ferro2014fair}; (2)~a native mesh with connectivity retained
-and nodal fields, since every dataset that regridded destroyed exactly the
-structure a hierarchical mesh network exists to exploit; (3)~a \emph{labelled
-uncertainty-source axis}, because no CAE benchmark today distinguishes ``my
-solver with a different seed'' from ``a different solver''; (4)~a paired
-deterministic control on which the predicted spread must collapse, without
-which a model that hallucinates spread is indistinguishable from a calibrated
-one; and (5)~an engineering quantity-of-interest distribution, since
-calibration on a stress field that is miscalibrated on peak stress is
-worthless.
+The shell construction targets a particular engineering question: how a
+withheld imperfection changes the field distribution across known geometries.
+Its requirements are (i)~a declared visible-input contract and independently
+drawn hidden variables; (ii)~retained mesh connectivity and consistently
+defined output fields; (iii)~repeated outcomes and separate condition splits
+for within-condition evaluation and transfer; (iv)~documented solver,
+convergence and retention criteria; and (v)~engineering quantities of interest
+alongside field diagnostics. A deterministic control is useful for detecting
+spurious spread, but a matching spread on that control alone cannot certify
+calibration.
+
+Sample counts should follow precision or power requirements rather than a
+universal cutoff such as $50$ conditions with $50$ members each. Finite
+reference self-scores provide a sampling baseline, not a strict lower bound
+for every observed score. Likewise, exclusions based on numerical convergence
+may change the retained conditional law and must be reported.
+Section~\ref{sec:results:buckling} states the implemented construction and
+the current evidence for these requirements.
+

@@ -34,7 +34,7 @@ gpu_ids	0
 '
 %   Trained generator that defines the design space
 vae_modelpath	../../output/geometry_generation/ex4/sdfflow_vae.pth
-fm_modelpath	../../output/geometry_generation/ex4/sdfflow_fm_e250.pth
+fm_modelpath	../../output/geometry_generation/ex4/sdfflow_fm_best.pth
 output_dir	../../output/geometry_generation/ex4/optimization_surrogate
 '
 %   Shape parameterization (same subspace as the FEA config)

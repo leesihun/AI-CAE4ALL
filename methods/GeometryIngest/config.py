@@ -53,4 +53,8 @@ def params_from_config(cfg: dict[str, str]) -> IngestParams:
         mesh_size_min=float(cfg.get("mesh_size_min", 0.0)),
         seed=int(cfg.get("seed", 42)),
         limit=int(cfg.get("limit", 0)),
+        preview=str(cfg.get("preview", "true")).strip().lower() in {"true", "1", "yes"},
+        preview_path=cfg.get("preview_path", ""),
+        preview_max_samples=int(cfg.get("preview_max_samples", 6)),
+        plot_dpi=int(cfg.get("plot_dpi", 150)),
     )

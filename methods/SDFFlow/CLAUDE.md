@@ -977,6 +977,22 @@ does not see them; validate them with per-file `--check`.
 | `design_loop/problem.py` | Bracket interfaces, GE load cases, mass objective with penalties |
 | `design_loop/loop.py` | Evaluator, baseline calibration, CMA-ES driver, history |
 
+## Periodic visualization
+
+Both periodic tests now render as well as export. Beside the STLs they already
+wrote, `train_vae`'s reconstruction test writes `epoch#####_recon.png` and
+`train_fm`'s generation test writes `epoch#####_samples.png` -- one panel per
+shape, identical axes and camera across panels, volume and face count in each
+title. A strip is what makes FM mode collapse (every panel the same shape) and
+a mean-blob decoder obvious; per-shape STL files do not.
+
+`display_testset` (default True) gates it; `plot_dpi` and `plot_max_faces` are
+shared with the inference figures. The renderer is
+`general_modules/mesh_render.py::plot_mesh_strip`, factored out of
+`inference_profiles/interpolate.py` so the training and inference figures are
+the same picture rather than two look-alikes -- matplotlib 3-D polygons, not
+VTK, because this has to run with no GL context.
+
 ## Validation after changes
 
 At minimum, run from the suite root:

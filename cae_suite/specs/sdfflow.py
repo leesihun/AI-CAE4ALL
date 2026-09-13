@@ -39,6 +39,10 @@ SDFFLOW_KEYS = frozenset(
         "max_condition_z", "condition_ood_policy", "latent_clip", "candidate_multiplier",
         "source_num_samples", "sample_index_a", "sample_index_b", "alpha",
         "plot_dpi", "plot_max_faces", "input_mesh",
+        # Periodic train/test renders: the reconstruction (VAE) and sample (FM)
+        # strips written beside their STLs. plot_dpi / plot_max_faces above are
+        # shared with the inference figures.
+        "display_testset",
         "pipeline_log_file", "skip_completed_stages",
         "vae_log_file_dir", "vae_training_epochs", "vae_batch_size",
         "vae_learningr", "vae_weight_decay", "vae_warmup_epochs",

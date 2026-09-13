@@ -213,6 +213,24 @@ worker uses `worker_device`, `wrap_model`, `DistributedSampler`,
 needs Linux + CUDA — on Windows, or without CUDA, use `parallel_mode single`
 (the default).
 
+## Periodic visualization
+
+Both stages write a picture every `test_interval` epochs (rank 0 only, no
+collective, so no barrier is needed), into the log file's directory:
+
+- **VAE** -- `vae_recon_epoch#####.png`: one row per held-out sample with truth,
+  reconstruction and |error| as `[channel, time]` images. Truth and
+  reconstruction share one colour scale on purpose; independently scaled panels
+  are how a collapsed decoder passes a visual check. `num_test_samples` sets
+  the row count (default 2). Values are denormalized first.
+- **LC** -- `lc_parity_epoch#####.png`: predicted vs true latent coordinate,
+  main and hierarchical stacks in separate panels with R2/RMSE. The conditioner
+  regresses a frozen target, so parity is the honest view of it.
+
+`display_testset` (default True) gates both; `general_modules/field_viz.py`
+imports matplotlib lazily, so a missing install prints a note rather than
+killing a run.
+
 ## Validation / test commands
 
 ```bash

@@ -37,6 +37,10 @@ TRANSOLVER_KEYS = frozenset(
         "test_batch_idx",
         "use_world_edges", "use_multiscale", "write_preprocessing",
         "max_train_batches", "max_val_batches", "display_trainset",
+        # display_testset writes the mesh HDF5 + 2x2 comparison PNG that MGN and
+        # Neural_Operator write; write_test_predictions is the separate lean
+        # numeric dump under <log_dir>/dumps/. They are independent.
+        "display_testset", "plot_feature_idx",
         "write_test_predictions", "use_parallel_stats",
     }
 )

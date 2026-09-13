@@ -32,6 +32,10 @@ SIMULGENVAE_KEYS = frozenset(
         "latent_dim", "latent_dim_end", "num_filter_enc", "loss_type", "alpha",
         "init_beta_divisor", "beta_target", "kl_warmup_epochs", "kl_warmup_start_frac",
         "recon_iter", "val_interval",
+        # Periodic visualization (general_modules/field_viz.py): the VAE stage
+        # writes a truth/reconstruction/error picture, the LC stage a latent
+        # parity plot, both beside the log file.
+        "test_interval", "display_testset", "num_test_samples", "plot_dpi",
         # LC arch
         "lc_filter", "lc_data_type", "param_dir", "param_data_type", "lc_dropout",
         "use_spatial_attention",

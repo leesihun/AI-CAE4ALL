@@ -33,6 +33,7 @@ from torch.utils.data.distributed import DistributedSampler
 from general_modules import distributed as D
 from general_modules.sdf_dataset import build_dataset_splits, compute_cond_stats
 from general_modules.mesh_extraction import decode_sdf_grid, sdf_grid_to_mesh, mesh_report
+from general_modules.mesh_render import plot_mesh_strip
 from model.sdf_vae import SDFVAE, describe_state_key_flag, load_vae_state_dict, sdf_loss
 from training_profiles.setup import (
     append_log,
@@ -611,6 +612,10 @@ def run_reconstruction_test(model, test_dataset, device, config, epoch):
     resolution = int(config.get('mc_resolution_test', 96))
     num_shapes = min(int(config.get('num_test_shapes', 2)), len(test_dataset))
 
+    # Collected for one strip figure: reconstructions on shared axes beside
+    # each other show a decoder that has collapsed to a mean blob, which the
+    # per-shape STL files do not make obvious.
+    meshes, labels, reports = [], [], []
     for i in range(num_shapes):
         item = test_dataset[i]
         surface_points = item['surface_points'].unsqueeze(0).to(device)
@@ -626,3 +631,17 @@ def run_reconstruction_test(model, test_dataset, device, config, epoch):
                   f'faces={report["faces"]} -> {path}')
         else:
             print(f'  [test] recon shape {int(item["shape_idx"])}: NO ZERO CROSSING')
+        meshes.append(mesh if report['valid'] else None)
+        labels.append(f'shape {int(item["shape_idx"])}')
+        reports.append(report)
+
+    if config.get('display_testset', True) and meshes:
+        written = plot_mesh_strip(
+            meshes, labels, reports,
+            os.path.join(out_dir, f'epoch{epoch:05d}_recon.png'),
+            dpi=int(config.get('plot_dpi', 180)),
+            max_faces=int(config.get('plot_max_faces', 0)),
+            title=f'SDFFlow VAE reconstruction -- epoch {epoch}',
+        )
+        if written:
+            print(f'  [viz] {written}')

@@ -66,6 +66,20 @@ Routing/optimizer/runtime keys are shared with the suite (`input_var`=N,
 [CONFIGURATION_REFERENCE.md](../../docs/CONFIGURATION.md) section 9.10 and the
 launcher spec `cae_suite/specs/mlp.py` (the validation source of truth).
 
+## Periodic visualization
+
+`display_testset` (default True) writes a **parity plot of the held-out split**
+every `test_interval` epochs, next to the log file
+(`<log_file_dir dir>/parity_val_epoch#####.png`). One panel per output column,
+predicted against true in physical units, with R2 and RMSE and a shared span on
+both axes; column labels come from the dataset's optional `output_names`.
+
+This is the tabular analogue of the mesh methods' field render, and it is here
+for one failure in particular: a surrogate that has learned the *output mean*
+still posts a plausible val loss on a small table, and shows up immediately as a
+horizontal band instead of a diagonal. `mlp/viz.py` imports matplotlib lazily,
+so a missing install prints a note and training continues.
+
 ## Tests
 
 ```bash

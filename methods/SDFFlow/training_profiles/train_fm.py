@@ -25,6 +25,7 @@ from torch.utils.data.distributed import DistributedSampler
 from general_modules import distributed as D
 from general_modules.sdf_dataset import build_dataset_splits
 from general_modules.mesh_extraction import decode_sdf_grid, sdf_grid_to_mesh, mesh_report
+from general_modules.mesh_render import plot_mesh_strip
 from model.sdf_vae import SDFVAE
 from model.velocity_net import VelocityNet, flow_matching_loss, sample_latents
 from training_profiles.setup import (
@@ -445,6 +446,10 @@ def run_generation_test(model, vae, device, config, epoch, latent_flat_dim,
     z_n = sample_latents(model, num_samples, latent_flat_dim, device, cond=cond,
                          ode_steps=int(config.get('ode_steps', 50)))
     z = z_n * latent_std.to(device) + latent_mean.to(device)
+    # Collected for one strip figure: a row of samples on shared axes shows
+    # mode collapse (every panel the same shape) at a glance, which per-shape
+    # STL files do not.
+    meshes, labels, reports = [], [], []
     for i in range(num_samples):
         volume = decode_sdf_grid(vae, z[i:i + 1], resolution=resolution, device=device)
         mesh = sdf_grid_to_mesh(volume)
@@ -455,3 +460,17 @@ def run_generation_test(model, vae, device, config, epoch, latent_flat_dim,
             print(f'  [test] sample {i}: watertight={report["watertight"]} faces={report["faces"]} -> {path}')
         else:
             print(f'  [test] sample {i}: NO ZERO CROSSING')
+        meshes.append(mesh if report['valid'] else None)
+        labels.append(f'sample {i}')
+        reports.append(report)
+
+    if config.get('display_testset', True) and meshes:
+        written = plot_mesh_strip(
+            meshes, labels, reports,
+            os.path.join(out_dir, f'epoch{epoch:05d}_samples.png'),
+            dpi=int(config.get('plot_dpi', 180)),
+            max_faces=int(config.get('plot_max_faces', 0)),
+            title=f'SDFFlow samples -- epoch {epoch}',
+        )
+        if written:
+            print(f'  [viz] {written}')

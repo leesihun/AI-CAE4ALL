@@ -10,6 +10,7 @@ import os
 from dataclasses import dataclass
 
 from . import readers, to_graph, to_pointcloud, writer
+from .preview import render_geometry_preview
 
 _MESH_GLOBS = ("*.stl", "*.ply", "*.obj", "*.off",
                "*.step", "*.stp", "*.igs", "*.iges", "*.brep")
@@ -27,6 +28,12 @@ class IngestParams:
     mesh_size_min: float = 0.0
     seed: int = 42
     limit: int = 0                # cap number of inputs (0 = all)
+    # Preview render (preview.py): a strip of the first samples, written beside
+    # the output dataset. Works in inspect mode too, where it is the only output.
+    preview: bool = True
+    preview_path: str = ""        # default: <output_dataset>_preview.png
+    preview_max_samples: int = 6
+    plot_dpi: int = 150
 
 
 def gather_paths(root: str, limit: int) -> list[str]:
@@ -75,6 +82,16 @@ def pointcloud_output_path(graph_out: str) -> str:
     return f"{stem}_pointcloud{ext or '.h5'}"
 
 
+def _default_preview_path(output: str | None, first_input: str) -> str:
+    """Beside the dataset being written; in inspect mode there is none, so
+    beside the first input instead (never inside methods/, per the layout rule)."""
+    if output:
+        stem, _ext = os.path.splitext(output)
+        return f"{stem}_preview.png"
+    directory = os.path.dirname(os.path.abspath(first_input))
+    return os.path.join(directory, "geometry_ingest_preview.png")
+
+
 def run_ingest(paths: list[str], params: IngestParams, output: str | None,
                dry_run: bool) -> int:
     """Process every path, then write the requested emit(s). Returns an exit code."""
@@ -91,8 +108,22 @@ def run_ingest(paths: list[str], params: IngestParams, output: str | None,
     if not samples:
         print("Nothing ingested.")
         return 1
+
+    if params.preview:
+        preview_path = params.preview_path or _default_preview_path(output, paths[0])
+        written = render_geometry_preview(
+            samples, preview_path,
+            max_panels=params.preview_max_samples,
+            dpi=params.plot_dpi,
+            seed=params.seed,
+            title=f"geometry_ingest -- {len(samples)} sample(s), "
+                  f"{'volume' if params.volume else 'surface'} mesh",
+        )
+        if written:
+            print(f"\nPreview -> {written}")
+
     if dry_run:
-        print(f"\n[inspect] {len(samples)} sample(s) ok; no file written.")
+        print(f"\n[inspect] {len(samples)} sample(s) ok; no dataset written.")
         return 0
 
     if "graph" in params.emit:

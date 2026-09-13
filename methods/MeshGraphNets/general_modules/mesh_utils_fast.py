@@ -50,7 +50,7 @@ def _triangles_from_edges_dict(edges_np, num_nodes):
 _DENSE_ADJ_NODE_LIMIT = 20_000
 
 
-def edges_to_triangles_gpu(edge_index, device='cpu'):
+def _edges_to_3cycles_gpu(edge_index, device='cpu'):
     """
     Vectorized triangle reconstruction using dense adjacency on GPU.
 
@@ -117,7 +117,7 @@ def edges_to_triangles_gpu(edge_index, device='cpu'):
     return torch.cat(all_triangles, dim=0).cpu().numpy().astype(np.int64)
 
 
-def edges_to_triangles_optimized(edge_index):
+def _edges_to_3cycles_cpu(edge_index):
     """
     CPU triangle reconstruction using numpy dense adjacency.
 
@@ -177,6 +177,88 @@ def edges_to_triangles_optimized(edge_index):
         return np.array([], dtype=np.int64).reshape(0, 3)
 
     return np.concatenate(all_triangles, axis=0).astype(np.int64)
+
+
+def quads_to_triangles(edge_index, num_nodes=None, max_degree=16):
+    """
+    Split quadrilateral faces into triangles.
+
+    The reconstructions above find 3-cycles, so a structured quad or hex mesh --
+    which has no diagonal edges -- yields zero faces and nothing is drawable.
+    A quad (u, a, v, b) appears in the edge graph as two non-adjacent nodes
+    u, v that share exactly the two neighbours a and b, so every such 4-cycle
+    is emitted as the triangle pair (u, a, v), (u, v, b).
+
+    Only reached as a fallback when no triangle exists at all: a mesh that
+    already has triangles keeps the original reconstruction untouched, and a
+    mixed tri/quad mesh is left alone as well.
+
+    Args:
+        edge_index: (2, E) array or tensor of edges (bidirectional or not)
+        num_nodes: node count; inferred from edge_index when omitted
+        max_degree: nodes with more neighbours than this are skipped. Quad-mesh
+            nodes have degree <= 8; a denser graph is a neighbourhood graph that
+            already has triangles, so the O(N*d^3) Python scan is not worth it.
+
+    Returns:
+        faces: (F, 3) int64 array, empty when the mesh has no quads either
+    """
+    if isinstance(edge_index, torch.Tensor):
+        edge_index = edge_index.detach().cpu().numpy()
+    edge_index = np.asarray(edge_index)
+    if edge_index.size == 0:
+        return np.zeros((0, 3), dtype=np.int64)
+    if num_nodes is None:
+        num_nodes = int(edge_index.max()) + 1
+
+    adj = [set() for _ in range(num_nodes)]
+    for u, v in zip(edge_index[0].tolist(), edge_index[1].tolist()):
+        if u != v:
+            adj[u].add(v)
+            adj[v].add(u)
+
+    faces = []
+    seen = set()
+    for u in range(num_nodes):
+        nbrs = adj[u]
+        if not nbrs or len(nbrs) > max_degree:
+            continue
+        ordered = sorted(nbrs)
+        for i in range(len(ordered) - 1):
+            a = ordered[i]
+            for b in ordered[i + 1:]:
+                if b in adj[a]:
+                    continue  # (u, a, b) closes a triangle, not a quad corner
+                for v in adj[a] & adj[b]:
+                    if v == u or v in nbrs:
+                        continue  # a chord would make this not a 4-cycle
+                    key = (u, a, v, b) if u < v else (v, b, u, a)
+                    key = tuple(sorted(key))
+                    if key in seen:
+                        continue  # the same quad found from its other diagonal
+                    seen.add(key)
+                    faces.append((u, a, v))
+                    faces.append((u, v, b))
+
+    if not faces:
+        return np.zeros((0, 3), dtype=np.int64)
+    return np.asarray(faces, dtype=np.int64)
+
+
+def edges_to_triangles_gpu(edge_index, device='cpu'):
+    """Triangle reconstruction with a quad fallback. See quads_to_triangles."""
+    faces = _edges_to_3cycles_gpu(edge_index, device=device)
+    if faces.shape[0] == 0:
+        faces = quads_to_triangles(edge_index)
+    return faces
+
+
+def edges_to_triangles_optimized(edge_index):
+    """Triangle reconstruction with a quad fallback. See quads_to_triangles."""
+    faces = _edges_to_3cycles_cpu(edge_index)
+    if faces.shape[0] == 0:
+        faces = quads_to_triangles(edge_index)
+    return faces
 
 
 def compute_face_values_gpu(faces, node_values, device='cpu'):
@@ -363,9 +445,19 @@ def save_inference_results_fast(output_path, graph,
     if not skip_visualization:
         plot_path = output_path.replace('.h5', '.png')
 
+        # With no reconstructable surface (a point cloud, or a quad mesh whose
+        # quads were not recoverable) the face arrays are empty, so the plot is
+        # coloured per node instead -- plot_mesh_comparison draws points then.
+        if faces.shape[0] > 0:
+            plot_values = (pred_face_values_norm, target_face_values_norm,
+                           pred_face_values_denorm, target_face_values_denorm)
+        else:
+            plot_values = (predicted_norm, target_norm,
+                           predicted_denorm, target_denorm)
+
         # Validate data before returning for visualization
-        if pred_face_values_norm.shape[1] == 0:
-            print(f"Warning: No features in face values for sample_id={sample_id}, time_idx={time_idx}. Skipping visualization.")
+        if plot_values[0].shape[0] == 0 or plot_values[0].shape[1] == 0:
+            print(f"Warning: nothing to visualize for sample_id={sample_id}, time_idx={time_idx}. Skipping visualization.")
             return None
 
         # Return plot data for parallel processing with full metadata
@@ -374,10 +466,10 @@ def save_inference_results_fast(output_path, graph,
             'plot_path': plot_path,
             'pos': pos,
             'faces': faces,
-            'pred_values_norm': pred_face_values_norm,
-            'target_values_norm': target_face_values_norm,
-            'pred_values_denorm': pred_face_values_denorm,
-            'target_values_denorm': target_face_values_denorm,
+            'pred_values_norm': plot_values[0],
+            'target_values_norm': plot_values[1],
+            'pred_values_denorm': plot_values[2],
+            'target_values_denorm': plot_values[3],
             'sample_id': sample_id,
             'time_idx': time_idx,
             'face_part_ids': face_part_ids,
@@ -407,20 +499,25 @@ def plot_mesh_comparison(pos, faces, pred_values_norm, target_values_norm,
         time_idx: Timestep index for plot title (optional)
         face_part_ids: (F,) array of part IDs per face for edge coloring (optional)
     """
-    if faces.shape[0] == 0:
-        return
+    # No surface topology (point cloud, or a quad mesh with no recoverable
+    # quads): colour the nodes instead of silently drawing nothing. The caller
+    # passes per-node values in that case.
+    point_mode = faces.shape[0] == 0
 
-    # Validate feature_idx
+    # Validate the scalars
+    if pred_values_norm.shape[0] == 0:
+        print(f"Warning: No geometry to visualize for sample_id={sample_id}, time_idx={time_idx}")
+        return False
     num_features = pred_values_norm.shape[1]
     if num_features == 0:
         print(f"Warning: No features to visualize for sample_id={sample_id}, time_idx={time_idx}")
-        return
+        return False
 
     actual_feature_idx = feature_idx if feature_idx >= 0 else num_features + feature_idx
     if actual_feature_idx < 0 or actual_feature_idx >= num_features:
         print(f"Error: feature_idx={feature_idx} (actual={actual_feature_idx}) out of bounds "
               f"for {num_features} features (sample_id={sample_id}, time_idx={time_idx})")
-        return
+        return False
 
     # Extract the selected feature for all four plots
     pred_colors_norm = pred_values_norm[:, feature_idx].astype(np.float64)
@@ -428,23 +525,18 @@ def plot_mesh_comparison(pos, faces, pred_values_norm, target_values_norm,
     pred_colors_denorm = pred_values_denorm[:, feature_idx].astype(np.float64)
     target_colors_denorm = target_values_denorm[:, feature_idx].astype(np.float64)
 
-    # Feature name and units
-    feature_names = ['Delta Disp X', 'Delta Disp Y', 'Delta Disp Z', 'Stress']
-    feature_units_norm   = ['mm', 'mm', 'mm', 'MPa']
-    feature_units_denorm = ['mm', 'mm', 'mm', 'Pa']
-    feature_name = (feature_names[actual_feature_idx]
-                    if actual_feature_idx < len(feature_names)
-                    else f'Feature {actual_feature_idx}')
-    feature_unit_norm   = (feature_units_norm[actual_feature_idx]
-                           if actual_feature_idx < len(feature_units_norm) else '')
-    feature_unit_denorm = (feature_units_denorm[actual_feature_idx]
-                           if actual_feature_idx < len(feature_units_denorm) else '')
-
-    # Convert denormalized stress from MPa to Pa
-    is_stress = actual_feature_idx == 3
-    if is_stress:
-        pred_colors_denorm  = pred_colors_denorm  * 1e6
-        target_colors_denorm = target_colors_denorm * 1e6
+    # Feature name and units.
+    # The channel layout is dataset-specific and this function is given no way
+    # to know which dataset it is rendering, so the channel is named by index.
+    # The names that used to be hardcoded here ('Delta Disp X/Y/Z', 'Stress')
+    # came from NASA-CRM and were applied to every dataset -- together with a
+    # silent MPa->Pa rescale of channel 3 in the MeshGraphNets copy -- which
+    # mislabelled and rescaled the plot for anything else (iFEM dense48's
+    # channel 3 is u_eps2, not a stress).
+    feature_name = f'Feature {actual_feature_idx}'
+    feature_unit = ''
+    feature_unit_norm = ''
+    feature_unit_denorm = ''
 
     # Shared color ranges (same scale for pred vs target within each row)
     eps = 1e-12
@@ -471,10 +563,13 @@ def plot_mesh_comparison(pos, faces, pred_values_norm, target_values_norm,
     r2_norm   = _pearson_r2(pred_colors_norm,   target_colors_norm)
     r2_denorm = _pearson_r2(pred_colors_denorm, target_colors_denorm)
 
-    # Build VTK-format faces: [3, v0, v1, v2, 3, v0, v1, v2, ...]
-    n_faces = faces.shape[0]
-    vtk_faces = np.column_stack([np.full(n_faces, 3, dtype=faces.dtype), faces]).ravel()
-    mesh = pv.PolyData(pos.astype(np.float64), vtk_faces)
+    if point_mode:
+        mesh = pv.PolyData(pos.astype(np.float64))
+    else:
+        # Build VTK-format faces: [3, v0, v1, v2, 3, v0, v1, v2, ...]
+        n_faces = faces.shape[0]
+        vtk_faces = np.column_stack([np.full(n_faces, 3, dtype=faces.dtype), faces]).ravel()
+        mesh = pv.PolyData(pos.astype(np.float64), vtk_faces)
 
     # Build header text
     header_parts = []
@@ -492,9 +587,8 @@ def plot_mesh_comparison(pos, faces, pred_values_norm, target_values_norm,
 
     # Colorbar labels
     cbar_label_norm   = f'{feature_name} (Normalized)'
-    cbar_label_denorm = (f'Stress (Pa)' if is_stress
-                         else (f'{feature_name} ({feature_unit_denorm})'
-                               if feature_unit_denorm else f'{feature_name} (Denormalized)'))
+    cbar_label_denorm = (f'{feature_name} ({feature_unit_denorm})'
+                         if feature_unit_denorm else f'{feature_name} (Denormalized)')
 
     # Subplot definitions: (row, col, scalars, title, clim, show_cbar, cbar_title)
     subplot_configs = [
@@ -510,12 +604,17 @@ def plot_mesh_comparison(pos, faces, pred_values_norm, target_values_norm,
     for row, col, scalars, title, clim, show_cbar, cbar_title in subplot_configs:
         plotter.subplot(row, col)
         m = mesh.copy()
-        m.cell_data['values'] = scalars
+        if point_mode:
+            m.point_data['values'] = scalars
+        else:
+            m.cell_data['values'] = scalars
 
         sbar_args = dict(title=cbar_title, n_labels=5, fmt='%.4f', vertical=True)
         plotter.add_mesh(
             m,
             scalars='values',
+            render_points_as_spheres=point_mode,
+            point_size=10 if point_mode else 5,
             cmap='jet',
             clim=clim,
             show_edges=False,
@@ -537,6 +636,7 @@ def plot_mesh_comparison(pos, faces, pred_values_norm, target_values_norm,
 
     plotter.screenshot(output_path)
     plotter.close()
+    return True
 
 
 def render_plot_data(plot_data):
@@ -558,7 +658,7 @@ def render_plot_data(plot_data):
         return False
 
     try:
-        plot_mesh_comparison(
+        return bool(plot_mesh_comparison(
             plot_data['pos'],
             plot_data['faces'],
             plot_data['pred_values_norm'],
@@ -570,8 +670,7 @@ def render_plot_data(plot_data):
             sample_id=sample_id,
             time_idx=time_idx,
             face_part_ids=plot_data.get('face_part_ids'),
-        )
-        return True
+        ))
     except Exception as e:
         import traceback
         print(f"Error rendering sample_id={sample_id}, time_idx={time_idx}: {e}")

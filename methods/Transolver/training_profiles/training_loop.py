@@ -1,13 +1,18 @@
 """
-Train/validate/test loops (mirrors MeshGraphNets' training_profiles/training_loop.py),
-with topology-independent visualization boundary (section 12 Phase 4): this repo's
-graphs carry no edge_attr, so periodic evaluation reports numeric metrics
-(denormalized per-feature RMSE/MAE, per-sample relative L2) and optionally
-dumps raw prediction HDF5 files. Full 3D mesh/triangle visualization (pyvista)
-is deliberately out of scope for this pass -- it is MGN-specific plumbing
-(edges_to_triangles, mesh_utils_fast) that this architecture does not need for
-its numeric evaluation contract, and section 12 only requires visualization to
-be decoupled from edge attributes, not reimplemented.
+Train/validate/test loops (mirrors MeshGraphNets' training_profiles/training_loop.py).
+
+Periodic evaluation reports numeric metrics (denormalized per-feature RMSE/MAE,
+per-sample relative L2) and has two independent, separately keyed dumps:
+
+  write_test_predictions  lean numeric HDF5 (pos + denormalized pred/target)
+                          under <log_dir>/dumps/<prefix>/<gpu>/<epoch>/
+  display_testset         the mesh HDF5 + a 2x2 comparison PNG under
+                          <log_dir>/<prefix>/<gpu>/<epoch>/, the same writer and
+                          layout Neural_Operator uses
+
+The visualization stays decoupled from edge *attributes* (this repo's graphs
+carry none): the surface is reconstructed from `edge_index` topology alone, so
+the renderer needs nothing the attention model consumes.
 """
 
 import os
@@ -20,6 +25,13 @@ import tqdm
 from torch.optim.swa_utils import AveragedModel, get_ema_multi_avg_fn
 from torch.utils.data import Subset
 from torch_geometric.loader import DataLoader
+
+from general_modules.mesh_utils_fast import (
+    edges_to_triangles_gpu,
+    edges_to_triangles_optimized,
+    render_plot_data,
+    save_inference_results_fast,
+)
 
 from general_modules.time_integration import resolve_rollout_window
 from model.amortized import describe_amortized
@@ -277,7 +289,12 @@ def run_periodic_test(model, test_loader, device, config, epoch, train_dataset):
                 Subset(train_dataset, viz_indices),
                 batch_size=1, shuffle=False, pin_memory=torch.cuda.is_available(),
             )
-            viz_loss = test_model(model, viz_loader, device, config, epoch,
+            # The Subset renumbers the requested samples to 0..n-1, so the dump
+            # filter has to be renumbered with it or a non-contiguous
+            # test_batch_idx (say [10, 20]) would select nothing here.
+            viz_config = dict(config)
+            viz_config['test_batch_idx'] = list(range(len(viz_indices)))
+            viz_loss = test_model(model, viz_loader, device, viz_config, epoch,
                                   train_dataset, output_prefix='train')
             print(f"  Train reconstruction loss: {viz_loss:.2e}")
     return test_loss
@@ -310,11 +327,16 @@ def test_model(model, dataloader, device, config, epoch, dataset=None, output_pr
     n_eval_samples = 0
 
     write_hdf5 = config.get('write_test_predictions', False)
+    display_testset = config.get('display_testset', True)
     gpu_ids = str(config.get('gpu_ids'))
+    use_gpu = device.type == 'cuda' if hasattr(device, 'type') else (device != 'cpu')
+    mesh_device = device if use_gpu else 'cpu'
+    faces_cache = {}
 
     with torch.no_grad():
         total_loss_sum = 0.0
         total_loss_count = 0
+        plot_data_queue = []
 
         pbar = tqdm.tqdm(dataloader, total=effective_total)
         for batch_idx, graph in enumerate(pbar):
@@ -361,6 +383,53 @@ def test_model(model, dataloader, device, config, epoch, dataset=None, output_pr
                         f.create_dataset('predicted_denorm', data=predicted_denorm)
                         f.create_dataset('target_denorm', data=target_denorm)
                         f.create_dataset('pos', data=graph.pos.cpu().numpy())
+
+            else:
+                # No normalizer on the dataset: the metrics above need one and
+                # are skipped, but the picture below does not.
+                predicted_denorm, target_denorm = predicted_np, target_np
+
+            if display_testset and batch_idx in _as_list(config.get('test_batch_idx', [0, 1, 2, 3])):
+                sample_id = _scalar_attr(graph, 'sample_id')
+                time_idx = _scalar_attr(graph, 'time_idx')
+                filename = (f'sample{sample_id}_t{time_idx}' if time_idx is not None
+                            else f'sample{sample_id}' if sample_id is not None
+                            else f'batch{batch_idx}')
+                viz_base = config.get('log_dir') or '../../output/transolver'
+                viz_path = os.path.join(viz_base, output_prefix, gpu_ids,
+                                        str(epoch), f'{filename}.h5')
+
+                # The surface is rebuilt from edge_index topology only; this
+                # repo's graphs carry no edge_attr and the model reads none.
+                cached_faces = faces_cache.get(sample_id)
+                if cached_faces is None and sample_id is not None:
+                    if use_gpu and torch.cuda.is_available():
+                        cached_faces = edges_to_triangles_gpu(
+                            graph.edge_index.to(mesh_device), device=mesh_device)
+                    else:
+                        ei_np = (graph.edge_index.cpu().numpy()
+                                 if hasattr(graph.edge_index, 'cpu')
+                                 else np.array(graph.edge_index))
+                        cached_faces = edges_to_triangles_optimized(ei_np)
+                    faces_cache[sample_id] = cached_faces
+
+                plot_data = save_inference_results_fast(
+                    viz_path, graph,
+                    predicted_norm=predicted_np, target_norm=target_np,
+                    predicted_denorm=predicted_denorm, target_denorm=target_denorm,
+                    skip_visualization=False,
+                    device=mesh_device,
+                    feature_idx=config.get('plot_feature_idx', -1),
+                    precomputed_faces=cached_faces,
+                )
+                if plot_data:
+                    plot_data_queue.append(plot_data)
+
+        if plot_data_queue:
+            print(f"\nRendering {len(plot_data_queue)} visualizations...")
+            failed = sum(0 if render_plot_data(pd) else 1 for pd in plot_data_queue)
+            print("All visualizations complete!" if not failed
+                  else f"Visualization done with {failed}/{len(plot_data_queue)} failures.")
 
         if n_eval_samples > 0:
             rmse = np.sqrt(rmse_sum / n_eval_samples)

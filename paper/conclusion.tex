@@ -1,0 +1,38 @@
+\section{Conclusions}
+\label{sec:conclusion}
+
+MeshGraphNets-V and cHI-MGNflow implement two probabilistic extensions of a
+hierarchical mesh simulator: graph-level latent slots with a conditional prior,
+and a conditional field-space flow. Their implemented training objectives are
+reconstruction/MMD/prior matching and flow matching, respectively. Proper
+scores used for validation or evaluation must not be described as their
+training objectives without specifying the actual training path.
+
+The historical SAOI note reports lower peak-to-valley distribution error for
+MGN-V across the recorded arms, together with substantial location and width
+defects. Those results concern three parts, not population-wide performance.
+The missing original predictions and run configurations prevent an independent
+reproduction of that experiment, and the incomplete, unreplicated sweep cannot
+establish a null effect of encoder-gradient coupling. Our Gaussian
+counterexample establishes only that the flow-matching loss is not the KL
+rate term of a variational objective; it does not predict collapse of the
+complete implemented loss.
+
+The shell construction makes the withheld imperfection law explicit. A
+reproduced snapshot contains $\TrainDraws$ training draws over twelve
+geometries, with $\TrainModesMin$--$\TrainModesMax$ observed dominant modes
+and top-mode shares of $\TrainTopMin$--$\TrainTopMax\%$. Its audit also
+exposes material limitations: $\TrainDriftPercent\%$ exceed the RMS-drift
+threshold, and a low RMS drift alone does not establish equilibrium. We
+corrected the taper thickness supplied to the solver and added checks against
+reusing invalid legacy results or mixing inference tiers into training.
+Quality filtering and the raw finite-time ensemble describe different
+sampling populations and are reported separately.
+
+No learned-model result on this shell dataset is yet established. Completing
+equilibrium and discretisation validation, restoring the historical SAOI
+experiment artifacts, and evaluating both full fields and engineering
+quantities with calibrated uncertainty are the remaining steps toward a
+reproducible comparison. The present implementation and measurements support
+the construction and its stated limits, rather than a claim that either
+architecture has solved distributional engineering simulation.

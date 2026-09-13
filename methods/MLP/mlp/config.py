@@ -103,6 +103,13 @@ class Params:
     use_compile: bool = False
     val_interval: int = 5
     checkpoint_interval: int = 0
+    # Periodic visualization (mlp/viz.py): a parity plot of the held-out split,
+    # written beside the log/checkpoint. test_interval mirrors the cadence key
+    # the mesh methods use.
+    test_interval: int = 10
+    display_testset: bool = True
+    plot_dpi: int = 140
+    plot_max_points: int = 5000
 
 
 def params_from_config(cfg: dict[str, str]) -> Params:
@@ -139,6 +146,10 @@ def params_from_config(cfg: dict[str, str]) -> Params:
         use_compile=get_bool(cfg, "use_compile", False),
         val_interval=get_int(cfg, "val_interval", 5),
         checkpoint_interval=get_int(cfg, "checkpoint_interval", 0),
+        test_interval=get_int(cfg, "test_interval", 10),
+        display_testset=get_bool(cfg, "display_testset", True),
+        plot_dpi=get_int(cfg, "plot_dpi", 140),
+        plot_max_points=get_int(cfg, "plot_max_points", 5000),
     )
 
 

@@ -11,8 +11,9 @@ from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
 from .config import Params
-from .data import Normalizer, load_xy, split_indices
+from .data import Normalizer, load_output_names, load_xy, split_indices
 from .model import MLP
+from .viz import parity_plot
 
 _LOSSES = {"mse": nn.MSELoss, "mae": nn.L1Loss, "huber": nn.HuberLoss}
 
@@ -55,6 +56,25 @@ def _evaluate(model: nn.Module, loader: DataLoader, loss_fn: nn.Module, device: 
     return total / max(1, count)
 
 
+def _viz_dir(params: Params) -> Path:
+    """Where periodic artifacts go: the log file's directory, as everywhere else
+    in the suite, falling back to the checkpoint's directory."""
+    anchor = params.log_file_dir or params.modelpath
+    return Path(anchor).parent if anchor else Path(".")
+
+
+@torch.no_grad()
+def _predict(model: nn.Module, x_norm: np.ndarray, device: torch.device,
+             batch_size: int) -> np.ndarray:
+    model.eval()
+    outputs = []
+    for start in range(0, x_norm.shape[0], batch_size):
+        chunk = torch.from_numpy(x_norm[start:start + batch_size]).to(device)
+        outputs.append(model(chunk).float().cpu().numpy())
+    model.train()
+    return np.concatenate(outputs, axis=0) if outputs else np.zeros((0, 0), dtype=np.float32)
+
+
 def train(params: Params, config_path: str) -> int:
     torch.manual_seed(params.split_seed)
     device = _device(params.gpu_ids)
@@ -75,6 +95,7 @@ def train(params: Params, config_path: str) -> int:
     if len(val_idx) > 0:
         val_loader = _make_loader(x_norm.transform(x[val_idx]), y_norm.transform(y[val_idx]), params, shuffle=False)
     print(f"Samples: train={len(train_idx)} val={len(val_idx)} | N={params.input_var} -> M={params.output_var}")
+    output_names = load_output_names(params.dataset_dir)
 
     model = MLP(
         params.input_var, params.output_var, params.hidden_layers,
@@ -150,6 +171,23 @@ def train(params: Params, config_path: str) -> int:
 
         if params.checkpoint_interval > 0 and (epoch + 1) % params.checkpoint_interval == 0:
             save("periodic")
+
+        # Periodic visualization: the held-out parity plot, in physical units.
+        # Uses the live weights, so it shows exactly the model the val loss
+        # above was measured on (not the EMA shadow).
+        last_epoch = epoch == params.training_epochs - 1
+        if (params.display_testset and len(val_idx) > 0
+                and ((epoch + 1) % max(1, params.test_interval) == 0 or last_epoch)):
+            predicted = y_norm.inverse(
+                _predict(model, x_norm.transform(x[val_idx]), device, params.batch_size))
+            written = parity_plot(
+                y[val_idx], predicted,
+                _viz_dir(params) / f"parity_val_epoch{epoch + 1:05d}.png",
+                epoch=epoch + 1, split="val", labels=output_names,
+                dpi=params.plot_dpi, max_points=params.plot_max_points,
+            )
+            if written:
+                print(f"  [viz] {written}")
 
     # Always leave a usable checkpoint (covers no-val and val-never-improved runs).
     if best_val == float("inf"):

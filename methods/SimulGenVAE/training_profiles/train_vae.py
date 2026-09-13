@@ -6,6 +6,7 @@ and checkpoint writes). The loss follows the SimulGenVAE convention
 ``alpha * recon + beta * sum(KL)`` with a linear KL beta warmup.
 """
 
+import os
 import time
 
 import torch
@@ -13,10 +14,12 @@ from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 
 from general_modules import distributed as D
+from general_modules.field_viz import plot_field_reconstruction
 from general_modules.fom_dataset import build_dataset_splits
 from model.common import add_sn, initialize_weights_He
 from training_profiles.setup import (
     append_log,
+    artifact_dir,
     build_ema_model,
     build_optimizer_scheduler,
     build_vae,
@@ -37,6 +40,45 @@ def _kl_beta(epoch, total_epochs, init_beta, beta_target, start_frac, warmup_epo
     if epoch >= end:
         return beta_target
     return (epoch - start) * (beta_target - init_beta) / (end - start) + init_beta
+
+
+@torch.no_grad()
+def run_reconstruction_test(model, val_dataset, config, device, epoch, normalization, out_dir):
+    """Periodic reconstruction picture on the held-out split (rank 0 only).
+
+    Runs the same forward the validation loss uses and hands truth and
+    reconstruction to field_viz; no collective, so it does not need a barrier.
+    """
+    if val_dataset is None or len(val_dataset) == 0:
+        return None
+    count = min(int(config.get('num_test_samples', 2)), len(val_dataset))
+    was_training = model.training
+    model.eval()
+
+    sample_ids = getattr(val_dataset, 'sample_ids', None)
+    truths, reconstructions, labels = [], [], []
+    for i in range(count):
+        field, index = val_dataset[i]
+        output = model(field.unsqueeze(0).to(device))
+        reconstruction = output[0] if isinstance(output, (tuple, list)) else output
+        truths.append(field.numpy())
+        reconstructions.append(reconstruction[0].float().cpu().numpy())
+        index = int(index)
+        identifier = (sample_ids[index] if sample_ids is not None and index < len(sample_ids)
+                      else index)
+        labels.append(f'sample {identifier}')
+
+    if was_training:
+        model.train()
+
+    written = plot_field_reconstruction(
+        truths, reconstructions, os.path.join(out_dir, f'vae_recon_epoch{epoch:05d}.png'),
+        epoch=epoch, sample_labels=labels, normalization=normalization,
+        dpi=int(config.get('plot_dpi', 140)),
+    )
+    if written:
+        print(f'  [viz] {written}')
+    return written
 
 
 def vae_worker(config, config_filename='config.txt'):
@@ -102,8 +144,11 @@ def vae_worker(config, config_filename='config.txt'):
     scaler = torch.amp.GradScaler('cuda', enabled=amp_enabled and amp_dtype == torch.float16)
 
     val_interval = int(config.get('val_interval', 20))
+    test_interval = max(1, int(config.get('test_interval', 50)))
+    display_testset = bool(config.get('display_testset', True))
     modelpath = config.get('vae_modelpath', '../../output/simulgenvae/simulgenvae_vae.pth')
     log_file = init_log_file(config, config_filename) if rank0 else None
+    viz_dir = artifact_dir(config, modelpath) if rank0 else None
 
     if rank0:
         print('\n' + '=' * 60)
@@ -174,6 +219,11 @@ def vae_worker(config, config_filename='config.txt'):
                 append_log(log_file, f'Elapsed: {elapsed:.2f}s Epoch {epoch} '
                                      f'Recon {train_recon:.4e} KL {train_kl:.4e} Beta {beta:.4e} {val_str} '
                                      f'LR {current_lr:.4e}')
+
+            if (rank0 and display_testset
+                    and (epoch % test_interval == 0 or epoch == total_epochs - 1)):
+                run_reconstruction_test(eval_model, val_dataset, config, device, epoch,
+                                        normalization, viz_dir)
 
         maybe_save(total_epochs - 1)
         D.barrier()

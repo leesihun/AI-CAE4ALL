@@ -45,6 +45,10 @@ root (`methods/GeometryIngest/`), matching the suite's native-path convention.
 | `num_fields` | opt (`3`) | zero-filled solution-field rows after xyz |
 | `mesh_size_max`/`mesh_size_min` | opt (`0`) | gmsh target element size |
 | `seed`, `limit` | opt | resample seed; cap input count |
+| `preview` | opt (`True`) | render a preview strip of the ingested samples (see below) |
+| `preview_path` | opt | where to write it; default `<output_dataset stem>_preview.png`, or beside the first input in `inspect` mode |
+| `preview_max_samples` | opt (`6`) | panels in the strip |
+| `plot_dpi` | opt (`150`) | preview raster resolution |
 
 > Comments must be on their own `%` line. An inline `% ...` after a value is **not**
 > stripped by the suite parser and becomes part of the value.
@@ -52,6 +56,18 @@ root (`methods/GeometryIngest/`), matching the suite's native-path convention.
 Shipped templates in `configs/GeometryIngest/`: `config_ingest_volume.txt`
 (CAD → volume, needs gmsh), `config_ingest_surface.txt` (STL/PLY → surface,
 trimesh only), `config_inspect_surface.txt` (stats-only).
+
+### The preview render
+
+This tool trains nothing, so it has no periodic test to hang a picture on; the
+equivalent check is *did I actually mesh the geometry I meant to*. `preview`
+writes one strip over the first `preview_max_samples` samples — shaded triangles
+for a surface mesh, a node scatter for anything else (extracting a boundary from
+a tet mesh is work this preview does not need to do) — with node/triangle count,
+watertightness and bbox per panel. A reader that produced a degenerate mesh, a
+unit mix-up between files, or a point-cloud resample that collapsed all show up
+here and in none of the numeric summary lines. `preview.py` imports matplotlib
+lazily, so a missing install prints a note instead of failing the ingest.
 
 ## Standalone CLI
 

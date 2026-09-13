@@ -23,6 +23,10 @@ GEOMETRY_INGEST_KEYS = frozenset(
         "num_fields", "num_points", "resample_method",
         "mesh_size_max", "mesh_size_min",
         "seed", "limit",
+        # Preview render (GeometryIngest/preview.py): a strip of the first
+        # samples, written beside the output dataset (and the only output in
+        # mode inspect).
+        "preview", "preview_path", "preview_max_samples", "plot_dpi",
     }
 )
 

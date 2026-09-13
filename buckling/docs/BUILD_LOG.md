@@ -465,3 +465,350 @@ needed.
 2. Box-spanning cost on all four corners, to firm up the schedule.
 3. Full 80-draw pilot per corner -> G2, G3, G5 proper.
 4. G4 equivalent-cylinder check before any cone is generated.
+
+---
+
+# Production rebuild, 2026-09-12
+
+The pilot is retired. Three defects made it unfit to ship, all of them found by
+verification rather than by the runs failing -- every one of the 320 draws
+completed cleanly.
+
+## Fix 1 -- Component A was selecting the outcome, not just breaking symmetry
+
+Component A exists to break the SO(2) symmetry so the buckle *location* is
+predictable from geometry. It was also choosing the *mode number*, which is
+supposed to be the withheld variable's job.
+
+The harmonic set was `l = 2, 3` (ovalization) plus `j*N_p` for `j = 1..4` with
+`N_p = 8`. At R/t = 110 the critical circumferential wavenumber is
+`n ~ 0.86*sqrt(R/t) = 9.0`, so the weld harmonic `l = 8` sits directly on it.
+
+Dose-response, R/t = 110, L/R = 1.0:
+
+| Component A RMS | draws | n = 8 |
+|---|---|---|
+| 0 (off) | 12 | 0 / 12 |
+| 0.01*t | 6 | 4 / 6 |
+| 0.10*t | 12 | 12 / 12 |
+
+`process_signature` now takes `critical_n` and drops every harmonic within
+`guard = 3.0` wavenumbers of it. `apply_imperfection` passes
+`critical_wavenumber(R/t)`. Ovalization survives at every geometry in the box
+and is what does the symmetry breaking; the colliding weld harmonic does not.
+
+| R/t | n_crit | kept | dropped |
+|---|---|---|---|
+| 110 | 9.0 | 2, 3, 16, 24, 32 | 8 |
+| 140-190 | 10.5-11.9 | 2, 3, 16, 24, 32 | 8 |
+| 230 | 13.0 | 2, 3, 8, 24, 32 | 16 |
+
+Verified with 16 fresh seeds at R/t = 110, converged settle: modes
+{8: 8, 9: 7, 10: 1}, three distinct values, top mode share 50 % against the
+100 % the biased component produced at 0.10*t.
+
+## Fix 2 -- the settle window was 10x too short
+
+`write_twostep_inp` defaulted to `n_inc_settle = 20, t_settle = 4.0`. The
+converged value is `200 / 40.0`, which was measured earlier but never promoted
+to the default, so the pilot ran at the short one and understated the
+displacement amplitude by 2.64x. Defaults changed.
+
+## Fix 3 -- convergence was never measured
+
+Nothing in the pilot checked whether a draw had actually settled, which is why
+320 non-equilibrium states shipped looking clean. `run_production.py` now
+records `drift` per draw -- the fractional change in field RMS over the last
+third of the settle window -- and `pack_hdf5.py` rejects draws above
+`--max-drift`.
+
+## New tooling
+
+| File | Role |
+|---|---|
+| `src/run_production.py` | resumable family-aware generator; keeps full 3-D displacement + circumferential spectrum + drift |
+| `src/make_plan.py` | emits the geometry plan: train / t1 param-extrapolation / t2 cones / t3 thickness taper |
+| `src/pack_hdf5.py` | packs to the suite mesh contract; withheld Component B goes under `latent/`, never into `nodal_data` |
+| `src/validate_dataset.py` | D1-D5 audit: constant channels, output-from-input leakage, within-geometry spread, withheld-latent integrity, contract sanity |
+
+The argmax mode label is kept but is no longer the only target: the full
+circumferential spectrum is stored per draw, because the label is not
+damping-invariant on near-degenerate draws (1 of 6 flipped between alpha = 0.3
+and 0.6, on the lowest-`n_share` sample).
+
+## Fix 4 -- the slender corner is excluded, on a measurement
+
+R/t = 230, L/R = 1.6 (Batdorf Z = 562) does not converge at the production
+target and does not become tractable by backing the target off:
+
+| target | outcome |
+|---|---|
+| 1.5 * d_cr | exceeded 2 h, no result |
+| 1.2 * d_cr | `ok=False` at the 5400 s timeout |
+
+Reducing the target does not help because the difficulty is not the depth of
+the post-buckled state, it is that a shell this slender goes through a cascade
+of mode jumps rather than settling into one equilibrium. Dropping it.
+
+The production box is therefore capped at R/t <= 200, L/R <= 1.3, whose worst
+corner is Z = 322 against the excluded 562:
+
+| geometry | Z | vs fast corner |
+|---|---|---|
+| R/t 110, L/R 1.0 (fast, 26 min) | 105 | 1.0x |
+| R/t 200, L/R 1.3 (plan worst train) | 322 | 3.1x |
+| R/t 140, L/R 1.5 (plan worst t1) | 300 | 2.9x |
+| R/t 230, L/R 1.6 (EXCLUDED) | 562 | 5.4x |
+
+## Component A is inert at the amplitude the pilot used
+
+With the colliding harmonic gone, Component A at 0.01*t changes nothing at all.
+Sixteen paired seeds, A on versus A off, converged settle:
+
+| quantity | A on (0.01*t) | A off |
+|---|---|---|
+| dominant mode | \multicolumn -- 16/16 identical | |
+| mean rms/t | 1.3241 | 1.3232 |
+| buckle phase | 0.0015 of a period apart | |
+| location resultant R (n=8, 8 draws) | 0.470 | 0.467 |
+
+So the withheld field is doing all of the work. That is correct for the mode
+and wrong for the location: Component A's other job (design goal F3) is to make
+the buckle LOCATION predictable from geometry, and it is not doing it. R = 0.47
+on 8 draws is not evidence that it is -- the Rayleigh null gives
+P(R >= 0.47 | 8 uniform draws) = 0.17, so the location is consistent with
+uniform. That also clears a confound worth stating: the structured mesh's
+residual C_N symmetry is NOT biasing where the buckle lands.
+
+0.01*t was tuned against the buggy Component A, in which `l = 8` sat on the
+critical wavenumber and dominated at any amplitude. That tuning does not carry
+over. `src/analyse_compa.py` re-picks the amplitude against BOTH jobs:
+
+  * DEFER -- mode histogram stays as wide as the A-off control
+    (>= 3 distinct modes, top share <= 60 %)
+  * PIN   -- buckle angle beats the Rayleigh uniform null (p < 0.05)
+
+and takes the largest amplitude that still defers. `src/phase_metric.py`
+carries the location measurement, with the Rayleigh null built in so that weak
+evidence cannot be read as pinning -- the naive version of this metric
+(complex-averaging the circumferential FFT across axial stations) cancels on
+the axial sign flip and reports the argmax of noise.
+
+## Component A amplitude re-picked: 0.15*t, and the location goal is retired
+
+Sweep at R/t = 110, L/R = 1.0, ten paired seeds per amplitude, converged settle.
+
+| Component A RMS | mode histogram | distinct | top share | mode flips vs A-off | relL2 vs A-off | Rayleigh p |
+|---|---|---|---|---|---|---|
+| off | {8:8, 9:7, 10:1} | 3 | 50 % | - | - | 0.177 |
+| 0.01*t | {8:8, 9:7, 10:1} | 3 | 50 % | 0 / 10 | 0.011 | 0.173 |
+| 0.05*t | {8:4, 9:5, 10:1} | 3 | 50 % | 0 / 10 | 0.039 | 0.235 |
+| **0.15*t** | {8:4, 9:5, 10:1} | 3 | 50 % | **0 / 10** | **0.111** | 0.234 |
+| 0.40*t | {8:3, 9:6, 10:1} | 3 | 60 % | 2 / 10 | 0.398 | 0.304 |
+
+Between-seed relL2 at A-off, for scale: **1.220**.
+
+**Chosen: 0.15*t.** Largest amplitude that leaves mode selection completely
+untouched, while contributing a real geometry-dependent field component
+(relL2 0.111) instead of sitting there inert. It stays 11x below the withheld
+field's own spread, so the one-to-many property is untouched. 0.40*t is
+rejected: it flips 2 of 10 modes, which is the defect this rebuild removes.
+
+**The location goal (F3) is retired, and not because the tuning failed.**
+No amplitude pins the buckle angle -- every one of them sits far from the
+Rayleigh threshold. That is a physical result, not a knob left unturned:
+imperfection sensitivity is mode-specific, so a long-wavelength ovalization
+(l = 2, 3) cannot seed a short-wavelength n ~ 9 buckle at any sane amplitude,
+and anything placed in the critical band selects the mode instead of merely
+locating it. Location and mode are the same knob under this imperfection law,
+and the benchmark needs the mode left free.
+
+Consequence for evaluation: **the buckle location is uniform on the circle by
+construction.** This is an exact known symmetry of p(field | geometry) rather
+than a nuisance -- it gives a free correctness check on any learned
+distribution -- but scoring must use SO(2)-invariant descriptors.
+`src/gates.py::so2_invariant()` already implements the quotient.
+
+Future work if a pinned location is ever wanted: the single-perturbation-load
+approach (a localized dent at a fixed angle, broadband in n) is the established
+experimental technique and is the right shape for the job, since it excites a
+band of wavenumbers rather than one. It is a different imperfection law and
+would need its own validation cycle.
+
+## Production launch, 2026-09-12
+
+Cost was calibrated on two measured single-lane draws rather than guessed:
+
+| geometry | Batdorf Z | measured |
+|---|---|---|
+| R/t 110, L/R 0.8 | 67 | 18.7 min |
+| R/t 200, L/R 1.3 | 322 | 48.2 min |
+
+giving cost ~ Z^0.60. Mesh resolution holds across the whole box -- 5,311 to
+15,190 nodes, 6.0 nodes per buckling half-wave at every corner -- so the large
+geometries are resolved, not merely slower.
+
+| tier | geometries | draws |
+|---|---|---|
+| train | 12 | 576 |
+| t1 parameter extrapolation | 4 | 128 |
+| t2 cones | 4 | 128 |
+| t3 thickness taper | 2 | 64 |
+| **total** | **22** | **896** |
+
+454 core-hours, about 33 wall-clock hours at 19 lanes (60 % of 32 logical
+cores, the standing constraint). The runner is resumable on `draw.npz`, so an
+interruption costs at most the draws in flight.
+
+`--max-drift` default raised 0.05 -> 0.15 on measurement: observed settle
+residuals run 0.02-0.10, and the high-drift draws are the ones with low
+`n_share` -- genuinely near-degenerate states that keep exchanging energy
+between competing modes. Rejecting them would bias the dataset toward decisive
+outcomes and *understate* the spread, which is the quantity being benchmarked.
+They are kept and flagged.
+
+Note for anyone resuming: the smoke and probe draws were generated at the old
+`COMP_A = 0.01` and were deleted before launch, because `run_production.one()`
+reuses any existing `draw.npz` and would have silently mixed two imperfection
+laws in one dataset.
+
+## G3 on live production data (208 draws, 4 complete geometries)
+
+Does `p(outcome | geometry)` actually depend on geometry? If the between-geometry
+difference is the size of the within-geometry sampling noise, the conditional
+task is fake and the whole benchmark collapses to one global distribution.
+
+**On the discrete mode label, only 3 of 6 pairs separate.**
+
+| | rt110 lr0.8 | rt110 lr1.0 | rt110 lr1.3 | rt140 lr0.8 |
+|---|---|---|---|---|
+| rt110 lr0.8 | - | 0.062 | 0.125 | **0.729** |
+| rt110 lr1.0 | | - | 0.188 | **0.688** |
+| rt110 lr1.3 | | | - | **0.750** |
+
+TV within geometry (pure sampling noise, 200 random half-splits): mean 0.143,
+p95 0.292. So the three R/t pairs clear it easily and the three L/R pairs do not.
+
+That is not a defect, and reading it as one would have been a mistake: the
+critical wavenumber is `n ~ 0.86*sqrt(R/t)` and **does not depend on L/R at
+all**. Changing L/R at fixed R/t is *supposed* to leave the circumferential
+mode distribution alone. The measured means confirm the law holds:
+
+| geometry | mean n | 0.86*sqrt(R/t) |
+|---|---|---|
+| R/t 110, L/R 0.8 | 8.77 | 9.02 |
+| R/t 110, L/R 1.0 | 8.88 | 9.02 |
+| R/t 110, L/R 1.3 | 8.58 | 9.02 |
+| R/t 140, L/R 0.8 | 9.92 | 10.18 |
+
+**On the field, all 12 ordered pairs separate.** Energy score of geometry A's
+ensemble predicting geometry B, divided by B's own self floor (1.0 = as good as
+the truth, higher = separated), on the SO(2)-invariant spectrum with amplitude
+normalised out:
+
+| A \ B | rt110 lr0.8 | rt110 lr1.0 | rt110 lr1.3 | rt140 lr0.8 |
+|---|---|---|---|---|
+| rt110 lr0.8 | 0.97 | 1.08 | 1.08 | 2.19 |
+| rt110 lr1.0 | 1.10 | 0.96 | 1.28 | 2.11 |
+| rt110 lr1.3 | 1.09 | 1.25 | 0.96 | 2.39 |
+| rt140 lr0.8 | 2.33 | 2.16 | 2.59 | 0.94 |
+
+Off-diagonal mean 1.72, minimum 1.08; 8 of 12 separate by more than 10 %, and
+the 4 weakest are precisely the same-R/t L/R pairs.
+
+**The conclusion that matters for the benchmark design: the argmax mode label is
+a lossy target.** The field carries strictly more conditioning information than
+the label does -- the L/R pairs that are indistinguishable by mode label
+(TV 0.06-0.19, inside sampling noise) separate at field level (1.08-1.28x the
+floor). This is the measured justification for storing the full 3-D
+displacement and full circumferential spectrum, and for scoring on the
+invariant field descriptor rather than on the discrete label.
+
+## Train tier complete: a convergence defect the easy corners hid
+
+12 geometries x 48 draws = 576, zero solver failures. Two findings and one
+defect.
+
+**The conditional law broadens as the shell thins.** Top-mode share falls from
+65-67 % at R/t = 110 to 38-56 % at R/t = 200, correlation -0.68 against R/t.
+Thinner shells have a denser cluster of near-degenerate modes, so the withheld
+field has more nearly equivalent branches to pick between. That is a built-in
+difficulty axis, not noise.
+
+**The classical wavenumber over-predicts, systematically.** The mean realised
+mode is below 0.86*sqrt(R/t) at every one of the twelve geometries, by 1.6 % to
+13.0 %, with the deficit growing with R/t (correlation +0.59 on magnitude). The
+direction is expected for imperfect shells; the magnitude at the thin end means
+the closed form is a reference line, not a label to reproduce. An earlier
+version of the paper claimed "within 3 %" from the first four geometries -- that
+was wrong and was caught by re-checking against the fuller data.
+
+**DEFECT: the settle window does not transfer across aspect ratio.**
+
+| L/R | median drift | draws over the 0.15 threshold |
+|---|---|---|
+| 0.8 | 0.021-0.034 | **0 % at every R/t** |
+| 1.0 | 0.020-0.116 | 0-21 % |
+| 1.3 | 0.038-0.191 | **0-81 %** |
+
+The driver is L/R, not R/t (exceedance correlates with R/t at only 0.28). The
+window was calibrated on R/t = 110, L/R = 1.0 -- a short shell -- and the long
+shells do not settle inside it.
+
+This is the same class of defect as the original pilot's transient snapshots,
+returning at an aspect ratio the calibration never visited. It also corrects an
+earlier conclusion recorded in DATASET_CARD s7.5: the natural-frequency
+extraction found omega_1 of the UNDEFORMED shell nearly constant across the box
+(spread 1.014x), and that was read as ruling out a geometry-dependent settle
+requirement. It does not. The undeformed fundamental frequency is not the
+post-buckled relaxation timescale, and the present data shows they are not
+interchangeable.
+
+Consequences, in order:
+
+1. The L/R = 1.3 rows are **under-converged** at the current settle length. The
+   per-draw `drift` is stored, so the threshold can be re-applied downstream.
+2. **t1 includes R/t = 140, L/R = 1.5**, which will be worse still. Expect that
+   geometry to be largely over threshold.
+3. `T_SETTLE` must scale with L/R in any regeneration. Do NOT apply that change
+   while a run is live: `run_production.py` workers are spawned, so Windows
+   re-imports the module and a mid-run edit would silently split the dataset
+   across two settle lengths. Finish the run, then regenerate the affected rows.
+4. Drift still tracks near-degeneracy across the full tier (correlation -0.54
+   with top-mode share), so the draws that fail to settle are preferentially the
+   marginal ones. They stay in, flagged -- dropping them would bias the dataset
+   toward decisive outcomes and understate exactly the spread being measured.
+
+## 2026-09-13 audit corrections to earlier interpretations
+
+The observations above are historical snapshots. The current contract is
+[DATASET_CARD.md section 9](DATASET_CARD.md#9-current-production-contract-audited-2026-09-13).
+The following corrections supersede incompatible interpretations above:
+
+- Raw NPZ outputs retain high-drift draws, but the HDF5 packer defaults to
+  rejecting `drift > 0.15`. These are different populations. Export rejection
+  counts must accompany results, especially when rejection varies by geometry.
+- `drift` measures RMS range over the last third of saved usable displacement
+  blocks, not a certified time window or full-field convergence. A steady RMS
+  does not establish a steady shape, force equilibrium or negligible inertia.
+- The production deck originally ignored thickness variation. Corrected decks
+  assign the requested thickness to every node; unversioned taper caches are
+  rejected. Their solver success alone did not validate the intended physics.
+- A phase test that does not reject uniformity does not prove exact SO(2)
+  invariance with a fixed non-axisymmetric visible signature.
+- The reference half-split energy score estimates an intrinsic expected-score
+  baseline, not a hard floor. A ratio above one is an observed difference;
+  without uncertainty analysis it does not establish statistical separation.
+  The normalized spectral descriptor also discards amplitude, phase and axial
+  arrangement, so it does not establish equality or separation of full field laws.
+- The coefficient `0.86` in the mode guide was fitted empirically to pilot
+  outcomes. It is not an independently derived classical prediction.
+- Row 9 of new exports contains actual `t(z)` in reference-radius units,
+  replacing the former thickness ratio. All 11 rows retain a single timestep.
+
+The regression suite in `tests/test_buckling_dataset_contract.py` checks nodal
+thickness cards, cache rejection without overwriting original artifacts,
+packed physical thickness and static layout, corrupt inputs/edges in the 61st
+sample, latent and shape mismatches, fair score normalization, and randomized
+rank ties. These checks validate the data/software contract; they do not prove
+physical equilibrium or model performance.

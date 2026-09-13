@@ -192,7 +192,7 @@ def write_dynamic_inp(path, mesh, coords, target_shortening, t_ramp=20.0,
 
 def write_twostep_inp(path, mesh, coords, target_shortening, handover=0.70,
                       n_inc_static=10, n_inc_dyn=80, t_dyn=8.0, rho=1.0,
-                      n_inc_settle=20, t_settle=4.0, damp_alpha=0.3, hht_alpha=-0.3, rn=1.0e-5, cn=1.0e-7):
+                      n_inc_settle=200, t_settle=40.0, damp_alpha=0.3, hht_alpha=-0.3, rn=1.0e-5, cn=1.0e-7):
     """Static pre-buckling, then implicit dynamics through the snap.
 
     The pre-buckling path is essentially linear and a static solve walks it in
@@ -322,8 +322,15 @@ def run_ccx(inp_path, timeout=3600, nthreads=1, scratch=True):
            % (LDPATH, nthreads, inner))
     t0 = time.time()
     try:
-        p = subprocess.run(["wsl", "-e", "bash", "-lc", cmd],
-                           capture_output=True, text=True, timeout=timeout)
+        # On Windows the solver lives inside WSL; on a native Linux host (the
+        # compute server) bash is the shell and the wsl wrapper does not exist.
+        # `_win_to_wsl` is already a no-op for paths without a drive letter, and
+        # CCX/CCX_LD are environment-overridable, so this is the only
+        # platform-specific line.
+        argv = (["wsl", "-e", "bash", "-lc", cmd] if os.name == "nt"
+                else ["bash", "-lc", cmd])
+        p = subprocess.run(argv, capture_output=True, text=True,
+                           timeout=timeout)
         out = (p.stdout or "") + (p.stderr or "")
         ok = "Job finished" in out
     except subprocess.TimeoutExpired:
@@ -391,3 +398,41 @@ def read_frd_displacements(frd_path):
     for k, v in last.items():
         arr[k - 1] = v
     return arr
+
+
+def read_total_force(dat_path):
+    """Reaction-force history at the loaded end, from a *NODE PRINT ... RF block.
+
+    The deck already asks for this; the production runner used to delete the
+    .dat before reading it, which threw away the engineering scalar entirely.
+    That matters because the load and the pattern have opposite information
+    structure: measured over the pilot, the knockdown scalar varies only
+    0.33-0.62% between draws of one geometry while spanning 13.3% across
+    geometries, whereas the buckling pattern is broadly distributed within
+    every geometry. One dataset therefore carries a near-deterministic target
+    and a genuinely distributional one, and a model must get both right.
+
+    Returns (times, fz) as float arrays, axial component only.
+    """
+    import os
+    if not os.path.exists(dat_path):
+        return np.array([]), np.array([])
+    times, fz = [], []
+    lines = open(dat_path, errors="replace").read().splitlines()
+    for i, ln in enumerate(lines):
+        if "total force" not in ln.lower():
+            continue
+        m = re.search(r"time\s+([0-9.eE+-]+)", ln)
+        if not m:
+            continue
+        for j in range(i + 1, min(i + 4, len(lines))):
+            parts = lines[j].split()
+            if len(parts) >= 3:
+                try:
+                    vals = [float(p) for p in parts[:3]]
+                except ValueError:
+                    continue
+                times.append(float(m.group(1)))
+                fz.append(vals[2])
+                break
+    return np.asarray(times, dtype=float), np.asarray(fz, dtype=float)

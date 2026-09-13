@@ -17,6 +17,27 @@ W = os.path.join(ROOT, "work", "diag")
 os.makedirs(W, exist_ok=True)
 
 
+THICKNESS_SCHEMA = "nodal-thickness-v1"
+
+
+def shell_section(mesh):
+    """Match solver thickness to the nodal conditioning field.
+
+    CalculiX 2.22 manual sections 7.94/7.117 require both the section's
+    NODAL THICKNESS parameter and a thickness for every node. The section
+    still needs its otherwise ignored nominal-thickness data line.
+    """
+    section = "*SHELL SECTION, ELSET=EALL, MATERIAL=STEEL"
+    if mesh.thickness_gamma == 0.0:
+        return [section, "%.13e" % mesh.t]
+    thickness = np.asarray(mesh.thickness_at(mesh.z), dtype=float)
+    if thickness.shape != (mesh.n_nodes,) or not np.all(np.isfinite(thickness)) or np.any(thickness <= 0):
+        raise ValueError("nodal shell thickness must be finite and positive")
+    return [section + ", NODAL THICKNESS", "%.13e" % mesh.t,
+            "*NODAL THICKNESS"] + [
+                "%d, %.13e" % (i, t) for i, t in enumerate(thickness, start=1)]
+
+
 def write_diag(path, mesh, coords, target_shortening, handover=0.70,
               n_inc_static=10, n_inc_dyn=80, t_dyn=8.0,
               n_inc_settle=200, t_settle=40.0, damp_alpha=0.3, hht_alpha=-0.3,
@@ -30,7 +51,7 @@ def write_diag(path, mesh, coords, target_shortening, handover=0.70,
         "*MATERIAL, NAME=STEEL", "*ELASTIC", "%.13e, %.13e" % (E_MOD, NU),
         "*DENSITY", "%.13e" % rho,
         "*DAMPING, ALPHA=%.13e" % damp_alpha,
-        "*SHELL SECTION, ELSET=EALL, MATERIAL=STEEL", "%.13e" % mesh.t,
+        *shell_section(mesh),
         "*BOUNDARY", "NBOT, 1, 6, 0.0", "NTOP, 1, 2, 0.0", "NTOP, 4, 6, 0.0",
         "*STEP, NLGEOM, INC=%d" % (n_inc_static * 20), "*STATIC",
         "%.6e, 1.0, 1.0e-9, %.6e" % (1.0 / n_inc_static, 2.0 / n_inc_static),

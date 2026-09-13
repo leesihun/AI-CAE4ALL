@@ -7,6 +7,7 @@ regress both from the physical parameter / image conditions. Loss follows the
 SimulGenVAE convention ``10 * MSE(main) + MSE(hier)``.
 """
 
+import os
 import time
 
 import numpy as np
@@ -16,6 +17,7 @@ from torch.utils.data import DataLoader, TensorDataset
 from torch.utils.data.distributed import DistributedSampler
 
 from general_modules import distributed as D
+from general_modules.field_viz import plot_latent_parity
 from general_modules.fom_dataset import (
     apply_minmax,
     build_dataset_splits,
@@ -25,6 +27,7 @@ from general_modules.fom_dataset import (
 from model.common import add_sn
 from training_profiles.setup import (
     append_log,
+    artifact_dir,
     build_lc,
     build_optimizer_scheduler,
     build_vae,
@@ -47,6 +50,43 @@ def _encode_latents(vae, data_nct, device, batch_size):
         mains.append(mu.detach().cpu().numpy())
         hiers.append(torch.stack(xs, dim=1).detach().cpu().numpy())  # [B, L, Dh]
     return np.concatenate(mains, 0), np.concatenate(hiers, 0)
+
+
+@torch.no_grad()
+def run_latent_parity_test(lc, val_loader, config, device, epoch, out_dir):
+    """Periodic parity picture for the conditioner (rank 0 only).
+
+    The conditioner regresses a frozen latent target, so predicted-vs-true over
+    every latent coordinate is the honest view: a model that has learned only
+    the latent mean collapses onto a horizontal band instead of the diagonal.
+    """
+    if val_loader is None:
+        return None
+    was_training = lc.training
+    lc.eval()
+
+    true_main, pred_main, true_hier, pred_hier = [], [], [], []
+    for x, y_main, y_hier in val_loader:
+        out_main, out_hier = lc(x.to(device, non_blocking=True))
+        true_main.append(y_main.numpy())
+        pred_main.append(out_main.float().cpu().numpy())
+        true_hier.append(y_hier.numpy())
+        pred_hier.append(out_hier.float().cpu().numpy())
+
+    if was_training:
+        lc.train()
+    if not true_main:
+        return None
+
+    written = plot_latent_parity(
+        np.concatenate(true_main, 0), np.concatenate(pred_main, 0),
+        np.concatenate(true_hier, 0), np.concatenate(pred_hier, 0),
+        os.path.join(out_dir, f'lc_parity_epoch{epoch:05d}.png'),
+        epoch=epoch, dpi=int(config.get('plot_dpi', 140)),
+    )
+    if written:
+        print(f'  [viz] {written}')
+    return written
 
 
 def lc_worker(config, config_filename='config.txt'):
@@ -122,6 +162,9 @@ def lc_worker(config, config_filename='config.txt'):
 
     modelpath = config.get('lc_modelpath', '../../output/simulgenvae/simulgenvae_lc.pth')
     log_file = init_log_file(config, config_filename) if rank0 else None
+    test_interval = max(1, int(config.get('test_interval', 100)))
+    display_testset = bool(config.get('display_testset', True))
+    viz_dir = artifact_dir(config, modelpath) if rank0 else None
     if rank0:
         print('\n' + '=' * 60)
         print(f'Starting latent-conditioner training ({num_levels} hierarchical levels)...')
@@ -159,12 +202,17 @@ def lc_worker(config, config_filename='config.txt'):
         scheduler.step()
         train_loss = D.reduce_epoch_mean(loss_sum, batches, device)
 
-        if rank0 and (epoch % 100 == 0 or epoch == total_epochs - 1):
+        last_epoch = epoch == total_epochs - 1
+        if rank0 and (epoch % 100 == 0 or last_epoch):
             val_loss = _validate(D.unwrap_model(train_lc_model), val_loader, device, mse)
             lr = optimizer.param_groups[0]['lr']
             print(f'Epoch {epoch}/{total_epochs} LC train {train_loss:.4e} val {val_loss:.4e} LR {lr:.2e}')
             append_log(log_file, f'Elapsed {time.time()-start_time:.2f}s Epoch {epoch} '
                                  f'LC train {train_loss:.4e} val {val_loss:.4e} LR {lr:.4e}')
+
+        if rank0 and display_testset and (epoch % test_interval == 0 or last_epoch):
+            run_latent_parity_test(D.unwrap_model(train_lc_model), val_loader, config,
+                                   device, epoch, viz_dir)
 
     if rank0:
         save_checkpoint(modelpath, payload(total_epochs - 1))

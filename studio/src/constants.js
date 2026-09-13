@@ -42,6 +42,18 @@ export const KEY_CATALOGS = {
 // published. Keep them explicit here so Studio authoring and MethodSpecs stay
 // aligned without hiding them in an unrelated model family's long key line.
 KEY_CATALOGS.operator = [...new Set([...KEY_CATALOGS.operator, "gino_domain_padding"])].sort();
+
+// Periodic training visualization, added to every method that trains. The mesh
+// routes already carried display_testset/plot_feature_idx; these are the routes
+// that gained a picture of their own (parity plots, field reconstruction,
+// generated-shape strips).
+KEY_CATALOGS.transolver = [...new Set([...KEY_CATALOGS.transolver,
+  "display_testset", "plot_feature_idx"])].sort();
+KEY_CATALOGS.mlp = [...new Set([...KEY_CATALOGS.mlp,
+  "test_interval", "display_testset", "plot_dpi", "plot_max_points"])].sort();
+KEY_CATALOGS.simulgenvae = [...new Set([...KEY_CATALOGS.simulgenvae,
+  "test_interval", "display_testset", "num_test_samples", "plot_dpi"])].sort();
+KEY_CATALOGS.sdfflow = [...new Set([...KEY_CATALOGS.sdfflow, "display_testset"])].sort();
 export const SIMULGEN_REMOVED_NOOPS = new Set(["load_all", "plot_mode", "recon_iter"]);
 KEY_CATALOGS.simulgenvae = [...new Set([...KEY_CATALOGS.simulgenvae, "fsdp_min_params"])]
   .sort();
@@ -1068,6 +1080,18 @@ export const HELP = {
   fm_modelpath: "SDFFlow flow-matching checkpoint. It defines the learned latent distribution used by sample, interpolate, and optimize modes.",
   lc_modelpath: "SimulGen latent-conditioner checkpoint output for train/train_lc and input for reconstruct.",
   num_filter_enc: "Space-separated progressive VAE encoder widths; hierarchical levels equal length minus one.",
+  // Periodic training visualization. Every training route writes a picture at
+  // test_interval; what it draws differs by what the method predicts.
+  test_interval: "Epoch cadence for the periodic test/visualization pass. Costs one extra forward over a few samples, so it is normally much larger than val_interval.",
+  display_testset: "Write the periodic picture. Mesh routes: HDF5 + a 2x2 predicted/truth comparison PNG on the reconstructed surface. MLP: a held-out parity plot. SimulGen-VAE: truth/reconstruction/error field images. SDFFlow: a strip of the reconstructed (VAE) or generated (FM) shapes.",
+  display_trainset: "Also run the periodic pass over a few TRAINING samples, written under a train/ prefix. Train and held-out pictures side by side separate underfitting from a generalization gap.",
+  plot_feature_idx: "Which output channel the mesh PNG colours (-1 = last). One channel per picture, so point it at a channel that is not identically zero.",
+  plot_dpi: "Raster resolution of the rendered PNGs.",
+  plot_max_points: "Cap on scatter points in the MLP parity plot (0 = no cap); a subsample keeps a large held-out split legible.",
+  plot_max_faces: "Cap on triangles drawn per SDFFlow panel (0 = no cap). Thinning only affects the picture, never the exported STL.",
+  num_test_samples: "How many held-out samples the SimulGen-VAE reconstruction picture shows, one row each.",
+  preview: "geometry_ingest only: render a preview strip of the first ingested samples beside the output dataset. In mode inspect it is the only output.",
+  preview_max_samples: "How many ingested samples the preview strip shows.",
   // HELP is keyed by config key, and several keys are shared across routes with
   // different meanings -- so shared entries name each meaning. The old
   // latent_dim text ("per-level hierarchical latent width") was true only for

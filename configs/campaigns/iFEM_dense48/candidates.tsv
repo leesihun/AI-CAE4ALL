@@ -1,0 +1,34 @@
+candidate	model	axis	gpu	epochs	batch_size	learningr	weight_decay	architecture	est_gpu_hours	train_config	infer_config
+D01	deeponet	base	2	250	32	0.0003	0.00001	hidden 256, basis 128	4	configs/Neural_Operator/iFEM_dense48/config_train_d01.txt	configs/Neural_Operator/iFEM_dense48/config_infer_d01.txt
+D02	deeponet	hidden_channels down	1	250	32	0.0003	0.00001	hidden 128, basis 128	3	configs/Neural_Operator/iFEM_dense48/config_train_d02.txt	configs/Neural_Operator/iFEM_dense48/config_infer_d02.txt
+D03	deeponet	hidden_channels up	2	250	32	0.0003	0.00001	hidden 512, basis 128	6	configs/Neural_Operator/iFEM_dense48/config_train_d03.txt	configs/Neural_Operator/iFEM_dense48/config_infer_d03.txt
+D04	deeponet	basis_dim down	3	250	32	0.0003	0.00001	hidden 256, basis 64	4	configs/Neural_Operator/iFEM_dense48/config_train_d04.txt	configs/Neural_Operator/iFEM_dense48/config_infer_d04.txt
+D05	deeponet	basis_dim up	0	250	32	0.0003	0.00001	hidden 256, basis 256	4	configs/Neural_Operator/iFEM_dense48/config_train_d05.txt	configs/Neural_Operator/iFEM_dense48/config_infer_d05.txt
+D06	deeponet	batch_size down	1	250	16	0.0003	0.00001	hidden 256, basis 128	4	configs/Neural_Operator/iFEM_dense48/config_train_d06.txt	configs/Neural_Operator/iFEM_dense48/config_infer_d06.txt
+D07	deeponet	batch_size down	2	250	8	0.0003	0.00001	hidden 256, basis 128	4	configs/Neural_Operator/iFEM_dense48/config_train_d07.txt	configs/Neural_Operator/iFEM_dense48/config_infer_d07.txt
+D08	deeponet	training_epochs up	2	600	32	0.0003	0.00001	hidden 256, basis 128	10	configs/Neural_Operator/iFEM_dense48/config_train_d08.txt	configs/Neural_Operator/iFEM_dense48/config_infer_d08.txt
+M01	meshgraphnets	base	1	250	32	0.0001	0.00001	latent 128, mp 8	3	configs/MeshGraphNets/iFEM_dense48/config_train_m01.txt	configs/MeshGraphNets/iFEM_dense48/config_infer_m01.txt
+M02	meshgraphnets	message_passing_num down	0	250	32	0.0001	0.00001	latent 128, mp 4	2	configs/MeshGraphNets/iFEM_dense48/config_train_m02.txt	configs/MeshGraphNets/iFEM_dense48/config_infer_m02.txt
+M03	meshgraphnets	message_passing_num down	2	250	32	0.0001	0.00001	latent 128, mp 2	2	configs/MeshGraphNets/iFEM_dense48/config_train_m03.txt	configs/MeshGraphNets/iFEM_dense48/config_infer_m03.txt
+M04	meshgraphnets	message_passing_num up	3	250	32	0.0001	0.00001	latent 128, mp 16	4	configs/MeshGraphNets/iFEM_dense48/config_train_m04.txt	configs/MeshGraphNets/iFEM_dense48/config_infer_m04.txt
+M05	meshgraphnets	latent_dim down	1	250	32	0.0001	0.00001	latent 64, mp 8	2	configs/MeshGraphNets/iFEM_dense48/config_train_m05.txt	configs/MeshGraphNets/iFEM_dense48/config_infer_m05.txt
+M06	meshgraphnets	latent_dim up	0	250	32	0.0001	0.00001	latent 256, mp 8	4	configs/MeshGraphNets/iFEM_dense48/config_train_m06.txt	configs/MeshGraphNets/iFEM_dense48/config_infer_m06.txt
+M07	meshgraphnets	latent_dim up	3	250	32	0.0001	0.00001	latent 512, mp 8	6	configs/MeshGraphNets/iFEM_dense48/config_train_m07.txt	configs/MeshGraphNets/iFEM_dense48/config_infer_m07.txt
+M08	meshgraphnets	batch_size down	2	250	16	0.0001	0.00001	latent 128, mp 8	3	configs/MeshGraphNets/iFEM_dense48/config_train_m08.txt	configs/MeshGraphNets/iFEM_dense48/config_infer_m08.txt
+M09	meshgraphnets	batch_size down	3	250	8	0.0001	0.00001	latent 128, mp 8	3	configs/MeshGraphNets/iFEM_dense48/config_train_m09.txt	configs/MeshGraphNets/iFEM_dense48/config_infer_m09.txt
+M10	meshgraphnets	training_epochs up	3	600	32	0.0001	0.00001	latent 128, mp 8	7	configs/MeshGraphNets/iFEM_dense48/config_train_m10.txt	configs/MeshGraphNets/iFEM_dense48/config_infer_m10.txt
+T01	transolver	base	3	250	32	0.0003	0.00001	latent 256, 4 layers, 8 heads, slice 64	28	configs/Transolver/iFEM_dense48/config_train_t01.txt	configs/Transolver/iFEM_dense48/config_infer_t01.txt
+T02	transolver	num_layers down	3	250	32	0.0003	0.00001	latent 256, 2 layers, 8 heads, slice 64	14	configs/Transolver/iFEM_dense48/config_train_t02.txt	configs/Transolver/iFEM_dense48/config_infer_t02.txt
+T03	transolver	num_layers up	3	250	32	0.0003	0.00001	latent 256, 8 layers, 8 heads, slice 64	57	configs/Transolver/iFEM_dense48/config_train_t03.txt	configs/Transolver/iFEM_dense48/config_infer_t03.txt
+T04	transolver	num_layers up	0	250	32	0.0003	0.00001	latent 256, 16 layers, 8 heads, slice 64	113	configs/Transolver/iFEM_dense48/config_train_t04.txt	configs/Transolver/iFEM_dense48/config_infer_t04.txt
+T05	transolver	latent_dim down	2	250	32	0.0003	0.00001	latent 128, 4 layers, 8 heads, slice 64	28	configs/Transolver/iFEM_dense48/config_train_t05.txt	configs/Transolver/iFEM_dense48/config_infer_t05.txt
+T06	transolver	latent_dim up	3	250	32	0.0003	0.00001	latent 512, 4 layers, 8 heads, slice 64	28	configs/Transolver/iFEM_dense48/config_train_t06.txt	configs/Transolver/iFEM_dense48/config_infer_t06.txt
+T07	transolver	num_heads down	2	250	32	0.0003	0.00001	latent 256, 4 layers, 4 heads, slice 64	28	configs/Transolver/iFEM_dense48/config_train_t07.txt	configs/Transolver/iFEM_dense48/config_infer_t07.txt
+T08	transolver	num_heads up	0	250	32	0.0003	0.00001	latent 256, 4 layers, 16 heads, slice 64	28	configs/Transolver/iFEM_dense48/config_train_t08.txt	configs/Transolver/iFEM_dense48/config_infer_t08.txt
+T09	transolver	slice_num down	1	250	32	0.0003	0.00001	latent 256, 4 layers, 8 heads, slice 16	28	configs/Transolver/iFEM_dense48/config_train_t09.txt	configs/Transolver/iFEM_dense48/config_infer_t09.txt
+T10	transolver	slice_num down	3	250	32	0.0003	0.00001	latent 256, 4 layers, 8 heads, slice 32	28	configs/Transolver/iFEM_dense48/config_train_t10.txt	configs/Transolver/iFEM_dense48/config_infer_t10.txt
+T11	transolver	slice_num up	2	250	32	0.0003	0.00001	latent 256, 4 layers, 8 heads, slice 128	28	configs/Transolver/iFEM_dense48/config_train_t11.txt	configs/Transolver/iFEM_dense48/config_infer_t11.txt
+T12	transolver	batch_size down	0	250	16	0.0003	0.00001	latent 256, 4 layers, 8 heads, slice 64	28	configs/Transolver/iFEM_dense48/config_train_t12.txt	configs/Transolver/iFEM_dense48/config_infer_t12.txt
+T13	transolver	batch_size down	1	250	8	0.0003	0.00001	latent 256, 4 layers, 8 heads, slice 64	28	configs/Transolver/iFEM_dense48/config_train_t13.txt	configs/Transolver/iFEM_dense48/config_infer_t13.txt
+T14	transolver	training_epochs up	2	600	32	0.0003	0.00001	latent 256, 4 layers, 8 heads, slice 64	68	configs/Transolver/iFEM_dense48/config_train_t14.txt	configs/Transolver/iFEM_dense48/config_infer_t14.txt
+T15	transolver	training_epochs up	1	1000	32	0.0003	0.00001	latent 256, 4 layers, 8 heads, slice 64	113	configs/Transolver/iFEM_dense48/config_train_t15.txt	configs/Transolver/iFEM_dense48/config_infer_t15.txt

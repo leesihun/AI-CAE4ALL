@@ -144,6 +144,20 @@ def init_log_file(config, config_filename):
     return log_file
 
 
+def artifact_dir(config, fallback_path=None):
+    """Directory that receives periodic artifacts (plots).
+
+    The suite convention: the log file's directory holds every artifact of a
+    run, so one run's outputs land together. Falls back to the checkpoint's
+    directory when no log file is configured.
+    """
+    anchor = config.get('log_file_dir') or fallback_path or ''
+    directory = os.path.dirname(anchor)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+    return directory or '.'
+
+
 def append_log(log_file, text):
     if log_file:
         with open(log_file, 'a') as f:

@@ -93,5 +93,5 @@ out["totals"] = dict(n_draws=len(recs), n_ok=len(recs), n_attempted=len(recs),
 path = os.path.join(ROOT, "work", "viz_data.json")
 json.dump(out, open(path, "w"))
 print("wrote %s (%.0f KB)" % (path, os.path.getsize(path) / 1024))
-print("corners:", [c["r_over_t"], c["l_over_r"]] and [(c["r_over_t"], c["l_over_r"]) for c in out["corners"]])
+print("corners:", [(c["r_over_t"], c["l_over_r"]) for c in out["corners"]])
 print("fields exported:", len(out["fields"]))

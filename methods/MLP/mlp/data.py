@@ -34,6 +34,20 @@ def load_xy(path: str, *, require_y: bool = True) -> tuple[np.ndarray, np.ndarra
     return x, y
 
 
+def load_output_names(path: str) -> list[str] | None:
+    """Read the optional ``output_names`` string dataset, for plot labels."""
+    import h5py
+
+    with h5py.File(path, "r") as handle:
+        if "output_names" not in handle:
+            return None
+        raw = handle["output_names"][...]
+    names = []
+    for item in np.asarray(raw).ravel().tolist():
+        names.append(item.decode("utf-8", "replace") if isinstance(item, bytes) else str(item))
+    return names or None
+
+
 @dataclass
 class Normalizer:
     """Per-column standardization. mode: standard | minmax | none."""

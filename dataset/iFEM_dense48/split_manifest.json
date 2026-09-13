@@ -1,0 +1,73 @@
+{
+  "source": "C:\\Users\\Lee\\Desktop\\Huni\\DDFEM\\POC_ifem_v0\\iFEM_dataset_dense48.h5",
+  "source_sha256": "9023239c7dbf6acc9c2adc2a3b503354c7fdb55fffea8ba9bb5b19f6a76890db",
+  "seed": 42,
+  "method": "geometry_disjoint",
+  "infer_fraction_requested": 0.2,
+  "num_total": 47929,
+  "num_geometries": 886,
+  "features": [
+    "x",
+    "y",
+    "z",
+    "u_eps1_x",
+    "u_eps1_y",
+    "u_eps2_x",
+    "u_eps2_y",
+    "phi",
+    "trace_eps1_x",
+    "trace_eps1_y",
+    "trace_eps2_x",
+    "trace_eps2_y",
+    "traction_x",
+    "traction_y",
+    "body_x",
+    "body_y",
+    "gamma_dir_x",
+    "gamma_dir_y",
+    "gamma_traction_x",
+    "gamma_traction_y"
+  ],
+  "shape": [
+    20,
+    1,
+    81
+  ],
+  "cond_var": 13,
+  "sample_id_overlap": 0,
+  "all_samples_verified_exact": true,
+  "geometry_phi_overlap": 0,
+  "infer_cases_with_geometry_in_train": 0,
+  "source_file_overlap": 0,
+  "interpretation": "Held-out geometries are absent from training. This IS an unseen-geometry benchmark.",
+  "splits": {
+    "train": {
+      "path": "C:\\Users\\Lee\\Desktop\\Huni\\DDFEM\\POC_ifem_v0\\data_dense48\\iFEM_dense48_train.h5",
+      "count": 39447,
+      "num_geometries": 709,
+      "sha256": "5af367cbbefe2a388259d24977d86e80676e51022242e7d51ea621a8782965cf",
+      "cases_per_geometry_median": 48.0,
+      "target_norm_quantiles_0_10_50_90_100": [
+        0.10973492241060279,
+        2.884088740141647,
+        9.74546740146704,
+        87.5747214055522,
+        10110.200643047674
+      ]
+    },
+    "infer": {
+      "path": "C:\\Users\\Lee\\Desktop\\Huni\\DDFEM\\POC_ifem_v0\\data_dense48\\iFEM_dense48_infer.h5",
+      "count": 8482,
+      "num_geometries": 177,
+      "sha256": "672e84eb7aebf3e2a98767582c3840899a55e05024e9f4656b342cc5da16446e",
+      "cases_per_geometry_median": 48.0,
+      "target_norm_quantiles_0_10_50_90_100": [
+        0.1358227005454157,
+        2.6756062908218237,
+        9.103945723983637,
+        108.50466126137552,
+        5862.010128115615
+      ]
+    }
+  }
+}

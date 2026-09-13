@@ -1,6 +1,7 @@
 # Dataset card — shell post-buckling one-to-many benchmark
 
-**Status: pilot only, one known open issue (see &sect;7) blocks calling this final.**
+**Read section 9 first. Sections 1-8 preserve historical pilot descriptions;
+section 9 supersedes their generator, storage, scoring and status statements.**
 This card describes exactly what the generator in `buckling/src/` produces, as
 implemented today — not the aspirational design in `BENCHMARK_DESIGN.md`, where
 the two differ. Every number below was read from the code or measured, not
@@ -263,6 +264,36 @@ longer window. A run at `damp_alpha=3.0` (10&times; production) on the R/t=230,
 L/R=1.6 corner is in progress; this section will be updated with the result
 before any regeneration is launched.
 
+### 7.3b The hard corner is not just unconverged, it is computationally intractable
+
+Follow-up run on R/t=230, L/R=1.6 at the *original* light damping (alpha=0.3) with the
+settle window extended to t_settle=70 (350 increments): **timed out at 7,200 s
+without finishing**. Combined with 7.3, the picture for that corner is:
+
+| attempt | settle | damping | outcome |
+|---|---|---|---|
+| production | t=4 (20 inc) | 0.3 | badly unconverged (ringing >150% of mean) |
+| diagnostic | t=40 (200 inc) | 0.3 | still creeping, increment *growing*; 4,646 s |
+| diagnostic | t=40 (200 inc) | 3.0 | overdamped, monotone, further from equilibrium; 4,720 s |
+| diagnostic | t=70 (350 inc) | 0.3 | **did not finish inside 2 h** |
+
+A single draw of this geometry needs more than two hours to reach a settle length
+that still is not demonstrably converged. Eighty draws of it, let alone 80 across
+a regenerated pilot, is not viable on this machine.
+
+**This is a design-level problem, not a solver-tuning problem.** The geometry box
+as specified contains a corner that cannot be generated at the fidelity the rest
+of the box is generated at. Options, none yet chosen:
+
+1. Shrink the box so the thinnest/longest combination is excluded, and say so.
+2. Lower the target end shortening for the flexible corner (1.5*d_cr may push a
+   very slender shell far deeper into post-buckling than the stiff corner, which
+   would explain both the long transient and the cost).
+3. Accept a geometry-dependent settle length, and pay for it only where needed.
+4. Treat the near-flat equilibrium surface of slender shells as the physics of
+   interest rather than a nuisance, and define the QoI so it does not depend on a
+   fully-settled amplitude.
+
 ### 7.4 What this means right now
 
 - **The published sample explorer's field magnitudes and the BUILD_LOG.md
@@ -277,6 +308,87 @@ before any regeneration is launched.
   right, not fast; a second brute-force pass that still doesn't converge on
   the flexible end of the box would cost real compute for no benefit.
 
+## 7.5 Two further findings from targeted tests
+
+### Natural frequency is NOT the cause (hypothesis ruled out)
+
+Mass-proportional damping gives `zeta_i = alpha/(2*omega_i)`, so a single fixed
+`alpha` only behaves the same across geometries if `omega_1` does. Measured by
+`*FREQUENCY` extraction (`buckling/src/run_freq.py`), 12 modes per corner:
+
+| R/t | L/R | omega_1 | T_1 | zeta_1 at alpha=0.3 | settle periods at t=40 |
+|---:|---:|---:|---:|---:|---:|
+| 110 | 1.0 | 0.9880 | 6.360 | 0.152 | 6.29 |
+| 110 | 1.6 | 0.9927 | 6.330 | 0.151 | 6.32 |
+| 230 | 1.0 | 0.9853 | 6.377 | 0.152 | 6.27 |
+| 230 | 1.6 | 0.9987 | 6.291 | 0.150 | 6.36 |
+
+The fundamental frequency is **effectively identical across the whole box**
+(spread 1.014x), so the damping ratio and the number of settle periods are too.
+A frequency mismatch is therefore *not* why the thin/long corner fails to settle.
+That hypothesis is dead and should not be revisited.
+
+### Component A is seeding the winning mode, not just breaking symmetry
+
+Component B's correlation length scales as `sqrt(R*t)`, so its wavenumber content
+tracks the critical band at every geometry by construction. **Component A does
+not scale** -- its harmonics are the fixed integers `l = 2, 3` and
+`j*N_p = 8, 16, 24, 32`.
+
+The empirical critical wavenumber is `n ~= 0.86*sqrt(R/t)`, i.e. **n ~ 9 at
+R/t=110**. Component A's `l = 8` sits right on it. The amplitude sweep is an
+unambiguous dose-response:
+
+| Component A RMS | n=8 occurrences (12 seeds) |
+|---|---|
+| 0.00 t | **0 / 12** |
+| 0.01 t | 3 / 12 |
+| 0.03 t | 7 / 12 |
+| 0.10 t | 12 / 12 |
+| 0.30 t | 12 / 12 |
+
+With Component A off, n=8 never occurs. Its presence creates the n=8 outcomes in
+proportion to its amplitude. `N_p = 8` was chosen as a plausible weld-panel count
+and never checked against the critical band.
+
+**Fix required before any production run:** either drop the weld harmonics and
+keep only ovalization (`l = 2, 3`, safely clear of n = 9-13), or choose `N_p` per
+geometry so that no `j*N_p` lands within a couple of wavenumbers of
+`0.86*sqrt(R/t)`.
+
+### Damping does not change the answer -- except on near-degenerate draws
+
+Same six seeds, same imperfections, only `alpha` changed 0.3 -> 0.6:
+
+| seed | alpha=0.3 | alpha=0.6 | mode |
+|---|---|---|---|
+| 2 | n=8, 1.3740 | n=8, 1.3635 | same |
+| 3 | n=9, 1.3010 | n=9, 1.2892 | same |
+| 4 | n=8, 1.3717 | **n=7**, 1.3585 | **FLIPPED** |
+| 5 | n=9, 1.2989 | n=9, 1.2981 | same |
+| 6 | n=8, 1.3781 | n=8, 1.3754 | same |
+| 7 | n=8, 1.3749 | n=8, 1.3694 | same |
+
+- **Amplitude is robust**: doubling the damping moves rms/t by 0.55% on average,
+  0.97% at worst. The field magnitude is a genuine property of the equilibrium.
+- **The discrete mode label is not fully robust**: 1 of 6 flipped.
+- **The flip is explainable, not random.** Seed 4 had the weakest spectral
+  dominance of the set (`n_share` 0.357, second-lowest at alpha=0.3 and lowest at
+  0.6). It is a genuinely near-degenerate draw with two modes nearly tied, so an
+  arbitrarily small numerical difference tips it. The samples with a clear
+  winner (share 0.53-0.68) never moved.
+- One systematic effect worth noting: `n_share` fell for **every** seed at higher
+  damping (0.434->0.288, 0.526->0.423, 0.582->0.455, 0.676->0.513, 0.527->0.372).
+  Higher damping yields a more mixed spectrum, so damping does influence spectral
+  composition, not only the path.
+
+**Implication for the benchmark:** a hard argmax mode label is the wrong target
+for near-degenerate draws. Either report `n_share` alongside the label and treat
+low-share draws as ambiguous, or make the target the continuous wavenumber
+spectrum rather than its argmax.
+
+---
+
 ## 8. Parameters not yet varied in this pilot
 
 For completeness — these exist in the code but are fixed or unused so far:
@@ -289,3 +401,166 @@ For completeness — these exist in the code but are fixed or unused so far:
   T3) and require the equivalent-cylinder check (gate G4) before any cone is
   generated.
 - `N_p` (weld-panel count) — see &sect;4, currently one global constant.
+
+---
+
+# 9. Current production contract (audited 2026-09-13)
+
+The allocations below are the generation plan. Retained counts require a dated
+export audit. RMS stability does not certify static equilibrium.
+
+## 9.1 What changed from the pilot
+
+| | pilot | v2 |
+|---|---|---|
+| Component A harmonics | `2, 3, 8, 16, 24, 32` | critical band filtered out (see 9.2) |
+| Component A amplitude | 0.01·t | **0.15·t**, re-picked against a sweep |
+| Settle window | 20 inc / t = 4 | **200 inc / t = 40** |
+| Convergence check | none | `drift` recorded per draw |
+| Stored output | radial component only | full 3-D displacement + spectrum |
+| Geometry box | included R/t 230, L/R 1.6 | that corner **excluded** (intractable) |
+
+## 9.2 The imperfection law, as built
+
+**Component A — known, deterministic, given to the model.**
+Ovalization plus a weld pattern, `l ∈ {2, 3} ∪ {8, 16, 24, 32}`, with any
+harmonic within 3 wavenumbers of the critical one `n ≈ 0.86·√(R/t)` **dropped**.
+RMS = 0.15·t. This component is identical across every draw of one geometry and
+is written into `nodal_data` rows 6:9.
+
+**Component B — withheld. This is the entire source of spread.**
+The implemented field has Matérn-shaped spectral density, nominal amplitude
+`σ̂ = 10⁻³`, correlation length `0.70·√(R·t)` and `ν = 1.5`. Coefficients have
+fixed amplitudes and independent uniform phases; this is a random-phase field,
+not an exact Gaussian random field. The wavenumber support is rectangular,
+with each axis limit derived from `8/ell`, not a circular cutoff. Individual
+realizations are not renormalized, so measured spatial RMS varies. Closed-form
+evaluation permits evaluation at new mesh coordinates without nodal
+interpolation, but float32 coefficient exports do not promise bitwise recovery
+of the original float64 field. Coefficients are stored under `latent/`, outside
+the documented input rows.
+
+The nominal A/B amplitude ratio is 150, rather than exactly 150 for each draw.
+Only B varies between draws of one geometry. This controls input variability;
+it does not prove that damping, dynamics or mesh discretization have no effect
+on the selected terminal state.
+
+## 9.3 Phase and scoring scope
+
+A pilot phase test did not detect pinning. Failure to reject uniformity does
+not prove uniformity; fixed non-axisymmetric Component A breaks the continuous
+rotational symmetry of the conditioned problem. Exact SO(2) invariance is not
+a justified property of the conditional field law.
+
+`gates.so2_invariant` removes circumferential Fourier phase, the axisymmetric
+component and modes beyond the truncation. Its energy score assesses that
+descriptor's distribution. Proper ensemble scores on raw fields are also valid
+when phase is an intended target. The descriptor uses raw FFT magnitudes and
+a mesh-dependent axial grid; cross-geometry comparisons require a separately
+defined common descriptor and normalization.
+
+## 9.4 Storage contract (`pack_hdf5.py`)
+
+```
+data/{sample_id}/nodal_data   [11, 1, num_nodes]
+data/{sample_id}/mesh_edge    [2, num_edges]
+latent/{sample_id}/...        withheld Component B coefficients + spectrum
+```
+
+| rows | content | role |
+|---|---|---|
+| 0:3 | reference coordinates of the perfect shell | input |
+| 3:6 | solver displacement `ux, uy, uz` from the imperfect starting surface | **output** (`output_var = 3`) |
+| 6:9 | Component A offset vector | input only |
+| 9 | actual nodal thickness `t(z)`, in units with reference radius R=1 | input only |
+| 10 | node type (0 interior, 1 clamped base, 2 loaded top) | input only |
+
+`input_var = 3`, `output_var = 3`, `cond_var = 5`, `num_timesteps = 1`.
+
+Row 9 previously stored `t(z)/t_nominal`; it now explicitly exposes absolute
+thickness. Coordinates plus displacement alone do not reconstruct the deformed
+surface: the initial imperfection must also be added for that purpose.
+
+The packer requires an explicit plan and tier selection, checks source arrays
+and prescribed shortening, records source hashes and rejection reasons, and
+refuses to overwrite existing exports. The validator checks every sample and
+every input row against the analytic visible inputs, all edges against the
+S8R topology, boundary displacements and available solve provenance.
+
+Current suite loaders do not enforce tier attributes. Export training and
+inference tiers separately; a combined train/OOD file must not be randomly
+split for training. Static model inputs must exclude displacement targets.
+Sample IDs, seeds, outcome attributes and the latent group are diagnostics,
+not model features. An HDF5 audit does not certify a training configuration.
+
+Coordinates are **not** an output. Scoring rows 0:3 yields R² = 1 for any model
+— the failure this repo has already shipped once.
+
+## 9.5 Tiers
+
+| tier | planned geometries | planned draws | what it tests |
+|---|---|---|---|
+| train | 12 | 576 | cylinders, R/t ∈ {110,140,170,200} × L/R ∈ {0.8,1.0,1.3} |
+| t1 | 4 | 128 | parameter extrapolation: R/t 95 and 245, L/R 0.6 and 1.5 |
+| t2 | 4 | 128 | cones, 10° and 20°, base R/t 115 and 140 |
+| t3 | 2 | 64 | thickness taper, γ = 0.15 and 0.25 |
+
+t2 and t3 keep **local R/t inside the training range** at every axial station.
+The discrete training grid has not sampled every local value. This reduces
+one extrapolation confound; it does not uniquely attribute every error to
+structural novelty.
+
+## 9.6 Convergence and what is kept
+
+Static loading stops at `0.70*d_cr`, not 70% of the final target; implicit
+dynamics then reaches the planned target (normally `1.5*d_cr`) before a settle
+of duration 40 with nominal 200 increments. Adaptive stepping can change the
+actual increment count.
+
+`drift=(max(RMS_tail)-min(RMS_tail))/mean(RMS_tail)` covers the last third of
+saved usable displacement blocks. Without timestamps this is not guaranteed
+to be the final third of physical settle time. It cannot detect a changing
+shape with constant RMS, certify force equilibrium or bound kinetic energy.
+Retained outputs are terminal dynamic states with an RMS stability filter.
+
+The default export retains finite nonnegative `drift <= 0.15` after physical
+and provenance checks. Rejections are recorded. This can change the reference
+law: results describe the retained conditional distribution. Report exclusions
+per geometry and threshold sensitivity before claims about the unfiltered law.
+
+The original production writer ignored `thickness_gamma` and assigned uniform
+shell thickness. Unversioned nonzero-gamma caches are invalid for the taper
+benchmark. The corrected writer uses a `NODAL THICKNESS` shell section and a
+thickness for every node, following the [CalculiX 2.22 manual, sections 7.94
+and 7.117](https://www.dhondt.de/ccx_2.22.pdf). The cache and exporter reject
+legacy tapers. New draws persist `run_spec_json`; legacy uniform-thickness
+cylinders and cones remain explicitly labelled as unversioned.
+
+For the same reason the argmax mode label is **not** the only target: the full
+circumferential spectrum ships with every draw, because the label is not
+damping-invariant on near-degenerate draws (1 of 6 flipped between α = 0.3
+and 0.6, on the lowest-`n_share` sample).
+
+## 9.7 Scoring (`scoring.py`)
+
+The fair energy-score and CRPS self-terms divide by `m*(m-1)` for `m>=2`.
+For iid ensemble draws this removes their ensemble-size-dependent bias, not
+sampling variance. A singleton is a deterministic point forecast. See
+[Ferro (2014)](https://rmets.onlinelibrary.wiley.com/doi/abs/10.1002/qj.2270).
+
+A nondegenerate distribution has positive expected energy score even with
+infinite samples. The reference half-split score (legacy key `self_floor`)
+estimates this intrinsic baseline with sampling uncertainty; it is not an
+unbeatable floor. Finite fair scores can fall below it, and skill can exceed 1.
+`mean_only_ref` uses the observed reference mean and is an in-sample diagnostic,
+not an independently fitted forecast baseline. Strict propriety concerns the
+vector distribution actually scored; a noninjective descriptor cannot identify
+all differences between field distributions. See [Gneiting and Raftery
+(2007)](https://sites.stat.washington.edu/people/raftery/Research/PDF/Gneiting2007jasa.pdf).
+
+Spread/RMSE mixes mean error and width. Sampling of the ensemble mean adds
+RMSE; the iid calibrated squared-moment reference ratio is `sqrt(m/(m+1))`.
+Rank histograms use a fixed projection (coordinate 0 by default) and randomized
+ties. A supplied projection must be fitted independently; a forecast-only PC
+breaks exchangeability. Flat marginal ranks do not establish conditional or
+multivariate calibration.

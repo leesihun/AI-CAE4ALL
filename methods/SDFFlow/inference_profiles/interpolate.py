@@ -36,9 +36,9 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
 from general_modules.mesh_extraction import decode_sdf_grid, mesh_report, sdf_grid_to_mesh
+from general_modules.mesh_render import ENDPOINT_COLOR, MIDDLE_COLOR, plot_mesh_strip
 from inference_profiles.sample import (
     VelocityCallCounter,
     _audit_report,
@@ -54,8 +54,8 @@ from training_profiles.setup import load_checkpoint, resolve_device
 
 INTERPOLATION_SPACES = ('slerp_noise', 'lerp_latent', 'cond_sweep')
 DEFAULT_SWEEP_STEPS = 5
-_ENDPOINT_COLOR = '#3B82C4'
-_MIDDLE_COLOR = '#E68A2E'
+_ENDPOINT_COLOR = ENDPOINT_COLOR
+_MIDDLE_COLOR = MIDDLE_COLOR
 
 
 def slerp(a, b, alpha, eps=1e-6):
@@ -83,51 +83,9 @@ def slerp(a, b, alpha, eps=1e-6):
     return out.to(a.dtype)
 
 
-def _plot_strip(meshes, labels, reports, path, dpi=180, max_faces=0, title=None, colors=None):
-    """Render N meshes side by side with identical axes and camera settings.
-
-    `meshes` entries may be None (a decode without a zero crossing); that
-    panel is drawn empty with its label so the strip keeps one panel per step.
-    `colors` defaults to endpoints blue / interior panels orange.
-    """
-    n = len(meshes)
-    if n == 0:
-        raise ValueError('_plot_strip needs at least one panel')
-    if colors is None:
-        colors = tuple(_ENDPOINT_COLOR if i in (0, n - 1) else _MIDDLE_COLOR for i in range(n))
-    fig = plt.figure(figsize=(max(5.3 * n, 6.0), 5.8), dpi=dpi, facecolor='white')
-
-    for index, (mesh, label, report, color) in enumerate(
-            zip(meshes, labels, reports, colors), start=1):
-        ax = fig.add_subplot(1, n, index, projection='3d')
-        if mesh is not None:
-            triangles = mesh.triangles
-            if max_faces > 0 and len(triangles) > max_faces:
-                selected = np.linspace(0, len(triangles) - 1, max_faces, dtype=np.int64)
-                triangles = triangles[selected]
-            surface = Poly3DCollection(
-                triangles, facecolor=color, edgecolor='none', linewidth=0.0, alpha=1.0)
-            ax.add_collection3d(surface)
-        else:
-            ax.text(0.0, 0.0, 0.0, 'no zero crossing', ha='center', va='center', fontsize=11)
-        ax.set_xlim(-1.0, 1.0)
-        ax.set_ylim(-1.0, 1.0)
-        ax.set_zlim(-1.0, 1.0)
-        ax.set_box_aspect((1, 1, 1))
-        ax.view_init(elev=24, azim=-58)
-        ax.set_proj_type('ortho')
-        ax.set_axis_off()
-        volume = report.get('volume')
-        volume_text = f'{volume:.4f}' if volume is not None else 'n/a'
-        faces = report.get('faces')
-        faces_text = f'{faces:,}' if faces is not None else 'n/a'
-        ax.set_title(f'{label}\nvolume={volume_text}, faces={faces_text}',
-                     fontsize=12, pad=0, y=0.90)
-
-    fig.suptitle(title or 'SDFFlow latent interpolation', fontsize=16, y=0.97)
-    fig.subplots_adjust(left=0.01, right=0.99, bottom=0.01, top=0.84, wspace=0.01)
-    fig.savefig(path, bbox_inches='tight', facecolor='white')
-    plt.close(fig)
+# Factored into general_modules/mesh_render.py so the periodic train/test
+# renders draw the same picture on the same axes and camera.
+_plot_strip = plot_mesh_strip
 
 
 def _plot_triptych(meshes, labels, reports, path, dpi=180, max_faces=0, title=None):
