@@ -1,0 +1,14 @@
+{
+  "source_files_snapshotted": 12,
+  "local_links_valid": 41,
+  "figures": 5,
+  "formats": [
+    "PNG",
+    "PDF",
+    "SVG"
+  ],
+  "model_or_training_edits_by_this_task": true,
+  "diagnostic_workflow_edits_by_this_task": true,
+  "native_packaged_model_parity": true,
+  "real_data_training_performed": false
+}

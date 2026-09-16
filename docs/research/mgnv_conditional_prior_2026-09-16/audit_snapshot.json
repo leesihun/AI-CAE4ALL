@@ -1,0 +1,24 @@
+{
+  "date": "2026-09-16",
+  "git_head": "f58b16968608a242b84872ad4c33700b3036e84e",
+  "source_sha256": {
+    "methods/MeshGraphNets_Variational/model/conditional_prior.py": "1a58d727cbfa33a6ef3464adebe853fd8e84eacb55edc8438f9078429a8fac40",
+    "methods/MeshGraphNets_Variational/model/mlp.py": "102bf0df75bd49f28eae062a797b18957196cd9977ab27e73564b291ea79dd82",
+    "methods/MeshGraphNets_Variational/model/vae.py": "452a7804bbf827389fb753a9c03722a5d5a640521944eb15280ebacde4847da3",
+    "methods/MeshGraphNets_Variational/training_profiles/training_loop.py": "b08769ff8ee136956f9999ce12b826cf8d812cb8c99abe50cbbe54a95899f6f2",
+    "methods/MeshGraphNets_Variational/training_profiles/single_training.py": "f2b90c7c99b4bc969ee003ac7b3543bac405be847dba8339c0f03f8ac10f3790",
+    "methods/MeshGraphNets_Variational/training_profiles/distributed_training.py": "ec9d9c9c5d2e11dfaf99fb687fd2660fe24fb0af1e051dffe359717a8abbb110",
+    "methods/MeshGraphNets_Variational/misc/retrain_prior.py": "08d5d18c7b1382faa437025be21f2e10adaaf8420a263d9278ef771894e4486a",
+    "inference/cae_infer/families/meshgraphnets_v/model/conditional_prior.py": "1a58d727cbfa33a6ef3464adebe853fd8e84eacb55edc8438f9078429a8fac40",
+    "inference/cae_infer/families/meshgraphnets_v/driver.py": "a27b5c711cc357057757aaf079a39668668f516233c556d971ec82adf4b8437c",
+    "configs/MeshGraphNets_Variational/SAOI_all_input/config_train_bot.txt": "800680ba5bdd0dfe7e674486697def9b4eb4f53e916c6c19fb811e493606cd05",
+    "configs/MeshGraphNets_Variational/SAOI_sweep/config_train_8.txt": "6a07d2c558374c66f3703bdcfba74cce9b3f2304bb79f56f555cb76b9cb24552",
+    "configs/MeshGraphNets_Variational/b8_all_warpage_input/config_train8.txt": "11c2aed26967e969c56b1af85dc7d71485c30b888c07dee1bbfdfd282d1474a2"
+  },
+  "data_present": {
+    "dataset/SAOI/saoi_train_bot.h5": false,
+    "dataset/SAOI/saoi_train_top.h5": false,
+    "dataset/b8_main_sec_dataset_traincopy.h5": false
+  },
+  "note": "FM-v2 model, training, native/package inference parity, diagnostics and controlled sweep were implemented; real SAOI training was not run locally."
+}

@@ -1,5 +1,7 @@
+import random
 import time
 
+import numpy as np
 import torch
 from torch_geometric.loader import DataLoader
 
@@ -18,8 +20,11 @@ from training_profiles.setup import (
 )
 from training_profiles.training_loop import (
     evaluate_vae_learned_prior_epoch,
+    bank_joint_checkpoint,
+    bank_moment_checkpoint,
     evaluate_vae_posterior_epoch,
     freeze_for_prior_fit,
+    freeze_moments_for_residual_fit,
     log_training_config,
     run_periodic_test,
     train_epoch,
@@ -32,6 +37,17 @@ def single_worker(config, config_filename='config.txt'):
     """Single GPU/CPU training entry point."""
     gpu_ids = config.get('gpu_ids')
     print("Starting single-process training...")
+
+    # A controlled architecture sweep needs identical initialization, data
+    # order and stochastic posterior/FM draws across arms. split_seed controls
+    # only the membership of each split; it does not seed any of these streams.
+    training_seed = int(config.get('training_seed', 42))
+    random.seed(training_seed)
+    np.random.seed(training_seed)
+    torch.manual_seed(training_seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(training_seed)
+    print(f"Training RNG seed: {training_seed}")
 
     # Normalize prior selection BEFORE any model is built. MeshGraphNets reads
     # `prior_type` in __init__ to decide whether to instantiate self.prior.
@@ -74,21 +90,27 @@ def single_worker(config, config_filename='config.txt'):
     pin_memory = bool(config.get('pin_memory', torch.cuda.is_available()))
     config['_pin_memory'] = pin_memory
     mp_context = 'spawn' if num_workers > 0 else None
+    train_generator = torch.Generator().manual_seed(training_seed)
+    val_generator = torch.Generator().manual_seed(training_seed + 1)
+    test_generator = torch.Generator().manual_seed(training_seed + 2)
     train_loader = DataLoader(
         train_dataset, batch_size=config['batch_size'], shuffle=True,
         num_workers=num_workers, pin_memory=pin_memory,
         persistent_workers=num_workers > 0,
         prefetch_factor=4 if num_workers > 0 else None,
-        multiprocessing_context=mp_context,
+        multiprocessing_context=mp_context, generator=train_generator,
     )
     val_loader = DataLoader(
         val_dataset, batch_size=config['batch_size'], shuffle=True,
         num_workers=num_workers, pin_memory=pin_memory,
         persistent_workers=num_workers > 0,
         prefetch_factor=2 if num_workers > 0 else None,
-        multiprocessing_context=mp_context,
+        multiprocessing_context=mp_context, generator=val_generator,
     )
-    test_loader = DataLoader(test_dataset, batch_size=1, shuffle=True, pin_memory=pin_memory)
+    test_loader = DataLoader(
+        test_dataset, batch_size=1, shuffle=True, pin_memory=pin_memory,
+        generator=test_generator,
+    )
 
     if torch.cuda.is_available():
         print(f'After dataloader creation: {torch.cuda.memory_allocated()/1e9:.2f}GB')
@@ -146,12 +168,36 @@ def single_worker(config, config_filename='config.txt'):
         # simulator frozen, latent standardization fitted, fresh cosine over
         # the prior alone. See training_loop.freeze_for_prior_fit.
         prior_freeze = int(config.get('prior_freeze_epoch', 0) or 0)
+        moment_calibration = int(config.get('prior_moment_calibration_epochs', 0) or 0)
+        moment_switch = prior_freeze + moment_calibration
         for epoch in range(total_epochs):
             if prior_freeze and epoch == prior_freeze:
                 optimizer, scheduler = freeze_for_prior_fit(
                     model, ema_model, train_loader, device, config,
                     remaining_epochs=total_epochs - epoch,
                 )
+                # The tail is the treatment. `modelname` holds one checkpoint
+                # chosen by best_by over the whole run, so a joint-phase CRPS no
+                # tail epoch beats would keep a joint model in it and the arm
+                # would evaluate a model the tail never touched. Keep that joint
+                # best beside it and restart the selection for the tail.
+                bank_joint_checkpoint(
+                    modelname, last_saved_epoch, best_valid_loss,
+                    str(config.get('best_by', 'recon')).lower().strip(),
+                )
+                best_valid_loss = float('inf')
+                last_saved_epoch = -1
+            if (prior_freeze and moment_calibration > 0
+                    and epoch == moment_switch):
+                optimizer, scheduler = freeze_moments_for_residual_fit(
+                    model, config, remaining_epochs=total_epochs - epoch,
+                )
+                bank_moment_checkpoint(
+                    modelname, last_saved_epoch, best_valid_loss,
+                    str(config.get('best_by', 'recon')).lower().strip(),
+                )
+                best_valid_loss = float('inf')
+                last_saved_epoch = -1
             if prior_freeze and epoch >= prior_freeze:
                 train_metrics = train_prior_epoch(
                     model, train_loader, optimizer, device, config, epoch, ema_model=ema_model,
@@ -216,9 +262,15 @@ def single_worker(config, config_filename='config.txt'):
                         and 'crps' in valid_learned_prior_metrics):
                     crps_str = f" | CRPS  {valid_learned_prior_metrics['crps']:.2e}"
                 val_str = f" | Valid  recon={valid_loss:.2e}" if do_val else ''
+                if moment_calibration > 0 and epoch < moment_switch:
+                    prior_stage = 'moments'
+                elif moment_calibration > 0:
+                    prior_stage = 'residual_fm'
+                else:
+                    prior_stage = 'fm'
                 print(
                     f"Epoch {epoch}/{total_epochs} LR: {current_lr:.2e} | "
-                    f"PRIOR-FIT  fm={train_metrics.get('prior_loss_mean', 0.0):.2e} "
+                    f"PRIOR-FIT  {prior_stage}={train_metrics.get('prior_loss_mean', 0.0):.2e} "
                     f"(simulator frozen)"
                     f"{val_str}{crps_str}{vram_str}"
                 )

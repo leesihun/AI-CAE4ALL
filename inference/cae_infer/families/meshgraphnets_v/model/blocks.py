@@ -130,3 +130,73 @@ class UnpoolBlock(nn.Module):
 
         h_up = self.node_mlp(torch.cat([h_fine_skip, agg], dim=-1))
         return h_up
+
+
+class AdaLNZero(nn.Module):
+    """AdaLN-Zero conditioning of one GnBlock on the global latent z.
+
+    Replaces the concat-fuser `Linear([x, z])`, which had two defects:
+      (a) z is broadcast identically to every node of a graph, so
+          `Linear([x, z]) = W_x x + W_z z + b` could only add ONE constant
+          vector per graph -- no scaling, no gating, no spatial selection.
+      (b) it is a bare, non-residual, un-normalized Linear inserted between all
+          ~28 processor blocks. Under the repo's kaiming_uniform(relu) init its
+          x-half has gain ~1.33, which compounds to ~10^3 by the decoder and
+          drowns the V-cycle's unpool branch (LayerNorm'd to unit scale) under
+          the inflated skip branch -- i.e. the multiscale global information is
+          attenuated by exactly the mechanism meant to inject z.
+
+    Here z instead emits (shift, scale, gate) and modulates the block
+    (Peebles & Xie, DiT 2023):
+
+        x_mod = (1 + scale) * x + shift
+        x_out = x + gate * (Block(x_mod) - x_mod)
+
+    The final Linear is zero-initialized with bias (0, 0, 1), so at init
+    scale=0, shift=0, gate=1 and this is EXACTLY the unconditioned block: the
+    residual highway is preserved bit-for-bit and conditioning can only be
+    learned in, never destroy it. `scale`/`gate` are multiplicative, giving z
+    the gating power a pure additive offset never had.
+
+    It is also cheaper than what it replaces: Linear(z_dim -> 3*D) is
+    3*z_dim*D MACs per node vs the fuser's (D + z_dim)*D -- 0.61 vs 1.84
+    GFLOP/block at D=128, z_dim=16, N=100k.
+    """
+
+    def __init__(self, latent_dim, z_dim):
+        super().__init__()
+        self.latent_dim = int(latent_dim)
+        self.net = nn.Sequential(nn.SiLU(), nn.Linear(int(z_dim), 3 * self.latent_dim))
+        self.reset_identity()
+
+    def reset_identity(self):
+        """(Re-)initialize to the identity map.
+
+        Must run AFTER any global `apply(init_weights)`, which would otherwise
+        kaiming-fill these and reintroduce the very gain problem being fixed.
+        """
+        linear = self.net[1]
+        nn.init.zeros_(linear.weight)
+        with torch.no_grad():
+            linear.bias.zero_()
+            linear.bias[2 * self.latent_dim:].fill_(1.0)   # gate = 1
+
+    def forward(self, z_per_node):
+        """[N, z_dim] -> (shift, scale, gate), each [N, latent_dim]."""
+        return self.net(z_per_node).chunk(3, dim=-1)
+
+
+def apply_adaln(block, graph, modulation, z_per_node):
+    """Run `block` on `graph` with AdaLN-Zero modulation from `z_per_node`.
+
+    `graph.x` is overwritten with the modulated features (the block consumes
+    them and returns a fresh Data), then the block's own update is re-attached
+    to the UNMODULATED input through the gate.
+    """
+    shift, scale, gate = modulation(z_per_node)
+    x_in = graph.x
+    x_mod = x_in * (1.0 + scale) + shift
+    graph.x = x_mod
+    out = block(graph)
+    out.x = x_in + gate * (out.x - x_mod)
+    return out

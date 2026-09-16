@@ -97,6 +97,110 @@ def ensemble_table(truth, post_mu, post_z, prior):
     return out
 
 
+def _ecdf(values):
+    """Coordinates for an empirical CDF."""
+    x = np.sort(np.asarray(values, dtype=np.float64))
+    if x.size == 0:
+        return x, x
+    return x, np.arange(1, x.size + 1, dtype=np.float64) / x.size
+
+
+def write_distribution_figure(path, tag, truth, post_mu, post_z, prior, ens, lines):
+    """Write the immediately readable GT -> posterior -> prior comparison.
+
+    PNG is embedded in the sweep report. PDF and SVG carry the same figure for
+    paper use. The plot contains only the physical peak-to-valley statistic;
+    the JSON beside it retains the full latent diagnostics.
+    """
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+
+    colors = {
+        'truth': '#20252B',
+        'posterior_mean': '#6E7781',
+        'posterior_sample': '#2878B5',
+        'prior': '#D65F32',
+    }
+    labels = {
+        'truth': 'GT realizations',
+        'posterior_mean': 'Posterior mean decode',
+        'posterior_sample': 'Posterior sample decode',
+        'prior': 'FM prior decode',
+    }
+    raw_arrays = {
+        'truth': np.asarray(truth, dtype=np.float64),
+        'posterior_mean': np.asarray(post_mu, dtype=np.float64),
+        'posterior_sample': np.asarray(post_z, dtype=np.float64),
+        'prior': np.asarray(prior, dtype=np.float64),
+    }
+    arrays = {name: values[np.isfinite(values)]
+              for name, values in raw_arrays.items()}
+    empty = [name for name, values in arrays.items() if values.size == 0]
+    if empty:
+        raise ValueError(f'no finite spread values for: {", ".join(empty)}')
+    pooled = np.concatenate(list(arrays.values()))
+    if pooled.size < 2:
+        raise ValueError('not enough finite spread values to plot')
+    qlo, qhi = float(pooled.min()), float(pooled.max())
+    if not np.isfinite(qlo) or not np.isfinite(qhi):
+        qlo, qhi = -1.0, 1.0
+    if qhi <= qlo:
+        qhi = qlo + 1.0
+    iqr = np.subtract(*np.quantile(pooled, [0.75, 0.25]))
+    width = 2.0 * iqr / np.cbrt(max(pooled.size, 1)) if iqr > 0 else 0.0
+    nbin = int(np.clip(np.ceil((qhi - qlo) / width), 16, 60)) if width > 0 else 24
+    bins = np.linspace(qlo, qhi, nbin + 1)
+
+    fig, axes = plt.subplots(1, 3, figsize=(14.2, 4.3),
+                             gridspec_kw={'width_ratios': [1.5, 1.25, 1.0]})
+    order = ('truth', 'posterior_sample', 'prior', 'posterior_mean')
+    styles = {'truth': '-', 'posterior_sample': '-', 'prior': '-',
+              'posterior_mean': '--'}
+    for name in order:
+        axes[0].hist(arrays[name], bins=bins, density=True, histtype='step',
+                     linewidth=2.0 if name != 'posterior_mean' else 1.4,
+                     linestyle=styles[name], color=colors[name], label=labels[name])
+        x, y = _ecdf(arrays[name])
+        axes[1].step(x, y, where='post', linewidth=2.0 if name != 'posterior_mean' else 1.4,
+                     linestyle=styles[name], color=colors[name], label=labels[name])
+    axes[0].set(title='Distribution', xlabel='z-displacement peak-to-valley\n(dataset physical units)',
+                ylabel='Density', xlim=(qlo, qhi))
+    axes[1].set(title='Empirical CDF', xlabel='z-displacement peak-to-valley\n(dataset physical units)',
+                ylabel='Cumulative probability', ylim=(0, 1.01), xlim=(qlo, qhi))
+    axes[0].legend(frameon=False, fontsize=8.5)
+
+    names = ('posterior_mean', 'posterior_sample', 'prior')
+    y = np.arange(len(names))
+    ratios = [ens[n]['sd_ratio'] for n in names]
+    plot_ratios = [ratio if np.isfinite(ratio) else 0.0 for ratio in ratios]
+    bars = axes[2].barh(y, plot_ratios, color=[colors[n] for n in names], alpha=.9)
+    axes[2].axvline(1.0, color=colors['truth'], linestyle='--', linewidth=1.5)
+    axes[2].set(yticks=y, yticklabels=['Posterior mean', 'Posterior sample', 'FM prior'],
+                xlabel='SD / GT SD', title='Conditional spread',
+                xlim=(0, max(1.15, max(plot_ratios) * 1.2)))
+    axes[2].invert_yaxis()
+    for bar, ratio, name in zip(bars, ratios, names):
+        bias = ens[name]['dmean_over_sd']
+        axes[2].text(bar.get_width() + .02, bar.get_y() + bar.get_height()/2,
+                     f'{ratio:.2f}  (bias {bias:+.2f})', va='center', fontsize=8.5)
+
+    fig.suptitle(f'GT → posterior decode → FM prior decode: {tag}', fontsize=14, weight='bold')
+    if lines:
+        verdict_text = lines[0].split(':', 1)[0]
+        fig.text(.01, .005, f'Automatic reading: {verdict_text}. Full thresholds and latent PCA are in JSON.',
+                 color='#586575', fontsize=8.5)
+    fig.tight_layout(rect=(0, .04, 1, .94))
+    base, _ = os.path.splitext(path)
+    written = {}
+    for ext in ('png', 'pdf', 'svg'):
+        out = base + '.' + ext
+        fig.savefig(out, dpi=220, bbox_inches='tight', facecolor='white')
+        written[ext] = os.path.abspath(out)
+    plt.close(fig)
+    return written
+
+
 def latent_table(post_mu, prior_z, top_k=4):
     """Compare the posterior means of one part against the prior's draws for it.
 
@@ -286,21 +390,46 @@ def main():
         sids = list(f['data'].keys())
         ys, truth = [], []
         ref_xyz = None
+        cond_start = 3 + int(c2.get('input_var', 0))
+        cond_stop = cond_start + int(c2.get('cond_var', 0) or 0)
         with h5py.File(cfg['infer_dataset'], 'r') as fi:
             i0 = list(fi['data'].keys())[0]
-            ref_xyz = fi[f'data/{i0}/nodal_data'][0:3, -1, :]
+            ref_group = fi[f'data/{i0}']
+            ref_nd = ref_group['nodal_data']
+            ref_xyz = ref_nd[0:3, 0, :]
+            ref_cond = ref_nd[cond_start:cond_stop, 0, :]
+            ref_edge = ref_group['mesh_edge'][:]
+            ref_node_type = ref_nd[-1, 0, :] if c2.get('use_node_types', False) else None
         for sid in sids:
-            nd = f[f'data/{sid}/nodal_data']
+            group = f[f'data/{sid}']
+            nd = group['nodal_data']
             if nd.shape[2] != N:
                 raise SystemExit(f"realization {sid} has {nd.shape[2]} nodes, geometry has {N}: "
                                  f"the compare file is not this part")
-            xyz = nd[0:3, -1, :]
+            if nd.shape[0] < cond_stop:
+                raise SystemExit(f"realization {sid} has {nd.shape[0]} feature rows but "
+                                 f"conditioning requires rows through {cond_stop - 1}")
+            xyz = nd[0:3, 0, :]
             if not np.allclose(xyz, ref_xyz, atol=1e-6):
                 raise SystemExit(f"realization {sid}: node coordinates differ from the infer "
                                  f"geometry -- node ordering does not match, encoder input "
                                  f"would be scrambled")
-            ys.append(nd[3:3 + int(c2['output_var']), -1, :].T.astype(np.float32))
-            truth.append(_spread_max_minus_min(nd[Z_DISP_CHANNEL, -1, :]))
+            if not np.array_equal(group['mesh_edge'][:], ref_edge):
+                raise SystemExit(f"realization {sid}: mesh topology differs from the infer "
+                                 f"graph -- this is not the same graph condition")
+            if cond_stop > cond_start:
+                cond = nd[cond_start:cond_stop, 0, :]
+                if not np.allclose(cond, ref_cond, rtol=1e-6, atol=1e-7, equal_nan=True):
+                    raise SystemExit(f"realization {sid}: conditioning rows {cond_start}:"
+                                     f"{cond_stop} differ from the infer graph (for example "
+                                     f"thickness or recorded B.C.)")
+            if ref_node_type is not None:
+                node_type = nd[-1, 0, :]
+                if not np.array_equal(node_type, ref_node_type):
+                    raise SystemExit(f"realization {sid}: node/B.C. types differ from the "
+                                     f"infer graph")
+            ys.append(nd[3:3 + int(c2['output_var']), 0, :].T.astype(np.float32))
+            truth.append(_spread_max_minus_min(nd[Z_DISP_CHANNEL, 0, :]))
     R = len(ys)
     print(f"  geometry: {N} nodes;  realizations: {R};  prior draws: {a.n_prior}")
 
@@ -380,16 +509,27 @@ def main():
     out_dir = a.out or os.path.join(os.path.dirname(cfg.get('inference_output_dir', '.')), 'diag')
     os.makedirs(out_dir, exist_ok=True)
     out = os.path.join(out_dir, f'posterior_vs_prior_{tag}.json')
+    figure = write_distribution_figure(
+        os.path.join(out_dir, f'posterior_vs_prior_{tag}.png'),
+        tag, truth, sp_mu, sp_z, sp_prior, ens, lines,
+    )
     with open(out, 'w', encoding='utf-8') as fh:
         json.dump({'config': a.config, 'geometry_nodes': N, 'realizations': R,
-                   'n_prior': a.n_prior, 'ensembles': ens, 'latent': lat,
-                   'verdict': lines,
-                   'spreads': {'truth': list(map(float, truth)),
-                               'posterior_mean': list(map(float, sp_mu)),
-                               'posterior_sample': list(map(float, sp_z)),
-                               'prior': list(map(float, sp_prior))}},
-                  fh, indent=2)
+                    'same_condition_checks': {
+                        'coordinates': True,
+                        'mesh_topology': True,
+                        'conditioning_rows': [cond_start, cond_stop],
+                        'node_bc_types': bool(ref_node_type is not None),
+                    },
+                    'n_prior': a.n_prior, 'ensembles': ens, 'latent': lat,
+                    'verdict': lines, 'figure': figure,
+                    'spreads': {'truth': list(map(float, truth)),
+                                'posterior_mean': list(map(float, sp_mu)),
+                                'posterior_sample': list(map(float, sp_z)),
+                                'prior': list(map(float, sp_prior))}},
+                   fh, indent=2)
     print(f"\n  wrote {out}")
+    print(f"  figure {figure['png']}  (+ PDF/SVG)")
     return 0
 
 

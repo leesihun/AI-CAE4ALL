@@ -64,13 +64,15 @@ class _SampleContext:
     risk transcription drift from the live graph-construction logic.
     """
 
-    def __init__(self, config, checkpoint_norm, ref_pos, edge_index, part_ids, device,
+    def __init__(self, config, checkpoint_norm, ref_pos, edge_index, part_ids,
+                 conditions, device,
                  world_max_num_neighbors=64, world_edge_backend="scipy_kdtree",
                  coarse_world_edges=False):
         self.device = device
         self.ref_pos = ref_pos
         self.edge_index = edge_index
         self.num_nodes = ref_pos.shape[0]
+        self.conditions = conditions
 
         norm = checkpoint_norm
         self.node_mean, self.node_std = norm["node_mean"], norm["node_std"]
@@ -147,10 +149,12 @@ class _SampleContext:
 
     def build_step_graph(self, current_state):
         device = self.device
+        blocks = [current_state]
+        if self.conditions is not None:
+            blocks.append(self.conditions)
         if self.pos_features is not None:
-            x_raw = np.concatenate([current_state, self.pos_features], axis=1)
-        else:
-            x_raw = current_state
+            blocks.append(self.pos_features)
+        x_raw = np.concatenate(blocks, axis=1) if len(blocks) > 1 else current_state
         x_norm = (x_raw - self.node_mean) / self.node_std
         if self.node_type_onehot is not None:
             x_norm = np.concatenate([x_norm, self.node_type_onehot], axis=1)
@@ -294,7 +298,8 @@ def run(checkpoint: str, input: str, output: str, device: torch.device,
         if conditional_prior is not None:
             if getattr(conditional_prior, "family", "gmm") == "fm":
                 sampler_desc = (f"conditional flow-matching prior "
-                                 f"({conditional_prior.num_steps} Euler steps, temp={prior_temperature:g})")
+                                 f"({conditional_prior.num_steps} "
+                                 f"{conditional_prior.solver} steps, temp={prior_temperature:g})")
             else:
                 sampler_desc = (f"conditional mixture prior "
                                  f"({conditional_prior.num_components} components, temp={prior_temperature:g})")
@@ -305,6 +310,7 @@ def run(checkpoint: str, input: str, output: str, device: torch.device,
 
     input_dim = config.get("input_var")
     output_dim = config.get("output_var")
+    cond_dim = int(config.get("cond_var", 0) or 0)
 
     with h5py.File(input, "r") as f:
         sample_ids = sorted(int(k) for k in f["data"].keys())
@@ -334,13 +340,24 @@ def run(checkpoint: str, input: str, output: str, device: torch.device,
                 )
 
         ref_pos = nodal_data[:3, 0, :].T
-        initial_state = nodal_data[3:3 + input_dim, 0, :].T
+        if int(config.get("num_timesteps", 1) or 1) == 1:
+            initial_state = np.zeros((num_nodes, input_dim), dtype=np.float32)
+        else:
+            initial_state = nodal_data[3:3 + input_dim, 0, :].T
+        cond_start = 3 + input_dim
+        cond_stop = cond_start + cond_dim
+        if num_features < cond_stop:
+            raise ValueError(
+                f"sample {sample_id} has {num_features} feature rows but "
+                f"cond_var={cond_dim} requires rows through {cond_stop - 1}")
+        conditions = (nodal_data[cond_start:cond_stop, 0, :].T
+                      if cond_dim else None)
         part_ids = (nodal_data[-1, 0, :].astype(np.int32)
                     if config.get("use_node_types") and num_features > 7 else None)
         edge_index = np.concatenate([mesh_edge, mesh_edge[[1, 0], :]], axis=1)
 
         ctx = _SampleContext(
-            config, norm, ref_pos, edge_index, part_ids, device,
+            config, norm, ref_pos, edge_index, part_ids, conditions, device,
             world_max_num_neighbors=world_max_num_neighbors,
             world_edge_backend=world_edge_backend,
             coarse_world_edges=coarse_world_edges,

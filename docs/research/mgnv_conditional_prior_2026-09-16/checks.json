@@ -1,0 +1,29 @@
+{
+  "kind": "Mathematical and source-isolated checks, not empirical model results",
+  "joint_distribution": {
+    "joint_correlation": 0.9890037305444085,
+    "independent_correlation": 0.046777257116115536,
+    "marginals_identical": true,
+    "derived_std_joint": 0.29842230983777573,
+    "derived_std_independent": 2.7756885924025654
+  },
+  "variance_comparison": {
+    "conditional_variance": 0.25,
+    "between_condition_variance": 4.0,
+    "correct_prior_misleading_ratio": 0.24253562503633297,
+    "conditional_ratio": 1.0
+  },
+  "sampler_compatibility": {
+    "scope": "Actual FM class bodies, minimal stub conditioner; no real checkpoint or mesh",
+    "strict_load_native_to_package": "passed",
+    "native_default_solver": "heun",
+    "packaged_solver": "heun",
+    "posterior_sample_moment_standardization": "passed"
+  },
+  "population_crps": {
+    "true_distribution": 0.5,
+    "collapsed_at_mean": 1.0,
+    "conclusion": "One observed y per condition does not make CRPS improper in expectation"
+  },
+  "frozen_decoder_input_gradient": "passed"
+}

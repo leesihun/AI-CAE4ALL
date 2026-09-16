@@ -25,7 +25,14 @@ class _ConditionalPriorBase(nn.Module):
         super().__init__()
         self.config = dict(config)
         self.z_dim = int(config.get('vae_latent_dim', 32))
-        self.hidden_dim = int(config.get('prior_hidden_dim', config.get('latent_dim', 128)))
+        # Keep prior_hidden_dim as the backwards-compatible default, but allow
+        # the graph conditioner and density head to be sized independently.
+        # The old sweep changed both together, so a wider "prior" could not say
+        # whether graph encoding or the velocity field had improved.
+        self.hidden_dim = int(config.get(
+            'prior_condition_hidden_dim',
+            config.get('prior_hidden_dim', config.get('latent_dim', 128)),
+        ))
         self.num_mp_layers = int(config.get('prior_mp_layers', 3))
         # Per-level z slots (matches MeshGraphNets.num_z). Default 1 for back-compat.
         if config.get('use_multiscale', False):
@@ -62,6 +69,53 @@ class _ConditionalPriorBase(nn.Module):
         for block in self.mp_layers:
             g = block(g)
         return self.pool(g.x, batch)
+
+
+class _FiLMResidualBlock(nn.Module):
+    """Pre-norm residual block modulated by time and graph condition."""
+
+    def __init__(self, hidden_dim, context_dim):
+        super().__init__()
+        self.norm = nn.LayerNorm(hidden_dim, elementwise_affine=False)
+        self.film = nn.Linear(context_dim, 2 * hidden_dim)
+        self.net = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.SiLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+        )
+
+    def forward(self, x, context):
+        scale, shift = self.film(context).chunk(2, dim=-1)
+        # Bounding the scale prevents an early, untrained conditioner from
+        # amplifying the residual stream by orders of magnitude.
+        h = self.norm(x) * (1.0 + 0.1 * torch.tanh(scale)) + shift
+        return (x + self.net(h)) / math.sqrt(2.0)
+
+
+class _ResidualFiLMVelocity(nn.Module):
+    """Higher-capacity FM velocity with explicit time/condition modulation."""
+
+    def __init__(self, flat_dim, condition_dim, time_dim, hidden_dim, num_blocks):
+        super().__init__()
+        self.z_in = nn.Linear(flat_dim, hidden_dim)
+        self.context = nn.Sequential(
+            nn.Linear(condition_dim + time_dim, hidden_dim),
+            nn.SiLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+        )
+        self.blocks = nn.ModuleList([
+            _FiLMResidualBlock(hidden_dim, hidden_dim)
+            for _ in range(num_blocks)
+        ])
+        self.out_norm = nn.LayerNorm(hidden_dim)
+        self.out = nn.Linear(hidden_dim, flat_dim)
+
+    def forward(self, z_t, time_embedding, condition):
+        context = self.context(torch.cat([time_embedding, condition], dim=-1))
+        h = self.z_in(z_t)
+        for block in self.blocks:
+            h = block(h, context)
+        return self.out(torch.nn.functional.silu(self.out_norm(h)))
 
 
 class ConditionalMixturePrior(_ConditionalPriorBase):
@@ -156,16 +210,55 @@ class ConditionalFMPrior(_ConditionalPriorBase):
             raise ValueError(
                 f"prior_fm_solver must be 'heun' or 'euler', got '{self.solver}'")
         self.flat_dim = self.num_z * self.z_dim
+        self.velocity_hidden_dim = int(config.get(
+            'prior_velocity_hidden_dim',
+            config.get('prior_hidden_dim', self.hidden_dim),
+        ))
+        self.velocity_arch = str(config.get('prior_fm_velocity_arch', 'mlp')).lower().strip()
+        if self.velocity_arch not in ('mlp', 'residual_film'):
+            raise ValueError(
+                "prior_fm_velocity_arch must be 'mlp' or 'residual_film', "
+                f"got '{self.velocity_arch}'")
+        self.velocity_blocks = int(config.get('prior_fm_blocks', 4))
+        if self.velocity_blocks < 1:
+            raise ValueError('prior_fm_blocks must be >= 1')
         # Fourier features of t: [sin(2^k π t), cos(2^k π t)], k = 0..15.
         freqs = (2.0 ** torch.arange(16, dtype=torch.float32)) * math.pi
         self.register_buffer('t_freqs', freqs, persistent=False)
         t_emb_dim = 2 * freqs.numel()
-        self.velocity_net = build_mlp(
-            self.flat_dim + t_emb_dim + self.hidden_dim,
-            self.hidden_dim,
-            self.flat_dim,
-            layer_norm=False,
-        )
+        if self.velocity_arch == 'mlp':
+            # Exact legacy module layout when the new options are absent.
+            self.velocity_net = build_mlp(
+                self.flat_dim + t_emb_dim + self.hidden_dim,
+                self.velocity_hidden_dim,
+                self.flat_dim,
+                layer_norm=False,
+            )
+        else:
+            self.velocity_net = _ResidualFiLMVelocity(
+                self.flat_dim, self.hidden_dim, t_emb_dim,
+                self.velocity_hidden_dim, self.velocity_blocks,
+            )
+
+        # Optional condition-dependent affine base. It handles conditional
+        # location and diagonal scale; FM transports the remaining joint,
+        # non-Gaussian residual across every latent slot at once.
+        self.use_conditional_moments = bool(config.get('prior_fm_moments', False))
+        self.moment_loss_weight = float(config.get('prior_fm_moment_weight', 1.0))
+        self.moment_min_scale = float(config.get('prior_fm_moment_min_scale', 0.03))
+        self.moment_max_scale = float(config.get('prior_fm_moment_max_scale', 20.0))
+        if not 0.0 < self.moment_min_scale <= self.moment_max_scale:
+            raise ValueError('prior_fm_moment scales must satisfy 0 < min <= max')
+        if self.moment_loss_weight < 0.0:
+            raise ValueError('prior_fm_moment_weight must be >= 0')
+        if self.use_conditional_moments:
+            moment_hidden = int(config.get('prior_fm_moment_hidden_dim', self.hidden_dim))
+            self.moment_head = build_mlp(
+                self.hidden_dim, moment_hidden, 2 * self.flat_dim,
+                layer_norm=False,
+            )
+        else:
+            self.moment_head = None
         # Latent standardization. The FM path runs on (z - shift)/scale and
         # integration output is mapped back, so the velocity net always works
         # in a unit-scale space while callers keep decoder units. Identity by
@@ -178,6 +271,11 @@ class ConditionalFMPrior(_ConditionalPriorBase):
         self.register_buffer('z_shift', torch.zeros(self.flat_dim))
         self.register_buffer('z_scale', torch.ones(self.flat_dim))
         self.apply(init_weights)
+        if self.moment_head is not None:
+            # Start from mu(c)=0, scale(c)=1 so the initial flow-space contract
+            # matches the baseline arm exactly.
+            nn.init.zeros_(self.moment_head[4].weight)
+            nn.init.zeros_(self.moment_head[4].bias)
 
     @torch.no_grad()
     def fit_standardization(self, mu, logvar, eps=1e-6):
@@ -206,9 +304,32 @@ class ConditionalFMPrior(_ConditionalPriorBase):
 
     def velocity(self, z_t, t, cond):
         """v_θ(z_t, t, c): [B, flat_dim] × [B, 1] × [B, hidden] → [B, flat_dim]."""
-        return self.velocity_net(torch.cat([z_t, self._t_embed(t), cond], dim=-1))
+        t_emb = self._t_embed(t)
+        if self.velocity_arch == 'mlp':
+            return self.velocity_net(torch.cat([z_t, t_emb, cond], dim=-1))
+        return self.velocity_net(z_t, t_emb, cond)
 
-    def fm_loss(self, cond, target_z):
+    def moment_parameters(self, cond):
+        """Return condition-dependent diagonal base mean and scale."""
+        if self.moment_head is None:
+            shape = (cond.shape[0], self.flat_dim)
+            return cond.new_zeros(shape), cond.new_ones(shape)
+        mean, raw_log_scale = self.moment_head(cond).chunk(2, dim=-1)
+        log_scale = raw_log_scale.clamp(
+            min=math.log(self.moment_min_scale),
+            max=math.log(self.moment_max_scale),
+        )
+        return mean, log_scale.exp()
+
+    def _flow_to_standardized_z(self, flow_z, cond):
+        """Map residual-flow coordinates to globally standardized decoder z."""
+        if self.moment_head is None:
+            return flow_z
+        mean, scale = self.moment_parameters(cond)
+        return mean + scale * flow_z
+
+    def fm_loss(self, cond, target_z, target_mu=None, target_logvar=None,
+                objective='all'):
         """Conditional flow-matching MSE on a detached posterior sample.
 
         Path: z_t = (1 − (1−σ_min)·t)·z0 + t·z1,  target v* = z1 − (1−σ_min)·z0.
@@ -223,17 +344,50 @@ class ConditionalFMPrior(_ConditionalPriorBase):
             target_z: [B, num_z, D] fresh detached posterior sample.
         Returns scalar loss (fp32).
         """
+        if objective not in ('all', 'moment', 'flow'):
+            raise ValueError("FM objective must be 'all', 'moment' or 'flow'")
+        if objective == 'moment' and self.moment_head is None:
+            raise ValueError('moment-only FM objective requires prior_fm_moments=True')
         with _autocast_disabled_for(cond):
             z1 = target_z.reshape(target_z.shape[0], -1).float()
             z1 = (z1 - self.z_shift) / self.z_scale
             c = cond.float()
+            moment_loss = z1.new_zeros(())
+            if self.moment_head is not None:
+                moment_mean, moment_scale = self.moment_parameters(c)
+                # The moment head has its own proper likelihood objective. Do
+                # not let the residual FM redefine its coordinate system.
+                residual_target = (
+                    (z1 - moment_mean.detach()) / moment_scale.detach()
+                )
+                if objective != 'flow' and target_mu is not None and target_logvar is not None:
+                    q_mean = target_mu.reshape(target_mu.shape[0], -1).float()
+                    q_var = target_logvar.reshape(target_logvar.shape[0], -1).float().exp()
+                    q_mean = (q_mean - self.z_shift) / self.z_scale
+                    q_var = q_var / self.z_scale.square()
+                    second_moment = q_var + (q_mean - moment_mean).square()
+                    moment_loss = 0.5 * (
+                        second_moment / moment_scale.square()
+                        + 2.0 * moment_scale.log()
+                    ).mean()
+                elif objective != 'flow':
+                    moment_loss = 0.5 * (
+                        (z1 - moment_mean).square() / moment_scale.square()
+                        + 2.0 * moment_scale.log()
+                    ).mean()
+                z1 = residual_target
+            if objective == 'moment':
+                return self.moment_loss_weight * moment_loss
             z0 = torch.randn_like(z1)
             t = torch.rand(z1.shape[0], 1, device=z1.device)
             s = 1.0 - self.sigma_min
             z_t = (1.0 - s * t) * z0 + t * z1
             target_v = z1 - s * z0
             pred_v = self.velocity(z_t, t, c)
-            return torch.nn.functional.mse_loss(pred_v, target_v)
+            flow_loss = torch.nn.functional.mse_loss(pred_v, target_v)
+            if objective == 'flow':
+                return flow_loss
+            return flow_loss + self.moment_loss_weight * moment_loss
 
     def _integrate(self, z, c, steps):
         """Transport z ~ N(0,I) along v_theta from t=0 to t=1.
@@ -276,6 +430,7 @@ class ConditionalFMPrior(_ConditionalPriorBase):
         c = cond.float().repeat_interleave(n, dim=0)
         z = torch.randn(c.shape[0], self.flat_dim, device=c.device)
         z = self._integrate(z, c, steps)
+        z = self._flow_to_standardized_z(z, c)
         z = z * self.z_scale + self.z_shift
         return z.view(cond.shape[0], n, self.num_z, self.z_dim).to(cond.dtype)
 
@@ -309,8 +464,10 @@ class ConditionalFMPrior(_ConditionalPriorBase):
             z = torch.randn(bn, self.flat_dim, device=c.device)
             z = z * math.sqrt(max(float(temperature), 1e-6))
             z = self._integrate(z, c, self.num_steps)
+            z = self._flow_to_standardized_z(z, c)
             if inflation != 1.0:
                 center = self._integrate(torch.zeros_like(z), c, self.num_steps)
+                center = self._flow_to_standardized_z(center, c)
                 z = center + inflation * (z - center)
             z = z * self.z_scale + self.z_shift
         B = cond.shape[0]
@@ -512,10 +669,31 @@ def build_prior_config(config):
         'num_z': int(config.get('num_z', default_num_z)),
         'prior_family': str(config.get('prior_family', 'fm')).lower().strip(),
         'prior_hidden_dim': config.get('prior_hidden_dim', config.get('latent_dim')),
+        'prior_condition_hidden_dim': config.get(
+            'prior_condition_hidden_dim',
+            config.get('prior_hidden_dim', config.get('latent_dim')),
+        ),
         'prior_mp_layers': config.get('prior_mp_layers', 10),
         # fm family only:
         'prior_fm_steps': config.get('prior_fm_steps', 20),
         'prior_fm_solver': config.get('prior_fm_solver', 'heun'),
+        'prior_velocity_hidden_dim': config.get(
+            'prior_velocity_hidden_dim',
+            config.get('prior_hidden_dim', config.get('latent_dim')),
+        ),
+        'prior_fm_velocity_arch': str(
+            config.get('prior_fm_velocity_arch', 'mlp')
+        ).lower().strip(),
+        'prior_fm_blocks': config.get('prior_fm_blocks', 4),
+        'prior_fm_moments': config.get('prior_fm_moments', False),
+        'prior_fm_moment_hidden_dim': config.get(
+            'prior_fm_moment_hidden_dim',
+            config.get('prior_condition_hidden_dim',
+                       config.get('prior_hidden_dim', config.get('latent_dim'))),
+        ),
+        'prior_fm_moment_weight': config.get('prior_fm_moment_weight', 1.0),
+        'prior_fm_moment_min_scale': config.get('prior_fm_moment_min_scale', 0.03),
+        'prior_fm_moment_max_scale': config.get('prior_fm_moment_max_scale', 20.0),
         # gmm family only:
         'prior_mixture_components': config.get('prior_mixture_components', 50),
         'prior_min_std': config.get('prior_min_std', 0.1),

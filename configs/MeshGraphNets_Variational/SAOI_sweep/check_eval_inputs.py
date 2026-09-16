@@ -199,6 +199,66 @@ def degenerate_count(rep):
     return n, flat
 
 
+def same_condition_problems(infer_path, eval_path, cfg):
+    """Verify every eval realization uses the exact inference condition."""
+    try:
+        import h5py
+        import numpy as np
+    except ImportError:
+        return ["h5py/numpy unavailable for the same-condition check"]
+
+    input_dim = int(cfg.get("input_var", 0))
+    cond_dim = int(cfg.get("cond_var", 0))
+    cond_start = 3 + input_dim
+    cond_stop = cond_start + cond_dim
+    use_node_types = str(cfg.get("use_node_types", "false")).lower() == "true"
+    problems = []
+    try:
+        with h5py.File(infer_path, "r") as fi, h5py.File(eval_path, "r") as fe:
+            infer_ids = list(fi[DATA_GROUP].keys())
+            if not infer_ids:
+                return ["infer_dataset has no graph under /data"]
+            ref_group = fi[f"{DATA_GROUP}/{infer_ids[0]}"]
+            ref_nd = ref_group[NODAL]
+            if ref_nd.shape[0] < cond_stop:
+                return [f"infer_dataset has {ref_nd.shape[0]} rows but cond_var={cond_dim} "
+                        f"requires rows through {cond_stop - 1}"]
+            ref_xyz = ref_nd[0:3, 0, :]
+            ref_cond = ref_nd[cond_start:cond_stop, 0, :]
+            ref_edge = ref_group["mesh_edge"][:]
+            ref_types = ref_nd[-1, 0, :] if use_node_types else None
+
+            for sid in fe[DATA_GROUP].keys():
+                group = fe[f"{DATA_GROUP}/{sid}"]
+                nd = group[NODAL]
+                prefix = f"eval realization {sid}"
+                if nd.shape[2] != ref_nd.shape[2]:
+                    problems.append(f"{prefix}: node count {nd.shape[2]} != {ref_nd.shape[2]}")
+                    continue
+                if nd.shape[0] < cond_stop:
+                    problems.append(f"{prefix}: only {nd.shape[0]} feature rows; need {cond_stop}")
+                    continue
+                if not np.allclose(nd[0:3, 0, :], ref_xyz, rtol=0.0, atol=1e-6,
+                                   equal_nan=True):
+                    problems.append(f"{prefix}: node coordinates/order differ")
+                if not np.array_equal(group["mesh_edge"][:], ref_edge):
+                    problems.append(f"{prefix}: mesh topology/order differs")
+                if cond_dim and not np.allclose(
+                        nd[cond_start:cond_stop, 0, :], ref_cond,
+                        rtol=1e-6, atol=1e-7, equal_nan=True):
+                    problems.append(
+                        f"{prefix}: conditioning rows {cond_start}:{cond_stop} differ "
+                        f"(thickness or recorded condition/B.C.)")
+                if ref_types is not None and not np.array_equal(nd[-1, 0, :], ref_types):
+                    problems.append(f"{prefix}: configured node/B.C. types differ")
+                if len(problems) >= 12:
+                    problems.append("additional mismatches omitted")
+                    break
+    except Exception as exc:
+        problems.append(f"same-condition read failed: {type(exc).__name__}: {exc}")
+    return problems
+
+
 # ---------------------------------------------------------------------------
 # rendering
 # ---------------------------------------------------------------------------
@@ -319,6 +379,7 @@ def main():
     print(f"  method repo = {METHOD_REPO}")
 
     cache = {}                       # resolved path -> h5_report, read once
+    condition_cache = {}             # repeated arms share identical eval pairs
 
     def report_for(path):
         if path not in cache:
@@ -380,6 +441,18 @@ def main():
                     problems.append(
                         f"eval_dataset row {Z_DISP_CHANNEL} is flat in "
                         f"{flat}/{n} sampled entries")
+
+            if (p_infer["exists"] and p_eval["exists"]
+                    and not p_infer["error"] and not p_eval["error"]):
+                condition_sig = (
+                    p_infer["path"], p_eval["path"], cfg.get("input_var"),
+                    cfg.get("cond_var"), cfg.get("use_node_types"),
+                )
+                if condition_sig not in condition_cache:
+                    condition_cache[condition_sig] = same_condition_problems(
+                        p_infer["path"], p_eval["path"], cfg,
+                    )
+                problems.extend(condition_cache[condition_sig])
 
         if problems:
             bad += 1

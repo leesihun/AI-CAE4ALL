@@ -233,9 +233,31 @@ def build_model_config(config) -> dict:
         # and load_state_dict fails.
         'prior_family':             str(config.get('prior_family', 'fm')).lower().strip(),
         'prior_hidden_dim':         config.get('prior_hidden_dim', config.get('latent_dim')),
+        'prior_condition_hidden_dim': config.get(
+            'prior_condition_hidden_dim',
+            config.get('prior_hidden_dim', config.get('latent_dim')),
+        ),
         'prior_mp_layers':          config.get('prior_mp_layers', 10),
         # fm family only:
         'prior_fm_steps':           config.get('prior_fm_steps', 20),
+        'prior_fm_solver':          str(config.get('prior_fm_solver', 'heun')).lower().strip(),
+        'prior_velocity_hidden_dim': config.get(
+            'prior_velocity_hidden_dim',
+            config.get('prior_hidden_dim', config.get('latent_dim')),
+        ),
+        'prior_fm_velocity_arch':   str(
+            config.get('prior_fm_velocity_arch', 'mlp')
+        ).lower().strip(),
+        'prior_fm_blocks':          config.get('prior_fm_blocks', 4),
+        'prior_fm_moments':         config.get('prior_fm_moments', False),
+        'prior_fm_moment_hidden_dim': config.get(
+            'prior_fm_moment_hidden_dim',
+            config.get('prior_condition_hidden_dim',
+                       config.get('prior_hidden_dim', config.get('latent_dim'))),
+        ),
+        'prior_fm_moment_weight':   config.get('prior_fm_moment_weight', 1.0),
+        'prior_fm_moment_min_scale': config.get('prior_fm_moment_min_scale', 0.03),
+        'prior_fm_moment_max_scale': config.get('prior_fm_moment_max_scale', 20.0),
         # gmm family only:
         'prior_mixture_components': config.get('prior_mixture_components', 50),
         'prior_min_std':            config.get('prior_min_std', 0.1),

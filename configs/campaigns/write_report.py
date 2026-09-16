@@ -25,6 +25,7 @@ Metrics come from rank_arms.py so there is exactly one implementation of them.
 """
 import argparse
 import datetime
+import json
 import os
 import pathlib
 import re
@@ -155,6 +156,35 @@ def fnum(v, p=3):
     return f'{v:.{p}f}' if isinstance(v, (int, float)) and v == v else '—'
 
 
+def collect_posterior_prior(diag_root, arms):
+    """Read <arm>/<eval-set>/posterior_vs_prior_*.json diagnostics."""
+    if not diag_root:
+        return {}
+    root = pathlib.Path(diag_root)
+    found = {}
+    for arm in arms:
+        arm_dir = root / str(arm)
+        if not arm_dir.is_dir():
+            continue
+        for tag_dir in sorted(p for p in arm_dir.iterdir() if p.is_dir()):
+            files = sorted(tag_dir.glob('posterior_vs_prior_*.json'))
+            if not files:
+                continue
+            path = files[-1]
+            try:
+                payload = json.loads(path.read_text(encoding='utf-8'))
+            except (OSError, json.JSONDecodeError) as exc:
+                found.setdefault(str(arm), {})[tag_dir.name] = {
+                    'error': f'{type(exc).__name__}: {exc}', 'json': path,
+                }
+                continue
+            png = path.with_suffix('.png')
+            found.setdefault(str(arm), {})[tag_dir.name] = {
+                'payload': payload, 'json': path, 'png': png if png.is_file() else None,
+            }
+    return found
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--label', required=True)
@@ -164,10 +194,13 @@ def main():
     ap.add_argument('--arms', required=True)
     ap.add_argument('--axis', required=True, help='the config key this run varies')
     ap.add_argument('--out', required=True)
+    ap.add_argument('--diag', default=None,
+                    help='optional <arm>/<eval-set>/ posterior-vs-prior diagnostics')
     ap.add_argument('--kind', choices=['mgnv', 'flow'], required=True)
     a = ap.parse_args()
 
     arms = a.arms.split()
+    out_path = pathlib.Path(a.out)
     stamp = datetime.date.today().isoformat()
     L = [f'# SAOI long run — {a.label}',
          '',
@@ -185,6 +218,50 @@ def main():
                   [[r['arm'], r['gpu'], r['section'], r['axis'], r['epochs'],
                     r['batch'], f"`{r['dataset']}`"] for r in rows])
     L += ['']
+
+    # ---- direct posterior-vs-prior path diagnosis -------------------------
+    pvp = collect_posterior_prior(a.diag, arms) if a.kind == 'mgnv' else {}
+    if pvp:
+        L += ['## GT → posterior decode → FM prior decode', '',
+              'This is the causal split behind the sweep. All three distributions use '
+              'the **same geometry, thickness and recorded conditions**. The posterior '
+              'path sees each ground-truth realization; the FM prior sees only inference '
+              'conditions and fresh noise. `post/GT ≈ 1` with `prior/GT << 1` localizes '
+              'the loss to the conditional prior.', '']
+        pvp_rows = []
+        for arm in arms:
+            for tag in sorted(pvp.get(arm, {})):
+                item = pvp[arm][tag]
+                if 'error' in item:
+                    pvp_rows.append([arm, tag, 'INVALID: ' + item['error'], '', '', '', ''])
+                    continue
+                payload = item['payload']
+                e = payload.get('ensembles', {})
+                pm, ps, pr = (e.get('posterior_mean', {}),
+                              e.get('posterior_sample', {}), e.get('prior', {}))
+                psr, prr = ps.get('sd_ratio', float('nan')), pr.get('sd_ratio', float('nan'))
+                relative = prr / psr if psr == psr and psr != 0 else float('nan')
+                label = (payload.get('verdict') or ['—'])[0].split(':', 1)[0]
+                pvp_rows.append([arm, tag, fnum(pm.get('sd_ratio')), fnum(psr), fnum(prr),
+                                 fnum(relative), label])
+        L += md_table(['arm', 'eval set', 'posterior-mean/GT SD',
+                       'posterior-sample/GT SD', 'FM-prior/GT SD',
+                       'prior/posterior SD', 'automatic reading'], pvp_rows)
+        L += ['', '`posterior-sample` is the most faithful reference for what the frozen '
+                    'decoder was trained to receive. `posterior-mean` is shown separately '
+                    'because suppressing q-noise can itself narrow the field.', '']
+        for arm in arms:
+            pictures = []
+            for tag in sorted(pvp.get(arm, {})):
+                png = pvp[arm][tag].get('png')
+                if png is None:
+                    continue
+                rel = os.path.relpath(png.resolve(), start=out_path.resolve().parent)
+                pictures.append([tag, f'![arm {arm}, {tag}]({rel.replace(os.sep, "/")})'])
+            if pictures:
+                L += [f'### Arm {arm}', '']
+                L += md_table(['eval set', 'conditional distribution comparison'], pictures)
+                L += ['']
 
     # ---- distribution metrics --------------------------------------------
     dumps = rank_arms.collect([a.infer])
@@ -426,10 +503,12 @@ def main():
           f'- dumps: `{a.infer}/<arm>/<eval set>/spread_values.npz`',
           f'- logs: `{a.logs}/<arm>.log`',
           f'- configs: `{a.configs}/config_train_<arm>.txt`',
+          *([f'- posterior/prior diagnostics: `{a.diag}/<arm>/<eval set>/`']
+            if a.diag else []),
           f'- rebuild: `python configs/campaigns/write_report.py --kind {a.kind} ...`',
           '']
 
-    out = pathlib.Path(a.out)
+    out = out_path
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text('\n'.join(L), encoding='utf-8', newline='\n')
     print(f'wrote {out}  ({len(arms)} arms, {len(metric_rows)} metric rows)')

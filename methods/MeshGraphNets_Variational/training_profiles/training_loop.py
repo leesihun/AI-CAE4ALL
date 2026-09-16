@@ -1,4 +1,5 @@
 import os
+import shutil
 import contextlib
 import time
 
@@ -287,6 +288,7 @@ def _compose_loss(model, graph, terms):
         if prior_outputs.get('pooled') is not None:
             prior_loss_val = terms.inner_model.prior.fm_loss(
                 prior_outputs['pooled'], z_fresh,
+                target_mu=mu_q, target_logvar=logvar_q,
             )
         else:
             prior_loss_val = mixture_nll(
@@ -387,7 +389,11 @@ def log_training_config(config):
                 print(f"Prior (gnn_e2e, family=gmm): nll_weight={p_w} kl_anchor={p_kl}")
             else:
                 print(f"Prior (gnn_e2e, family=fm): fm_weight={p_w} "
-                      f"euler_steps={config.get('prior_fm_steps', 20)}")
+                      f"velocity={config.get('prior_fm_velocity_arch', 'mlp')} "
+                      f"velocity_hidden={config.get('prior_velocity_hidden_dim', config.get('prior_hidden_dim'))} "
+                      f"moments={config.get('prior_fm_moments', False)} "
+                      f"solver={config.get('prior_fm_solver', 'heun')} "
+                      f"steps={config.get('prior_fm_steps', 20)}")
     else:
         print("VAE: disabled")
 
@@ -472,7 +478,22 @@ def freeze_for_prior_fit(model, ema_model, dataloader, device, config, remaining
         lvs.append(lv.float())
     if was_training:
         bare.train()
-    shift, scale = prior.fit_standardization(torch.cat(mus), torch.cat(lvs))
+    if getattr(prior, 'use_conditional_moments', False):
+        # The conditional moment head already supplies a graph-dependent
+        # coordinate system. Changing a second, global affine transform at the
+        # phase boundary would invalidate the moment head learned during joint
+        # training and confound the P2 treatment with a coordinate reset.
+        prior.z_shift.zero_()
+        prior.z_scale.fill_(1.0)
+        shift = prior.z_shift.detach().cpu()
+        scale = prior.z_scale.detach().cpu()
+        standardization_note = 'conditional moment base active; global transform kept identity'
+    else:
+        shift, scale = prior.fit_standardization(torch.cat(mus), torch.cat(lvs))
+        standardization_note = (
+            f'global |shift| rms {float(shift.norm() / shift.numel() ** 0.5):.4f}, '
+            f'scale min {float(scale.min()):.4f} max {float(scale.max()):.4f}'
+        )
     if ema_model is not None:
         ema_prior = _bare(ema_model.module).prior
         ema_prior.z_shift.copy_(prior.z_shift)
@@ -482,10 +503,64 @@ def freeze_for_prior_fit(model, ema_model, dataloader, device, config, remaining
         config, prior.parameters(), max(int(remaining_epochs), 1))
     print(f"\n  [prior-fit] simulator FROZEN; training {n_prior:,} prior parameters "
           f"for {remaining_epochs} epochs on a fresh cosine")
-    print(f"  [prior-fit] latent standardization: |shift| rms "
-          f"{float(shift.norm() / shift.numel() ** 0.5):.4f}, scale min {float(scale.min()):.4f} "
-          f"max {float(scale.max()):.4f}  (far from 1 = the mis-scaling this removes)")
+    print(f"  [prior-fit] latent coordinates: {standardization_note}")
     return optimizer, scheduler
+
+
+def bank_joint_checkpoint(modelpath, saved_epoch, best_value, criterion):
+    """Set the joint-phase best aside before the tail restarts checkpoint selection.
+
+    `modelpath` holds ONE checkpoint, chosen by `best_by` over the whole run. The
+    tail is the treatment: if no tail epoch beats the joint phase's best score,
+    the tail is silently discarded and the arm evaluates a joint-phase model --
+    an experiment that reports "no effect" by construction, with nothing in the
+    output to say so. The joint best is therefore copied to <stem>.joint.pth,
+    where it stays evaluable as the joint recipe's own product, and the caller
+    resets its selection so `modelpath` ends up holding the tail's best.
+
+    Returns the copy's path, or None when no checkpoint has been saved yet.
+    """
+    if saved_epoch < 0 or not os.path.exists(modelpath):
+        return None
+    stem, ext = os.path.splitext(modelpath)
+    joint_path = f"{stem}.joint{ext or '.pth'}"
+    shutil.copyfile(modelpath, joint_path)
+    print(f"  [prior-fit] joint-phase best (epoch {saved_epoch}, {criterion} {best_value:.4e}) "
+          f"kept at {joint_path}; checkpoint selection restarts for the tail")
+    return joint_path
+
+
+def freeze_moments_for_residual_fit(model, config, remaining_epochs):
+    """Freeze P3's condition/moment base and optimize only residual velocity."""
+    from training_profiles.setup import build_optimizer_scheduler
+
+    prior = _bare(model).prior
+    if prior is None or not getattr(prior, 'use_conditional_moments', False):
+        raise RuntimeError('residual-only stage requires a conditional-moment FM prior')
+    for p in prior.parameters():
+        p.requires_grad_(False)
+    for p in prior.velocity_net.parameters():
+        p.requires_grad_(True)
+    trainable = [p for p in prior.parameters() if p.requires_grad]
+    optimizer, scheduler, _, _ = build_optimizer_scheduler(
+        config, trainable, max(int(remaining_epochs), 1))
+    print(f"\n  [prior-fit] condition trunk + moment head FROZEN; training "
+          f"{sum(p.numel() for p in trainable):,} residual-velocity parameters "
+          f"for {remaining_epochs} epochs on a fresh cosine")
+    return optimizer, scheduler
+
+
+def bank_moment_checkpoint(modelpath, saved_epoch, best_value, criterion):
+    """Keep the moment-calibration best before residual-only selection starts."""
+    if saved_epoch < 0 or not os.path.exists(modelpath):
+        return None
+    stem, ext = os.path.splitext(modelpath)
+    moment_path = f"{stem}.moment{ext or '.pth'}"
+    shutil.copyfile(modelpath, moment_path)
+    print(f"  [prior-fit] moment-stage best (epoch {saved_epoch}, {criterion} "
+          f"{best_value:.4e}) kept at {moment_path}; residual-stage checkpoint "
+          f"selection restarts")
+    return moment_path
 
 
 def train_prior_epoch(model, dataloader, optimizer, device, config, epoch, ema_model=None):
@@ -500,6 +575,12 @@ def train_prior_epoch(model, dataloader, optimizer, device, config, epoch, ema_m
     inner, prior = bare.model, bare.prior
     prior.train()
     weight = float(config.get('prior_nll_weight', 1.0))
+    calibration_epochs = int(config.get('prior_moment_calibration_epochs', 0) or 0)
+    freeze_epoch = int(config.get('prior_freeze_epoch', 0) or 0)
+    if getattr(prior, 'use_conditional_moments', False) and calibration_epochs > 0:
+        objective = 'moment' if epoch < freeze_epoch + calibration_epochs else 'flow'
+    else:
+        objective = 'all'
     total = torch.zeros((), device=device, dtype=torch.float32)
     n_graphs = 0
     pbar = tqdm.tqdm(dataloader, desc=f'PriorFit {epoch}')
@@ -513,7 +594,10 @@ def train_prior_epoch(model, dataloader, optimizer, device, config, epoch, ema_m
                 x=(g.x if inner.vae_graph_aware else None),
             )
             z1 = mu + torch.exp(0.5 * lv) * torch.randn_like(mu)
-        loss = weight * prior.fm_loss(prior.condition(g), z1)
+        loss = weight * prior.fm_loss(
+            prior.condition(g), z1, target_mu=mu, target_logvar=lv,
+            objective=objective,
+        )
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
         torch.nn.utils.clip_grad_norm_(prior.parameters(), max_norm=3.0)
@@ -523,7 +607,8 @@ def train_prior_epoch(model, dataloader, optimizer, device, config, epoch, ema_m
         total += loss.detach().float()
         n_graphs += int(getattr(g, 'num_graphs', 1))
         if batch_idx % 10 == 0:
-            pbar.set_postfix({'fm_p': f'{float(loss):.2e}', 'mem': _mem_str()})
+            pbar.set_postfix({f'{objective}_p': f'{float(loss.detach()):.2e}',
+                              'mem': _mem_str()})
     peak_gb, reserved_gb = _mem_gb()
     fm = float(total) / max(len(dataloader), 1)
     return {'mean': 0.0, 'total_mean': fm, 'sum': 0.0, 'count': max(n_graphs, 1),

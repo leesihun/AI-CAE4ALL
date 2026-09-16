@@ -1,12 +1,38 @@
 import math
 
 import torch
+import torch.distributed as dist
+import torch.distributed.nn  # noqa: F401  (registers the autograd-aware collectives)
 import torch.nn as nn
 from torch_geometric.data import Data
 from torch_geometric.nn import AttentionalAggregation
 
 from model.encoder_decoder import GnBlock
 from model.mlp import build_mlp
+
+
+def gather_across_ranks(z):
+    """All-gather z over DDP ranks, preserving gradients. No-op off DDP.
+
+    MMD is a two-SAMPLE statistic: its effective sample count is the number of
+    z rows it sees. `mmd_loss` runs inside the model forward, so without this it
+    only ever saw the PER-RANK batch — on 4 GPUs at Batch_size 16 the global
+    batch is 64 but the estimator used 16, and MMD's variance falls as 1/B.
+
+    z is tiny ([B, num_z, D]), so the collective costs nothing. Every rank ends
+    up with the same rows but its own N(0,I) reference draw, so the per-rank
+    losses differ slightly; `torch.distributed.nn.all_gather` sum-reduces the
+    incoming gradient and DDP then averages over ranks, which together give
+    exactly the gradient of the rank-averaged MMD — no extra scaling needed.
+
+    DistributedSampler pads each rank to the same sample count, so the gathered
+    shapes always match (an unequal last batch would deadlock the collective).
+    """
+    if not (dist.is_available() and dist.is_initialized()):
+        return z
+    if dist.get_world_size() < 2:
+        return z
+    return torch.cat(torch.distributed.nn.all_gather(z.contiguous()), dim=0)
 
 
 class GNNVariationalEncoder(nn.Module):

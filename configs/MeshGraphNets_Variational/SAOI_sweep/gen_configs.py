@@ -1,59 +1,21 @@
-"""Generate the MeshGraphNets-V SAOI sweep: 8 arms, one per card 0-7.
+"""Generate the controlled from-scratch SAOI FM-v2 sweep.
+
+One command writes all training/inference configs:
 
     python configs/MeshGraphNets_Variational/SAOI_sweep/gen_configs.py
 
-THE DESIGN: a 2^3 FULL factorial over the PRIOR -- section x prior fit x trunk.
+Each board half gets the same four-step ablation. Encoder, decoder, graph
+conditioner, data split, RNG seed, optimizer, prior-only tail and inference
+budget are held fixed.
 
-    Eight arms is exactly the full grid of three two-level factors, so nothing
-    is confounded with anything.
+    P0  legacy two-hidden-layer FM velocity, width 256
+    P1  P0 with velocity width 512                 (capacity only)
+    P2  P1 with residual FiLM velocity             (architecture only)
+    P3  P2 with conditional mean/scale residuals   (moment base only)
 
-      section      bot | top          the board's two halves, independent models
-      prior fit    joint | tail       prior_freeze_epoch 0  |  700 of 1000
-      prior trunk  small | large      hidden 256 / 5 MP    |  512 / 8 MP
-
-WHY THE PRIOR, AND NOT THE DECODER
-    Posterior reconstruction is excellent while the generated distribution is
-    ~2x too narrow (sd_ratio 0.45-0.53 on every arm of the previous grid).
-    Training decodes z ~ q(z | y, g); deployment decodes z ~ p(z | g). The
-    decoder is common to both paths, so if the posterior path reproduces a
-    part's spread and the prior path does not, the prior's conditional for
-    that part is what is wrong. Three mechanisms can make it so, and the two
-    factors here address all three:
-
-      1. a MOVING target -- the encoder keeps receiving reconstruction
-         gradients, so q drifts for the whole run and the prior chases it.
-         The `tail` level freezes the simulator at epoch 700 and fits the prior
-         alone for the last 300, against a posterior that has stopped moving,
-         on a fresh cosine over the prior's own parameters;
-      2. an ILL-SCALED target -- MMD pins the AGGREGATE q(z) to N(0,I), and
-         with ~100 realizations of each of a few parts that aggregate is a
-         mixture: unit total variance is compatible with every per-part cloud
-         being far smaller and off-origin. The `tail` level also fits latent
-         standardization (z_shift / z_scale) from the frozen posterior, so the
-         velocity net regresses a unit-scale target;
-      3. an UNDERSIZED trunk -- prior_hidden_dim 256 / prior_mp_layers 5 is
-         much smaller than the main network. If the trunk cannot separate
-         parts, the prior learns a conditional smeared across neighbours.
-
-    prior_grad_to_encoder is closed on every arm: open, the FM objective can
-    lower itself by shrinking the target distribution (integrated CFM loss is
-    pi*a/2 for target scale a), and nothing here should be moving the target.
-
-WHAT IS HELD FIXED
-    beta_aux 10 on every arm -- the peak-to-valley term on the decoded field at
-    the balance point estimated from realistic recon/aux magnitudes. It is the
-    I(z;y) floor that keeps z informative (the old z-readout head is gone), so
-    it stays ON, and it stays CONSTANT so it is not a factor. Its own
-    dose-response is a different sweep.
-
-    The previous 2^(4-1) grid moved W1/sd by 0.001-0.054 across
-    z_conditioning, prior_grad_to_encoder, capacity and lambda_mmd, against a
-    0.10 arm-to-arm range. None of those is spent again.
-
-BUDGET
-    1000 epochs at a measured ~346 s/epoch. The `tail` arms are CHEAPER, not
-    dearer: their last 300 epochs run the posterior encoder under no_grad and
-    the small prior only -- no decoder forward, no decoder backward.
+This ordering identifies why an arm improves. The old grid changed tail fit and
+graph-trunk capacity together, so it could rank recipes but could not identify
+which FM mechanism fixed the conditional distribution.
 """
 import pathlib
 import sys
@@ -63,135 +25,140 @@ sys.path.insert(0, str(HERE.parents[1] / 'campaigns'))
 
 from sweep_common import write_sweep      # noqa: E402
 
-OUT_ROOT = '../../output/meshgraphnets-v/saoi_sweep'
+OUT_ROOT = '../../output/meshgraphnets-v/saoi_fm_v2_sweep'
 EPOCHS = '1000'
 FREEZE_AT = '700'
+TRAINING_SEED = '20260916'
 
-SMALL = {'prior_hidden_dim': ('256', 'prior trunk: small (production)'),
-         'prior_mp_layers': ('5', 'prior trunk: small (production)')}
-LARGE = {'prior_hidden_dim': ('512', 'prior trunk: LARGE -- can it separate parts?'),
-         'prior_mp_layers': ('8', 'prior trunk: LARGE')}
-JOINT = {'prior_freeze_epoch': ('0', 'prior fit: joint to the end (the baseline recipe)')}
-TAIL = {'prior_freeze_epoch': (FREEZE_AT,
-                               f'prior fit: TAIL -- simulator frozen at {FREEZE_AT}, '
-                               f'latent standardization fitted, prior alone on a fresh '
-                               f'cosine for the remaining {1000 - int(FREEZE_AT)} epochs')}
+COMMON_PRIOR = {
+    'prior_hidden_dim': ('256', 'backwards-compatible prior width alias'),
+    'prior_condition_hidden_dim': ('256', 'HELD FIXED graph conditioner width'),
+    'prior_mp_layers': ('5', 'HELD FIXED graph conditioner depth'),
+    'prior_fm_blocks': ('4', 'residual block count; ignored by legacy MLP'),
+    'prior_fm_moment_hidden_dim': ('256', 'conditional moment-head width'),
+    'prior_fm_moment_weight': ('1.0', 'proper Gaussian cross-entropy weight'),
+    'prior_fm_moment_min_scale': ('0.03', 'positive diagonal scale floor'),
+    'prior_fm_moment_max_scale': ('20.0', 'diagonal scale ceiling'),
+}
+
+VARIANTS = (
+    ('P0', {
+        'prior_velocity_hidden_dim': ('256', 'P0 current FM velocity width'),
+        'prior_fm_velocity_arch': ('mlp', 'P0 current two-hidden-layer velocity MLP'),
+        'prior_fm_moments': ('False', 'P0 global standardization only'),
+        'prior_moment_calibration_epochs': ('0', 'no conditional moment stage'),
+    }, 'current FM baseline'),
+    ('P1', {
+        'prior_velocity_hidden_dim': ('512', 'P1 wider velocity only'),
+        'prior_fm_velocity_arch': ('mlp', 'same MLP as P0'),
+        'prior_fm_moments': ('False', 'global standardization only'),
+        'prior_moment_calibration_epochs': ('0', 'no conditional moment stage'),
+    }, 'wider velocity control'),
+    ('P2', {
+        'prior_velocity_hidden_dim': ('512', 'matched to P1'),
+        'prior_fm_velocity_arch': ('residual_film', 'residual velocity with time/condition FiLM'),
+        'prior_fm_moments': ('False', 'global standardization only'),
+        'prior_moment_calibration_epochs': ('0', 'no conditional moment stage'),
+    }, 'residual FiLM FM'),
+    ('P3', {
+        'prior_velocity_hidden_dim': ('512', 'matched to P1/P2'),
+        'prior_fm_velocity_arch': ('residual_film', 'matched to P2'),
+        'prior_fm_moments': ('True', 'conditional mean/diagonal scale plus residual FM'),
+        'prior_moment_calibration_epochs': (
+            '50', 'fit moments on frozen posterior, then freeze base and fit residual FM'),
+    }, 'conditional-moment residual FM'),
+)
 
 ARMS = []
-_n = 0
+arm_number = 0
 for half in ('bot', 'top'):
-    for fit, fit_tag in ((JOINT, 'joint'), (TAIL, 'tail')):
-        for trunk, trunk_tag in ((SMALL, 'small'), (LARGE, 'large')):
-            _n += 1
-            over = dict(fit)
-            over.update(trunk)
-            ARMS.append((str(_n), half, over, f'{half} {fit_tag} {trunk_tag}'))
+    for variant, changes, description in VARIANTS:
+        arm_number += 1
+        overrides = dict(COMMON_PRIOR)
+        overrides.update(changes)
+        overrides['fm_variant'] = (variant, f'report label: {description}')
+        ARMS.append((str(arm_number), half, overrides,
+                     f'{half} {variant}: {description}'))
 
 BANNER = """%   ============================================================
-%   SAOI warpage, MeshGraphNets-V -- arm {arm}   ({note})
+%   SAOI MeshGraphNets-V FM-v2 -- arm {arm} ({note})
 %
-%   section   {half}
+%   board half {half}
 {axis}
-%   gpu {gpu} -- one arm per card, nothing shared
+%   gpu {gpu}; all arms start from scratch with the same training RNG seed.
 %
-%   A 2^3 FULL factorial over the PRIOR: section x prior fit (joint | frozen
-%   tail with latent standardization) x prior trunk (small | large). The
-%   decoder is common to the posterior and prior paths; the posterior path
-%   reproduces a part's spread and the prior path does not, so the prior is
-%   what this sweep varies. beta_aux is held at 10 on every arm.
-%
-%   GENERATED by gen_configs.py from ../SAOI_all_input/config_train_{half}.txt.
-%   Do not hand-edit -- regenerate.
+%   Controlled P0 -> P1 -> P2 -> P3 ablation. Encoder/decoder, graph
+%   conditioner, split, optimizer, frozen-prior tail and evaluation are fixed.
+%   GENERATED by gen_configs.py; do not hand-edit.
 %   ============================================================
 """
 
 INFER_BANNER = """%   ============================================================
-%   SAOI inference -- arm {arm} ({note}), eval set {tag}.
+%   SAOI FM-v2 inference -- arm {arm} ({note}), eval set {tag}.
 %
-%   `eval_dataset` is the `_compare_` file: the 125 realizations of the ONE
-%   part in `infer_dataset`. That pairing is what makes sd_ratio's target 1 --
-%   the truth here IS the conditional distribution, not a single outcome.
-%
-%   Architecture keys mirror the train config. rollout.py overrides them from
-%   checkpoint['model_config'] at load time, so the checkpoint always wins;
-%   they are kept in sync so this file documents what runs. The latent
-%   standardization a `tail` arm fitted rides inside the checkpoint as prior
-%   buffers and needs nothing here.
-%
-%   gpu {gpu}. GENERATED by gen_configs.py -- do not hand-edit.
+%   `_infer_` supplies graph/thickness/recorded B.C.; `_compare_` supplies the
+%   realizations of that same condition. posterior_vs_prior.py verifies node
+%   coordinates, topology, condition rows and configured node/B.C. types.
+%   gpu {gpu}. GENERATED by gen_configs.py; do not hand-edit.
 %   ============================================================
 """
+
+ARCH_KEYS = {
+    'prior_hidden_dim', 'prior_condition_hidden_dim', 'prior_mp_layers',
+    'prior_velocity_hidden_dim', 'prior_fm_velocity_arch', 'prior_fm_blocks',
+    'prior_fm_moments', 'prior_fm_moment_hidden_dim',
+    'prior_fm_moment_weight', 'prior_fm_moment_min_scale',
+    'prior_fm_moment_max_scale',
+}
 
 SPEC = dict(
     here=HERE,
     prod_dir=HERE.parent / 'SAOI_all_input',
     out_root=OUT_ROOT,
     slug='meshgraphnets-v',
-    title='MeshGraphNets-V SAOI sweep -- 2^3 over the prior (section x fit x trunk), one card each:',
+    title='MeshGraphNets-V SAOI FM-v2 sweep -- P0/P1/P2/P3 for bot and top:',
     banner=BANNER,
     infer_banner=INFER_BANNER,
     arms=ARMS,
-    gpu_of=lambda arm: int(arm) - 1,          # arms 1..8 -> cards 0..7
+    gpu_of=lambda arm: int(arm) - 1,
     infer_sources={
         's26fe_main': 'config_infer_s26fe_main_{half}.txt',
         's26fe_sec':  'config_infer_s26fe_sec_{half}.txt',
         'sm_l345u':   'config_infer_sm_l345u_main_{half}.txt',
     },
-    # Keys whose value must be identical in the train and inference configs,
-    # or the inference file documents a model the checkpoint is not.
-    arch_keys={'prior_hidden_dim', 'prior_mp_layers'},
+    arch_keys=ARCH_KEYS,
     train_fixed={
-        'Training_epochs': (EPOCHS,
-                            'no resume exists and cosine_T0 = epochs - warmup, so '
-                            'this is a COMPLETE run at its own schedule; '
-                            '~346 s/epoch measured on one card'),
-        'Batch_size': ('16', 'the value the previous grid measured as its winner'),
-        'val_interval': ('30', 'CRPS is the selection metric'),
-        'test_interval': ('200', 'periodic plots; 5 over the run'),
-        'best_by': ('crps', 'select on the GENERATIVE metric, not posterior recon'),
-        'hierarchy_cache_keep': ('True',
-                                 'REQUIRED: every arm shares one cache; a finishing '
-                                 'arm must not delete it'),
-        'recon_loss': ('mse',
-                       'MSE penalizes extreme-node error far more than Huber, which '
-                       'caps it -- and peak-to-valley IS an extreme-value statistic'),
-        'alpha_recon': ('1000', 'reconstruction multiplier'),
-        'beta_aux': ('10',
-                     'HELD CONSTANT: peak-to-valley MSE on the decoded field at the '
-                     'balance point estimated from recon/aux magnitudes. It is the '
-                     'I(z;y) floor that keeps z informative now the z-readout head is '
-                     'gone, so it stays on; it stays fixed so it is not a factor'),
-        'num_vae_samples': ('10000', 'draws per scene; unused in train mode'),
+        'Training_epochs': (EPOCHS, 'complete from-scratch schedule'),
+        'Batch_size': ('16', 'held fixed across every arm'),
+        'training_seed': (TRAINING_SEED,
+                          'same initialization, shuffle and stochastic latent streams'),
+        'split_seed': ('42', 'same 80/10/10 membership'),
+        'prior_freeze_epoch': (
+            FREEZE_AT,
+            f'freeze encoder/decoder at {FREEZE_AT}; fit only the prior for '
+            f'{int(EPOCHS) - int(FREEZE_AT)} epochs on a fresh cosine'),
+        'val_interval': ('30', 'CRPS checkpoint-selection interval'),
+        'test_interval': ('200', 'periodic visualization interval'),
+        'best_by': ('crps', 'select the inference distribution, not posterior reconstruction'),
+        'hierarchy_cache_keep': ('True', 'all parallel arms share the hierarchy cache'),
+        'recon_loss': ('mse', 'held fixed field reconstruction loss'),
+        'alpha_recon': ('1000', 'held fixed reconstruction multiplier'),
+        'beta_aux': ('10', 'held fixed decoded peak-to-valley supervision'),
         'prior_grad_to_encoder': (
             '0.0',
-            'CLOSED on every arm. Open, the FM objective reaches the encoder and '
-            'can lower itself by SHRINKING the target distribution (integrated CFM '
-            'loss is pi*a/2 for target scale a). This sweep is about fitting the '
-            'prior to the posterior, so nothing may be moving the posterior toward '
-            'the prior. The previous grid measured the flag at delta 0.001'),
+            'FM may fit q(z|y,c), but may not shrink the encoder target'),
+        'num_vae_samples': ('10000', 'unused during training'),
     },
     infer_fixed={
-        'num_vae_samples': ('2000',
-                            'draws per scene. THE DOMINANT COST of this stage: '
-                            'arms x eval sets x draws forwards'),
-        'save_rollouts': ('False',
-                          'one HDF5 per (scene, draw) would be tens of thousands of '
-                          'files; the spread values still reach spread_values.npz'),
-        'make_histogram': ('True', 'GT vs generated z_disp peak-to-valley'),
-        'show_histogram': ('False', 'headless box: save the PNG, do not open a viewer'),
-        'hierarchy_seed': ('0, 1, 2, 3',
-                           'build one partition per seed and rotate across draw '
-                           'batches, so one unlucky partition cannot poison a scene'),
+        'num_vae_samples': ('2000', 'stochastic prior draws per condition'),
+        'save_rollouts': ('False', 'retain statistics without thousands of field files'),
+        'make_histogram': ('True', 'GT versus generated peak-to-valley distribution'),
+        'show_histogram': ('False', 'headless execution'),
+        'hierarchy_seed': ('0, 1, 2, 3', 'average over fixed coarsening variants'),
     },
-    # The deterministic control, written beside every stochastic inference
-    # config as config_infer_<arm>_<tag>_det.txt and dumped under infer/det/.
     det_fixed={
-        'num_vae_samples': ('1', 'DETERMINISTIC CONTROL: one draw per scene'),
-        'prior_temperature': ('1e-9',
-                              '~0 kills the prior sampling noise: z is the ODE image '
-                              'of the origin, the conditional centre. Its spread '
-                              'against the 125 truths is pure BIAS -- what no width '
-                              'fix can repair'),
+        'num_vae_samples': ('1', 'conditional-centre bias control'),
+        'prior_temperature': ('1e-9', 'remove initial sampling noise'),
     },
 )
 

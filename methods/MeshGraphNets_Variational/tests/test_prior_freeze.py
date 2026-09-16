@@ -8,7 +8,11 @@ Three things must hold, each a way the recipe could be silently wrong:
      loads EMA weights, and AveragedModel does not track buffers: a prior
      trained on whitened targets sampled through identity buffers would be
      wrong in a way nothing downstream would flag;
-  3. the returned optimizer holds ONLY prior parameters, on a fresh schedule.
+  3. the returned optimizer holds ONLY prior parameters, on a fresh schedule;
+  4. the joint-phase best checkpoint is set aside at the switch. `modelpath`
+     holds one checkpoint chosen by best_by over the whole run, so without
+     this a joint-phase CRPS that no tail epoch beats keeps a joint model in
+     it and the "tail" arm evaluates a model the tail never touched.
 """
 
 from pathlib import Path
@@ -26,7 +30,7 @@ if str(MGN_ROOT) not in sys.path:
 from general_modules.mesh_dataset import MeshGraphDataset          # noqa: E402
 from model.MeshGraphNets import MeshGraphNets                       # noqa: E402
 from training_profiles.training_loop import (                       # noqa: E402
-    build_ema_model, freeze_for_prior_fit, train_prior_epoch,
+    bank_joint_checkpoint, build_ema_model, freeze_for_prior_fit, train_prior_epoch,
 )
 from torch_geometric.loader import DataLoader                       # noqa: E402
 
@@ -149,3 +153,15 @@ def test_fitted_standardization_matches_the_posterior(setup):
     freeze_for_prior_fit(model, ema, loader, torch.device("cpu"), cfg, remaining_epochs=1)
     assert torch.allclose(model.prior.z_shift, want_shift, atol=1e-5)
     assert torch.allclose(model.prior.z_scale, want_scale, atol=1e-5)
+
+
+def test_bank_joint_checkpoint_copies_the_joint_best_aside(tmp_path):
+    src = tmp_path / "3.pth"
+    src.write_bytes(b"joint-phase best")
+    out = bank_joint_checkpoint(str(src), 690, 0.0123, "crps")
+    assert out == str(tmp_path / "3.joint.pth")
+    assert Path(out).read_bytes() == b"joint-phase best"
+    assert src.read_bytes() == b"joint-phase best"      # original untouched
+    # Nothing saved yet -> nothing to bank, and no file is invented.
+    assert bank_joint_checkpoint(str(tmp_path / "none.pth"), -1, float("inf"), "crps") is None
+    assert not (tmp_path / "none.joint.pth").exists()
