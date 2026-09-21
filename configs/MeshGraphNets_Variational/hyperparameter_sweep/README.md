@@ -1,13 +1,19 @@
 # MeshGraphNets-V SAOI — hyperparameter sweep
 
-Nine arms on the `bot` half. Run the whole thing from the repository root:
+Eight arms, trained independently on both halves of the SAOI part (`bot` and
+`top` — 16 training jobs total, nothing shared between the halves). Run one
+half at a time from the repository root:
 
 ```bash
-nohup bash configs/MeshGraphNets_Variational/hyperparameter_sweep/run_sweep.sh \
-    > output/meshgraphnets-v/saoi_sweep/run.out 2>&1 &
+bash configs/MeshGraphNets_Variational/hyperparameter_sweep/run_sweep.sh \
+    > output/meshgraphnets-v/saoi_sweep/run_bot.out 2>&1
+
+HALF=top bash configs/MeshGraphNets_Variational/hyperparameter_sweep/run_sweep.sh \
+    > output/meshgraphnets-v/saoi_sweep_top/run_top.out 2>&1
 ```
 
-Train → infer → posterior-vs-prior → one report.
+Train → infer → posterior-vs-prior → one report, per half. See "Running both
+halves" below for why these run one after the other, not backgrounded together.
 
 ## What this sweep is aimed at
 
@@ -28,96 +34,96 @@ largest replicated effect in the whole campaign and it made `sd_ratio` **worse**
 (−9.5% bot, −29.9% top). Every arm here changes *where the variance goes*, not
 how much model there is.
 
-## The nine arms
+## The eight arms
 
 Every arm is exactly one config key away from `base`, which is the SAOI_run
-`bot` recipe verbatim. The swept line in each file is tagged `# SWEPT` and
-carries its own rationale, so a config read on its own explains itself.
+recipe verbatim for its half (`bot` or `top`). The swept line in each file is
+tagged `# SWEPT` and carries its own rationale, so a config read on its own
+explains itself.
 
-| Phase | Arm | Change | Hypothesis |
-|---|---|---|---|
-| A | `base` | — | reference; identical to `configs/.../SAOI_run/config_train_bot.txt` but for output paths |
-| A | `seed` | `training_seed` 20260916 → 20270317 | **the noise floor.** Nothing else differs, so any gap is scatter by construction |
-| A | `zdim8` | `vae_latent_dim` 16 → 8 | z over-capacity: unused latent dimensions are exactly where the prior can waste variance |
-| A | `zdim4` | `vae_latent_dim` 16 → 4 | same axis, far enough out to tell a trend from a lucky point |
-| A | `pmin15` | `posterior_min_std` 0.05 → 0.15 | the decoder is only trained on z near a posterior mean, so a distant prior draw is off-distribution and gets squashed |
-| A | `pmin30` | `posterior_min_std` 0.05 → 0.30 | same axis, 6× the baseline floor |
-| B | `g2e` | `prior_grad_to_encoder` 0.0 → 1.0 | closed, p is fitted to a fixed q and nothing pulls q toward what p can represent |
-| B | `mmd10` | `lambda_mmd` 1 → 10 | push the aggregate posterior toward N(0,I) so the flow has a better-conditioned target |
-| B | `arecon` | `alpha_recon` 1000 → 100 | recon outweighs every distributional term by 10³; a direction finder, confounded on purpose |
+| Arm | Change | Hypothesis |
+|---|---|---|
+| `base` | — | reference; identical to `configs/.../SAOI_run/config_train_<half>.txt` but for output paths |
+| `seed` | `training_seed` 20260916 → 20270317 | **the noise floor.** Nothing else differs, so any gap is scatter by construction |
+| `zdim8` | `vae_latent_dim` 16 → 8 | z over-capacity: unused latent dimensions are exactly where the prior can waste variance |
+| `zdim4` | `vae_latent_dim` 16 → 4 | same axis, far enough out to tell a trend from a lucky point |
+| `pmin15` | `posterior_min_std` 0.05 → 0.15 | the decoder is only trained on z near a posterior mean, so a distant prior draw is off-distribution and gets squashed |
+| `pmin30` | `posterior_min_std` 0.05 → 0.30 | same axis, 6× the baseline floor |
+| `g2e` | `prior_grad_to_encoder` 0.0 → 1.0 | closed, p is fitted to a fixed q and nothing pulls q toward what p can represent |
+| `mmd10` | `lambda_mmd` 1 → 10 | push the aggregate posterior toward N(0,I) so the flow has a better-conditioned target |
 
-Phase A is the two axes the PVP decomposition points at directly (capacity,
-posterior floor) — mechanically simple, decoder-side hypotheses, plus the
-`base`/`seed` pair both phases are judged against. Phase B is the two axes
-that reweight the objective and the one that opens a new gradient path —
-each moves more than one mechanism at once, and `g2e` carries a known
-collapse risk. See "Running it in two phases" below.
+`zdim8`, `zdim4`, `pmin15` and `pmin30` are the two axes the PVP decomposition
+points at directly (capacity, posterior floor) — mechanically simple,
+decoder-side hypotheses, plus the `base`/`seed` pair every arm is judged
+against. `g2e` and `mmd10` reweight the objective instead: each moves more
+than one mechanism at once, and `g2e` carries a known collapse risk.
 
-Two arms are deliberately **absent**. `prior_temperature` is not a width knob —
-it scales the *start* of the ODE, leaving the trajectories the velocity field
-was trained on, which is why `latent_inflation` exists. `prior_min_std` clamps
-the *mixture* prior and does nothing under `prior_family fm`.
+A ninth arm, `arecon` (`alpha_recon` 1000 → 100), is **benched, not deleted**:
+recon outweighs every distributional term by 10³, so it is a direction finder
+confounded on purpose rather than a clean hypothesis, and unlike the eight
+above it has no `top` counterpart. Its `bot` config still runs standalone —
+`ARMS=arecon bash run_sweep.sh` — it just is not part of either half's default
+roster.
 
-### `seed` is not one of nine results
+Two more arms are deliberately **absent** (no config at all, on either half).
+`prior_temperature` is not a width knob — it scales the *start* of the ODE,
+leaving the trajectories the velocity field was trained on, which is why
+`latent_inflation` exists. `prior_min_std` clamps the *mixture* prior and does
+nothing under `prior_family fm`.
 
-It is the measurement that makes the other eight readable. The retired ablation
-had no seed replicate, which is why its sub-2% `W1/sd` result could never be
-interpreted. `analyze_sweep.py` refuses to call anything an effect unless it
-clears the base-vs-seed gap **and** moves the same direction on all three eval
-sets. If you drop `seed` to save a card, the sweep produces an ordering and no
-conclusion.
+### `seed` is not one of eight results
 
-## Running it in two phases
+It is the measurement that makes the other seven readable. The retired
+ablation had no seed replicate, which is why its sub-2% `W1/sd` result could
+never be interpreted. `analyze_sweep.py` refuses to call anything an effect
+unless it clears the base-vs-seed gap **and** moves the same direction on all
+three eval sets. If you drop `seed` to save a card, the sweep produces an
+ordering and no conclusion.
 
-Nine arms do not divide evenly across eight cards (see "Cost and scheduling"
-below), and the two halves of the table above carry different risk. `PHASE`
-splits the campaign into two invocations, each ending in its own report,
-instead of forcing one nine-arm pass to run two waves before printing
-anything:
+## Running both halves
+
+`bot` and `top` are two physically distinct halves of the SAOI part, each
+with its own training dataset and its own three eval sets. They share
+nothing — not a checkpoint, not a report — so `HALF` just points the whole
+script (train, infer, PVP, report) at one half's configs and one half's
+output root:
 
 ```bash
-# phase A: base, seed, zdim8, zdim4, pmin15, pmin30 -- six arms, one wave
-PHASE=A bash configs/MeshGraphNets_Variational/hyperparameter_sweep/run_sweep.sh \
-    > output/meshgraphnets-v/saoi_sweep/run_a.out 2>&1
+# bot half (default) -- writes output/meshgraphnets-v/saoi_sweep/
+bash configs/MeshGraphNets_Variational/hyperparameter_sweep/run_sweep.sh \
+    > output/meshgraphnets-v/saoi_sweep/run_bot.out 2>&1
 
-# read output/meshgraphnets-v/saoi_sweep/run_logs/report_a.txt, then:
-
-# phase B: g2e, mmd10, arecon -- three arms, one wave, reusing phase A's checkpoints
-PHASE=B bash configs/MeshGraphNets_Variational/hyperparameter_sweep/run_sweep.sh \
-    > output/meshgraphnets-v/saoi_sweep/run_b.out 2>&1
+# top half -- writes output/meshgraphnets-v/saoi_sweep_top/
+HALF=top bash configs/MeshGraphNets_Variational/hyperparameter_sweep/run_sweep.sh \
+    > output/meshgraphnets-v/saoi_sweep_top/run_top.out 2>&1
 ```
 
-Both phases fit in a single wave on eight cards (six arms, then three), so the
-two-phase run is not slower than the unphased one — it is the same nine
-arm-slots of training, just split where the report can land in the middle.
+Run them one after the other, not concurrently: both default to the same
+eight cards (`$GPUS`), and `Batch_size 16` being per-rank means every arm
+needs a card to itself, so overlapping the two invocations would silently put
+two arms on some cards. To actually run them at once, split `$GPUS` between
+the two instead, e.g. `GPUS="0 1 2 3"` for bot and `GPUS="4 5 6 7"` for top —
+each then takes two waves instead of one (see "Cost and scheduling" below).
 
-Phase B trains only its own three arms, but its report needs `base` and
-`seed` too, for the same noise floor described above — so phase B reports on
-`base seed g2e mmd10 arecon`, and the two floor checkpoints are read from
-phase A's `output/.../base.pth` and `seed.pth` rather than retrained. If those
-files are missing, phase B's TRAIN stage prints `WARNING: .../base.pth not
-found -- run PHASE=A first` and continues anyway; the report that follows will
-simply have no floor to compare against (see "`seed` is not one of nine
-results" above), so that warning is the only signal that something is wrong.
-
-Each phase writes its own tagged report, `report_a.txt` and `report_b.txt`, so
-neither overwrites the other. Leaving `PHASE` unset trains and reports on all
-nine arms in one pass and writes the untagged `report.txt`, exactly as before
-`PHASE` existed. `ARMS` and `REPORT_ARMS` still take an explicit override under
-either phase — setting one only replaces that phase's default for that
-variable, e.g. to re-run a single arm inside phase A without the other five.
+`ARMS` and `REPORT_ARMS` still take an explicit override under either half —
+setting one only replaces that half's default for that variable, e.g. to
+re-run a single arm on `top` without touching any of `bot`'s checkpoints.
 
 ## What it produces
 
+Per half, under that half's own output root:
+
 ```text
-output/meshgraphnets-v/saoi_sweep/
-    <arm>.pth  <arm>.log                       9 checkpoints + training logs
+output/meshgraphnets-v/saoi_sweep/            HALF=bot (default)
+output/meshgraphnets-v/saoi_sweep_top/        HALF=top
+    <arm>.pth  <arm>.log                       8 checkpoints + training logs
     infer/<arm>/<eval set>/spread_values.npz   the whole inflation curve
     diag/posterior_vs_prior_<arm>_<tag>.json   the four-ensemble decomposition
-    run_logs/report.txt                        the report (all nine arms, PHASE unset)
-    run_logs/report_a.txt                      PHASE=A's report (six arms)
-    run_logs/report_b.txt                      PHASE=B's report (three arms + base/seed)
+    run_logs/report.txt                        this half's report (8 arms)
 ```
+
+That is 24 inference runs and 24 PVP dumps per half (8 arms × 3 eval sets),
+48 of each across both halves, and 16 checkpoints total.
 
 **The inflation curve is free.** `latent_inflation` is a list, and `rollout.py`
 cycles it batch by batch while tagging every draw with the λ that produced it
@@ -162,18 +168,17 @@ SAOI_run. Arms are dealt round-robin onto `$GPUS` and each lane runs its arms in
 series; `CUDA_VISIBLE_DEVICES` does the assignment, so every config asks for
 local device 0 and nothing in the configs knows about the machine.
 
-`GPUS` defaults to `0 1 2 3 4 5 6 7` — eight lanes. Nine arms do not divide
-evenly across eight, so round-robin dealing puts two arms on lane 0 and one
-arm on each of the other seven lanes: the campaign's wall-clock is **two waves
-of 1000-epoch training**, with seven of the eight cards idle during the
-second one. Splitting the run with `PHASE` ("Running it in two phases" above)
-avoids that entirely — six arms and three arms both fit in a single wave, so
-only the unphased nine-arm pass ever pays for a second wave. The schedule
-cannot be shortened further within one phase: `prior_freeze_epoch 700`
-means the last 300 epochs are the only ones that fit the prior, and the whole
-point of `base` is that it matches the recipe the evidence was collected
-under. If the box actually has fewer than eight cards, pass `GPUS` explicitly
-(see below) — nothing in the configs assumes a GPU count, only the default.
+`GPUS` defaults to `0 1 2 3 4 5 6 7` — eight lanes, and eight arms divide
+evenly across them: round-robin dealing puts exactly one arm per lane, so
+each half's training is **one wave of 1000-epoch training**, no card idle.
+Running both halves sequentially (see "Running both halves" above) is two
+such waves back to back, not four — there is no second wave to avoid within
+a half. The schedule cannot be shortened further within one wave:
+`prior_freeze_epoch 700` means the last 300 epochs are the only ones that fit
+the prior, and the whole point of `base` is that it matches the recipe the
+evidence was collected under. If the box actually has fewer than eight cards,
+pass `GPUS` explicitly (see below) — nothing in the configs assumes a GPU
+count, only the default.
 
 Inference and PVP are cheap by comparison and reuse the same lanes.
 
@@ -189,20 +194,24 @@ TRAIN=0 INFER=0 PVP=0 bash .../run_sweep.sh
 # a subset, on two cards
 ARMS="base seed pmin30" GPUS="0 1" bash .../run_sweep.sh
 
-# phase A now, phase B later (see "Running it in two phases" above)
-PHASE=A bash .../run_sweep.sh
-PHASE=B bash .../run_sweep.sh
+# bot now, top later (see "Running both halves" above)
+bash .../run_sweep.sh
+HALF=top bash .../run_sweep.sh
 
-# phase B's report only, re-read from disk, without g2e/mmd10 muddying it
-PHASE=B TRAIN=0 INFER=0 PVP=0 REPORT_ARMS="base seed arecon" bash .../run_sweep.sh
+# top's report only, re-read from disk, without g2e/mmd10 muddying it
+HALF=top TRAIN=0 INFER=0 PVP=0 REPORT_ARMS="base seed zdim8" bash .../run_sweep.sh
+
+# arecon, benched but not deleted -- bot half only, it has no top counterpart
+ARMS=arecon REPORT_ARMS="base seed arecon" bash .../run_sweep.sh
 ```
 
-Variables: `ARMS`, `REPORT_ARMS`, `PHASE`, `INFER_TAGS`, `GPUS`, `PYTHON`,
+Variables: `ARMS`, `REPORT_ARMS`, `HALF`, `INFER_TAGS`, `GPUS`, `PYTHON`,
 `METHOD_PYTHON`, and the stage switches `EVAL_PREFLIGHT`, `PREFLIGHT`,
-`STRICT_PREFLIGHT`, `TRAIN`, `INFER`, `PVP`, `REPORT`. `PHASE` (`A`, `B`, or
-unset) sets defaults for both `ARMS` (what this invocation trains) and
-`REPORT_ARMS` (what the report covers); setting either explicitly overrides
-just that one.
+`STRICT_PREFLIGHT`, `TRAIN`, `INFER`, `PVP`, `REPORT`. `HALF` (`bot`, `top`,
+or unset, defaulting to `bot`) picks the dataset and the output root; `ARMS`
+(what this invocation trains) and `REPORT_ARMS` (what the report covers) both
+default to the same eight-arm roster on either half, and each takes its own
+explicit override independent of `HALF`.
 
 `METHOD_PYTHON` is resolved from `ai_cae4all.local.toml` automatically, because
 `posterior_vs_prior.py` imports the method package directly instead of going

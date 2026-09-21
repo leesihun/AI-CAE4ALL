@@ -4,42 +4,49 @@
 #   nohup bash configs/MeshGraphNets_Variational/hyperparameter_sweep/run_sweep.sh \
 #       > output/meshgraphnets-v/saoi_sweep/run.out 2>&1 &
 #
-# Nine arms, each one config key away from `base`, which is itself the SAOI_run
-# bot recipe verbatim. One of the nine is `seed`, which changes only
+# Eight arms, each one config key away from `base`, which is itself the
+# SAOI_run recipe verbatim. One of the eight is `seed`, which changes only
 # training_seed: it measures the noise floor, and analyze_sweep.py refuses to
 # call anything an effect unless it clears that floor on all three eval sets.
 #
-# WHAT IT PRODUCES, in order:
-#   TRAIN     9 checkpoints under $OUT_ROOT
-#   INFER     27 runs (9 arms x 3 eval sets), each writing spread_values.npz
+# HALF picks which of the two SAOI table halves this invocation trains and
+# reports on -- `bot` (default) or `top`. They are two fully independent
+# datasets, checkpoints and reports; nothing is shared between them. Each
+# half gets its own output root ($OUT_ROOT below) precisely so arm names stay
+# plain (`base`, `seed`, ...) in both and analyze_sweep.py needs no changes:
+#   HALF=bot bash run_sweep.sh    (default)  -> output/.../saoi_sweep/
+#   HALF=top bash run_sweep.sh               -> output/.../saoi_sweep_top/
+# Run both -- they do not share a card budget, so one invocation must finish
+# (or at least finish TRAIN) before the other starts if $GPUS is the same
+# eight cards for both.
+#
+# A ninth arm, `arecon`, is benched: its bot config still exists and still
+# runs standalone (`ARMS=arecon`), but it is not in the default roster and has
+# no `top` counterpart. See "The eight arms" in README.md for why it was cut
+# rather than one of the two-point axes.
+#
+# WHAT IT PRODUCES, in order (per half):
+#   TRAIN     8 checkpoints under $OUT_ROOT
+#   INFER     24 runs (8 arms x 3 eval sets), each writing spread_values.npz
 #             with the whole latent_inflation curve tagged in `gen_lam`
-#   PVP       27 posterior_vs_prior JSON dumps -- the truth / posterior_mean /
+#   PVP       24 posterior_vs_prior JSON dumps -- the truth / posterior_mean /
 #             posterior_sample / prior decomposition that says whether the
 #             missing width is lost in the prior or in the decoder. This is the
 #             measurement the sweep exists to condition on; an arm ranking
 #             without it cannot tell a better prior from a better decoder.
 #   REPORT    one table, written by analyze_sweep.py
 #
-# SCHEDULING. Arms are dealt round-robin onto $GPUS and each lane runs its arms
-# in series. CUDA_VISIBLE_DEVICES does the assignment, so every config asks for
-# local device 0 and nothing in the configs has to know about the machine.
-# Batch_size 16 is per-rank, so one card per arm is required: two-card DDP would
-# make the global batch 32 and break comparability with base and with SAOI_run.
+# SCHEDULING. Eight arms divide evenly across eight cards: round-robin dealing
+# puts exactly one arm per lane, one wave, no idle cards, in EITHER half.
+# CUDA_VISIBLE_DEVICES does the assignment, so every config asks for local
+# device 0 and nothing in the configs has to know about the machine.
+# Batch_size 16 is per-rank, so one card per arm is required: two-card DDP
+# would make the global batch 32 and break comparability with base and with
+# SAOI_run.
 #
 # Useful overrides:
-#   PYTHON, METHOD_PYTHON, GPUS, ARMS, REPORT_ARMS, INFER_TAGS, PHASE
+#   PYTHON, METHOD_PYTHON, GPUS, ARMS, REPORT_ARMS, INFER_TAGS, HALF
 #   EVAL_PREFLIGHT=1, PREFLIGHT=1, STRICT_PREFLIGHT=1, TRAIN=1, INFER=1, PVP=1, REPORT=1
-#
-# PHASE splits the nine arms into two budgets, each ending in its own report,
-# instead of one nine-arm run:
-#   PHASE=A bash run_sweep.sh    trains base, seed, zdim8, zdim4, pmin15, pmin30
-#                                -> run_logs/report_a.txt
-#   PHASE=B bash run_sweep.sh    trains only g2e, mmd10, arecon; the report adds
-#                                base/seed back in from phase A WITHOUT
-#                                retraining them, because both phases have to
-#                                be judged against the same noise floor
-#                                -> run_logs/report_b.txt
-# Leaving PHASE unset runs all nine arms in one pass, exactly as before.
 set -uo pipefail
 
 PYTHON="${PYTHON:-python}"
@@ -50,43 +57,34 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 cd "$REPO_ROOT" || exit 1
 
 CFG_DIR="$SCRIPT_DIR"
-OUT_ROOT="output/meshgraphnets-v/saoi_sweep"
-LOG_ROOT="${LOG_ROOT:-$OUT_ROOT/run_logs}"
-DIAG_ROOT="$OUT_ROOT/diag"
 
-# PHASE=A is the two structural axes the PVP decomposition points at directly
-# (latent capacity, posterior floor) -- mechanically simple, decoder-side
-# hypotheses. PHASE=B is the three axes that reweight the objective or open a
-# new gradient path -- riskier (g2e can collapse to a trivial solution) and
-# each one moves more than one mechanism at once. REPORT_ARMS lets phase B's
-# report include base/seed's already-computed results without this
-# invocation retraining them.
-PHASE="${PHASE:-}"
-case "$PHASE" in
-    A|a)
-        ARMS="${ARMS:-base seed zdim8 zdim4 pmin15 pmin30}"
-        REPORT_ARMS="${REPORT_ARMS:-$ARMS}"
-        REPORT_TAG="_a"
+# HALF picks the dataset AND the output root, so bot and top never collide
+# and arm names stay plain (`base`, `seed`, ...) for analyze_sweep.py in
+# either one. CFG_SUFFIX picks the matching config file: config_train_base.txt
+# (bot) or config_train_base_top.txt (top) -- both live in this directory.
+HALF="${HALF:-bot}"
+case "$HALF" in
+    bot)
+        OUT_ROOT="output/meshgraphnets-v/saoi_sweep"
+        CFG_SUFFIX=""
         ;;
-    B|b)
-        ARMS="${ARMS:-g2e mmd10 arecon}"
-        REPORT_ARMS="${REPORT_ARMS:-base seed g2e mmd10 arecon}"
-        REPORT_TAG="_b"
-        for ck in base seed; do
-            [ -f "$OUT_ROOT/${ck}.pth" ] || echo "WARNING: $OUT_ROOT/${ck}.pth not found -- run PHASE=A" \
-                "first, or phase B's report has no noise floor to compare against." >&2
-        done
-        ;;
-    "")
-        ARMS="${ARMS:-base seed zdim8 zdim4 pmin15 pmin30 g2e mmd10 arecon}"
-        REPORT_ARMS="${REPORT_ARMS:-$ARMS}"
-        REPORT_TAG=""
+    top)
+        OUT_ROOT="output/meshgraphnets-v/saoi_sweep_top"
+        CFG_SUFFIX="_top"
         ;;
     *)
-        echo "PHASE must be 'A', 'B', or unset -- got '$PHASE'" >&2
+        echo "HALF must be 'bot', 'top', or unset (defaults to 'bot') -- got '$HALF'" >&2
         exit 1
         ;;
 esac
+LOG_ROOT="${LOG_ROOT:-$OUT_ROOT/run_logs}"
+DIAG_ROOT="$OUT_ROOT/diag"
+
+# arecon is benched (see README.md, "The eight arms"): its bot config still
+# runs standalone via ARMS=arecon, but it has no top counterpart and is not
+# in the default roster on either half.
+ARMS="${ARMS:-base seed zdim8 zdim4 pmin15 pmin30 g2e mmd10}"
+REPORT_ARMS="${REPORT_ARMS:-$ARMS}"
 INFER_TAGS="${INFER_TAGS:-s26fe_main s26fe_sec sm_l345u_main}"
 GPUS="${GPUS:-0 1 2 3 4 5 6 7}"
 EVAL_PREFLIGHT="${EVAL_PREFLIGHT:-1}"
@@ -119,7 +117,7 @@ NG=${#GPU_ARR[@]}
 echo "=================================================================="
 echo " MGN-V SAOI hyperparameter sweep"
 echo "=================================================================="
-echo "  phase         : ${PHASE:-(none -- all nine arms in one pass)}"
+echo "  half          : $HALF"
 echo "  arms (train)  : $ARMS"
 echo "  arms (report) : $REPORT_ARMS"
 echo "  eval sets     : $INFER_TAGS"
@@ -170,7 +168,7 @@ if [ "$PREFLIGHT" = "1" ]; then
     echo "---- preflight ---------------------------------------------------"
     ok=""
     for arm in $ARMS; do
-        cfg="$CFG_DIR/config_train_${arm}.txt"
+        cfg="$CFG_DIR/config_train_${arm}${CFG_SUFFIX}.txt"
         if [ ! -f "$cfg" ]; then
             echo "  arm $arm  MISSING CONFIG"
             SKIPPED="$SKIPPED $arm(config)"
@@ -194,10 +192,10 @@ if [ "$PREFLIGHT" = "1" ]; then
     [ -n "$ARMS" ] || { echo "Every arm failed preflight." >&2; exit 1; }
 fi
 
-# `base` and `seed` are the measurement, not two of nine results: without both
+# `base` and `seed` are the measurement, not two of eight results: without both
 # in the REPORT roster there is no noise floor and every other number is
-# unreadable. Checked against REPORT_ARMS, not ARMS, because phase B legitimately
-# trains neither this run and pulls them from phase A instead.
+# unreadable. Checked against REPORT_ARMS, not ARMS, so a report-only rerun
+# (TRAIN=0, REPORT_ARMS trimmed) is still checked against what it will print.
 case " $REPORT_ARMS " in
     *" base "*) ;;
     *) echo "WARNING: arm 'base' is not in this report -- nothing to compare against." >&2 ;;
@@ -221,7 +219,7 @@ if [ "$TRAIN" = "1" ]; then
             for arm in ${LANE[$L]}; do
                 echo "  [gpu $gpu] train $arm"
                 CUDA_VISIBLE_DEVICES="$gpu" "$PYTHON" AI_CAE4ALL_main.py \
-                    --config "$CFG_DIR/config_train_${arm}.txt" \
+                    --config "$CFG_DIR/config_train_${arm}${CFG_SUFFIX}.txt" \
                     > "$OUT_ROOT/${arm}.log" 2>&1 \
                     || echo "  [gpu $gpu] train $arm FAILED -- $OUT_ROOT/${arm}.log"
             done
@@ -261,7 +259,7 @@ if [ "$INFER" = "1" ]; then
             gpu="${GPU_ARR[$L]}"
             for arm in ${LANE[$L]}; do
                 for tag in $INFER_TAGS; do
-                    cfg="$CFG_DIR/config_infer_${arm}_${tag}.txt"
+                    cfg="$CFG_DIR/config_infer_${arm}_${tag}${CFG_SUFFIX}.txt"
                     if CUDA_VISIBLE_DEVICES="$gpu" "$PYTHON" AI_CAE4ALL_main.py \
                             --config "$cfg" \
                             > "$LOG_ROOT/${arm}.infer_${tag}.log" 2>&1; then
@@ -296,7 +294,7 @@ if [ "$PVP" = "1" ]; then
                     # inside the config itself.
                     if CUDA_VISIBLE_DEVICES="$gpu" "$METHOD_PYTHON" \
                             methods/MeshGraphNets_Variational/misc/posterior_vs_prior.py \
-                            --config "../../configs/MeshGraphNets_Variational/hyperparameter_sweep/config_infer_${arm}_${tag}.txt" \
+                            --config "../../configs/MeshGraphNets_Variational/hyperparameter_sweep/config_infer_${arm}_${tag}${CFG_SUFFIX}.txt" \
                             --tag "${arm}_${tag}" \
                             --out "../../$DIAG_ROOT" \
                             --gpu 0 \
@@ -320,7 +318,7 @@ if [ "$REPORT" = "1" ]; then
         --out-root "$OUT_ROOT" \
         --arms "$REPORT_ARMS" \
         --tags "$INFER_TAGS" \
-        | tee "$LOG_ROOT/report${REPORT_TAG}.txt"
+        | tee "$LOG_ROOT/report.txt"
 fi
 
 if [ -n "$SKIPPED" ]; then
