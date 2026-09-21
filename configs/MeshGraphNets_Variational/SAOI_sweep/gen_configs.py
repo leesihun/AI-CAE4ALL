@@ -1,21 +1,31 @@
-"""Generate the controlled from-scratch SAOI FM-v2 sweep.
-
-One command writes all training/inference configs:
+"""Generate the SAOI FM-v2 production configs -- one recipe, two board halves.
 
     python configs/MeshGraphNets_Variational/SAOI_sweep/gen_configs.py
 
-Each board half gets the same four-step ablation. Encoder, decoder, graph
-conditioner, data split, RNG seed, optimizer, prior-only tail and inference
-budget are held fixed.
+This directory used to hold an eight-arm P0->P1->P2->P3 ablation over the flow
+matching prior. That campaign is finished and this is its surviving cell.
 
-    P0  legacy two-hidden-layer FM velocity, width 256
-    P1  P0 with velocity width 512                 (capacity only)
-    P2  P1 with residual FiLM velocity             (architecture only)
-    P3  P2 with conditional mean/scale residuals   (moment base only)
+WHAT THE ABLATION DECIDED (see README.md for the numbers)
 
-This ordering identifies why an arm improves. The old grid changed tail fit and
-graph-trunk capacity together, so it could rank recipes but could not identify
-which FM mechanism fixed the conditional distribution.
+P0 -- the untouched baseline -- won `sd_ratio`, `PITtails` and `PIT_KS` in BOTH
+halves. Its only loss was `W1/sd`, by under 2%, which is inside single-seed
+noise and is driven by conditional-mean accuracy rather than by the width and
+calibration this model exists to get right. Widening the velocity MLP from 256
+to 512 was the largest replicated effect in the sweep and it was HARMFUL
+(sd_ratio -9.5% bot, -29.9% top); residual FiLM was a clean null; the
+conditional moment head helped the mean but not the width.
+
+So the winning cell is every FM-v2 key at its native default, and this file
+therefore sets none of them -- the twelve-key tail is gone rather than
+restated. The defaults that carry the verdict are:
+
+    prior_fm_velocity_arch          mlp     (two-hidden-layer velocity MLP)
+    prior_velocity_hidden_dim       = prior_hidden_dim, 256
+    prior_fm_moments                False   (global standardization only)
+    prior_moment_calibration_epochs 0       (no moment stage)
+
+Everything below is what still has to be SAID, because it differs from the
+production profile in SAOI_all_input/ that these are rendered from.
 """
 import pathlib
 import sys
@@ -30,109 +40,60 @@ EPOCHS = '1000'
 FREEZE_AT = '700'
 TRAINING_SEED = '20260916'
 
-COMMON_PRIOR = {
-    'prior_hidden_dim': ('256', 'backwards-compatible prior width alias'),
-    'prior_condition_hidden_dim': ('256', 'HELD FIXED graph conditioner width'),
-    'prior_mp_layers': ('5', 'HELD FIXED graph conditioner depth'),
-    'prior_fm_blocks': ('4', 'residual block count; ignored by legacy MLP'),
-    'prior_fm_moment_hidden_dim': ('256', 'conditional moment-head width'),
-    'prior_fm_moment_weight': ('1.0', 'proper Gaussian cross-entropy weight'),
-    'prior_fm_moment_min_scale': ('0.03', 'positive diagonal scale floor'),
-    'prior_fm_moment_max_scale': ('20.0', 'diagonal scale ceiling'),
-}
-
-VARIANTS = (
-    ('P0', {
-        'prior_velocity_hidden_dim': ('256', 'P0 current FM velocity width'),
-        'prior_fm_velocity_arch': ('mlp', 'P0 current two-hidden-layer velocity MLP'),
-        'prior_fm_moments': ('False', 'P0 global standardization only'),
-        'prior_moment_calibration_epochs': ('0', 'no conditional moment stage'),
-    }, 'current FM baseline'),
-    ('P1', {
-        'prior_velocity_hidden_dim': ('512', 'P1 wider velocity only'),
-        'prior_fm_velocity_arch': ('mlp', 'same MLP as P0'),
-        'prior_fm_moments': ('False', 'global standardization only'),
-        'prior_moment_calibration_epochs': ('0', 'no conditional moment stage'),
-    }, 'wider velocity control'),
-    ('P2', {
-        'prior_velocity_hidden_dim': ('512', 'matched to P1'),
-        'prior_fm_velocity_arch': ('residual_film', 'residual velocity with time/condition FiLM'),
-        'prior_fm_moments': ('False', 'global standardization only'),
-        'prior_moment_calibration_epochs': ('0', 'no conditional moment stage'),
-    }, 'residual FiLM FM'),
-    ('P3', {
-        'prior_velocity_hidden_dim': ('512', 'matched to P1/P2'),
-        'prior_fm_velocity_arch': ('residual_film', 'matched to P2'),
-        'prior_fm_moments': ('True', 'conditional mean/diagonal scale plus residual FM'),
-        'prior_moment_calibration_epochs': (
-            '50', 'fit moments on frozen posterior, then freeze base and fit residual FM'),
-    }, 'conditional-moment residual FM'),
-)
-
-ARMS = []
-arm_number = 0
-for half in ('bot', 'top'):
-    for variant, changes, description in VARIANTS:
-        arm_number += 1
-        overrides = dict(COMMON_PRIOR)
-        overrides.update(changes)
-        overrides['fm_variant'] = (variant, f'report label: {description}')
-        ARMS.append((str(arm_number), half, overrides,
-                     f'{half} {variant}: {description}'))
+# Named by board half, not by number. The halves are different datasets, not
+# variants of one recipe, and `bot.pth` cannot be confused with an arm of the
+# retired ablation the way a renumbered `2.pth` could.
+ARMS = [
+    ('bot', 'bot', {}, 'bottom board half'),
+    ('top', 'top', {}, 'top board half'),
+]
+GPU_OF = {'bot': 0, 'top': 1}
 
 BANNER = """%   ============================================================
-%   SAOI MeshGraphNets-V FM-v2 -- arm {arm} ({note})
+%   SAOI MeshGraphNets-V FM-v2 -- {note}
 %
-%   board half {half}
-{axis}
-%   gpu {gpu}; all arms start from scratch with the same training RNG seed.
+%   board half {half}; gpu {gpu}
 %
-%   Controlled P0 -> P1 -> P2 -> P3 ablation. Encoder/decoder, graph
-%   conditioner, split, optimizer, frozen-prior tail and evaluation are fixed.
+%   FM prior: native defaults (MLP velocity at prior_hidden_dim, no
+%   conditional moments). That is the P0 cell of the retired eight-arm
+%   ablation, which won sd_ratio, PITtails and PIT_KS in both halves.
 %   GENERATED by gen_configs.py; do not hand-edit.
 %   ============================================================
 """
 
 INFER_BANNER = """%   ============================================================
-%   SAOI FM-v2 inference -- arm {arm} ({note}), eval set {tag}.
+%   SAOI FM-v2 inference -- {note}, eval set {tag}; gpu {gpu}.
 %
 %   `_infer_` supplies graph/thickness/recorded B.C.; `_compare_` supplies the
-%   realizations of that same condition. posterior_vs_prior.py verifies node
-%   coordinates, topology, condition rows and configured node/B.C. types.
-%   gpu {gpu}. GENERATED by gen_configs.py; do not hand-edit.
+%   realizations of that same condition, which is what the generated-versus-GT
+%   spread histogram is scored against. Each eval set is ONE part with 125
+%   realizations, so the histogram's target width ratio is exactly 1.
+%   GENERATED by gen_configs.py; do not hand-edit.
 %   ============================================================
 """
-
-ARCH_KEYS = {
-    'prior_hidden_dim', 'prior_condition_hidden_dim', 'prior_mp_layers',
-    'prior_velocity_hidden_dim', 'prior_fm_velocity_arch', 'prior_fm_blocks',
-    'prior_fm_moments', 'prior_fm_moment_hidden_dim',
-    'prior_fm_moment_weight', 'prior_fm_moment_min_scale',
-    'prior_fm_moment_max_scale',
-}
 
 SPEC = dict(
     here=HERE,
     prod_dir=HERE.parent / 'SAOI_all_input',
     out_root=OUT_ROOT,
     slug='meshgraphnets-v',
-    title='MeshGraphNets-V SAOI FM-v2 sweep -- P0/P1/P2/P3 for bot and top:',
+    title='MeshGraphNets-V SAOI FM-v2 -- bot and top on one recipe:',
     banner=BANNER,
     infer_banner=INFER_BANNER,
     arms=ARMS,
-    gpu_of=lambda arm: int(arm) - 1,
+    gpu_of=lambda arm: GPU_OF[arm],
     infer_sources={
         's26fe_main': 'config_infer_s26fe_main_{half}.txt',
         's26fe_sec':  'config_infer_s26fe_sec_{half}.txt',
         'sm_l345u':   'config_infer_sm_l345u_main_{half}.txt',
     },
-    arch_keys=ARCH_KEYS,
+    arch_keys=set(),
     train_fixed={
         'Training_epochs': (EPOCHS, 'complete from-scratch schedule'),
-        'Batch_size': ('16', 'held fixed across every arm'),
+        'Batch_size': ('16', 'held fixed across both halves'),
         'training_seed': (TRAINING_SEED,
-                          'same initialization, shuffle and stochastic latent streams'),
-        'split_seed': ('42', 'same 80/10/10 membership'),
+                          'pinned initialization, shuffle and stochastic latent streams'),
+        'split_seed': ('42', 'same 80/10/10 membership in both halves'),
         'prior_freeze_epoch': (
             FREEZE_AT,
             f'freeze encoder/decoder at {FREEZE_AT}; fit only the prior for '
@@ -140,7 +101,7 @@ SPEC = dict(
         'val_interval': ('30', 'CRPS checkpoint-selection interval'),
         'test_interval': ('200', 'periodic visualization interval'),
         'best_by': ('crps', 'select the inference distribution, not posterior reconstruction'),
-        'hierarchy_cache_keep': ('True', 'all parallel arms share the hierarchy cache'),
+        'hierarchy_cache_keep': ('True', 'both halves share the hierarchy cache'),
         'recon_loss': ('mse', 'held fixed field reconstruction loss'),
         'alpha_recon': ('1000', 'held fixed reconstruction multiplier'),
         'beta_aux': ('10', 'held fixed decoded peak-to-valley supervision'),
@@ -152,18 +113,15 @@ SPEC = dict(
     infer_fixed={
         'split_seed': (
             '42',
-            'MUST match training: posterior_vs_prior.py fits its normalizers on '
-            'the train split, so a different seed denormalizes every spread by '
-            'the wrong constants'),
+            'MUST match training: the split decides which 80% the normalizers '
+            'are fit on, and those denormalize every spread'),
         'num_vae_samples': ('2000', 'stochastic prior draws per condition'),
-        'save_rollouts': ('False', 'retain statistics without thousands of field files'),
+        'save_rollouts': ('False',
+                          'the histogram and spread_values.npz are the record; '
+                          'thousands of field files are not'),
         'make_histogram': ('True', 'GT versus generated peak-to-valley distribution'),
         'show_histogram': ('False', 'headless execution'),
         'hierarchy_seed': ('0, 1, 2, 3', 'average over fixed coarsening variants'),
-    },
-    det_fixed={
-        'num_vae_samples': ('1', 'conditional-centre bias control'),
-        'prior_temperature': ('1e-9', 'remove initial sampling noise'),
     },
 )
 

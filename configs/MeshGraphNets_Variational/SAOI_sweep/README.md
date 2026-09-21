@@ -1,99 +1,124 @@
-# MeshGraphNets-V SAOI FM-v2 sweep
+# MeshGraphNets-V SAOI FM-v2
 
-Run the complete campaign from the repository root:
+One recipe, two board halves. Run the whole thing from the repository root:
 
 ```bash
 bash configs/MeshGraphNets_Variational/SAOI_sweep/run_sweep.sh
 ```
 
-The command generates every config, checks the training and evaluation data,
-trains all models from scratch, performs stochastic and deterministic
-inference, creates the same-condition GT/posterior/prior diagnostics, ranks the
-arms and writes `docs/research/SAOI_FM_V2_SWEEP_MGNV.md`.
+That generates the configs, checks the training and evaluation data, trains
+`bot` and `top` from scratch in parallel (one GPU each), then runs inference on
+each of the three evaluation sets.
 
-Outputs are isolated from the previous campaign under:
+**Inference is what draws the figure.** With `make_histogram True` — which the
+generated infer configs set — `inference_profiles/rollout.py` writes the
+GT-versus-generated peak-to-valley histogram, `spread_values.npz` and the
+machine-readable `[SPREAD]` log lines itself. There is no separate figure,
+diagnostic or ranking stage in this pipeline.
+
+Everything lands under:
 
 ```text
 output/meshgraphnets-v/saoi_fm_v2_sweep/
+    bot.pth  top.pth         checkpoints
+    bot.log  top.log         training logs
+    infer/                   rollout metrics, spread_values.npz, histogram PNGs
+    run_logs/                per-stage launcher logs
 ```
 
-## Controlled comparison
+## The two arms
 
-Each board half uses four arms. The graph conditioner remains 256-wide with
-five message-passing layers in every arm.
-
-| Variant | Velocity | Conditional base | Question answered |
+| Arm | Data | GPU | Checkpoint |
 |---|---|---|---|
-| P0 | legacy MLP, width 256 | global standardization | current FM baseline |
-| P1 | legacy MLP, width 512 | global standardization | does velocity capacity help? |
-| P2 | four residual FiLM blocks, width 512 | global standardization | does time/condition modulation help? |
-| P3 | same as P2 | `mu(c)`, diagonal `L(c)` plus residual FM | does explicit conditional location/scale help? |
+| `bot` | bottom board half | 0 | `bot.pth` |
+| `top` | top board half | 1 | `top.pth` |
 
-Arms 1–4 are `bot` P0–P3 and arms 5–8 are `top` P0–P3. All arms use the
-same `training_seed=20260916`, split, batch size, loss weights, graph
-conditioner, 1000-epoch schedule and prior-only tail from epoch 700. The FM
-gradient to the posterior encoder is disabled in every arm.
+They are not variants of one recipe — they are different datasets. The recipe
+is identical and fixed: `training_seed 20260916`, `split_seed 42`, batch size
+16, 1000 epochs with the encoder/decoder frozen at epoch 700 so the last 300
+fit only the prior on a fresh cosine, `best_by crps`, and no FM gradient into
+the posterior encoder (`prior_grad_to_encoder 0.0`).
 
-During P3 training, the moment head minimizes the analytic Gaussian
-cross-entropy against posterior `mu/logvar`. The residual FM receives
+## Why the FM-v2 keys are absent from these configs
+
+This directory used to hold an eight-arm ablation over the flow-matching prior:
+`bot`/`top` × P0–P3, where P0 was the untouched baseline, P1 widened the
+velocity MLP 256 → 512, P2 replaced it with four residual FiLM blocks at width
+512, and P3 added a graph-conditioned moment head `mu(c), L(c)` on top of P2.
+
+That campaign is finished. **P0 won**, and P0 is exactly the native default, so
+`gen_configs.py` now sets none of those twelve keys rather than restating them.
+
+| Question | Verdict |
+|---|---|
+| Does velocity capacity help? (P1, 256 → 512) | **No — actively harmful.** The largest replicated effect in the sweep: `sd_ratio` fell 9.5% on `bot` and 29.9% on `top`. |
+| Does time/condition modulation help? (P2, residual FiLM) | **No — a clean null** in both halves. |
+| Do explicit conditional moments help? (P3) | Helped the conditional mean, not the width. |
+
+P0 won `sd_ratio`, `PITtails` and `PIT_KS` in **both** halves. Its single loss
+was `W1/sd`, by under 2% — inside single-seed noise, and a conditional-mean
+metric rather than the width and calibration this model exists to get right.
+
+The defaults that carry that verdict, for the record:
 
 ```text
-r* = (z* - mu(c)) / L(c)
+prior_fm_velocity_arch          mlp     two-hidden-layer velocity MLP
+prior_velocity_hidden_dim       = prior_hidden_dim, 256
+prior_fm_moments                False   global standardization only
+prior_moment_calibration_epochs 0       no moment stage
 ```
 
-with `mu(c), L(c)` detached from the FM loss. This keeps conditional moments
-and nonlinear residual transport from redefining each other's scale.
-After the simulator freezes at epoch 700, P3 uses epochs 700–749 to calibrate
-the graph conditioner and moment head against the fixed posterior. It then
-freezes both and uses epochs 750–999 for residual-velocity fitting on another
-fresh cosine schedule. Checkpoint selection restarts at each boundary; the
-joint and moment-stage bests remain available as `.joint.pth` and
-`.moment.pth` controls.
+The retired arms' artifacts (`1.pth` … `8.pth`) are untouched in the same
+output directory. `bot.pth`/`top.pth` are new names, which is why the arms were
+renamed rather than renumbered: a renumbered arm `2` would load `2.pth`, the
+retired bot-P1 checkpoint. The trained P0 arms can be kept without retraining:
 
-## Boundary conditions and comparison contract
+```bash
+cp output/meshgraphnets-v/saoi_fm_v2_sweep/1.pth output/meshgraphnets-v/saoi_fm_v2_sweep/bot.pth
+cp output/meshgraphnets-v/saoi_fm_v2_sweep/5.pth output/meshgraphnets-v/saoi_fm_v2_sweep/top.pth
+```
 
-For one evaluation case, the fixed condition is
+## What the histogram is scored against
+
+For one evaluation case the condition is fixed:
 
 ```text
 c = graph geometry + mesh topology + thickness/recorded condition rows
     + configured node/B.C. types
 ```
 
-The `_compare_` file supplies multiple physical realizations under that same
-condition. Before any comparison, `posterior_vs_prior.py` verifies coordinates,
-topology, condition rows and configured B.C. types against the `_infer_` graph.
-A mismatch stops the diagnostic.
+The `_infer_` file is ONE part's geometry; the matching `_compare_` file holds
+125 physical realizations of that same part. That is why the target width ratio
+is exactly **1** — the model draws 2000 samples under the condition and their
+peak-to-valley spread should match the 125 real ones.
 
-The report then compares:
+`check_eval_inputs.py` verifies the pairing before any GPU work, because an
+`_infer_`/`_compare_` mismatch compares two different parts and reads as a
+spread defect.
 
-1. GT realizations;
-2. posterior-mean decode;
-3. posterior-sample decode;
-4. graph-conditioned FM-prior decode.
-
-PNG is embedded in the report. Matching PDF and SVG files are written for the
-paper, with the latent slot/PCA numbers in JSON:
-
-```text
-output/meshgraphnets-v/saoi_fm_v2_sweep/diag/<arm>/<eval-set>/
-```
+`split_seed 42` appears in the inference configs for the same reason it appears
+in training: the split decides which 80% the normalizers are fit on, and those
+normalizers denormalize every spread.
 
 ## Operational controls
 
-The normal command runs everything. Selected stages can be repeated without
-editing configs:
+The bare command runs everything. Stages can be repeated without editing
+configs:
 
 ```bash
-TRAIN=0 INFER=0 PVP=1 SCORE=1 PVP_FORCE=1 \
+# re-run inference (and its histograms) on existing checkpoints
+TRAIN=0 bash configs/MeshGraphNets_Variational/SAOI_sweep/run_sweep.sh
+
+# one half, one evaluation set
+ARMS=bot INFER_TAGS=s26fe_main TRAIN=0 \
 bash configs/MeshGraphNets_Variational/SAOI_sweep/run_sweep.sh
 ```
 
-Useful variables are `ARMS`, `INFER_TAGS`, `PVP_N`, `PVP_CHUNK`, `STAGGER`,
-and `PYTHON`. Config regeneration and both preflights default to on. A
-preflight failure aborts before GPU work so a partial grid cannot be mistaken
-for a controlled sweep.
+Variables: `ARMS`, `INFER_TAGS`, `STAGGER`, `PYTHON`, and the stage switches
+`GENERATE`, `PREFLIGHT`, `STRICT_PREFLIGHT`, `EVAL_PREFLIGHT`, `TRAIN`,
+`INFER`.
 
-Training arms run in parallel, one per GPU. After training, the script accepts
-only checkpoints newer than each arm's launch marker, preventing an old
-checkpoint from being inferred after a failed fresh run. Inference and the
-posterior/prior diagnostic also run in parallel by arm.
+Config regeneration and both preflights default to on. A preflight failure
+aborts before any GPU work. After training, the script accepts only checkpoints
+newer than each arm's launch marker, so an old checkpoint cannot be inferred
+after a failed fresh run.
