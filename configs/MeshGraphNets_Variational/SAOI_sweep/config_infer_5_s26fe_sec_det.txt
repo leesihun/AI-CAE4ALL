@@ -94,6 +94,7 @@ time_integration	ar_ot  # ar_ot = one-step/teacher-forced (default); ar_rt = ful
 
 
 %   Sweep-only keys (absent from the production profile)
+split_seed	42  # MUST match training: posterior_vs_prior.py fits its normalizers on the train split, so a different seed denormalizes every spread by the wrong constants
 save_rollouts	False  # retain statistics without thousands of field files
 make_histogram	True  # GT versus generated peak-to-valley distribution
 show_histogram	False  # headless execution

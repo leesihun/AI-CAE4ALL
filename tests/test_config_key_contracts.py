@@ -57,6 +57,11 @@ def test_chi_mgnflow_rejects_the_unimplemented_copied_pipeline_surface():
         "chi-mgnflow",
         std_noise=0,
         message_passing_num=1,
+        use_multiscale=True,
+        coarsening_type="voronoi_seedmean",
+        multiscale_levels=1,
+        voronoi_clusters=6,
+        mp_per_level=[1, 1, 1],
     )
     assert any(item.code == "FLOW-LEGACY-NOISE" for item in legacy_zero)
     assert not [item for item in legacy_zero if item.severity == Severity.ERROR]

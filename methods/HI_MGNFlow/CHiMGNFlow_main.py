@@ -1,4 +1,4 @@
-# cHI-MGNflow -- conditional flow matching on mesh fields
+# cHI-MGNflow -- HI-MGN compressor + coarse-latent flow-matching prior (LDGN-style)
 import os
 import sys
 # Must be set before h5py is imported (transitively via data_loader/mesh_dataset)

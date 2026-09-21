@@ -32,6 +32,9 @@ edge_var	8
 positional_features	4
 
 message_passing_num	12
+%   Superseded by config_train_fixed.txt (see its header) -- kept for
+%   comparison, so ae_epochs matches that run's stage-1 budget.
+ae_epochs	200
 Training_epochs	400
 Batch_size	4
 LearningR	0.0005

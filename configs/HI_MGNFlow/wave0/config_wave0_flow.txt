@@ -36,6 +36,7 @@ feature_loss_weights	0.1, 0.1, 1
 edge_var	8
 positional_features	4
 message_passing_num	15
+ae_epochs	800  # stage-1 compressor; far fewer epochs than the flow prior needs (reasoned, not measured).
 training_epochs	4000  # same budget for both arms; long enough that the slower one also flattens
 batch_size	16
 learningr	0.0001

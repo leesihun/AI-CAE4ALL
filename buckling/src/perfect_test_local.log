@@ -1,0 +1,4 @@
+perfect_train_tight_2: starter rc=0 n_err=0 n_warn=0
+perfect_train_tight_2: ENGINE TIMEOUT/EXC after 1201.2s TimeoutExpired(['C:\\tmp\\OpenRadioss\\win64\\OpenRadioss\\exec\\engine_win64.exe', '-i', 'draw_0001.rad'], 1200)
+perfect_train_tight_1: starter rc=0 n_err=0 n_warn=0
+perfect_train_tight_1: engine rc=0 normal_term=True n_rows=50 final={'cycle': 4900, 'time': 0.986, 'i_energy': 0.09938, 'ke_t': 0.006667, 'ke_r': 0.0, 'ext_work': 0.1061} wall_s=63.3

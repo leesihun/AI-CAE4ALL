@@ -204,8 +204,12 @@ def main():
     torch.manual_seed(1234)
 
     # ---- data: same split, same normalizers, NO augmentation --------------
+    # 42 matches every trainer call site's default; an absent key reproduces a
+    # run that also omitted it, but a wrong seed silently refits the normalizers.
     ds = load_data(cfg)
-    tr, va, te = ds.split(0.8, 0.1, 0.1, seed=int(cfg['split_seed']))
+    if 'split_seed' not in cfg:
+        print("  [note] no split_seed in the config; using 42 (the trainer's default)")
+    tr, va, te = ds.split(0.8, 0.1, 0.1, seed=int(cfg.get('split_seed', 42)))
     for s in (tr, va, te):
         s.augment_geometry = False
     bs = a.batch_size or int(cfg['batch_size'])

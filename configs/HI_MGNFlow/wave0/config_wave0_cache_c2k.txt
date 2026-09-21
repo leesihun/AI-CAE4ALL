@@ -28,6 +28,7 @@ feature_loss_weights	0.1, 0.1, 1
 edge_var	8
 positional_features	4
 message_passing_num	15
+ae_epochs	1  # cache-warming run only; this checkpoint is discarded, see header.
 training_epochs	2
 batch_size	16
 learningr	0.0003

@@ -1,15 +1,19 @@
-"""Conditional flow matching in field space.
+"""Conditional flow matching -- generic path/ODE math, tensor-agnostic.
 
-The generative contract of this repo, in three lines:
+These functions do not care whether `y1` is a field or a latent; this repo
+applies them to the coarse latent produced by the stage-1 compressor
+(model/autoencoder.py), not to the raw field. In three lines:
 
-    z0  ~ N(0, I)                        noise field, same shape as the target
+    z0  ~ N(0, I)                        noise tensor, same shape as the target
     y_t = (1 - s*t) * z0 + t * y1        a point on the straight path, s = 1 - sigma_min
     u   = y1 - s * z0                    the velocity that path travels at
 
 The network regresses `u` from `(y_t, t, graph)`. Its regression optimum is the
 marginal velocity E[u | y_t, t, g], whose ODE flow transports N(0, I) exactly
-onto p(y | g) (Lipman et al. 2023, Liu et al. 2023). Nothing else is needed:
-no posterior encoder, no learned prior, no MMD, no scoring rule.
+onto p(y | g) (Lipman et al. 2023, Liu et al. 2023). This module alone needs
+nothing else: no posterior encoder, no learned prior, no MMD, no scoring rule
+-- the posterior encoder is a separate concern, one level up in the stage-1
+compressor.
 
 Two facts about cost that are easy to get wrong:
 

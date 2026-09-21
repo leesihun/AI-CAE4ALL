@@ -7,10 +7,41 @@ from .meshgraphnets_variational import VAR_KEYS, VAR_REMOVED_KEYS
 
 
 # The backbone is the HI-MGN V-cycle, so the whole mesh/multiscale key surface
-# is inherited verbatim from the variational spec. What differs is only the
-# generative machinery: every latent/prior key is gone, replaced by four flow
-# keys. Reusing VAR_KEYS rather than re-listing them means a future change to
-# the shared backbone stays in one place.
+# is inherited verbatim from the variational spec. What differs is the
+# generative machinery: this is now an LDGN-style two-stage model (Lino,
+# Pfaff & Thuerey, ICLR 2025, arXiv:2504.02843) -- a near-lossless compressor
+# (stage 1, 'train_ae') onto a coarse spatial latent, and a flow-matching
+# prior over that latent alone (stage 2, 'train_prior'), with 'train' running
+# both in sequence. Every key from the variational tree's pooled-vector VAE +
+# generic prior family is gone, replaced by AE_PRIOR_KEYS (the two-stage
+# architecture/mode surface) and FLOW_ONLY_KEYS (the flow-matching ODE
+# surface, unchanged: the prior is still a flow, just over a coarse latent
+# instead of the full field). Reusing VAR_KEYS rather than re-listing the
+# mesh/multiscale keys means a future change to the shared backbone stays in
+# one place.
+AE_PRIOR_KEYS = frozenset(
+    {
+        # Channels per COARSE-MESH NODE in the compressed latent (not one
+        # pooled vector -- see model/autoencoder.py). ARCHITECTURE-DEFINING:
+        # sizes both the compressor's bottleneck and the prior's input/output,
+        # so a checkpoint only loads under the value it trained with.
+        "latent_ch",
+        # KL(q(z|y) || N(0,I)) weight for the stage-1 compressor. Kept tiny
+        # (paper: ~1e-6) on purpose -- this is a near-lossless compressor, not
+        # a generative bottleneck; the generative job is stage 2's flow.
+        "ae_kl_weight",
+        # AdaLN-Zero GnBlocks in the stage-2 LatentFlowPrior's trunk.
+        "prior_blocks",
+        # mode 'train_prior' only: path to a checkpoint saved by a completed
+        # 'train_ae' run. Loaded once at construction and frozen; the
+        # compressor never receives gradient during stage 2.
+        "ae_checkpoint",
+        # mode 'train' (combined) only: stage-1 epoch budget. Stage 2 then
+        # runs for training_epochs, mirroring SimulGenVAE's combined pipeline.
+        "ae_epochs",
+    }
+)
+
 FLOW_ONLY_KEYS = frozenset(
     {
         # Number of ODE steps used at inference. A SAMPLING-TIME choice, not an
@@ -42,10 +73,6 @@ FLOW_ONLY_KEYS = frozenset(
         # Inference readout: 'sample' (integrate), 'mean' (1 forward at t=0) or
         # 'ensemble_mean' (average of num_vae_samples draws).
         "flow_predict",
-        # What the network output MEANS: 'v' velocity (default) or 'x' the clean
-        # field, converted to velocity by the exact path identity inside the
-        # model. flow_head_eps floors the conversion's denominator near t=1.
-        "flow_head", "flow_head_eps",
         # Validation sampling: how many ODE steps and how many ensemble members.
         # Cheaper than inference on purpose -- validation runs every val_interval.
         "val_flow_steps", "val_num_samples",
@@ -85,7 +112,27 @@ FLOW_RUNTIME_REMOVED_KEYS = frozenset(
     {"pipeline_microbatches", "std_noise", "noise_gamma", "noise_std_ratio"}
 )
 
-FLOW_KEYS = (VAR_KEYS - REMOVED_LATENT_KEYS - FLOW_RUNTIME_REMOVED_KEYS) | FLOW_ONLY_KEYS
+# Output-parameterization keys from the retired single-stage, field-space
+# flow design (network reparameterized its output as the clean field 'x'
+# instead of velocity; flow_head_eps floored the resulting division near
+# t=1 -- see configs/HI_MGNFlow/SAOI_sweep/, an unrun experiment built on
+# that design). The LDGN rewrite's prior always emits velocity over the
+# coarse latent, so there is no field-space division left to floor, and
+# flow_loss_weighting='x0' gets the same data-prediction effect as a LOSS
+# REWEIGHTING on that one untouched head. Kept known (not silently
+# CFG-UNKNOWN) so a leftover config gets a precise diagnostic instead of a
+# generic one.
+FLOW_HEAD_REMOVED_KEYS = frozenset({"flow_head", "flow_head_eps"})
+
+FLOW_KEYS = (VAR_KEYS - REMOVED_LATENT_KEYS - FLOW_RUNTIME_REMOVED_KEYS) | FLOW_ONLY_KEYS | AE_PRIOR_KEYS
+
+# Shared base for every training mode: what it takes to construct the full
+# LatentDiffusionGraphNet (compressor + prior), even in 'train_prior' where
+# the compressor's weights are immediately overwritten by a frozen checkpoint.
+_BASE_TRAIN_REQUIRED = frozenset({
+    "dataset_dir", "modelpath", "input_var", "output_var", "edge_var",
+    "latent_dim", "training_epochs", "batch_size", "learningr",
+})
 
 
 def validate_chi_mgnflow(ctx: SpecValidationContext) -> None:
@@ -100,6 +147,19 @@ def validate_chi_mgnflow(ctx: SpecValidationContext) -> None:
             f"or learned prior and ignores it.",
             field_name=name,
             hint="Delete the line. See methods/HI_MGNFlow/README.md for the replacement controls.",
+            promote_in_strict=True,
+        )
+
+    for name in sorted(FLOW_HEAD_REMOVED_KEYS.intersection(values)):
+        ctx.add(
+            "FLOW-HEAD-REMOVED",
+            Severity.WARNING,
+            f"{name} belongs to cHI-MGNflow's retired single-stage field-space "
+            "flow design (superseded by the LDGN-style two-stage compressor + "
+            "coarse-latent flow prior) and is not read by the current model.",
+            field_name=name,
+            hint="Delete the line; flow_loss_weighting=x0 gets the equivalent "
+                 "data-prediction effect on the one velocity head that remains.",
             promote_in_strict=True,
         )
 
@@ -179,22 +239,6 @@ def validate_chi_mgnflow(ctx: SpecValidationContext) -> None:
                 "flow_loss_weighting must be 'uniform' or 'x0'.",
                 field_name="flow_loss_weighting")
 
-    if ("flow_head" in values
-            and str(values["flow_head"]).lower().strip() not in {"v", "x"}):
-        ctx.add("FLOW-HEAD-001", Severity.ERROR,
-                "flow_head must be 'v' (network emits velocity) or 'x' (network "
-                "emits the clean field, converted to velocity inside the model).",
-                field_name="flow_head")
-    if "flow_head_eps" in values:
-        try:
-            eps = float(values["flow_head_eps"])
-        except (TypeError, ValueError):
-            eps = -1.0
-        if not 0.0 < eps < 1.0:
-            ctx.add("FLOW-HEAD-002", Severity.ERROR,
-                    "flow_head_eps floors the x-head denominator (1 - s*t) and must "
-                    "be in (0, 1); 0.05 is the default.",
-                    field_name="flow_head_eps")
     if ("flow_predict" in values
             and str(values["flow_predict"]).lower().strip()
             not in {"sample", "mean", "ensemble_mean"}):
@@ -222,12 +266,62 @@ def validate_chi_mgnflow(ctx: SpecValidationContext) -> None:
     if values.get("use_multiscale", False) is not True:
         ctx.add(
             "FLOW-FLAT",
-            Severity.WARNING,
-            "use_multiscale is off. At t~0 the network sees white noise plus the "
-            "geometry and must recover global structure from it, which a flat "
-            "message-passing stack cannot do within its receptive field.",
+            Severity.ERROR,
+            "cHI-MGNflow's LDGN-style architecture compresses the field onto a "
+            "coarse mesh level, which requires use_multiscale=True (with "
+            "multiscale_levels >= 1 and a matching mp_per_level). A flat "
+            "(non-hierarchical) HI-MGN has no coarse level to place the latent "
+            "on -- this now raises inside LatentDiffusionGraphNet.__init__, "
+            "not just a discouraged setting.",
             field_name="use_multiscale",
         )
+
+    # message_passing_num is a MeshGraphNets-family key inherited via VAR_KEYS;
+    # cHI-MGNflow's V-cycle depth comes entirely from mp_per_level (one entry
+    # per pre/coarsest/post stage) and never reads message_passing_num.
+    if "message_passing_num" in values:
+        ctx.add(
+            "FLOW-MPNUM-INERT",
+            Severity.NOTICE,
+            "message_passing_num is not read by cHI-MGNflow; the V-cycle's "
+            "per-level message-passing depth is set entirely by mp_per_level.",
+            field_name="message_passing_num",
+            hint="Delete the line, or set mp_per_level if you meant to change depth.",
+        )
+
+    if "latent_ch" in values:
+        v = integer(values["latent_ch"])
+        if v is None or v < 1:
+            ctx.add("FLOW-LATENTCH", Severity.ERROR,
+                    "latent_ch must be an integer >= 1.", field_name="latent_ch")
+
+    if "prior_blocks" in values:
+        v = integer(values["prior_blocks"])
+        if v is None or v < 1:
+            ctx.add("FLOW-PRIORBLOCKS", Severity.ERROR,
+                    "prior_blocks must be an integer >= 1.", field_name="prior_blocks")
+
+    if "ae_kl_weight" in values:
+        v = numeric(values["ae_kl_weight"])
+        if v is None or v < 0:
+            ctx.add("FLOW-AEKL", Severity.ERROR,
+                    "ae_kl_weight must be a number >= 0.", field_name="ae_kl_weight")
+        elif v > 1e-3:
+            ctx.add(
+                "FLOW-AEKL-LARGE",
+                Severity.WARNING,
+                f"ae_kl_weight={v:g} is large for a near-lossless compressor "
+                "(paper: ~1e-6). A strongly regularised stage-1 latent starves "
+                "stage 2's reconstruction quality independent of how well the "
+                "flow prior fits it.",
+                field_name="ae_kl_weight",
+            )
+
+    if "ae_epochs" in values:
+        v = integer(values["ae_epochs"])
+        if v is None or v < 1:
+            ctx.add("FLOW-AEEPOCHS", Severity.ERROR,
+                    "ae_epochs must be an integer >= 1.", field_name="ae_epochs")
 
 
 def build_chi_mgnflow_spec() -> MethodSpec:
@@ -237,13 +331,12 @@ def build_chi_mgnflow_spec() -> MethodSpec:
         model_ids=("chi-mgnflow",),
         repository="methods/HI_MGNFlow",
         entrypoint="CHiMGNFlow_main.py",
-        valid_modes=("train", "inference"),
-        known_keys=FLOW_KEYS | REMOVED_LATENT_KEYS | FLOW_RUNTIME_REMOVED_KEYS,
+        valid_modes=("train", "train_ae", "train_prior", "inference"),
+        known_keys=FLOW_KEYS | REMOVED_LATENT_KEYS | FLOW_RUNTIME_REMOVED_KEYS | FLOW_HEAD_REMOVED_KEYS,
         required_by_mode={
-            "train": frozenset({
-                "dataset_dir", "modelpath", "input_var", "output_var", "edge_var",
-                "latent_dim", "training_epochs", "batch_size", "learningr",
-            }),
+            "train": _BASE_TRAIN_REQUIRED | {"ae_epochs"},
+            "train_ae": _BASE_TRAIN_REQUIRED,
+            "train_prior": _BASE_TRAIN_REQUIRED | {"ae_checkpoint"},
             "inference": frozenset({
                 "modelpath", "infer_dataset", "input_var", "output_var", "edge_var",
             }),
@@ -251,10 +344,15 @@ def build_chi_mgnflow_spec() -> MethodSpec:
         recommended_by_mode={
             "train": frozenset({"feature_loss_weights", "split_seed", "parallel_mode",
                                 "flow_steps", "best_by"}),
+            "train_ae": frozenset({"feature_loss_weights", "split_seed", "parallel_mode"}),
+            "train_prior": frozenset({"split_seed", "parallel_mode", "flow_steps", "best_by"}),
         },
         defaults={
             "parallel_mode": "ddp",
             "use_multiscale": True,
+            "latent_ch": 4,
+            "ae_kl_weight": 1e-6,
+            "prior_blocks": 4,
             "flow_steps": 30,
             "flow_solver": "heun",
             "flow_time_freqs": 16,
@@ -263,9 +361,12 @@ def build_chi_mgnflow_spec() -> MethodSpec:
         },
         defaults_by_mode={"inference": {"inference_output_dir": "outputs/rollout"}},
         path_rules=(
-            PathRule("dataset_dir", PathKind.INPUT_FILE, frozenset({"train"})),
-            PathRule("modelpath", PathKind.OUTPUT_FILE, frozenset({"train"})),
+            PathRule("dataset_dir", PathKind.INPUT_FILE, frozenset({"train", "train_ae", "train_prior"})),
+            PathRule("modelpath", PathKind.OUTPUT_FILE, frozenset({"train", "train_ae", "train_prior"})),
             PathRule("modelpath", PathKind.INPUT_FILE, frozenset({"inference"})),
+            # Stage 2 alone loads a frozen stage-1 checkpoint at construction
+            # time, before training even starts -- an input, not an output.
+            PathRule("ae_checkpoint", PathKind.INPUT_FILE, frozenset({"train_prior"})),
             PathRule("infer_dataset", PathKind.INPUT_FILE, frozenset({"inference"})),
             # Scoring-only, but a stale path here is SILENT: rollout.py prints a
             # skip at the very end of a finished run, so the histogram is simply

@@ -1,0 +1,30 @@
+\relax 
+\providecommand\hyper@newdestlabel[2]{}
+\providecommand*\HyPL@Entry[1]{}
+\HyPL@Entry{0<</S/D>>}
+\@writefile{toc}{\contentsline {section}{\numberline {1}왜 이런 벤치마크가 필요한가}{1}{section.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {2}1. 형상(Geometry) --- 어떤 지오메트리들을 다루는가}{2}{section.2}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {1}{\ignorespaces 형상 티어 구성. $R$=반지름, $t$=두께, $L$=길이. train은 격자로 채운 $R/t \times L/R$ 조합, t1은 그 범위 바깥에서 파라미터를 외삽(extrapolation)한 조합이다 --- 형상족은 항상 같고, 오직 $R,t,L$의 값만 학습 범위 밖으로 나간다. 총 16개 형상, 704 draw.}}{2}{table.caption.3}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {1}{\ignorespaces 다루는 유일한 형상: 원형 원통형 쉘. $R,t,L$ 세 파라미터만 형상마다 바뀌며, $R/t$(슬렌더니스)와 $L/R$(길이비)로 스윕한다. 바닥은 고정, 상단에서 축방향 하중 $P$를 준다.}}{3}{figure.caption.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {3}2. Imperfection --- 어떤 방식으로, 어떤 랜덤으로 들어가는가}{3}{section.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.1}Dimple 하나의 모양}{3}{subsection.3.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.2}무엇이, 어떻게 랜덤인가}{4}{subsection.3.2}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {2}{\ignorespaces 한 형상에서 쉘 표면을 펼쳐 그린 imperfection 실현값 세 가지 (같은 형상, 다른 draw). 시각적 명료성을 위해 각 draw마다 4개의 dimple만 그린 단순화된 도식이다 --- 실제 벤치마크는 개수 $K$ 자체를 평균 20인 정규분포에서 뽑는다(2.2절). RSA로 배치된 dimple들이 서로 다른 위치·부호· 크기로 나타난다($+$ 표시가 dimple 중심). 색 스케일은 세 패널이 공유하며, 이 그림 전체가 모델에게는 \textbf  {보이지 않는다} --- 모델이 보는 것은 완벽한 원통뿐이다.}}{5}{figure.caption.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.3}저장 방식: 노드 값이 아니라 dimple 목록}{5}{subsection.3.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {4}3. 절차 --- 어떻게 실제로 이 imperfection이 구조 해석에 들어가는가}{5}{section.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {5}4. 예상 출력(Output) --- 데이터셋에 실제로 무엇이 담기는가}{6}{section.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.1}하나의 "샘플"이 무엇인가}{6}{subsection.5.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.2}실제 렌더링: 학습 형상 10개의 원본과 최종 변형}{6}{subsection.5.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.3}HDF5에 저장되는 행(row)}{6}{subsection.5.3}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {2}{\ignorespaces HDF5 저장 계약. Imperfection이 하나의 법칙으로 줄어들면서, 이전 설계에 있던 "결정론적 성분 오프셋" 행(구 6:9)이 사라져 총 8개 행으로 단순해진다. Dimple 목록 $\{\theta _k,z_k,a_k\}$과 $\sigma $는 이 표에 없는 별도의 \texttt  {latent/} 그룹에 저장되며, 모델이 읽는 입력 행에는 절대 포함되지 않는다.}}{6}{table.caption.6}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.4}"성공"은 어떻게 판단하는가}{6}{subsection.5.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {6}5. 참고 연구와의 비교: Butterfly Defect (arXiv:2607.19245)}{6}{section.6}\protected@file@percent }
+\gdef \LT@i {\LT@entry 
+    {1}{79.97733pt}\LT@entry 
+    {1}{165.6447pt}\LT@entry 
+    {1}{159.6447pt}}
+\@writefile{lot}{\contentsline {table}{\numberline {3}{\ignorespaces 원본 논문과 이 벤치마크의 설계 차이를 상세 비교한 표. Imperfection의 생성 메커니즘(위치/진폭/폭의 수식과 크기법칙, 최소 분리거리)은 검증 후 정확히 계승했다(진폭 분포는 이번 검토에서 파라미터를 원 논문 수치로 다시 역산해 고쳤다). 재료는 원 논문의 Neo-Hookean 초탄성이 아니라 선형탄성 모형재료($E{=}1$, $\nu {=}0.3$)로, 이 프로젝트의 다른 벤치마크들과 통일한 의도적 선택이다. 형상 스윕의 \emph  {철학} ($Z$ 고정 대 가변), 결함 개수 $K$의 \emph  {분포}(고정값 없이 draw마다 확률적)와 배치 제외 영역의 \emph  {세부 규칙}, 그리고 imperfection 수식의 \emph  {일반형}(이방성 대 등방)은 각각 다르지만, 수식의 일반형은 우리가 실제로 쓰는 특수 경우($a{=}1,\lambda {=}1$)에서는 원 논문과 일치한다. 남은 근본적인 차이는 --- 애초에 이 벤치마크가 존재하는 이유인 --- imperfection의 가시성과 출력 형식(분포 대 스칼라) 두 곳이다.}}{9}{table.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.1}sparse defect 영역을 의도적으로 목표로 한다}{9}{subsection.6.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {7}요약}{9}{section.7}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {3}{\ignorespaces 생산 캠페인에서 실제로 계산된 학습 형상 10개(\#0--\#9), 각각 대표 draw(seed 0) 하나씩. 왼쪽 패널은 원본(완벽한 원통, $t{=}0$ ANIM 프레임), 오른쪽 패널은 최종 변형($t{=}t_\mathrm  {end}$ ANIM 프레임)이며 색은 반경 방향 변위 $r(t_\mathrm  {end})-r(t{=}0)$를 나타낸다. 실제 좌굴 후 반경 변위는 반경 $R$의 몇 퍼센트에 불과해 눈에 보이지 않으므로, 기하학적으로만 x226--x350배 과장했다(패널마다 표시된 배율; 색 스케일 자체는 과장하지 않은 실제 값이다). 각 패널의 물결 개수가 그 형상 draw의 좌굴 모드 $K$(요약 로그에 기록된 값)와 일치한다 --- OpenRadioss의 \texttt  {ANIM} 바이너리를 벤더 제공 \texttt  {anim\_to\_vtk} 변환기로 VTK로 바꾼 뒤 PyVista로 렌더링했다. 같은 형상 안에서 draw마다 달라지는 것(이 절의 핵심 주장)은 이 그림이 아니라 통계적 분포로 별도 확인했다 --- 여기 있는 10개는 형상 \emph  {간} 다양성만 보여준다.}}{10}{figure.caption.5}\protected@file@percent }
+\gdef \@abspage@last{10}

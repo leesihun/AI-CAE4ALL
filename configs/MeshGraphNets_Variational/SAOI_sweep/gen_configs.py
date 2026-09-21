@@ -150,6 +150,11 @@ SPEC = dict(
         'num_vae_samples': ('10000', 'unused during training'),
     },
     infer_fixed={
+        'split_seed': (
+            '42',
+            'MUST match training: posterior_vs_prior.py fits its normalizers on '
+            'the train split, so a different seed denormalizes every spread by '
+            'the wrong constants'),
         'num_vae_samples': ('2000', 'stochastic prior draws per condition'),
         'save_rollouts': ('False', 'retain statistics without thousands of field files'),
         'make_histogram': ('True', 'GT versus generated peak-to-valley distribution'),

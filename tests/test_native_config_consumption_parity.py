@@ -38,6 +38,7 @@ RUNTIME_INTERNAL = {
         "_ddp_port", "_norm_stats", "_pin_memory", "log_dir",
         "num_node_types", "num_timesteps",
         "det_prob", "logit_scale", "t_sampling", "weighting",
+        "predict", "solver", "steps",
     },
     "methods/Neural_Operator": {"_norm_stats", "_paper_target_mean", "_paper_target_std"},
     "methods/Transolver": {

@@ -153,6 +153,13 @@ def build_model_config(config) -> dict:
         # Explicit identity prevents this shared HI-MGN backbone from being
         # mistaken for deterministic MeshGraphNets by checkpoint-only tools.
         'model':             'chi-mgnflow',
+        # Which stage produced this file: 'train_ae' (compressor only, prior
+        # untrained), 'train_prior' (loaded a frozen ae_checkpoint), or 'train'
+        # (combined run -- by the time this saves, both stages have been fit).
+        'training_stage':    str(config.get('mode', 'train')).lower().strip(),
+        'latent_ch':         config.get('latent_ch', 4),
+        'ae_kl_weight':      config.get('ae_kl_weight', 1e-6),
+        'prior_blocks':      config.get('prior_blocks', 4),
         'input_var':         config.get('input_var'),
         'output_var':        config.get('output_var'),
         'cond_var':          config.get('cond_var', 0),

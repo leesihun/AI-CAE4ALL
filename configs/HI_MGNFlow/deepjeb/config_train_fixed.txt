@@ -32,6 +32,14 @@
 %   converted by dataset/build_deepjeb_mgn.py. 57 brackets x 4 load cases,
 %   split BY BRACKET so the four cases of one geometry never straddle a split.
 %   ============================================================
+%   ============================================================
+%   LDGN-style two-stage architecture (Lino, Pfaff & Thuerey, ICLR 2025,
+%   arXiv:2504.02843): stage 1 (ae_epochs) is a near-lossless HI-MGN
+%   compressor onto the coarsest V-cycle level (~100 nodes here); stage 2
+%   (training_epochs) is a flow-matching prior over THAT coarse latent only,
+%   conditioned on geometry/load case. mode train runs both in sequence and
+%   freezes stage 1 before stage 2 starts. See methods/HI_MGNFlow/README.md.
+%   ============================================================
 model	chi-mgnflow
 mode	train
 gpu_ids	0
@@ -52,7 +60,17 @@ feature_loss_weights	1.0, 1.0
 edge_var	8
 positional_features	4
 
-message_passing_num	12
+%   Coarse latent (stage 1) + flow prior (stage 2) sizing. Defaults match the
+%   paper (latent_ch 4, ae_kl_weight ~1e-6 -- a compressor, not a generative
+%   bottleneck); made explicit here rather than left to rely on the spec's
+%   own defaults.
+latent_ch	4
+ae_kl_weight	1e-6
+prior_blocks	4
+%   Stage 1 is supervised reconstruction (fast, well-posed) so it needs far
+%   fewer epochs than the flow-matching stage; UNVERIFIED starting point --
+%   watch the stage-1 recon curve and shorten/lengthen once it's run.
+ae_epochs	200
 Training_epochs	400
 %   was 4. At flow_det_prob 0.25 a batch of 4 pins only ~1 graph per step to
 %   t=0 -- and best_by det selects on exactly that slice. 16 gives 4 graphs.

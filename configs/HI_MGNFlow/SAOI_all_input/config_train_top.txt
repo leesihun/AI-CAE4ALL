@@ -42,6 +42,7 @@ positional_features	4
 
 %   Network parameters
 message_passing_num	15  # ignored when use_multiscale=True
+ae_epochs	1000  # stage-1 compressor; far fewer epochs than the flow prior needs (reasoned, not measured -- watch the recon curve).
 training_epochs	6000  # FM needs more steps than a deterministic regressor: the
 %   target y-z0 carries irreducible noise of size Var(y|g). The multiple is
 %   NOT the integration step count -- measure it by comparing against a

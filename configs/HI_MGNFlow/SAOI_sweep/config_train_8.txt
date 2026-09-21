@@ -43,6 +43,7 @@ positional_features	4
 
 %   Network parameters
 message_passing_num	15  # ignored when use_multiscale=True
+ae_epochs	400  # stage-1 compressor; far fewer epochs than the flow prior needs (reasoned, not measured -- same across all 8 sweep arms so only the swept hyperparameter differs).
 training_epochs	2000  # no resume exists and cosine_T0 = epochs - warmup, so this is a COMPLETE run at its own schedule; ~113 s/epoch measured on one card at k0
 batch_size	16  # the grid measured b16 < b32 by 0.288
 learningr	0.0001  # FIXED at the previous grid marginal winner (tie, 0.083)

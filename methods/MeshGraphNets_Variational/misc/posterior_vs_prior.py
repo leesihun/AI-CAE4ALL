@@ -357,8 +357,14 @@ def main():
     torch.manual_seed(1234)
 
     # ---- normalizers from the TRAINING split, exactly as the trainer fit them
+    # The seed picks WHICH 80% those statistics come from, so one that disagrees
+    # with the training run denormalizes every spread by the wrong constants.
+    # 42 is what every trainer call site defaults to, so an absent key
+    # reproduces a run that also omitted it -- but say so rather than assume it.
     ds = load_data(cfg)
-    tr, va, te = ds.split(0.8, 0.1, 0.1, seed=int(cfg['split_seed']))
+    if 'split_seed' not in cfg:
+        print("  [note] no split_seed in the config; using 42 (the trainer's default)")
+    tr, va, te = ds.split(0.8, 0.1, 0.1, seed=int(cfg.get('split_seed', 42)))
     for s in (tr, va, te):
         s.augment_geometry = False
     dm = torch.tensor(tr.delta_mean, device=dev)

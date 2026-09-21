@@ -1,0 +1,546 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{fontspec}
+\usepackage{xeCJK}
+\setCJKmainfont{Batang}[BoldFont=Malgun Gothic]
+\setCJKsansfont{Malgun Gothic}
+\XeTeXlinebreaklocale "ko"
+\XeTeXlinebreakskip = 0pt plus 1pt minus 1pt
+
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{parskip}
+\usepackage{tikz}
+\usepackage[colorlinks=true,linkcolor=blue,urlcolor=blue]{hyperref}
+
+\title{cHI-MGNflow: 계층적 메시 그래프 위의\\2단계 잠재 Flow-Matching 모델}
+\author{AI-CAE4ALL --- \texttt{methods/HI\_MGNFlow} 내부 기술 리포트}
+\date{2026-09-18}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+메시 기반 시뮬레이션 대체 모델(surrogate model)에서, 하나의 형상·경계조건이
+유일한 정답이 아니라 \textbf{가능한 결과들의 분포}에 대응하는 문제(접촉,
+좌굴, 기타 경로 의존적 물리)가 존재한다. 본 리포트는 이러한 문제를 위해 이
+코드베이스가 채택한 조건부 생성 모델, cHI-MGNflow의 구조를 기술한다.
+cHI-MGNflow는 Lino, Pfaff \& Thuerey (ICLR 2025)의 논문 \textit{Learning
+Distributions of Complex Fluid Simulations with Diffusion Graph Networks}가
+제안한 LDGN(그 논문이 자신의 압축-latent 변형에 붙인 이름)의 2단계 설계
+--- 근손실 없는 그래프 압축기(stage 1)
++ 그 압축된 잠재 위에서만 동작하는 flow-matching prior(stage 2) --- 를
+그대로 채택하되, 논문 자체의 멀티스케일 백본을 이 리포지토리의 계층적
+HI-MGN V-cycle로 대체한 것이다. 이전 버전(field-space flow matching, 압축
+없음)은 학습·추론 분포는 일치시켰지만 매 ODE 스텝마다 전체 V-cycle을 다시
+돌려야 했고 reconstruction 단계에서부터 결과가 맞지 않았다. 본 아키텍처는
+압축과 분포 일치를 동시에 만족시켜, 샘플당 전체 V-cycle forward를 정확히
+2회(encode 1회, decode 1회)로 고정하고 K-step ODE 적분은 가장 coarse한
+레벨 하나에만 국한시킨다.
+\end{abstract}
+
+\section{서론}
+
+MeshGraphNets류 모델은 결정론적 encode-process-decode 구조로 메시 위의
+물리량을 예측한다. 그러나 결과가 초기 미세조건이나 경로에 따라 갈리는
+문제(접촉, 좌굴 모드 선택 등)에서는 하나의 예측값이 아니라 조건부 분포
+$p(y\mid c)$를 모델링해야 하며, 학습과 추론에서 이 분포로부터 표본을 뽑는
+절차 자체가 아키텍처의 일부가 된다.
+
+이 코드베이스는 이 문제에 두 가지 설계로 접근해왔다.
+
+\begin{enumerate}
+\item \textbf{MeshGraphNets-Variational} --- VAE로 posterior $q(z\mid y,c)$를
+  학습하고, 추론용으로 별도의 근사 prior $p(z\mid c)$를 학습한다. 두 분포가
+  정확히 같을 이유가 없어 aggregate-posterior drift가 발생한다.
+\item \textbf{cHI-MGNflow (이전 버전)} --- 이 불일치를 없애기 위해 필드
+  공간에서 직접 conditional flow matching을 적용했다: 학습·추론 모두
+  $\mathcal{N}(0,I)$에서 출발해 같은 ODE로 목표 분포에 도달하므로 분포
+  불일치 자체가 없다. 다만 압축이 전혀 없어 노드 수 $\times$
+  \texttt{output\_var} 전체 크기에서 flow가 동작했고, ODE 적분 스텝
+  하나마다 전체 V-cycle을 다시 계산해야 했다. 이 설계는 reconstruction
+  단계에서부터 결과가 맞지 않았다.
+\end{enumerate}
+
+참고 논문(Lino, Pfaff \& Thuerey, LDGN)을 다시 검토한 결과, 이 논문은 필드
+공간이 아니라 \textbf{압축된 coarse 잠재 위에서} flow matching을 수행하고
+있었다. 본 리포트가 기술하는 아키텍처(이하 v2)는 이 논문의 설계를 그대로
+채택하고 논문의 자체 멀티스케일 백본만 이 리포지토리의 HI-MGN V-cycle로
+교체한 것이며, 이전 버전(v1)을 완전히 대체한다.
+
+\section{관련 연구}
+
+\begin{itemize}
+\item \textbf{MeshGraphNets} (Pfaff et al., ICLR 2021) --- 메시 그래프
+  위의 결정론적 encode-process-decode 시뮬레이션 대체 모델.
+\item \textbf{계층적(멀티스케일) 확장} --- 코스닝을 통해 만든 여러 레벨
+  사이를 오가며 장거리 상호작용을 저비용으로 전달하는 V-cycle 구조(이
+  리포지토리의 HI-MGN). 본 아키텍처는 이 V-cycle을 압축기·prior 양쪽의
+  공통 백본으로 그대로 사용한다.
+\item \textbf{MeshGraphNets-Variational} --- 풀링된 전역 벡터에 대한
+  VAE + 별도 학습된 prior. 1절에서 설명한 posterior/prior 불일치의 근원.
+\item \textbf{Flow matching} (Lipman et al., ICLR 2023) 및
+  \textbf{rectified flow} (Liu, Gong \& Liu, ICLR 2023) --- 직선 경로를
+  따라 단순 분포($\mathcal{N}(0,I)$)를 데이터 분포로 옮기는 continuous
+  normalizing flow를 시뮬레이션-프리 회귀만으로 학습하는 기법. 학습이
+  ODE를 한 번도 적분하지 않고, 적분 스텝 수 $K$는 추론 시점에만 결정되는
+  하이퍼파라미터라는 점이 이 설계 전체를 가능하게 하는 전제다.
+\item \textbf{Diffusion Graph Networks (DGN) / LDGN} (Lino, Pfaff \&
+  Thuerey, ``Learning Distributions of Complex Fluid Simulations with
+  Diffusion Graph Networks,'' ICLR 2025, arXiv:2504.02843) --- 메시 기반
+  물리 문제를 위해 ``먼저 압축, 그다음 생성''을 제안한다: 근손실 그래프
+  오토인코더(VGAE)로 coarse 잠재를 만들고, 그 잠재 위에서만 동작하는
+  diffusion prior를 명시적으로 학습한다. 논문은 압축 없이 필드 위에서
+  바로 diffusion을 돌리는 자신의 기본형(DGN)과, 압축 후 그 latent 위에서
+  diffusion을 돌리는 변형(LDGN)을 직접 대조한다 --- 이 내부 대조가 정확히
+  이 리포트의 v1(필드 공간) $\to$ v2(coarse latent) 전환과 같은
+  motivation이다. 핵심 ablation: 같은 멀티스케일 구조를 쓰지만 명시적으로
+  학습된 prior가 없는 VGAE(오히려 더 무거운 KL, 더 coarse한 latent를 쓴)는
+  간단한 과제에서는 통하지만 복잡한 과제에서는 여전히 collapse한다 ---
+  즉 계층 구조 자체는 이 설계가 이기는 이유가 아니고, 결정적 요인은
+  ``prior를 명시적으로 학습시키는가''이다. 5절에서 이 논문과 본 구현의
+  구체적인 같은 점·다른 점을 정리한다.
+\item \textbf{AdaLN-Zero} (Peebles \& Xie, ``Scalable Diffusion Models
+  with Transformers'', ICCV 2023) --- 조건부 정보를 시간에 따라 변하는
+  scale/shift/gate로 주입하고, 학습 초기에는 블록이 항등함수가 되도록
+  0 근처로 초기화하는 기법. Stage 2 prior의 트렁크 블록에 사용된다.
+\end{itemize}
+
+\section{구조}
+
+\subsection{표기}
+
+\begin{table}[h]
+\centering
+\begin{tabularx}{\textwidth}{@{}l X@{}}
+\toprule
+기호 & 의미 \\
+\midrule
+$G=(V,E)$ & 입력 메시 그래프. 레벨 $0$(가장 fine)부터 $L$(가장 coarse)까지의 계층을 가짐 \\
+$V_l$ & 레벨 $l$의 노드 집합 (코스닝으로 생성, 압축기·prior 공통) \\
+$y \in \mathbb{R}^{|V_0|\times F}$ & 예측 대상 물리량 (finest 레벨의 노드 필드) \\
+$c$ & 조건 --- 형상/경계조건/재료 등, 노드·엣지 특성에 인코딩됨 \\
+$z \in \mathbb{R}^{|V_L|\times C}$ & coarse 레벨의 노드별 잠재. \texttt{latent\_ch}($=C$) 채널짜리 벡터가 coarsest 레벨 노드마다 하나 --- 풀링된 벡터 하나가 아니다 \\
+$E_\theta$ & 압축기 인코더 (공유 가중치, 두 번 호출됨, 3.3절) \\
+$D_\theta$ & 압축기 디코더 \\
+$v_\psi$ & stage 2의 flow-matching 속도장 (coarsest 레벨에서만 동작) \\
+\bottomrule
+\end{tabularx}
+\caption{표기 정리}
+\end{table}
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[
+  lvl/.style={draw, rounded corners, align=center, minimum height=0.85cm, minimum width=1.7cm, font=\small},
+  ->, thick
+]
+\node[lvl] (d0) at (0,4)     {$G_0$\\(finest)};
+\node[lvl] (d1) at (1.8,3.2) {$G_1$};
+\node[font=\large] (dd) at (3.6,2.4) {$\cdots$};
+\node[lvl, fill=gray!15] (dL) at (5.4,1.4) {$G_L$\\(coarsest)};
+\node[font=\large] (uu) at (7.2,2.4) {$\cdots$};
+\node[lvl] (u1) at (9.0,3.2) {$G_1$};
+\node[lvl] (u0) at (10.8,4) {$G_0$\\(finest)};
+
+\draw (d0.south east) -- (d1.north west);
+\draw (d1.south east) -- (dd);
+\draw (dd) -- (dL.north west);
+\draw (dL.north east) -- (uu);
+\draw (uu) -- (u1.south west);
+\draw (u1.north east) -- (u0.south west);
+
+\node[font=\scriptsize] at (1.8,2.55) {코스닝(pooling)};
+\node[font=\scriptsize] at (9.0,2.55) {unpool + skip 융합};
+
+\node[draw, dashed, align=center, font=\scriptsize, minimum width=3.6cm]
+  (note) at (5.4,-0.6) {stage 1의 $z$가 사는 곳\\stage 2 prior가 동작하는 유일한 레벨};
+\draw[dashed] (dL.south) -- (note.north);
+\end{tikzpicture}
+\caption{계층적 V-cycle 백본. 코스닝으로 레벨 $0$부터 $L$까지 내려간 뒤,
+  unpooling과 skip 융합으로 다시 레벨 $0$까지 올라온다. 압축기(stage 1)는
+  이 V 전체를 쓰고, stage 2 prior는 맨 밑의 $G_L$ 하나에서만 동작한다.}
+\end{figure}
+
+\subsection{개요: 2단계 분해}
+
+\begin{verbatim}
+  y, c --> [ E_theta : y-aware pass  ] --> (mu, logvar) --> z ~ N(mu, sigma^2)
+  0, c --> [ E_theta : y-blind pass  ] --> per-level skips {h_l}, prior cond g
+
+              z ----------------------------------------------+
+              {h_l} (blind-pass skips) -----------------------+--> D_theta --> y_hat
+
+  Stage 2 (coarsest level only, frozen Stage-1):
+    g --> z0 ~ N(0,I) --[ K-step ODE integration of v_psi ]--> z1'
+    train:      regress v_psi toward the path velocity between z0 and the REAL z1 = z
+    inference:  feed z1' into D_theta in place of z
+\end{verbatim}
+
+압축기는 전체 V-cycle(레벨 $0 \to L \to 0$)을 쓰고, prior는 그 V의 가장
+바닥(coarsest 레벨) 하나에만 존재한다. 이 비대칭이 3.5절에서 설명하는
+비용 구조의 근원이다.
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[
+  io/.style={draw, rounded corners, align=center, minimum height=0.8cm, minimum width=1.6cm, font=\small, fill=gray!10},
+  box/.style={draw, rounded corners, align=center, minimum height=0.9cm, minimum width=2.6cm, font=\small},
+  ->, thick
+]
+\node[io]  (yc)   at (0,4)     {$y, c$};
+\node[io]  (zc)   at (0,1.3)   {$0, c$};
+\node[box] (enc1) at (3.0,4)   {$E_\theta$\\(y-aware pass)};
+\node[box] (enc0) at (3.0,1.3) {$E_\theta$\\(y-blind pass)};
+\node[box] (mu)   at (6.6,4)   {$(\mu,\log\sigma^2)$\\$z\sim\mathcal{N}(\mu,\sigma^2)$};
+\node[box] (skip) at (6.6,1.3) {skip $\{h_l\}$\\prior 조건 $g$};
+\node[box] (dec)  at (10.2,2.65) {$D_\theta$};
+\node[io]  (yhat) at (12.6,2.65) {$\hat y$};
+
+\draw (yc.east) -- (enc1.west);
+\draw (zc.east) -- (enc0.west);
+\draw (enc1.east) -- (mu.west);
+\draw (enc0.east) -- (skip.west);
+\draw (mu.east) -| (dec.north);
+\draw (skip.east) -| (dec.south);
+\draw (dec.east) -- (yhat.west);
+\draw[dashed, <->] (enc1.south) -- (enc0.north)
+  node[midway, right, font=\scriptsize] {가중치 공유};
+
+\node[draw, dashed, align=center, font=\scriptsize, minimum width=5cm]
+  (s2) at (6.6,-1.4) {Stage 2 prior (coarsest 레벨만)\\
+    $z_0\sim\mathcal{N}(0,I) \to z_1'$ ($K$-step ODE)\\
+    (생성 시 $z_1'$이 $z$를 대체)};
+\draw[dashed] (skip.south) -- (s2.north) node[midway, right, font=\scriptsize] {$g$};
+\end{tikzpicture}
+\caption{Stage 1 압축기와 Stage 2 prior의 데이터 흐름. 같은 가중치의
+  $E_\theta$가 $y$-aware/$y$-blind 두 pass로 호출되고, $y$-blind pass의
+  출력만 디코더의 skip과 stage 2의 조건 $g$로 간다. Stage 2는 가장 coarse한
+  레벨 하나에서만 동작한다.}
+\end{figure}
+
+\subsection{Stage 1 --- 계층적 압축기}
+
+\texttt{HierarchyEncoder}는 V-cycle의 하강(코스닝) 팔로, 각 레벨에서
+\texttt{mp\_per\_level}만큼 메시지 패싱을 하고 레벨 사이를 코스닝 연산자
+(bi-stride / Voronoi 등, HI-MGN 백본이 이미 제공하는 것을 그대로 재사용)로
+풀링한다. 가장 coarse한 레벨 $L$에 도달하면 선형 head가 노드별
+$(\mu,\log\sigma^2)$를 내고, $z \sim \mathcal{N}(\mu,\sigma^2)$로
+재파라미터화한다 --- 이는 MeshGraphNets-Variational의 ``풀링된 전역 벡터
+하나''와 대비되는, \textbf{노드별 분포를 갖는 공간적 잠재}다.
+
+같은 가중치의 $E_\theta$를 \textbf{한 스텝에 두 번} 통과시킨다:
+
+\begin{verbatim}
+outs_y = E_theta(x = [state | y        | cond | pos | ...])   -- y를 아는 pass
+outs_0 = E_theta(x = [state | zeros(y) | cond | pos | ...])   -- y를 모르는(blind) pass
+\end{verbatim}
+
+\texttt{outs\_y}의 coarsest 출력만 $(\mu,\log\sigma^2)$로 간다.
+\texttt{outs\_0}의 \textbf{레벨별 전체 출력}이 디코더의 skip 연결과
+stage 2 prior의 조건 $g$로 간다. 이 분리가 핵심이다: skip 경로가 단순한
+fine-level 재사용이면 디코더가 $z$를 거치지 않고 skip만으로 $y$를
+복원하도록 학습해버릴 수 있다(LDGN 논문 자체의 VGAE collapse 메커니즘과
+동일). skip을 만드는 pass 자체가 $y$를 구조적으로 모르기 때문에 이
+우회가 불가능하고, 추론 시점에는 $y$가 애초에 없으므로 이 ``blind''
+pass는 학습 때와 추론 때 정확히 동일하게 동작한다.
+
+\texttt{MultiscaleDecoder}(V-cycle 상승 팔)는 $z$(학습 때는 posterior
+샘플, 추론 때는 stage 2가 적분한 샘플)를 coarsest 레벨 노드 수로 lift한
+뒤, 레벨을 올라가며 \texttt{outs\_0}의 skip과 융합해 $\hat y$를 만든다.
+
+목적함수:
+\begin{equation}
+\mathcal{L}_{\text{AE}} = \mathbb{E}_{q_\theta(z\mid y,c)}\Big[\, \lVert D_\theta(z) - y \rVert^2 \,\Big] \;+\; \beta \cdot \mathrm{KL}\big(q_\theta(z\mid y,c) \,\|\, \mathcal{N}(0,I)\big)
+\end{equation}
+
+$\beta$(\texttt{ae\_kl\_weight})는 아주 작게(논문 기준 $\sim 10^{-6}$)
+잡는다 --- 이 압축기는 그 자체로 생성적 병목이 아니라 근손실 압축이
+목적이며, KL은 $z$를 stage 2의 목표($\mathcal{N}(0,I)$에 가까운 분포)에
+부드럽게 앵커링하는 정도의 역할만 한다.
+
+\subsection{Stage 2 --- Coarse-Latent Flow-Matching Prior}
+
+Stage 1이 수렴하면 그 가중치를 얼려 고정된 특성 추출기로 쓴다. Stage 2는
+그 frozen 압축기가 만든 posterior 샘플 $z_1 \sim q_\theta(z\mid y,c)$
+(gradient 없이 draw)를 목표점으로 하는 flow-matching 속도장 $v_\psi$를
+coarsest 레벨 하나에서만 학습한다. 조건부 flow-matching 경로는 다음과
+같다:
+
+\begin{align}
+z_0 &\sim \mathcal{N}(0, I), \qquad s = 1-\sigma_{\min}, \qquad \sigma_{\min}=10^{-4} \\
+z_t &= (1-s\,t)\,z_0 + t\,z_1, \qquad t \sim U[0,1) \\
+u &= z_1 - s\,z_0 \\
+v_\psi(z_t, t, g) &\approx u
+\end{align}
+
+$z_0$는 $z_1$과 같은 크기($|V_L|\times C$)의 노이즈 끝점, $z_t$는 이 둘을
+잇는 직선 경로 위의 점, $u$는 그 경로가 갖는 속도(회귀 목표)다.
+AdaLN-Zero \texttt{GnBlock} 스택(\texttt{prior\_blocks}개)이 coarsest
+레벨 그래프 + 시간 임베딩 + $g$로 조건화되어 이 속도장 $v_\psi$를
+근사한다.
+
+\begin{equation}
+\mathcal{L}_{\text{prior}} = \mathbb{E}\big[\, w(t)\, \lVert v_\psi(z_t,t,g) - u \rVert^2 \,\big], \qquad
+w(t) = \begin{cases} 1 & \texttt{flow\_loss\_weighting}=\texttt{uniform} \\ (1-s\,t)^2 & \texttt{flow\_loss\_weighting}=\texttt{x0} \end{cases}
+\end{equation}
+
+$x0$ 가중치는 속도 head 자체는 그대로 두고 손실 재가중만으로 $t=0$ 근방
+정확도에 학습 예산을 집중시킨다.
+
+일부 학습 그래프는 $t=0$으로 고정해서 뽑는다(\texttt{flow\_det\_prob})
+--- 이 경우 목적함수는 $\mathbb{E}[z_1\mid g]$에 대한 순수 결정론적
+회귀로 붕괴하며, 이는 3.5절의 결정론적 readout을 실제로 \textit{학습시키는}
+장치다(추론 시점에 그냥 읽어내는 것이 아니라).
+
+AdaLN-Zero 블록은 초기화 시 항등함수가 되도록(gate/weight를 0 근처로)
+구성된다 --- 전역 kaiming 초기화를 먼저 적용한 뒤 이 근-항등 초기화를
+덮어씌우는 순서로 진행되며, 순서를 바꾸면 kaiming 초기화가 이 성질을
+지워버린다.
+
+\subsection{추론 경로}
+
+\begin{verbatim}
+generate(c):
+    g    = E_theta, blind(0, c)                     # 1) encode ONCE
+    z0  ~ N(0, I)                                     (coarsest 레벨 크기)
+    z1'  = integrate(v_psi(., ., g), z0, K steps)    # 2) coarsest 레벨에서만 K번 (Heun/Euler)
+    yhat = D_theta(z1', {h_l})                        # 3) decode ONCE
+\end{verbatim}
+
+이 경로에서 \textbf{$K$번 반복되는 것은 coarsest 레벨 하나만 다루는
+작은 네트워크뿐}이며, 전체 V-cycle(인코더·디코더)은 샘플 하나당 정확히
+1회씩만 호출된다. 이것이 field-space flow(레벨 0 크기에서 매 ODE
+스텝마다 전체 V-cycle을 다시 계산해야 하는)와 이 설계 사이의 핵심적인
+구조적 차이다.
+
+같은 학습된 네트워크에서 결정론적 readout도 닫힌 형태로 나온다:
+$t=0$에서는 경로 위의 점이 곧 $z_0$이므로 회귀 최적점은
+$v_\psi^*(z_0,0,g)=\mathbb{E}[z_1\mid g]-s\,z_0$이고, 크기 1의 Euler
+스텝을 밟으면
+
+\begin{equation}
+z_0 + v_\psi(z_0,0,g) \;=\; \mathbb{E}[z_1\mid g] + \sigma_{\min}\, z_0
+\end{equation}
+
+즉 $\sigma_{\min}$($=10^{-4}$) 스케일의 잔차 하나만 남는 조건부 평균이다.
+같은 가중치 하나가 (i) 분포를 샘플링하는 생성 모델과 (ii) 적분 없이 1회
+forward로 끝나는 결정론적 예측기를 동시에 서빙한다.
+
+\subsection{학습 모드}
+
+Stage 1과 stage 2를 지나는 세 가지 경로가 있다: stage 1만(압축기·디코더
+학습), stage 2만(디스크에서 완료된 stage-1 체크포인트를 얼려 로드한 뒤
+prior만 학습), 또는 하나의 프로세스에서 둘 다(정해진 epoch 동안 stage 1
+$\to$ 메모리 내에서 즉시 freeze $\to$ stage 2, 체크포인트 왕복 없음). 어느
+시점이든 두 파라미터 집합 중 정확히 하나만 gradient를 받으므로, 분산
+학습 래퍼는 파라미터 그래프의 한쪽 가지가 매 스텝 unused여도 견뎌야
+한다.
+
+\section{설계 근거: 왜 먼저 압축하는가}
+
+LDGN 논문의 ablation을 정확히 인용하면: \textbf{같은 멀티스케일 구조를 쓴
+VGAE}(오히려 더 무거운 KL, 더 coarse한 latent를 쓴)도 여전히 collapse한다.
+즉 계층 구조 자체는 이 설계가 이기는 이유가 아니다. 결정적인 lever는
+``$\mathcal{N}(0,I)$를 직접 가정해서 샘플링하는 대신, 압축된 공간 위에서
+\textbf{prior를 명시적으로 학습시키는 것}''이다.
+
+\begin{table}[h]
+\centering
+\footnotesize
+\begin{tabularx}{\textwidth}{@{}l X X X@{}}
+\toprule
+ & MeshGraphNets-V & cHI-MGNflow v1 (필드 공간) & cHI-MGNflow v2 (본 문서) \\
+\midrule
+학습 시 잠재의 출처 & posterior $q(z\mid y,c)$ & 필요 없음 (필드에 직접 flow) & posterior $q(z\mid y,c)$ (stage 1) \\
+추론 시 잠재의 출처 & 별도 학습된 근사 prior $p(z\mid c)$ --- posterior와 불일치 가능 & $\mathcal{N}(0,I) \to$ 학습된 ODE (필드 크기) & $\mathcal{N}(0,I) \to$ 학습된 ODE (coarse 잠재 크기) \\
+압축 & 있음 (풀링된 벡터) & \textbf{없음} & 있음 (coarse 레벨 노드별 벡터) \\
+샘플당 전체 V-cycle forward & 1 (prior는 flat) & \textbf{$K$} (ODE 스텝마다) & \textbf{2} (encode 1 + decode 1, $K$는 coarse 레벨에서만) \\
+\bottomrule
+\end{tabularx}
+\caption{세 설계의 비교}
+\end{table}
+
+v1은 이 표의 ``분포 일치''는 만족했지만 ``압축''을 하지 않아 비용과
+reconstruction 신뢰성 양쪽에서 문제가 있었다. v2는 두 축을 모두
+만족시키는, 논문의 ablation이 요구하는 조합이다.
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[
+  big/.style={draw, rounded corners, fill=gray!25, minimum width=1.9cm, minimum height=1.1cm, align=center, font=\small},
+  tiny/.style={draw, rounded corners, fill=gray!8, minimum width=0.55cm, minimum height=0.55cm, font=\tiny},
+  ->, thick
+]
+\node[font=\small] at (-2.3,3) {v1 (필드 공간)};
+\node[big] (v1a) at (0,3)   {V-cycle};
+\node[big] (v1b) at (2.3,3) {V-cycle};
+\node[font=\large] (v1dots) at (4.4,3) {$\cdots$};
+\node[big] (v1c) at (6.5,3) {V-cycle};
+\node[font=\scriptsize, align=center] at (3.25,3.9)
+  {ODE 스텝마다 전체 V-cycle을 $K$번\\(encode+decode 겸용)};
+\draw (v1a.east) -- (v1b.west);
+\draw (v1b.east) -- (v1dots);
+\draw (v1dots) -- (v1c.west);
+
+\node[font=\small] at (-2.3,0) {v2 (본 구현)};
+\node[big] (v2enc) at (0,0)   {encode\\(V-cycle)};
+\node[tiny] (v2a) at (1.7,0) {};
+\node[tiny] (v2b) at (2.4,0) {};
+\node[font=\scriptsize] (v2dots) at (3.1,0) {$\cdots$};
+\node[tiny] (v2c) at (3.8,0) {};
+\node[big] (v2dec) at (5.7,0) {decode\\(V-cycle)};
+\draw (v2enc.east) -- (v2a.west);
+\draw (v2a.east) -- (v2b.west);
+\draw (v2b.east) -- (v2dots);
+\draw (v2dots) -- (v2c.west);
+\draw (v2c.east) -- (v2dec.west);
+\node[font=\scriptsize, align=center] at (2.75,-0.8) {coarsest 레벨에서만 $K$번 (작음)};
+\end{tikzpicture}
+\caption{샘플 하나를 생성하는 데 필요한 전체 V-cycle(회색 큰 박스) 호출
+  횟수. v1은 매 ODE 스텝마다 전체 V-cycle을 다시 계산해 $K$회가 필요하고,
+  v2는 encode 1회 + decode 1회로 고정되며 반복은 coarsest 레벨의 작은
+  네트워크(흰 작은 박스)에서만 일어난다.}
+\end{figure}
+
+\section{원본 LDGN 논문과의 비교: 같은 점과 다른 점}
+
+정확한 서지사항을 다시 밝히면, 참고 논문의 제목은 \textit{Learning
+Distributions of Complex Fluid Simulations with Diffusion Graph Networks}
+(Lino, Pfaff \& Thuerey, ICLR 2025, arXiv:2504.02843)이다. ``LDGN''은 그
+논문이 자신의 latent-압축 변형에 붙인 이름이고, 압축 없이 필드 위에서
+바로 동작하는 기본형은 논문 안에서 ``DGN''이라 불린다. 즉 원 논문 자체가
+이미 DGN(필드 공간) vs LDGN(압축된 latent 공간)이라는 대조를 갖고 있고,
+이 대조는 정확히 본 리포트의 v1 $\to$ v2 전환과 같은 motivation을
+공유한다. 이 절은 그 LDGN 설계와 본 구현(cHI-MGNflow v2)이 정확히 어디까지
+같고 어디부터 다른지를 정리한다.
+
+\subsection{같은 점}
+
+\begin{itemize}
+\item \textbf{2단계 분해 자체.} 근손실 그래프 오토인코더(VGAE)로 먼저
+  압축하고, 그 압축된 latent 위에서만 별도의 생성 prior를 명시적으로
+  학습한다는 큰 그림은 그대로 채택했다.
+\item \textbf{잠재의 모양.} 잠재는 풀링된 전역 벡터 하나가 아니라, 가장
+  coarse한 레벨 $G_L$의 \textbf{노드마다} 분포 $(\mu_i,\sigma_i)$를 갖는
+  공간적 잠재다.
+\item \textbf{KL을 아주 작게 유지.} posterior collapse를 피하되 $z$를
+  prior의 목표 분포에 앵커링하는 정도로만 KL 항의 가중치를
+  $\beta \sim 10^{-6}$ 수준으로 아주 작게 잡는다.
+\item \textbf{핵심 motivating ablation.} 같은 계층 구조를 쓰지만 명시적
+  prior 없이 $\mathcal{N}(0,I)$에서 직접 샘플링하는 VGAE는(간단한
+  과제에서는 통하지만) 복잡한 과제에서 여전히 collapse한다는 논문의
+  관찰을 그대로 이 구현의 설계 근거(4절)로 인용한다.
+\item \textbf{생성 시 비용 철학.} 비싼 전체-그래프 연산(encode/decode)은
+  샘플당 고정된 소수 회로 묶고, 반복이 필요한 샘플링 과정은 이미 압축된
+  latent 공간 안에 가둔다는 비용 구조의 기본 방향은 동일하다.
+\end{itemize}
+
+\subsection{다른 점}
+
+\begin{table}[h]
+\centering
+\footnotesize
+\begin{tabularx}{\textwidth}{@{}l X X@{}}
+\toprule
+항목 & LDGN 원본 & cHI-MGNflow v2 (본 구현) \\
+\midrule
+멀티스케일 백본 / coarsening
+  & 자체 U-Net형 multi-scale GNN, Guillard 알고리즘으로 코스닝 (1D
+    $\sim$2배, 2D $\sim$4배 압축/레벨)
+  & 이 리포지토리의 기존 HI-MGN V-cycle(bi-stride/Voronoi 등)을 그대로
+    재사용 --- 논문의 백본 자체를 이것으로 대체한 것이 본 리포트의
+    출발점 \\
+압축기 인코더 구조
+  & 조건 인코더 / 노드 인코더 / 노드 디코더, 세 개의 \textbf{별도}
+    컴포넌트 --- 조건 인코더가 생성 시점에 필요한 $g$ 인코딩을 전담
+  & 하나의 \texttt{HierarchyEncoder}를 \textbf{같은 가중치}로 두 번
+    ($y$-aware/$y$-blind) 호출 --- 별도의 조건 인코더 네트워크가 없다
+    (3.3절) \\
+생성 prior의 주 형태
+  & \textbf{diffusion}(DDPM류)이 주 모델이고 논문 실험 전부가 이 경로를
+    씀; flow matching은 부록에서 ``더 빠른 샘플링''을 위한 미래 방향으로만
+    짧게 언급되며 구체적 공식은 없음
+  & \textbf{flow matching}이 유일한 생성 경로; 그 공식(직선 경로, velocity
+    목표, $x_0$/균등 재가중)은 논문이 아니라 flow-matching/rectified-flow
+    문헌(Lipman et al.; Liu, Gong \& Liu)에서 직접 채택 \\
+prior network 내부 구조
+  & coarse latent 위에서 \textbf{자체적으로 또 한 번} 4-scale까지의
+    멀티스케일 U-Net을 돌림 (단일 스케일은 복잡한 과제에서 실패했다고
+    보고)
+  & \texttt{LatentFlowPrior}는 coarsest 레벨 하나에서
+    \textbf{flat하게}(추가 pooling 없이) 블록만 반복 --- 더 단순하고
+    저비용, 단 논문의 ``단일 스케일 실패'' ablation과 아직 직접
+    대조되지 않음 \\
+시간/조건 주입 방식
+  & 매 메시지 패싱 레이어에 시간·조건 임베딩을 \textbf{덧셈으로} 주입
+    ($v_i \leftarrow v_i + \mathrm{Linear}(r_{\mathrm{emb}})$)
+  & \textbf{AdaLN-Zero}(Peebles \& Xie)로 scale/shift/gate 변조 + 항등
+    초기화 --- 논문에는 없는, 이 구현이 별도로 채택한 조건화 \\
+\bottomrule
+\end{tabularx}
+\caption{LDGN 원본과 cHI-MGNflow v2의 구조적 차이}
+\end{table}
+
+정리하면, 본 구현이 LDGN에서 가져온 것은 \textbf{``먼저 압축하고, 그
+압축된 latent 위에서만 prior를 명시적으로 학습시킨다''는 2단계 설계
+원칙과, 그 원칙을 정당화하는 VGAE-collapse ablation} 자체다. 그 원칙을
+실현하는 \textbf{구체적인 부품들}(멀티스케일 백본, 인코더 내부 구조,
+생성 모델의 수학적 형태, prior의 내부 구조, 조건 주입 방식)은 대부분
+이 리포지토리 자체의 기존 구성요소(HI-MGN V-cycle)이거나 별도 문헌
+(flow matching, AdaLN-Zero)에서 가져와 독자적으로 재구성한 것이다.
+
+\section{평가 프로토콜과 현재 검증 상태}
+
+이 아키텍처가 이미 계산하는 지표는 다음과 같다
+(\texttt{training\_profiles/training\_loop.py}):
+
+\begin{itemize}
+\item \textbf{recon} --- stage 1의 held-out reconstruction MSE.
+\item \textbf{det} --- 3.5절의 1-forward 결정론적 readout의 MSE.
+\item \textbf{crps} --- 샘플링 분포에 대한 proper score(CRPS), 앙상블
+  평가와 직접 대응.
+\item \textbf{spread/gt} --- 앙상블 표준편차와 실제(참) 분포 표준편차의
+  비율 --- 이 값이 0에 가까우면 모델이 노이즈 채널을 무시하고 있다는
+  뜻이다.
+\end{itemize}
+
+\textbf{현재까지 실제로 확인된 것}은 CPU 정합성 스모크 테스트와 이 방법
+자체의 단위 테스트 스위트 통과, 그리고 런처 설정-계약 검증(preflight)의
+정합성뿐이다. \textbf{이 아키텍처로 GPU 규모의 실제 학습은 아직 수행되지
+않았다.} 따라서 본 리포트는 정량적 결과 표를 포함하지 않는다 --- 이전
+아키텍처(v1)에서 측정된 수치는 압축이 없는 다른 구조에서 나온 것이라 본
+아키텍처로 이전되지 않으며, 실측은 실제 GPU 학습이 수행된 뒤 별도
+리포트에서 다룬다.
+
+\section{코드베이스 내 위치}
+
+구현은 \texttt{methods/HI\_MGNFlow/}에 있다. 설정 키, CLI 실행법, 학습
+로그 포맷, 그리고 (6절보다 더 세부적인) 현재 검증 현황 등 \textbf{운영
+관점의 문서}는 \texttt{methods/HI\_MGNFlow/README.md}가 맡는다. 본
+리포트는 그 아키텍처가 왜 이런 모양이고 무엇을 하는지에만 집중한다.
+
+\section*{참고문헌}
+
+\begin{itemize}
+\item Pfaff, T., Fortunato, M., Sanchez-Gonzalez, A., Battaglia, P.\,W.
+  ``Learning Mesh-Based Simulation with Graph Networks.'' ICLR, 2021.
+\item Lino, M., Pfaff, T., Thuerey, N. ``Learning Distributions of
+  Complex Fluid Simulations with Diffusion Graph Networks.'' ICLR, 2025.
+  arXiv:2504.02843.
+\item Lipman, Y., Chen, R.\,T.\,Q., Ben-Hamu, H., Nickel, M., Le, M.
+  ``Flow Matching for Generative Modeling.'' ICLR, 2023.
+\item Liu, X., Gong, C., Liu, Q. ``Flow Straight and Fast: Learning to
+  Generate and Transfer Data with Rectified Flow.'' ICLR, 2023.
+\item Peebles, W., Xie, S. ``Scalable Diffusion Models with
+  Transformers.'' ICCV, 2023. (AdaLN-Zero)
+\item Kipf, T.\,N., Welling, M. ``Variational Graph Auto-Encoders.''
+  NeurIPS Bayesian Deep Learning Workshop, 2016. (4절에서 언급한
+  ablation의 baseline)
+\end{itemize}
+
+\end{document}

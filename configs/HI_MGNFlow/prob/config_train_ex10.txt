@@ -36,6 +36,7 @@ positional_features	4
 
 %   Optimisation (identical across arms)
 message_passing_num	15
+ae_epochs	15  # stage-1 compressor; far fewer epochs than the flow prior needs (reasoned, not measured).
 Training_epochs	50
 Batch_size	8
 LearningR	0.0003

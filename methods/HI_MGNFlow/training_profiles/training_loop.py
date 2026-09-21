@@ -1,22 +1,35 @@
-"""Training and evaluation for cHI-MGNflow.
+"""Training and evaluation for cHI-MGNflow, an LDGN-style two-stage model.
 
-The objective is one term:
+Stage 1 (AE): a near-unregularized multiscale autoencoder compresses the field
+onto a coarse mesh level. Objective:
 
-    loss = MSE( v_theta(y_t, t, g),  y - s*z0 )
+    loss = MSE(y_hat, y) + ae_kl_weight * KL(q(z|y) || N(0, I))
 
-with (t, z0) freshly drawn every step. There is no reconstruction term, no
-latent regulariser, no proper-scoring-rule estimator, and no ensemble inside the
-training step -- a training step is a single forward pass.
+with ae_kl_weight tiny (LDGN: ~1e-6) -- this is a compressor, not a generative
+bottleneck by itself; KL only keeps the latent well-scaled for stage 2.
 
-Evaluation is split in two, because they answer different questions:
+Stage 2 (prior): a conditional flow-matching prior is trained ON FROZEN
+LATENTS drawn from stage 1's posterior, entirely within the small coarse
+latent space:
 
-  * `validate_epoch` scores the same one-step regression on held-out graphs.
-    Cheap, low-variance, runs every epoch. It tracks whether the velocity field
-    is being learned, but says nothing about sample quality.
-  * `evaluate_flow_sampling_epoch` actually integrates the ODE and scores the
-    resulting ensemble (CRPS + spread/skill + a z-sensitivity check). This is
-    the metric that mirrors inference, and it is what `best_by crps` selects on.
-    It costs `flow_steps` forwards per member, so it runs on `val_interval`.
+    loss = MSE(v_theta(z_t, t, ctx), z1 - s*z0),   z1 ~ q(z|y) from the frozen AE
+
+(t, z0) freshly drawn every step; there is no reconstruction term here and no
+gradient into the AE (see prior_loss / train_prior_epoch). This is the exact
+field-space objective from the old flow.py, transplanted onto the coarse
+latent -- sample_path and loss_weight do not care what tensor they are handed.
+
+Evaluation mirrors this split:
+
+  * `validate_ae_epoch` scores stage 1's reconstruction+KL on held-out graphs.
+  * `validate_prior_epoch` scores stage 2's one-step regression on frozen
+    latents. Cheap, low-variance, runs every epoch.
+  * `evaluate_prior_sampling_epoch` integrates the latent ODE, decodes, and
+    scores the resulting FIELD ensemble (CRPS + spread/skill + a deterministic
+    read-out). This is the metric that mirrors inference and is what
+    `best_by crps` selects on -- and because the ODE now runs over the coarse
+    mesh instead of the fine one, it is far cheaper per member than the old
+    field-space version.
 """
 import os
 import contextlib
@@ -36,8 +49,7 @@ from general_modules.mesh_utils_fast import (
     edges_to_triangles_gpu,
     edges_to_triangles_optimized,
 )
-from model.flow import (integrate, loss_weight, predict_mean, resolve_flow_config,
-                        sample_path)
+from model.flow import loss_weight, resolve_flow_config, sample_path
 
 
 # ── small helpers ───────────────────────────────────────────────────────────
@@ -63,7 +75,13 @@ def build_ema_model(model, config):
 
 
 def _build_loss_weights(config, device):
-    """Per-feature weights normalized to sum to 1 (a weighted mean)."""
+    """Per-feature weights normalized to sum to 1 (a weighted mean).
+
+    Physical-feature weights only -- they size to `output_var` and apply to
+    the AE's field-space reconstruction term. The prior's loss lives in latent
+    space, whose channels carry no such per-feature meaning, so prior_loss
+    never takes this argument.
+    """
     w = config.get('feature_loss_weights', None)
     if w is None:
         return None
@@ -120,62 +138,260 @@ def _delta_stats(dataloader, device):
     return None, None
 
 
-# ── the objective ───────────────────────────────────────────────────────────
+def _sample_posterior_latent(model, graph):
+    """Draw z1 ~ q(z|y) from the (frozen, eval-mode) compressor.
 
-def flow_loss(model, graph, loss_weights, use_amp, amp_dtype, flow_cfg=None):
-    """One flow-matching training term. Exactly one forward pass.
+    No-grad: stage 2 never backpropagates into the AE (see freeze_ae /
+    CHiMGNFlow.forward's DDP-safe dispatch) -- this is data preparation for the
+    prior's training pair, not part of the computation the optimizer steps on.
+    """
+    with torch.no_grad():
+        mu, logvar, ctx = _unwrap(model).encode_both_auto(graph)
+        std = torch.exp(0.5 * logvar)
+        z1 = mu + std * torch.randn_like(std)
+    return z1, ctx
 
-    `flow_cfg['weighting']` selects the parameterization ('uniform' = velocity
-    prediction, 'x0' = data prediction expressed as a (1-s*t)^2 weight) and
-    `flow_cfg['det_prob']` decides what share of graphs are pinned to t=0, where
-    the term is a pure deterministic regression on E[y|g].
+
+# ── stage 1: the compressor objective ───────────────────────────────────────
+
+def ae_loss(model, graph, loss_weights, use_amp, amp_dtype, kl_weight):
+    """Reconstruction + KL for the compressor stage. One call to model('ae', ...)
+    runs both the y-aware posterior pass and the y-blind decoder-skip pass
+    (see LatentDiffusionGraphNet.encode_both) inside a single autocast block.
+    """
+    with torch.amp.autocast('cuda', dtype=amp_dtype, enabled=use_amp):
+        y_hat, mu, logvar = model('ae', graph)
+    recon = _weighted_mse(y_hat, graph.y, loss_weights)
+    mu_f, logvar_f = mu.float(), logvar.float()
+    # Per-element KL to N(0,1), mean (not summed) over coarse-nodes x channels
+    # so kl_weight's useful range does not move with latent_ch or mesh size.
+    kl = (-0.5 * (1 + logvar_f - mu_f.pow(2) - logvar_f.exp())).mean()
+    return recon + kl_weight * kl, recon.detach(), kl.detach()
+
+
+def train_ae_epoch(model, dataloader, optimizer, device, config, epoch, ema_model=None):
+    model.train()
+
+    loss_weights = _build_loss_weights(config, device)
+    use_amp = config.get('use_amp', True)
+    amp_dtype = resolve_amp_dtype(device)
+    scaler = build_grad_scaler(amp_dtype, use_amp)
+    kl_weight = float(config.get('ae_kl_weight', 1e-6))
+
+    grad_accum_steps = config.get('grad_accum_steps', 1)
+    total_batches = len(dataloader)
+    actual_accum = total_batches if grad_accum_steps == 0 else grad_accum_steps
+
+    total_loss_gpu = torch.zeros((), device=device, dtype=torch.float32)
+    total_recon_gpu = torch.zeros((), device=device, dtype=torch.float32)
+    total_kl_gpu = torch.zeros((), device=device, dtype=torch.float32)
+    n_batches = 0
+
+    if torch.cuda.is_available():
+        torch.cuda.reset_peak_memory_stats()
+    optimizer.zero_grad(set_to_none=True)
+
+    pbar = tqdm.tqdm(dataloader, total=total_batches)
+    for batch_idx, graph in enumerate(pbar):
+        graph = _move(graph, device, config)
+        loss, recon, kl = ae_loss(model, graph, loss_weights, use_amp, amp_dtype, kl_weight)
+
+        scaled = loss / _accum_window_size(batch_idx, total_batches, actual_accum)
+        is_step = (batch_idx + 1) % actual_accum == 0 or (batch_idx == total_batches - 1)
+        sync_ctx = (contextlib.nullcontext() if (is_step or not hasattr(model, 'no_sync'))
+                    else model.no_sync())
+        with sync_ctx:
+            scaler.scale(scaled).backward()
+
+        # GPU accumulators: .item() deferred to epoch end so the loop never syncs per batch.
+        total_loss_gpu += loss.detach().float()
+        total_recon_gpu += recon
+        total_kl_gpu += kl
+        n_batches += 1
+
+        if is_step:
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=3.0)
+            scaler.step(optimizer)
+            scaler.update()
+            if ema_model is not None:
+                ema_model.update_parameters(model)
+            optimizer.zero_grad(set_to_none=True)
+
+        if batch_idx % 10 == 0:
+            pbar.set_postfix({'recon': f'{float(recon):.2e}', 'kl': f'{float(kl):.2e}',
+                              'mem': _mem_str()})
+
+    peak_gb, reserved_gb = _mem_gb()
+    n_batches = max(n_batches, 1)
+    mean = total_loss_gpu.item() / n_batches
+    recon_mean = total_recon_gpu.item() / n_batches
+    kl_mean = total_kl_gpu.item() / n_batches
+    return {'mean': mean, 'total_mean': mean, 'sum': mean * n_batches,
+            'count': n_batches, 'recon': recon_mean, 'kl': kl_mean,
+            'peak_gb': peak_gb, 'reserved_gb': reserved_gb}
+
+
+def validate_ae_epoch(model, dataloader, device, config, epoch=0):
+    """Reconstruction + KL on held-out graphs.
+
+    `mean` reports pure reconstruction error (what the compressor is FOR);
+    the composite recon+kl_weight*kl objective is available as 'total_mean'.
+    """
+    model.eval()
+    loss_weights = _build_loss_weights(config, device)
+    use_amp = config.get('use_amp', True)
+    amp_dtype = resolve_amp_dtype(device)
+    kl_weight = float(config.get('ae_kl_weight', 1e-6))
+
+    total = torch.zeros((), device=device, dtype=torch.float32)
+    total_recon = torch.zeros((), device=device, dtype=torch.float32)
+    total_kl = torch.zeros((), device=device, dtype=torch.float32)
+    n = 0
+    with torch.no_grad():
+        pbar = tqdm.tqdm(dataloader, desc='Validation')
+        for i, graph in enumerate(pbar):
+            graph = _move(graph, device, config)
+            loss, recon, kl = ae_loss(model, graph, loss_weights, use_amp, amp_dtype, kl_weight)
+            total += loss.detach().float()
+            total_recon += recon
+            total_kl += kl
+            n += 1
+            if i % 10 == 0:
+                pbar.set_postfix({'recon': f'{total_recon.item() / max(n, 1):.2e}'})
+    n = max(n, 1)
+    recon_mean = total_recon.item() / n
+    return {'mean': recon_mean, 'total_mean': total.item() / n, 'sum': total.item(),
+            'count': n, 'recon': recon_mean, 'kl': total_kl.item() / n}
+
+
+# ── stage 2: the latent flow prior objective ────────────────────────────────
+
+def prior_loss(model, ctx, z1, coarse_batch, use_amp, amp_dtype, flow_cfg):
+    """One flow-matching training term, transplanted onto the coarse latent.
+
+    Identical in structure to the old field-space flow_loss: y1 is now a
+    posterior draw z1 ~ q(z|y) from the frozen AE, and `batch` is the coarse
+    mesh's graph index -- sample_path / loss_weight are agnostic to what
+    tensor they are handed. No feature_loss_weights here: latent channels
+    carry no physical per-feature meaning.
     """
     cfg = flow_cfg or {}
-    B = _num_graphs(graph)
-    batch = getattr(graph, 'batch', None)
-    t, y_t, u = sample_path(graph.y, batch, B,
+    B = int(coarse_batch.max().item()) + 1 if coarse_batch.numel() else 1
+    t, z_t, u = sample_path(z1, coarse_batch, B,
                             cfg.get('t_sampling', 'uniform'),
                             cfg.get('logit_scale', 1.0),
                             cfg.get('det_prob', 0.0))
     with torch.amp.autocast('cuda', dtype=amp_dtype, enabled=use_amp):
-        v = model(graph, y_t, t)
+        v = model('prior', ctx, z_t, t)
 
-    err = (v.float() - u.float()).pow(2)
-    if loss_weights is not None:
-        per_node = torch.sum(err * loss_weights, dim=-1)
-    else:
-        per_node = err.mean(dim=-1)
+    per_node = (v.float() - u.float()).pow(2).mean(dim=-1)
     w = loss_weight(t.float(), cfg.get('weighting', 'uniform'))
     if w is not None:
-        # Per-graph weight, normalised so the loss scale (and therefore the
-        # usable learning rate) does not move when the weighting changes.
-        w_n = w[batch].squeeze(-1) if batch is not None else w.squeeze(-1)
+        w_n = w[coarse_batch].squeeze(-1)
         return (per_node * w_n).sum() / w_n.sum().clamp_min(1e-8)
     return per_node.mean()
 
 
-# ── sampling ────────────────────────────────────────────────────────────────
+def train_prior_epoch(model, dataloader, optimizer, device, config, epoch, ema_model=None):
+    model.train()
+
+    use_amp = config.get('use_amp', True)
+    amp_dtype = resolve_amp_dtype(device)
+    scaler = build_grad_scaler(amp_dtype, use_amp)
+    flow_cfg = resolve_flow_config(config)
+
+    grad_accum_steps = config.get('grad_accum_steps', 1)
+    total_batches = len(dataloader)
+    actual_accum = total_batches if grad_accum_steps == 0 else grad_accum_steps
+
+    total_loss_gpu = torch.zeros((), device=device, dtype=torch.float32)
+    n_batches = 0
+
+    if torch.cuda.is_available():
+        torch.cuda.reset_peak_memory_stats()
+    optimizer.zero_grad(set_to_none=True)
+
+    pbar = tqdm.tqdm(dataloader, total=total_batches)
+    for batch_idx, graph in enumerate(pbar):
+        graph = _move(graph, device, config)
+        z1, ctx = _sample_posterior_latent(model, graph)
+        loss = prior_loss(model, ctx, z1, ctx['coarse_batch'], use_amp, amp_dtype, flow_cfg)
+
+        scaled = loss / _accum_window_size(batch_idx, total_batches, actual_accum)
+        is_step = (batch_idx + 1) % actual_accum == 0 or (batch_idx == total_batches - 1)
+        sync_ctx = (contextlib.nullcontext() if (is_step or not hasattr(model, 'no_sync'))
+                    else model.no_sync())
+        with sync_ctx:
+            scaler.scale(scaled).backward()
+
+        total_loss_gpu += loss.detach().float()
+        n_batches += 1
+
+        if is_step:
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=3.0)
+            scaler.step(optimizer)
+            scaler.update()
+            if ema_model is not None:
+                ema_model.update_parameters(model)
+            optimizer.zero_grad(set_to_none=True)
+
+        if batch_idx % 10 == 0:
+            pbar.set_postfix({'fm': f'{float(loss):.2e}', 'mem': _mem_str()})
+
+    peak_gb, reserved_gb = _mem_gb()
+    n_batches = max(n_batches, 1)
+    mean = total_loss_gpu.item() / n_batches
+    return {'mean': mean, 'total_mean': mean, 'sum': mean * n_batches,
+            'count': n_batches, 'peak_gb': peak_gb, 'reserved_gb': reserved_gb}
+
+
+def validate_prior_epoch(model, dataloader, device, config, epoch=0):
+    """One-step flow-matching regression loss on frozen latents from held-out graphs.
+
+    Cheap and low-variance, but it measures the velocity field, not the
+    decoded samples. Use `evaluate_prior_sampling_epoch` for sample quality.
+    """
+    model.eval()
+    use_amp = config.get('use_amp', True)
+    amp_dtype = resolve_amp_dtype(device)
+    flow_cfg = resolve_flow_config(config)
+
+    total = torch.zeros((), device=device, dtype=torch.float32)
+    n = 0
+    with torch.no_grad():
+        pbar = tqdm.tqdm(dataloader, desc='Validation')
+        for i, graph in enumerate(pbar):
+            graph = _move(graph, device, config)
+            z1, ctx = _sample_posterior_latent(model, graph)
+            total += prior_loss(model, ctx, z1, ctx['coarse_batch'], use_amp, amp_dtype,
+                                flow_cfg).detach().float()
+            n += 1
+            if i % 10 == 0:
+                pbar.set_postfix({'fm': f'{total.item() / max(n, 1):.2e}'})
+    mean = total.item() / max(n, 1)
+    return {'mean': mean, 'total_mean': mean, 'sum': mean * n, 'count': n}
+
+
+# ── sampling (decoded fields) ────────────────────────────────────────────────
 
 @torch.no_grad()
-def sample_fields(model, graph, flow_cfg, num_samples=1, use_amp=False, amp_dtype=None):
-    """Draw `num_samples` fields for one batch of graphs by integrating the ODE.
+def _generate_fields(model, graph, flow_cfg, num_samples, use_amp, amp_dtype):
+    """Draw `num_samples` DECODED fields for one batch of graphs.
 
-    Returns [S, N, F]. Each member starts from an independent noise field; the
-    graph and its cached hierarchy are held fixed across every step and every
-    member, which is what makes the integrated vector field well defined.
+    Each draw integrates the prior's ODE over the small coarse latent, then
+    decodes -- far cheaper per member than the old field-space integration.
+    generate() itself refuses flow_cfg['predict']=='ensemble_mean' (that mode
+    means averaging DECODED fields over several calls, which is what the S
+    loop here already does), so callers that want an ensemble mean pass
+    'sample' or 'mean' and average `_generate_fields`'s own output instead.
     """
     inner = _unwrap(model)
     out = []
-    for _ in range(int(num_samples)):
-        y = torch.randn_like(graph.y)
-
-        def velocity(y_cur, t_scalar):
-            t = torch.full((_num_graphs(graph), 1), float(t_scalar),
-                           device=y_cur.device, dtype=y_cur.dtype)
-            with torch.amp.autocast('cuda', dtype=amp_dtype, enabled=use_amp):
-                return inner(graph, y_cur, t).float()
-
-        out.append(integrate(velocity, y, flow_cfg['steps'], flow_cfg['solver']))
+    with torch.amp.autocast('cuda', dtype=amp_dtype, enabled=use_amp):
+        for _ in range(int(num_samples)):
+            out.append(inner.generate(graph, flow_cfg))
     return torch.stack(out, dim=0)
 
 
@@ -203,110 +419,27 @@ def _crps(samples, target, loss_weights):
     return acc.mean()
 
 
-# ── epochs ──────────────────────────────────────────────────────────────────
-
-def train_epoch(model, dataloader, optimizer, device, config, epoch, ema_model=None):
-    model.train()
-
-    loss_weights = _build_loss_weights(config, device)
-    use_amp = config.get('use_amp', True)
-    amp_dtype = resolve_amp_dtype(device)
-    scaler = build_grad_scaler(amp_dtype, use_amp)
-    flow_cfg = resolve_flow_config(config)
-
-    grad_accum_steps = config.get('grad_accum_steps', 1)
-    total_batches = len(dataloader)
-    actual_accum = total_batches if grad_accum_steps == 0 else grad_accum_steps
-
-    total_loss_gpu = torch.zeros((), device=device, dtype=torch.float32)
-    n_batches = 0
-
-    if torch.cuda.is_available():
-        torch.cuda.reset_peak_memory_stats()
-    optimizer.zero_grad(set_to_none=True)
-
-    pbar = tqdm.tqdm(dataloader, total=total_batches)
-    for batch_idx, graph in enumerate(pbar):
-        graph = _move(graph, device, config)
-        loss = flow_loss(model, graph, loss_weights, use_amp, amp_dtype, flow_cfg)
-
-        scaled = loss / _accum_window_size(batch_idx, total_batches, actual_accum)
-        is_step = (batch_idx + 1) % actual_accum == 0 or (batch_idx == total_batches - 1)
-        sync_ctx = (contextlib.nullcontext() if (is_step or not hasattr(model, 'no_sync'))
-                    else model.no_sync())
-        with sync_ctx:
-            scaler.scale(scaled).backward()
-
-        # GPU accumulator: .item() is deferred to the end of the epoch so the
-        # training loop never syncs per batch.
-        total_loss_gpu += loss.detach().float()
-        n_batches += 1
-
-        if is_step:
-            scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=3.0)
-            scaler.step(optimizer)
-            scaler.update()
-            if ema_model is not None:
-                ema_model.update_parameters(model)
-            optimizer.zero_grad(set_to_none=True)
-
-        if batch_idx % 10 == 0:
-            pbar.set_postfix({'fm': f'{float(loss):.2e}', 'mem': _mem_str()})
-
-    peak_gb, reserved_gb = _mem_gb()
-    mean = total_loss_gpu.item() / max(n_batches, 1)
-    return {'mean': mean, 'total_mean': mean, 'sum': mean * n_batches,
-            'count': n_batches, 'peak_gb': peak_gb, 'reserved_gb': reserved_gb}
-
-
-def validate_epoch(model, dataloader, device, config, epoch=0):
-    """One-step flow-matching regression loss on held-out graphs.
-
-    Cheap and low-variance, but it measures the velocity field, not the samples.
-    Use `evaluate_flow_sampling_epoch` for anything about sample quality.
-    """
-    model.eval()
-    loss_weights = _build_loss_weights(config, device)
-    use_amp = config.get('use_amp', True)
-    amp_dtype = resolve_amp_dtype(device)
-    flow_cfg = resolve_flow_config(config)
-
-    total = torch.zeros((), device=device, dtype=torch.float32)
-    n = 0
-    with torch.no_grad():
-        pbar = tqdm.tqdm(dataloader, desc='Validation')
-        for i, graph in enumerate(pbar):
-            graph = _move(graph, device, config)
-            total += flow_loss(model, graph, loss_weights, use_amp, amp_dtype,
-                               flow_cfg).detach().float()
-            n += 1
-            if i % 10 == 0:
-                pbar.set_postfix({'fm': f'{total.item() / max(n, 1):.2e}'})
-    mean = total.item() / max(n, 1)
-    return {'mean': mean, 'total_mean': mean, 'sum': mean * n, 'count': n}
-
-
-def evaluate_flow_sampling_epoch(model, dataloader, device, config, epoch=0,
-                                 progress_name='ValidationSample'):
-    """Integrate the ODE on held-out graphs and score the resulting ensemble.
+def evaluate_prior_sampling_epoch(model, dataloader, device, config, epoch=0,
+                                  progress_name='ValidationSample'):
+    """Integrate the latent ODE, decode, and score the resulting field ensemble.
 
     Reports:
-        crps       fair CRPS of the ensemble against the single ground truth.
+        crps       fair CRPS of the decoded ensemble against the ground truth.
                    The estimator is unbiased at any S; S buys variance only,
                    and the noise floor is set by the number of validation
                    GRAPHS, not by S.
         recon      error of member 0 -- a single draw, NOT a reconstruction.
-                   Expect it to be worse than a deterministic regressor: a
-                   calibrated ensemble member is not supposed to sit on the mean.
-        spread     mean over graphs of std over members, in units of the target
-                   std. Near 0 means the noise channel is being ignored.
+                   Expect it to be worse than the AE's own recon (stage 1):
+                   a calibrated ensemble member is not supposed to sit on the
+                   mean, and it also carries the AE's own reconstruction error.
+        spread     mean over graphs of std over members, in units of the
+                   target std. Near 0 means the noise channel is being ignored.
     """
     model.eval()
     flow_cfg = resolve_flow_config(config)
-    # Validation may integrate more coarsely than inference; the velocity field
-    # is the same object either way.
     flow_cfg['steps'] = int(config.get('val_flow_steps', flow_cfg['steps']))
+    if flow_cfg['predict'] == 'ensemble_mean':
+        flow_cfg['predict'] = 'sample'
     S = int(config.get('val_num_samples', 8))
 
     loss_weights = _build_loss_weights(config, device)
@@ -318,24 +451,17 @@ def evaluate_flow_sampling_epoch(model, dataloader, device, config, epoch=0,
         pbar = tqdm.tqdm(dataloader, desc=progress_name)
         for graph in pbar:
             graph = _move(graph, device, config)
-            samples = sample_fields(model, graph, flow_cfg, S, use_amp, amp_dtype)
+            samples = _generate_fields(model, graph, flow_cfg, S, use_amp, amp_dtype)
             target = graph.y.float()
 
             crps_sum += float(_crps(samples, target, loss_weights))
             recon_sum += float(_weighted_mse(samples[0], target, loss_weights))
-            # The deterministic readout, one forward: z0 + v(z0, 0) = E[y|g].
-            # Tracked every validation so the deterministic quality is visible
-            # DURING training rather than only after it.
-            inner = _unwrap(model)
-
-            def _vel(y_cur, t_scalar, _g=graph):
-                tt = torch.full((_num_graphs(_g), 1), float(t_scalar),
-                                device=y_cur.device, dtype=y_cur.dtype)
-                with torch.amp.autocast('cuda', dtype=amp_dtype, enabled=use_amp):
-                    return inner(_g, y_cur, tt).float()
-
-            det_sum += float(_weighted_mse(
-                predict_mean(_vel, torch.randn_like(target)), target, loss_weights))
+            # The deterministic readout, one prior forward at t=0 (predict_mean):
+            # tracked every validation so det quality is visible DURING training.
+            mean_cfg = dict(flow_cfg)
+            mean_cfg['predict'] = 'mean'
+            predicted = _generate_fields(model, graph, mean_cfg, 1, use_amp, amp_dtype)[0]
+            det_sum += float(_weighted_mse(predicted, target, loss_weights))
             if S >= 2:
                 gt_std = target.std().clamp_min(1e-8)
                 spread_sum += float(samples.std(dim=0).mean() / gt_std)
@@ -357,7 +483,7 @@ def evaluate_flow_sampling_epoch(model, dataloader, device, config, epoch=0,
 
 
 def log_training_config(config):
-    flow_cfg = resolve_flow_config(config)
+    mode = str(config.get('mode', 'train')).lower().strip()
     lw = config.get('feature_loss_weights', None)
     if lw is not None:
         if not isinstance(lw, list):
@@ -368,35 +494,41 @@ def log_training_config(config):
     else:
         print("Per-feature loss weights: equal (default)")
 
-    print(f"Objective: conditional flow matching (single MSE term on the velocity)")
-    print(f"  parameterization:      {flow_cfg['weighting']}"
-          + ("  (velocity prediction)" if flow_cfg['weighting'] == 'uniform'
-             else "  (data prediction -- (1-s*t)^2 weight, favours the deterministic end)"))
-    if flow_cfg['det_prob'] > 0:
-        print(f"  deterministic slice:   {flow_cfg['det_prob']:.0%} of graphs pinned to t=0 "
-              f"(pure regression on E[y|g])")
-    print(f"  inference integration: {flow_cfg['steps']} steps, {flow_cfg['solver']} solver")
-    print(f"  validation sampling:   {config.get('val_flow_steps', flow_cfg['steps'])} steps, "
-          f"{config.get('val_num_samples', 8)} members")
-    print(f"  time embedding:        Fourier({flow_cfg['time_freqs']}) -> {2 * flow_cfg['time_freqs']} dims")
-    print(f"  t schedule:            {flow_cfg['t_sampling']}"
-          + (f" (scale={flow_cfg['logit_scale']:g})"
-             if flow_cfg['t_sampling'] == 'logitnormal' else ""))
+    L = int(config.get('multiscale_levels', 1))
+    mp = config.get('mp_per_level', [])
+    mp = [int(mp)] if not isinstance(mp, list) else [int(x) for x in mp]
+    print(f"Compressor V-cycle: {L} levels, {sum(mp)} GnBlocks total")
+    for i in range(L):
+        print(f"  Level {i} pre:  {mp[i]} blocks")
+    print(f"  Coarsest:    {mp[L]} blocks")
+    for i in range(L - 1, -1, -1):
+        print(f"  Level {i} post: {mp[2 * L - i]} blocks")
+    print(f"  Coarse latent: {config.get('latent_ch', 4)} channels/coarse-node "
+          f"(norm_latents, ae_kl_weight={float(config.get('ae_kl_weight', 1e-6)):g})")
 
-    if config.get('use_multiscale', False):
-        L = int(config.get('multiscale_levels', 1))
-        mp = config.get('mp_per_level', [])
-        if not isinstance(mp, list):
-            mp = [int(mp)]
-        print(f"Multi-Scale: ENABLED (V-cycle, {L} levels, {sum(int(x) for x in mp)} GnBlocks)")
-        for i in range(L):
-            print(f"  Level {i} pre:  {mp[i]} blocks")
-        print(f"  Coarsest:    {mp[L]} blocks")
-        for i in range(L - 1, -1, -1):
-            print(f"  Level {i} post: {mp[2 * L - i]} blocks")
-        print("  [message_passing_num is IGNORED when use_multiscale=True]")
-    else:
-        print(f"Multi-Scale: disabled (flat GNN, message_passing_num={config.get('message_passing_num')})")
+    if mode in ('train_ae', 'train'):
+        print("Stage 1 (compressor): reconstruction + KL, near-unregularized")
+
+    if mode in ('train_prior', 'train'):
+        flow_cfg = resolve_flow_config(config)
+        print(f"Stage 2 (prior): {config.get('prior_blocks', 4)} AdaLN-Zero GnBlocks, "
+              f"conditional flow matching on FROZEN coarse latents")
+        print(f"  parameterization:      {flow_cfg['weighting']}"
+              + ("  (velocity prediction)" if flow_cfg['weighting'] == 'uniform'
+                 else "  (data prediction -- (1-s*t)^2 weight, favours the deterministic end)"))
+        if flow_cfg['det_prob'] > 0:
+            print(f"  deterministic slice:   {flow_cfg['det_prob']:.0%} of graphs pinned to t=0 "
+                  f"(pure regression on E[z|g])")
+        print(f"  inference integration: {flow_cfg['steps']} steps, {flow_cfg['solver']} solver")
+        print(f"  validation sampling:   {config.get('val_flow_steps', flow_cfg['steps'])} steps, "
+              f"{config.get('val_num_samples', 8)} members")
+        print(f"  time embedding:        Fourier({flow_cfg['time_freqs']}) -> {2 * flow_cfg['time_freqs']} dims")
+        print(f"  t schedule:            {flow_cfg['t_sampling']}"
+              + (f" (scale={flow_cfg['logit_scale']:g})"
+                 if flow_cfg['t_sampling'] == 'logitnormal' else ""))
+    if mode == 'train':
+        print(f"  Combined run: {config.get('ae_epochs', 0)} AE epochs, then "
+              f"{config.get('training_epochs', 0)} prior epochs on the frozen AE")
 
 
 # ── periodic visual test ────────────────────────────────────────────────────
@@ -438,18 +570,24 @@ def _scalar_attr(graph, name):
 
 
 def test_model(model, dataloader, device, config, epoch, dataset=None, output_prefix='test'):
-    """Draw ONE sample per test graph and write it out for visual inspection.
+    """Draw ONE prediction per test graph and write it out for visual inspection.
 
-    Unlike the deterministic tree this is a draw, not a prediction: a different
-    call produces a different field. That is the point -- the pictures are for
-    judging whether individual samples look like physical fields.
+    In 'train_ae' mode this is the AE's reconstruction (posterior mean sample,
+    no prior exists yet). Otherwise it is a single draw from the trained prior
+    through the frozen decoder -- a different call produces a different field,
+    which is the point: the pictures are for judging whether individual
+    samples look like physical fields.
     """
     model.eval()
     loss_weights = _build_loss_weights(config, device)
-    flow_cfg = resolve_flow_config(config)
-    flow_cfg['steps'] = int(config.get('val_flow_steps', flow_cfg['steps']))
     use_amp = config.get('use_amp', True)
     amp_dtype = resolve_amp_dtype(device)
+    mode = str(config.get('mode', 'train')).lower().strip()
+    is_ae_only = mode == 'train_ae'
+    flow_cfg = None
+    if not is_ae_only:
+        flow_cfg = resolve_flow_config(config)
+        flow_cfg['steps'] = int(config.get('val_flow_steps', flow_cfg['steps']))
 
     use_gpu = device.type == 'cuda' if hasattr(device, 'type') else (device != 'cpu')
     mesh_device = device if use_gpu else 'cpu'
@@ -475,7 +613,12 @@ def test_model(model, dataloader, device, config, epoch, dataset=None, output_pr
             if batch_idx >= max_test_batches:
                 break
             graph = _move(graph, device, config)
-            predicted = sample_fields(model, graph, flow_cfg, 1, use_amp, amp_dtype)[0]
+            if is_ae_only:
+                with torch.amp.autocast('cuda', dtype=amp_dtype, enabled=use_amp):
+                    y_hat, _, _ = model('ae', graph)
+                predicted = y_hat.float()
+            else:
+                predicted = _generate_fields(model, graph, flow_cfg, 1, use_amp, amp_dtype)[0]
             target = graph.y.float()
             loss = _weighted_mse(predicted, target, loss_weights)
             total_loss += float(loss)

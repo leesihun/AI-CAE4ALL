@@ -35,6 +35,7 @@ edge_var	8
 positional_features	4
 
 message_passing_num	15
+ae_epochs	10  # stage-1 compressor; matches config_ex9_fm_v.txt so the v/x0 comparison differs only in flow_loss_weighting.
 Training_epochs	25
 Batch_size	8
 LearningR	0.0003

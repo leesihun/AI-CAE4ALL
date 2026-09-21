@@ -29,7 +29,7 @@ hierarchy_variants	1
 hierarchy_seed	1234
 hierarchy_cache_keep	True
 latent_dim	96
-message_passing_num	12
+message_passing_num	12  # ignored when use_multiscale=True
 
 %   Static: one step, no autoregressive feedback.
 infer_timesteps	1

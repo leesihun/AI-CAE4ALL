@@ -10,7 +10,7 @@ from general_modules.edge_features import EDGE_FEATURE_DIM, compute_edge_attr
 from general_modules.positional_features import compute_positional_features
 from general_modules.world_edges import HAS_TORCH_CLUSTER, compute_world_edges
 from model.CHiMGNFlow import CHiMGNFlow
-from model.flow import integrate, predict_mean, resolve_flow_config
+from model.flow import resolve_flow_config
 
 # Multiscale coarsening (only needed when use_multiscale=True)
 try:
@@ -503,7 +503,9 @@ def _load_model_from_checkpoint(config, checkpoint, device):
 
 def run_rollout(config, config_filename='config.txt'):
     """
-    Perform autoregressive rollout inference.
+    Perform autoregressive rollout inference with the LDGN-style two-stage
+    model (see model/CHiMGNFlow.py): a near-lossless HI-MGN compressor onto a
+    coarse mesh level, and a flow-matching prior over THAT coarse latent only.
 
     Given an initial condition from an HDF5 dataset and a pretrained model
     checkpoint, iteratively predicts the next state from the current state:
@@ -511,14 +513,18 @@ def run_rollout(config, config_filename='config.txt'):
         1. Load initial state at t=0
         2. For each step t -> t+1:
             a. Normalize current state -> build graph
-            b. Forward pass -> predicted normalized delta
-            c. Denormalize delta;  state_{t+1} = state_t + delta
+            b. model.generate(graph, flow_cfg): encode geometry/BC
+               conditioning once, integrate the coarse-latent ODE from noise,
+               decode -- the full LDGN inference path in one call
+            c. Denormalize the decoded field as a delta; state_{t+1} = state_t + delta
         3. Save all predicted timesteps to HDF5
 
-    With use_vae=True, `num_vae_samples` independent trajectories are generated
-    per scene, each with its own z drawn from the conditional prior (fallback:
-    N(0, I)). `vae_batch_size` trajectories are advanced together in one
-    batched forward pass.
+    `num_vae_samples` independent trajectories are generated per scene, each
+    with its own coarse-latent noise draw (generate() reseeds it every call).
+    `vae_batch_size` trajectories are advanced together in one batched
+    forward pass -- cheap here because the full-mesh V-cycle in generate()
+    runs once per graph per step, not once per ODE step (contrast the old
+    field-space flow, which paid the whole network per ODE step).
     """
     print("\n" + "=" * 60)
     print("AUTOREGRESSIVE ROLLOUT INFERENCE")
@@ -590,10 +596,29 @@ def run_rollout(config, config_filename='config.txt'):
     print("\nInitializing model...")
     model = _load_model_from_checkpoint(config, checkpoint, device)
 
-    # Every run is generative here: the only randomness is the noise field the
-    # ODE starts from, and drawing a new one gives a new sample.
+    # Every run is generative here: the only randomness is the coarse-latent
+    # noise generate() starts its ODE from, and drawing a new one gives a new
+    # sample.
     use_vae = True
     flow_cfg = resolve_flow_config(config)
+    if flow_cfg['predict'] == 'ensemble_mean':
+        # generate() draws exactly one sample per call and refuses this mode
+        # itself (see model/CHiMGNFlow.py) -- averaging belongs at the caller,
+        # over DECODED fields. Doing that correctly here would mean averaging
+        # every one of num_vae_samples draws back into a single running state
+        # at EVERY autoregressive step, which the auto-VRAM batch splitter
+        # below is not built to keep straight across multiple _run_batch
+        # calls. Nothing in configs/ uses this mode; rather than guess at
+        # semantics for zero current callers, fail with the working
+        # alternative: sample independent trajectories with `flow_predict
+        # sample` and average the saved HDF5 outputs downstream (that is
+        # exactly what the spread-histogram/CRPS diagnostics already below
+        # this function do across `sample` trajectories).
+        raise ValueError(
+            "flow_predict=ensemble_mean is not supported by rollout.py. Use "
+            "flow_predict=sample with num_vae_samples>1 and average the saved "
+            "trajectories downstream instead."
+        )
     num_vae_samples = max(1, int(config.get('num_vae_samples', 1)))
     raw_vae_batch_size = config.get('vae_batch_size', 1)
     auto_vae_batch_size = (
@@ -623,10 +648,11 @@ def run_rollout(config, config_filename='config.txt'):
     print(f"  Flow sampling: {num_vae_samples} sample(s) per scene "
           f"(ODE {flow_cfg['steps']} steps, {flow_cfg['solver']} solver, "
           f"batch_size={batch_desc})")
-    print(f"  Cost note: each sample costs {flow_cfg['steps']} network forwards"
-          + (f" x {flow_cfg['steps'] and 2 if flow_cfg['solver'] == 'heun' else 1}"
-             if flow_cfg['solver'] == 'heun' else "")
-          + " -- reduce flow_steps to trade accuracy for speed, no retraining needed.")
+    print(f"  Cost note: the full-mesh V-cycle (encoder+decoder) runs ONCE per "
+          f"sample regardless of flow_steps; only the coarse-latent prior pays "
+          f"per ODE step ({flow_cfg['steps']} steps"
+          + (" x 2 (heun)" if flow_cfg['solver'] == 'heun' else "")
+          + ") -- reduce flow_steps to trade accuracy for speed, no retraining needed.")
 
     # ---- Rollout inputs --------------------------------------------------
     dataset_dir = config.get('infer_dataset')
@@ -751,27 +777,14 @@ def run_rollout(config, config_filename='config.txt'):
 
                     batch_graph = Batch.from_data_list(graphs)
 
-                    # Integrate the velocity field from pure noise to a field.
-                    # The graph -- and with it the coarsening hierarchy -- is
-                    # built ONCE and held fixed for every one of these steps.
-                    # Rebuilding it inside the loop would make each step a
-                    # different vector field, so the ODE would integrate a
-                    # discontinuous object; that hazard does not exist in a
-                    # one-shot model, which is why it is new here.
-                    y = torch.randn(batch_graph.num_nodes, output_dim, device=device)
-
-                    def _velocity(y_cur, t_scalar, _g=batch_graph, _b=B):
-                        t = torch.full((_b, 1), float(t_scalar),
-                                       device=y_cur.device, dtype=y_cur.dtype)
-                        return model(_g, y_cur, t).float()
-
-                    if flow_cfg['predict'] == 'mean':
-                        # One forward, no integration: z0 + v(z0, 0) = E[y|g].
-                        # Every draw of this batch collapses to the same field,
-                        # which is the point -- it is a deterministic mode.
-                        y = predict_mean(_velocity, y)
-                    else:
-                        y = integrate(_velocity, y, flow_cfg['steps'], flow_cfg['solver'])
+                    # Full LDGN inference path in one call: encode geometry/BC
+                    # conditioning once, integrate the coarse-latent ODE from
+                    # fresh noise, decode. See CHiMGNFlow.generate() -- it
+                    # internally handles both 'mean' (one forward, no
+                    # integration) and 'sample' (full ODE), and it is what
+                    # keeps the full-mesh V-cycle to once per graph per step
+                    # rather than once per ODE step.
+                    y = model.generate(batch_graph, flow_cfg).float()
                     predicted = y.view(B, num_nodes, output_dim).cpu().numpy()
 
                     for b in range(B):

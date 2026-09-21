@@ -82,7 +82,13 @@ KEY_CATALOGS.sdfflow = [...new Set([
 // the flow controls are the only model-specific additions.
 KEY_CATALOGS.chiMgnflow = [...new Set([
   ...KEY_CATALOGS.meshgraphnetsV,
-  ...keys(`flow_steps flow_solver flow_time_freqs flow_t_sampling flow_t_logit_scale flow_loss_weighting flow_det_prob flow_predict flow_head flow_head_eps val_flow_steps val_num_samples gamma_es es_samples es_steps es_noise_source es_start_epoch`)
+  ...keys(`flow_steps flow_solver flow_time_freqs flow_t_sampling flow_t_logit_scale flow_loss_weighting flow_det_prob flow_predict flow_head flow_head_eps val_flow_steps val_num_samples gamma_es es_samples es_steps es_noise_source es_start_epoch`),
+  // LDGN rewrite (Lino, Pfaff & Thuerey, ICLR 2025, arXiv:2504.02843): the
+  // two-stage architecture/mode surface -- a near-lossless compressor (stage
+  // 1, latent_ch/ae_kl_weight/ae_epochs) feeding a coarse-latent flow prior
+  // (stage 2, prior_blocks), with ae_checkpoint loading a frozen stage-1
+  // checkpoint for a standalone 'train_prior' run.
+  ...keys(`ae_checkpoint ae_epochs ae_kl_weight latent_ch prior_blocks`)
 ])].sort();
 
 export const MODEL_CATALOG = {
@@ -144,6 +150,13 @@ export const MODEL_CATALOG = {
       message_passing_num: "15", coarsening_type: "voronoi_seedmean",
       multiscale_levels: "2", voronoi_clusters: "500,100", mp_per_level: "3,4,6,4,3",
       hierarchy_variants: "1", hierarchy_seed: "1234",
+      // Stage-1 compressor (mode train_ae, or the first half of combined
+      // train): ae_epochs has no launcher default and is REQUIRED for mode
+      // train, unlike latent_ch/ae_kl_weight/prior_blocks below, which mirror
+      // cae_suite/specs/chi_mgnflow.py's own defaults. Ratio (epochs:200 of
+      // training_epochs:500) matches configs/HI_MGNFlow/deepjeb/config_train.txt,
+      // the one full-scale combined-train config in the repo.
+      ae_epochs: "200", latent_ch: "4", ae_kl_weight: "1e-6", prior_blocks: "4",
       flow_steps: "30", flow_solver: "heun", flow_time_freqs: "16",
       flow_t_sampling: "uniform", flow_loss_weighting: "uniform", flow_det_prob: "0",
       flow_predict: "sample", val_flow_steps: "10", val_num_samples: "8", best_by: "crps",
@@ -776,6 +789,11 @@ export const TEMPLATES = {
     flow_steps: "20", flow_solver: "heun", flow_time_freqs: "16", flow_t_sampling: "uniform",
     flow_loss_weighting: "uniform", flow_det_prob: "0", flow_predict: "sample",
     val_flow_steps: "8", val_num_samples: "4", best_by: "crps",
+    // Stage-1 compressor epoch budget -- required for mode train with no
+    // launcher default. 10 is config_ex9_fm_v.txt's real value, chosen there
+    // to match config_ex9_fm_x0.txt so the two arms differ only in
+    // flow_loss_weighting.
+    ae_epochs: "10",
     training_epochs: "25", batch_size: "8", learningr: "0.0003",
     use_checkpointing: "True", use_amp: "True", use_ema: "True", ema_decay: "0.99",
     val_interval: "5", num_workers: "2", augment_geometry: "False",
