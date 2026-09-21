@@ -12,6 +12,11 @@ VAR_KEYS = frozenset(
         "model", "mode", "gpu_ids", "parallel_mode", "log_file_dir", "modelpath",
         "dataset_dir", "infer_dataset", "eval_dataset", "inference_output_dir",
         "infer_timesteps", "split_seed", "input_var", "output_var", "cond_var",
+        # split_seed decides data-split MEMBERSHIP; training_seed is a separate
+        # stream (init, shuffle, CUDA, stochastic latent -- single_training.py).
+        # Two runs differing only in training_seed share a split, which is what
+        # makes them a seed replicate rather than a different experiment.
+        "training_seed",
         # Inference-only: inflate the FM prior's z around its per-graph center
         # (ConditionalFMPrior.sample_n). Scalar or list; a list is cycled per
         # draw batch so one pass yields the lam-vs-spread curve.

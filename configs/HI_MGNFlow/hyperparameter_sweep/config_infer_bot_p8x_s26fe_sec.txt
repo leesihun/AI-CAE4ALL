@@ -1,0 +1,87 @@
+%   ============================================================
+%
+%   SAOI inference, cHI-MGNflow PHASE C -- one prior arm on one eval set.
+%
+%   infer_dataset is the ONE part to generate for. eval_dataset is its _compare_
+%   half: the 125 ground-truth realizations of that same part. Point the
+%   histogram at the wrong one and it is drawn against the wrong distribution
+%   while still looking plausible -- check_eval_inputs.py exists to catch that.
+%
+%   Every Phase-B arm is inferred on all three parts. Validation CRPS already
+%   ranks the arms, but it is a proxy; the spread ratio these runs produce is
+%   the quantity the campaign is actually for, and an arm that wins one part
+%   and loses two is not a winner.
+%
+%   A draw is not one forward. The full-mesh V-cycle runs ONCE per draw and only
+%   the coarse-latent prior pays per ODE step, so flow_steps and flow_solver are
+%   cheap to change here: rollout.py lets the config win over the checkpoint for
+%   exactly those two keys.
+%
+%   Board half bot, prior arm p8x, eval set s26fe_sec, card 3.
+%
+%   ============================================================
+model	chi-mgnflow
+mode	inference
+gpu_ids	3
+log_file_dir	../../output/chi-mgnflow/saoi_sweep/infer/bot.prior_p8x.infer_s26fe_sec.log
+modelpath	../../output/chi-mgnflow/saoi_sweep/bot.prior_p8x.pth
+inference_output_dir	../../output/chi-mgnflow/saoi_sweep/infer/bot/p8x/s26fe_sec
+
+%   Datasets
+infer_dataset	../../dataset/SAOI/test_S26FE-SEC_infer_bot.h5
+eval_dataset	../../dataset/SAOI/test_S26FE-SEC_compare_bot.h5  # ground truth for the histogram -- the _compare_ half
+infer_timesteps	1
+
+%   Channel layout. The SAOI columns are x y z dx dy dz thickness "Part No.",
+%   so rows 0:3 are the reference coordinates (never predicted), 3:6 the
+%   displacement state and 6:9 the input-only conditions the model reads every
+%   step but never predicts.
+input_var	3  # x/y/z displacement -- the state block
+output_var	3  # what the model generates
+cond_var	3  # input-only rows: thickness and part id
+edge_var	8  # deformed dx/dy/dz/dist + reference dx/dy/dz/dist
+positional_features	4  # rotation-invariant node features
+
+use_node_types	False
+use_world_edges	False
+
+%   Hierarchy. The coarsest level (100 clusters) is where the latent lives.
+%   Every arm in this sweep shares it byte for byte: a Phase-B arm whose
+%   hierarchy differs from the compressor it loads would be encoding through
+%   a partition the frozen weights were never fit to.
+use_multiscale	True
+coarsening_type	voronoi_seedmean
+voronoi_clusters	1000, 100
+multiscale_levels	2
+mp_per_level	4, 6, 8, 6, 4  # V-cycle depth: pre / coarsest / post
+
+%   The hierarchy MUST stay fixed for a whole ODE integration and across
+%   every draw of one scene: rebuilding it mid-solve would make each step a
+%   different vector field. Four partitions are built up front and rotated
+%   across draw batches, so one unlucky partition cannot poison a scene.
+hierarchy_seed	0, 1, 2, 3
+
+%   Architecture, repeated from the training config. The checkpoint's own
+%   model_config is the authority and overrides these at load time; they are
+%   written out so this config describes the run on its own and so a mismatch
+%   prints loudly instead of passing unseen. latent_ch tracks whichever
+%   compressor was promoted -- promote_ae.py checks these files too.
+latent_dim	128
+latent_ch	8
+prior_blocks	8
+flow_time_freqs	16
+
+%   Sampling. 2000 draws is what the MGN-V campaign uses, so the two methods'
+%   histograms are built from the same sample count and compare directly.
+num_vae_samples	2000
+flow_steps	30
+flow_solver	heun
+
+%   The histogram: generated vs ground-truth z_disp peak-to-valley, one value
+%   per draw against one per eval sample. rollout.py writes
+%   histogram_compare.png and spread_values.npz under inference_output_dir
+%   and prints the [SPREAD] summary lines, which rank_arms.py collects.
+make_histogram	True
+show_histogram	False  # headless box: save the PNG, never open a viewer
+histogram_bins	60
+save_rollouts	False  # the spreads still reach spread_values.npz

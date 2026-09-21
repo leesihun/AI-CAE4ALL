@@ -30,10 +30,11 @@ factorial each, trained on `dataset/SAOI/saoi_train_bot.h5` and scored on three
 held-out part families. This is the first head-to-head between the two.
 
 Configs: `SAOI_sweep3/` and `SAOI_sweepB/`, both **since replaced** by
-[configs/MeshGraphNets_Variational/SAOI_sweep/](../../configs/MeshGraphNets_Variational/SAOI_sweep/)
-and [configs/HI_MGNFlow/SAOI_sweep/](../../configs/HI_MGNFlow/SAOI_sweep/),
-whose arms and axes are different. The numbers below belong to the old
-grids and are not reproducible from the current configs.
+[configs/MeshGraphNets_Variational/SAOI_run/](../../configs/MeshGraphNets_Variational/SAOI_run/)
+and [configs/HI_MGNFlow/SAOI_run/](../../configs/HI_MGNFlow/SAOI_run/), which
+are no longer sweeps at all: each is one fixed recipe over the two board
+halves. The numbers below belong to the old grids and are not reproducible
+from the current configs.
 
 > Design context, not implementation truth. Where this and the code disagree,
 > the code is authoritative.

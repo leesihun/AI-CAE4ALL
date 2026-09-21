@@ -115,8 +115,7 @@ FLOW_RUNTIME_REMOVED_KEYS = frozenset(
 # Output-parameterization keys from the retired single-stage, field-space
 # flow design (network reparameterized its output as the clean field 'x'
 # instead of velocity; flow_head_eps floored the resulting division near
-# t=1 -- see configs/HI_MGNFlow/SAOI_sweep/, an unrun experiment built on
-# that design). The LDGN rewrite's prior always emits velocity over the
+# t=1). The LDGN rewrite's prior always emits velocity over the
 # coarse latent, so there is no field-space division left to floor, and
 # flow_loss_weighting='x0' gets the same data-prediction effect as a LOSS
 # REWEIGHTING on that one untouched head. Kept known (not silently

@@ -1,0 +1,107 @@
+%   ============================================================
+%
+%   SAOI warpage, cHI-MGNflow PHASE A -- stage 1 only (the compressor).
+%
+%   mode train_ae fits the KL-regularized multiscale autoencoder ALONE: encode
+%   the field down to latent_ch channels on each of the ~100 coarsest nodes,
+%   decode it back, score reconstruction + KL. No flow, no sampling, no prior.
+%
+%   This stage sets the CEILING. Stage 2 is trained against it frozen and never
+%   sees the fine mesh except through this latent, so whatever the compressor
+%   cannot represent is gone for good -- which is why the capacity ladder is
+%   swept here and not jointly with the prior.
+%
+%   EPOCH COUNT IS NOT A FREE DIAL. cosine_T0 = training_epochs - warmup_epochs
+%   with T_mult 1, so the LR anneals to eta_min exactly at the last epoch and no
+%   restart ever lands inside a run: every run looks converged at its own end.
+%   A short run therefore cannot tell you a longer one would not have helped.
+%   The fix is to run long and read the curve -- see ae_report.py.
+%
+%   In mode train_ae the epoch count comes from training_epochs. `ae_epochs` is
+%   read only by the combined mode train and is deliberately absent here.
+%
+%   Arm c8 on board half top, card 5: latent_ch 8, ae_kl_weight 1e-6.
+%   twice the latent budget per coarse node.
+%
+%   ============================================================
+model	chi-mgnflow
+mode	train_ae  # stage 1 alone; the prior is built but never trained or loaded from here
+gpu_ids	5
+parallel_mode	ddp
+log_file_dir	../../output/chi-mgnflow/saoi_sweep/ae/top.ae_c8.log
+modelpath	../../output/chi-mgnflow/saoi_sweep/top.ae_c8.pth
+
+%   Dataset
+dataset_dir	../../dataset/SAOI/saoi_train_top.h5
+split_seed	42
+augment_geometry	True
+
+%   Channel layout. The SAOI columns are x y z dx dy dz thickness "Part No.",
+%   so rows 0:3 are the reference coordinates (never predicted), 3:6 the
+%   displacement state and 6:9 the input-only conditions the model reads every
+%   step but never predicts.
+input_var	3  # x/y/z displacement -- the state block
+output_var	3  # what the model generates
+cond_var	3  # input-only rows: thickness and part id
+edge_var	8  # deformed dx/dy/dz/dist + reference dx/dy/dz/dist
+positional_features	4  # rotation-invariant node features
+
+use_node_types	False
+use_world_edges	False
+feature_loss_weights	0.1, 0.1, 1  # z_disp is the quantity of interest
+
+%   Hierarchy. The coarsest level (100 clusters) is where the latent lives.
+%   Every arm in this sweep shares it byte for byte: a Phase-B arm whose
+%   hierarchy differs from the compressor it loads would be encoding through
+%   a partition the frozen weights were never fit to.
+use_multiscale	True
+coarsening_type	voronoi_seedmean
+voronoi_clusters	1000, 100
+multiscale_levels	2
+mp_per_level	4, 6, 8, 6, 4  # V-cycle depth: pre / coarsest / post
+hierarchy_variants	4  # rotated across epochs so the model is invariant to the partition
+hierarchy_seed	1234
+hierarchy_cache_keep	True  # four arms per half share one cache; the lock file coordinates them
+
+%   THE SWEPT AXIS. latent_ch is the per-coarse-node budget and ae_kl_weight
+%   is the only regularizer on the latent scale. Both are locked once this
+%   checkpoint is promoted: a Phase-B arm must declare the same values or the
+%   frozen-compressor load raises on a state-dict mismatch.
+latent_dim	128  # trunk width, identical across every arm
+latent_ch	8
+ae_kl_weight	1e-6
+
+%   Length. Deliberately the same as Phase B rather than the 600 of
+%   SAOI_run: the capacity ladder is exactly the axis where the larger model
+%   converges last, so screening the arms short would systematically favour
+%   latent_ch 4. best_by recon keeps the best checkpoint whenever it occurs.
+training_epochs	2000
+
+%   Optimization
+batch_size	16  # measured b16 < b32 by 0.288 on this data
+learningr	0.0001
+grad_accum_steps	1
+num_workers	4
+
+%   Memory / performance
+use_checkpointing	True
+use_amp	True
+use_ema	True
+ema_decay	0.99
+
+%   Validation. Stage 1 has no sampling metric, so selection is on
+%   reconstruction; val_flow_steps / val_num_samples would be inert and are
+%   omitted. 80 selection points is also what makes the curve readable.
+val_interval	25
+best_by	recon
+
+%   Periodic visualization. In stage 1 this dumps the ENCODE/DECODE
+%   reconstruction against truth in physical units, which is what
+%   ae_ceiling_check.py reads to decide whether the compressor can represent
+%   the warpage spread at all.
+test_interval	200
+test_batch_idx	0, 1, 2, 3, 4, 5, 6, 7, 8, 9
+plot_feature_idx	2  # z_disp
+
+%   Time integration
+time_integration	ar_ot  # T=1 static data: there is no rollout to train through

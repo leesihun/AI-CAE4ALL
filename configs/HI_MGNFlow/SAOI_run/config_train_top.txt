@@ -1,0 +1,104 @@
+%   ============================================================
+%
+%   SAOI warpage, cHI-MGNflow -- board half top, card 1.
+%
+%   Two-stage: 600 epochs of the near-lossless compressor (stage 1), then 2000
+%   epochs of the flow-matching prior over its coarse latent (stage 2) with
+%   stage 1 frozen. One process, one checkpoint.
+%
+%   bot and top are separate datasets and separate models; this file and its
+%   sibling differ only in the dataset, the output paths and the card.
+%
+%   ============================================================
+model	chi-mgnflow
+mode	train  # combined: ae_epochs of stage 1, then training_epochs of stage 2
+gpu_ids	1  # one half per card; bot and top train at once
+parallel_mode	ddp
+log_file_dir	../../output/chi-mgnflow/saoi_run/top.log
+modelpath	../../output/chi-mgnflow/saoi_run/top.pth
+
+%   Dataset
+dataset_dir	../../dataset/SAOI/saoi_train_top.h5
+split_seed	42
+augment_geometry	True
+
+%   Channel layout. The SAOI columns are x y z dx dy dz thickness "Part No.",
+%   so rows 0:3 are the reference coordinates (never predicted), 3:6 the
+%   displacement state and 6:9 the input-only conditions the model reads every
+%   step but never predicts.
+input_var	3  # x/y/z displacement -- the state block
+output_var	3  # what the model generates
+cond_var	3  # input-only rows: thickness and part id
+edge_var	8  # deformed dx/dy/dz/dist + reference dx/dy/dz/dist
+positional_features	4  # rotation-invariant node features
+
+use_node_types	False
+use_world_edges	False
+feature_loss_weights	0.1, 0.1, 1  # z_disp is the quantity of interest
+
+%   Hierarchy. The coarsest level (100 clusters) is where the latent lives, so
+%   cHI-MGNflow requires use_multiscale True -- a flat stack has no coarse
+%   level to compress onto, and that now raises inside
+%   LatentDiffusionGraphNet.__init__ rather than training badly.
+use_multiscale	True
+coarsening_type	voronoi_seedmean
+voronoi_clusters	1000, 100
+multiscale_levels	2
+mp_per_level	4, 6, 8, 6, 4  # V-cycle depth: pre / coarsest / post
+hierarchy_variants	4  # rotated across epochs so the model is invariant to the partition
+hierarchy_seed	1234
+hierarchy_cache_keep	True  # keep the built cache; delete it by hand when the campaign is done
+
+%   STAGE 1 -- the compressor. It puts the whole field on the coarsest level
+%   as latent_ch channels per coarse node. Stage 2 then never sees the fine
+%   mesh except through it, so whatever stage 1 cannot represent is lost for
+%   good: this block sets the ceiling for the whole model.
+latent_dim	128  # trunk width
+latent_ch	4  # channels per coarse node -- the latent budget
+ae_kl_weight	1e-6  # near-lossless: just enough to keep the latent scaled
+ae_epochs	600  # stage-1 epochs; stage 2 is frozen against the result
+
+%   STAGE 2 -- the flow-matching prior over that coarse latent, trained
+%   against a frozen stage 1. It never touches the fine mesh, so its depth
+%   costs almost nothing per ODE step.
+prior_blocks	4  # AdaLN-Zero GnBlocks over the ~100 coarse nodes
+flow_time_freqs	16  # ARCHITECTURE-DEFINING: sets the AdaLN input width, so a checkpoint only loads under it
+flow_t_sampling	uniform  # beat logit-normal by 0.333 on this data
+flow_loss_weighting	uniform  # plain velocity MSE; x0 reweights toward data space
+training_epochs	2000  # prior epochs. No resume, and cosine_T0 = epochs - warmup, so this is a COMPLETE run
+
+%   Optimization
+batch_size	16  # measured b16 < b32 by 0.288 on this data
+learningr	0.0001
+grad_accum_steps	1
+num_workers	4
+
+%   Memory / performance
+use_checkpointing	True
+use_amp	True
+use_ema	True
+ema_decay	0.99
+
+%   Validation and checkpoint selection. One validation draw costs a single
+%   full-mesh encode + decode plus val_flow_steps x 2 forwards over the coarse
+%   nodes -- the ODE left the fine mesh with the rewrite. best_by crps keeps
+%   the best checkpoint, and it can only keep one it actually measured, so the
+%   interval buys selection points.
+val_interval	25  # 80 selection points across the prior stage
+val_flow_steps	20  # close to the K=30 used at inference
+val_num_samples	8  # CRPS is unbiased at any S; S buys variance only, the floor is the number of val GRAPHS
+best_by	crps  # select on the sampling metric, not the one-step loss
+
+%   Sampling defaults recorded with the checkpoint. Both are SAMPLING-TIME
+%   choices on a learned continuous velocity field, so an inference config
+%   overrides them with no retraining.
+flow_steps	30
+flow_solver	heun  # 2nd-order trapezoid: 2 forwards per step
+
+%   Periodic visualization
+test_interval	400
+test_batch_idx	0, 1, 2, 3, 4, 5, 6, 7, 8, 9
+plot_feature_idx	2  # z_disp
+
+%   Time integration
+time_integration	ar_ot  # T=1 static data: there is no rollout to train through

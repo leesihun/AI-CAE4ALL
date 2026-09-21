@@ -1,0 +1,81 @@
+%   ============================================================
+%
+%   SAOI inference -- board half bot, eval set s26fe_sec, card 0.
+%
+%   infer_dataset is the ONE part to generate for. eval_dataset is its
+%   _compare_ half: the 125 ground-truth realizations of that same part. Point
+%   the histogram at the wrong one and it is drawn against the wrong
+%   distribution while still looking plausible -- check_eval_inputs.py exists
+%   to catch exactly that.
+%
+%   A draw is not one forward. The full-mesh V-cycle (encoder + decoder) runs
+%   ONCE per draw and only the coarse-latent prior pays per ODE step, so
+%   flow_steps and flow_solver are cheap to change here: rollout.py lets the
+%   config win over the checkpoint for exactly those two keys.
+%
+%   ============================================================
+model	chi-mgnflow
+mode	inference
+gpu_ids	0
+log_file_dir	../../output/chi-mgnflow/saoi_run/bot.infer_s26fe_sec.log
+modelpath	../../output/chi-mgnflow/saoi_run/bot.pth
+inference_output_dir	../../output/chi-mgnflow/saoi_run/infer/bot/s26fe_sec
+
+%   Datasets
+infer_dataset	../../dataset/SAOI/test_S26FE-SEC_infer_bot.h5
+eval_dataset	../../dataset/SAOI/test_S26FE-SEC_compare_bot.h5  # ground truth for the histogram -- the _compare_ half
+infer_timesteps	1
+
+%   Channel layout. The SAOI columns are x y z dx dy dz thickness "Part No.",
+%   so rows 0:3 are the reference coordinates (never predicted), 3:6 the
+%   displacement state and 6:9 the input-only conditions the model reads every
+%   step but never predicts.
+input_var	3  # x/y/z displacement -- the state block
+output_var	3  # what the model generates
+cond_var	3  # input-only rows: thickness and part id
+edge_var	8  # deformed dx/dy/dz/dist + reference dx/dy/dz/dist
+positional_features	4  # rotation-invariant node features
+
+use_node_types	False
+use_world_edges	False
+
+%   Hierarchy. The coarsest level (100 clusters) is where the latent lives, so
+%   cHI-MGNflow requires use_multiscale True -- a flat stack has no coarse
+%   level to compress onto, and that now raises inside
+%   LatentDiffusionGraphNet.__init__ rather than training badly.
+use_multiscale	True
+coarsening_type	voronoi_seedmean
+voronoi_clusters	1000, 100
+multiscale_levels	2
+mp_per_level	4, 6, 8, 6, 4  # V-cycle depth: pre / coarsest / post
+
+%   The hierarchy MUST stay fixed for a whole ODE integration and across every
+%   draw of one scene: rebuilding it mid-solve would make each step a
+%   different vector field. Four partitions are built up front and rotated
+%   across draw batches, so one unlucky partition cannot poison a scene.
+hierarchy_seed	0, 1, 2, 3
+
+%   Architecture, repeated from config_train_bot.txt. The checkpoint's own
+%   model_config is the authority and overrides these at load time; they are
+%   written out so this config describes the run on its own, and so a mismatch
+%   prints loudly instead of passing unseen.
+latent_dim	128
+latent_ch	4
+prior_blocks	4
+flow_time_freqs	16
+
+%   Sampling. One draw = flow_steps x 2 coarse forwards plus one full-mesh
+%   encode/decode, against 125 ground-truth realizations.
+num_vae_samples	2000  # draws per scene
+flow_steps	30
+flow_solver	heun
+
+%   The histogram: generated vs ground-truth z_disp peak-to-valley, one value
+%   per draw against one per eval sample. rollout.py writes
+%   histogram_compare.png and spread_values.npz under inference_output_dir and
+%   prints the [SPREAD] summary lines to the log. This is the product of the
+%   run -- there is no separate scoring stage.
+make_histogram	True
+show_histogram	False  # headless box: save the PNG, never open a viewer
+histogram_bins	60
+save_rollouts	False  # the spreads still reach spread_values.npz; per-draw HDF5s would be tens of thousands of files

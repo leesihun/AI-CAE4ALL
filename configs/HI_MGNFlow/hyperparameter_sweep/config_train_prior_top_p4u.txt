@@ -1,0 +1,131 @@
+%   ============================================================
+%
+%   SAOI warpage, cHI-MGNflow PHASE B -- stage 2 only (the flow prior).
+%
+%   mode train_prior loads ae_checkpoint, freezes every weight outside the
+%   prior, and fits the flow-matching velocity field over the coarse latent
+%   alone. The compressor is never updated here.
+%
+%   WHY THIS IS NOT A FACTORIAL. Because stage 1 is frozen before stage 2
+%   starts, a prior knob only has meaning relative to a fixed latent space.
+%   Fanning four prior arms out from ONE promoted compressor makes every
+%   difference between them attributable to the prior -- retraining a
+%   compressor per cell would confound the prior knob with AE run-to-run
+%   variance, and cost four times the compute to say less.
+%
+%   WHAT MUST MATCH ae_checkpoint. _load_frozen_ae loads the checkpoint with
+%   every `model.prior.*` key stripped and then raises on ANY remaining missing
+%   or unexpected key. So latent_ch, latent_dim, the hierarchy block and the
+%   channel block below are LOCKED to the promoted compressor, while
+%   prior_blocks and flow_time_freqs are free -- they only shape model.prior.
+%
+%   The launcher cannot catch a mismatch for you: _probe_checkpoints in
+%   cae_suite/preflight.py only probes fields whose name ends in `modelpath`,
+%   so ae_checkpoint is existence-checked and nothing more. promote_ae.py does
+%   the real comparison against the checkpoint's own model_config.
+%
+%   Arm p4u on board half top, card 4: prior_blocks 4, flow_loss_weighting uniform.
+%   baseline depth, plain velocity MSE.
+%
+%   ============================================================
+model	chi-mgnflow
+mode	train_prior  # stage 2 alone, against the frozen compressor below
+gpu_ids	4
+parallel_mode	ddp
+log_file_dir	../../output/chi-mgnflow/saoi_sweep/prior/top.prior_p4u.log
+modelpath	../../output/chi-mgnflow/saoi_sweep/top.prior_p4u.pth
+
+%   The frozen compressor. promote_ae.py copies the winning Phase-A arm to
+%   this fixed path so the four prior arms of one half all load the same
+%   bytes. The saved checkpoint of THIS run contains the compressor too, so
+%   it is complete and directly usable at inference.
+ae_checkpoint	../../output/chi-mgnflow/saoi_sweep/top.ae.pth
+
+%   Dataset
+dataset_dir	../../dataset/SAOI/saoi_train_top.h5
+split_seed	42
+augment_geometry	True
+
+%   Channel layout. The SAOI columns are x y z dx dy dz thickness "Part No.",
+%   so rows 0:3 are the reference coordinates (never predicted), 3:6 the
+%   displacement state and 6:9 the input-only conditions the model reads every
+%   step but never predicts.
+input_var	3  # x/y/z displacement -- the state block
+output_var	3  # what the model generates
+cond_var	3  # input-only rows: thickness and part id
+edge_var	8  # deformed dx/dy/dz/dist + reference dx/dy/dz/dist
+positional_features	4  # rotation-invariant node features
+
+use_node_types	False
+use_world_edges	False
+
+%   Hierarchy. The coarsest level (100 clusters) is where the latent lives.
+%   Every arm in this sweep shares it byte for byte: a Phase-B arm whose
+%   hierarchy differs from the compressor it loads would be encoding through
+%   a partition the frozen weights were never fit to.
+use_multiscale	True
+coarsening_type	voronoi_seedmean
+voronoi_clusters	1000, 100
+multiscale_levels	2
+mp_per_level	4, 6, 8, 6, 4  # V-cycle depth: pre / coarsest / post
+hierarchy_variants	4
+hierarchy_seed	1234
+hierarchy_cache_keep	True
+
+%   LOCKED TO ae_checkpoint. These reproduce the promoted compressor. The
+%   default written here is the c8 arm; if a different arm wins Phase A,
+%   promote_ae.py refuses to promote and prints the exact edit.
+%   ae_kl_weight is inert in stage 2 -- the AE takes no gradient -- but it is
+%   recorded into this run's model_config, so it is carried through to keep
+%   the final checkpoint honest about the compressor it contains.
+latent_dim	128
+latent_ch	8
+ae_kl_weight	1e-6
+
+%   THE SWEPT AXIS, fully crossed 2x2. prior_blocks is depth over the ~100
+%   coarse nodes, which is why 8 costs almost nothing per ODE step;
+%   flow_loss_weighting x0 reweights the velocity loss toward data space.
+prior_blocks	4
+flow_loss_weighting	uniform
+
+%   NOT swept, and deliberately. flow_t_sampling uniform beat logit-normal by
+%   0.333 on this data, the largest margin in the retired grid, so it is
+%   settled. flow_time_freqs is architecture-defining for the prior: free
+%   against a fixed compressor, but a low-payoff use of one of eight cards.
+flow_t_sampling	uniform
+flow_time_freqs	16  # sets the AdaLN input width; a checkpoint only loads under it
+
+training_epochs	2000  # cosine_T0 = epochs - warmup, so this is a COMPLETE run; there is no resume
+
+%   Optimization
+batch_size	16
+learningr	0.0001
+grad_accum_steps	1
+num_workers	4
+
+%   Memory / performance
+use_checkpointing	True
+use_amp	True
+use_ema	True
+ema_decay	0.99
+
+%   Validation and checkpoint selection on the sampling metric.
+val_interval	25
+val_flow_steps	20  # close to the K=30 used at inference
+val_num_samples	8  # CRPS is unbiased at any S; the floor is the number of val GRAPHS
+best_by	crps
+
+%   Sampling defaults recorded with the checkpoint. Both are SAMPLING-TIME
+%   choices on a learned continuous velocity field, so an inference config
+%   overrides either with no retraining -- which is why neither is swept by
+%   spending a card on it.
+flow_steps	30
+flow_solver	heun  # 2nd-order trapezoid: 2 forwards per step
+
+%   Periodic visualization
+test_interval	400
+test_batch_idx	0, 1, 2, 3, 4, 5, 6, 7, 8, 9
+plot_feature_idx	2  # z_disp
+
+%   Time integration
+time_integration	ar_ot
