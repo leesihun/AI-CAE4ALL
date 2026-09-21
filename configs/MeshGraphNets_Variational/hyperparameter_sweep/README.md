@@ -1,19 +1,18 @@
 # MeshGraphNets-V SAOI — hyperparameter sweep
 
 Eight arms, trained independently on both halves of the SAOI part (`bot` and
-`top` — 16 training jobs total, nothing shared between the halves). Run one
-half at a time from the repository root:
+`top` — 16 training jobs total, nothing shared between the halves). One
+invocation runs both, one after the other, from the repository root:
 
 ```bash
-bash configs/MeshGraphNets_Variational/hyperparameter_sweep/run_sweep.sh \
-    > output/meshgraphnets-v/saoi_sweep/run_bot.out 2>&1
-
-HALF=top bash configs/MeshGraphNets_Variational/hyperparameter_sweep/run_sweep.sh \
-    > output/meshgraphnets-v/saoi_sweep_top/run_top.out 2>&1
+nohup bash configs/MeshGraphNets_Variational/hyperparameter_sweep/run_sweep.sh \
+    > output/meshgraphnets-v/run_sweep.out 2>&1 &
 ```
 
-Train → infer → posterior-vs-prior → one report, per half. See "Running both
-halves" below for why these run one after the other, not backgrounded together.
+Train → infer → posterior-vs-prior → one report, for `bot`, then the same four
+stages again for `top` — see "Both halves, one invocation" below for why they
+run one after the other rather than backgrounded together, and how to run only
+one of them.
 
 ## What this sweep is aimed at
 
@@ -50,20 +49,22 @@ explains itself.
 | `pmin15` | `posterior_min_std` 0.05 → 0.15 | the decoder is only trained on z near a posterior mean, so a distant prior draw is off-distribution and gets squashed |
 | `pmin30` | `posterior_min_std` 0.05 → 0.30 | same axis, 6× the baseline floor |
 | `g2e` | `prior_grad_to_encoder` 0.0 → 1.0 | closed, p is fitted to a fixed q and nothing pulls q toward what p can represent |
-| `mmd10` | `lambda_mmd` 1 → 10 | push the aggregate posterior toward N(0,I) so the flow has a better-conditioned target |
+| `arecon` | `alpha_recon` 1000 → 100 | recon currently outweighs every distributional term 10³:1, leaving little gradient to pull the aggregate posterior toward the prior or the decoder toward off-mean samples |
 
 `zdim8`, `zdim4`, `pmin15` and `pmin30` are the two axes the PVP decomposition
 points at directly (capacity, posterior floor) — mechanically simple,
 decoder-side hypotheses, plus the `base`/`seed` pair every arm is judged
-against. `g2e` and `mmd10` reweight the objective instead: each moves more
-than one mechanism at once, and `g2e` carries a known collapse risk.
+against. `g2e` and `arecon` reweight the objective instead: each moves more
+than one mechanism at once (`g2e` carries a known collapse risk; `arecon` is a
+direction finder confounded on purpose, since easing recon's dominance touches
+the encoder, decoder and prior fit simultaneously).
 
-A ninth arm, `arecon` (`alpha_recon` 1000 → 100), is **benched, not deleted**:
-recon outweighs every distributional term by 10³, so it is a direction finder
-confounded on purpose rather than a clean hypothesis, and unlike the eight
-above it has no `top` counterpart. Its `bot` config still runs standalone —
-`ARMS=arecon bash run_sweep.sh` — it just is not part of either half's default
-roster.
+A ninth arm, `mmd10` (`lambda_mmd` 1 → 10), is **benched, not deleted**: it
+sits on the same "push the aggregate posterior toward the prior" axis as
+`arecon` but more gently, and only one card per half is worth spending on that
+axis. Its config still runs standalone on either half — `ARMS=mmd10
+REPORT_ARMS="base seed mmd10" bash run_sweep.sh` — it just is not part of the
+default roster.
 
 Two more arms are deliberately **absent** (no config at all, on either half).
 `prior_temperature` is not a width knob — it scales the *start* of the ODE,
@@ -80,42 +81,40 @@ unless it clears the base-vs-seed gap **and** moves the same direction on all
 three eval sets. If you drop `seed` to save a card, the sweep produces an
 ordering and no conclusion.
 
-## Running both halves
+## Both halves, one invocation
 
 `bot` and `top` are two physically distinct halves of the SAOI part, each
 with its own training dataset and its own three eval sets. They share
-nothing — not a checkpoint, not a report — so `HALF` just points the whole
-script (train, infer, PVP, report) at one half's configs and one half's
-output root:
+nothing — not a checkpoint, not a report — so each gets its own output root,
+and a single `bash run_sweep.sh` always runs the full train → infer → PVP →
+report pipeline for both, `bot` then `top`. There is no switch to run only
+one; if you need that (e.g. re-running `top` after a fix, without retraining
+`bot`), edit the `for h in bot top` line at the bottom of the script to name
+just the one you want.
 
-```bash
-# bot half (default) -- writes output/meshgraphnets-v/saoi_sweep/
-bash configs/MeshGraphNets_Variational/hyperparameter_sweep/run_sweep.sh \
-    > output/meshgraphnets-v/saoi_sweep/run_bot.out 2>&1
-
-# top half -- writes output/meshgraphnets-v/saoi_sweep_top/
-HALF=top bash configs/MeshGraphNets_Variational/hyperparameter_sweep/run_sweep.sh \
-    > output/meshgraphnets-v/saoi_sweep_top/run_top.out 2>&1
+```text
+output/meshgraphnets-v/saoi_sweep/            bot
+output/meshgraphnets-v/saoi_sweep_top/        top
 ```
 
-Run them one after the other, not concurrently: both default to the same
-eight cards (`$GPUS`), and `Batch_size 16` being per-rank means every arm
-needs a card to itself, so overlapping the two invocations would silently put
-two arms on some cards. To actually run them at once, split `$GPUS` between
-the two instead, e.g. `GPUS="0 1 2 3"` for bot and `GPUS="4 5 6 7"` for top —
-each then takes two waves instead of one (see "Cost and scheduling" below).
+The two halves always run one after the other, never concurrently: both
+default to the same eight cards (`$GPUS`), and `Batch_size 16` being per-rank
+means every arm needs a card to itself, so overlapping them would silently put
+two arms on some cards.
 
-`ARMS` and `REPORT_ARMS` still take an explicit override under either half —
-setting one only replaces that half's default for that variable, e.g. to
-re-run a single arm on `top` without touching any of `bot`'s checkpoints.
+A hard failure in one half (every arm fails preflight, or none produces a
+fresh checkpoint) aborts only that half — the script still attempts the
+other and reports a nonzero exit code at the end. `ARMS` and `REPORT_ARMS`
+apply identically to both halves; there is no per-half override for them,
+since the roster is meant to be the same arm names on both sides.
 
 ## What it produces
 
 Per half, under that half's own output root:
 
 ```text
-output/meshgraphnets-v/saoi_sweep/            HALF=bot (default)
-output/meshgraphnets-v/saoi_sweep_top/        HALF=top
+output/meshgraphnets-v/saoi_sweep/            bot
+output/meshgraphnets-v/saoi_sweep_top/        top
     <arm>.pth  <arm>.log                       8 checkpoints + training logs
     infer/<arm>/<eval set>/spread_values.npz   the whole inflation curve
     diag/posterior_vs_prior_<arm>_<tag>.json   the four-ensemble decomposition
@@ -171,9 +170,9 @@ local device 0 and nothing in the configs knows about the machine.
 `GPUS` defaults to `0 1 2 3 4 5 6 7` — eight lanes, and eight arms divide
 evenly across them: round-robin dealing puts exactly one arm per lane, so
 each half's training is **one wave of 1000-epoch training**, no card idle.
-Running both halves sequentially (see "Running both halves" above) is two
-such waves back to back, not four — there is no second wave to avoid within
-a half. The schedule cannot be shortened further within one wave:
+Running both halves (see "Both halves, one invocation" above) is two such
+waves back to back, not four — there is no second wave to avoid within a
+half. The schedule cannot be shortened further within one wave:
 `prior_freeze_epoch 700` means the last 300 epochs are the only ones that fit
 the prior, and the whole point of `base` is that it matches the recipe the
 evidence was collected under. If the box actually has fewer than eight cards,
@@ -185,33 +184,32 @@ Inference and PVP are cheap by comparison and reuse the same lanes.
 ## Operational controls
 
 ```bash
-# checkpoints already exist: redo inference, diagnosis and the report
-TRAIN=0 bash configs/MeshGraphNets_Variational/hyperparameter_sweep/run_sweep.sh
+# both halves, default roster (the normal way to run this)
+bash configs/MeshGraphNets_Variational/hyperparameter_sweep/run_sweep.sh
 
-# just re-read what is on disk
+# checkpoints already exist: redo inference, diagnosis and the report, both halves
+TRAIN=0 bash .../run_sweep.sh
+
+# just re-read what is on disk, both halves
 TRAIN=0 INFER=0 PVP=0 bash .../run_sweep.sh
 
-# a subset, on two cards
+# a subset, on two cards, both halves
 ARMS="base seed pmin30" GPUS="0 1" bash .../run_sweep.sh
 
-# bot now, top later (see "Running both halves" above)
-bash .../run_sweep.sh
-HALF=top bash .../run_sweep.sh
+# top's report only, re-read from disk, without g2e/arecon muddying it
+TRAIN=0 INFER=0 PVP=0 REPORT_ARMS="base seed zdim8" bash .../run_sweep.sh
 
-# top's report only, re-read from disk, without g2e/mmd10 muddying it
-HALF=top TRAIN=0 INFER=0 PVP=0 REPORT_ARMS="base seed zdim8" bash .../run_sweep.sh
-
-# arecon, benched but not deleted -- bot half only, it has no top counterpart
-ARMS=arecon REPORT_ARMS="base seed arecon" bash .../run_sweep.sh
+# mmd10, benched but not deleted -- runs on both halves like any other arm
+ARMS=mmd10 REPORT_ARMS="base seed mmd10" bash .../run_sweep.sh
 ```
 
-Variables: `ARMS`, `REPORT_ARMS`, `HALF`, `INFER_TAGS`, `GPUS`, `PYTHON`,
+Variables: `ARMS`, `REPORT_ARMS`, `INFER_TAGS`, `GPUS`, `PYTHON`,
 `METHOD_PYTHON`, and the stage switches `EVAL_PREFLIGHT`, `PREFLIGHT`,
-`STRICT_PREFLIGHT`, `TRAIN`, `INFER`, `PVP`, `REPORT`. `HALF` (`bot`, `top`,
-or unset, defaulting to `bot`) picks the dataset and the output root; `ARMS`
-(what this invocation trains) and `REPORT_ARMS` (what the report covers) both
-default to the same eight-arm roster on either half, and each takes its own
-explicit override independent of `HALF`.
+`STRICT_PREFLIGHT`, `TRAIN`, `INFER`, `PVP`, `REPORT`. `ARMS` (what each half
+trains) and `REPORT_ARMS` (what each half's report covers) apply identically
+to both halves and default to the same eight-arm roster. There is no
+per-half override and no switch to run only one half — see "Both halves, one
+invocation" above.
 
 `METHOD_PYTHON` is resolved from `ai_cae4all.local.toml` automatically, because
 `posterior_vs_prior.py` imports the method package directly instead of going
