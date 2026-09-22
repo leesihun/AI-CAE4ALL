@@ -4,7 +4,7 @@ Uses the real `Transolver` class from this repo, with a minimal prototype of the
 proposed condition-token patch (concatenate K condition tokens to the M physics
 slice tokens inside `_slice_attend`, deslice only the M).
 
-Synthetic thermal-warpage-like problem, static (T=1) like ex1.h5:
+Synthetic thermal-warpage-like problem, static (T=1) like ex1_static_thermoelastic.h5:
 
     u(x) = g(dT) * shape(x; geometry)          (1 output channel)
 

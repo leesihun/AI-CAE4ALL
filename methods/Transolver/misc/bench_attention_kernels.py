@@ -4,8 +4,8 @@ naive and slice_space Physics-Attention kernels on the largest sample of a
 real dataset, forward+backward wall time and peak CUDA memory.
 
 Usage:
-    python misc/bench_attention_kernels.py --dataset dataset/ex1.h5
-    python misc/bench_attention_kernels.py --dataset dataset/ex1.h5 --chunk-size 8000
+    python misc/bench_attention_kernels.py --dataset dataset/deterministic/ex1_static_thermoelastic.h5
+    python misc/bench_attention_kernels.py --dataset dataset/deterministic/ex1_static_thermoelastic.h5 --chunk-size 8000
 
 Expectation from section 6.3: naive is faster (fewer attention FLOPs at this
 profile), slice_space uses less peak memory.

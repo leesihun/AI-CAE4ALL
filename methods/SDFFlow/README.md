@@ -38,7 +38,7 @@ mode -- and leave the rest unspecified. It needs DeepJEB's FEA labels appended
 to the dataset once, then trains, calibrates, samples, sweeps and benchmarks:
 
 ```bash
-cd methods/SDFFlow && python add_fea_conditions.py --h5 ../../dataset/deepjeb.h5 \
+cd methods/SDFFlow && python add_fea_conditions.py --h5 ../../dataset/geometry_generation/ex1_deepjeb.h5 \
     --csv D:/CAE_datasets_raw/deepjeb/Scalar/bracket_labels.csv --dry_run   # then without --dry_run
 cd ../..
 python AI_CAE4ALL_main.py --config configs/SDFFlow/config_train_v3_fea.txt
@@ -191,8 +191,8 @@ existing sidecar unless told otherwise (`--allow_missing`, `--overwrite`), and
 
 ```bash
 cd methods/SDFFlow
-python add_fea_conditions.py --h5 ../../dataset/deepjeb.h5 --csv D:/CAE_datasets_raw/deepjeb/Scalar/bracket_labels.csv --dry_run
-python add_fea_conditions.py --h5 ../../dataset/deepjeb.h5 --csv D:/CAE_datasets_raw/deepjeb/Scalar/bracket_labels.csv
+python add_fea_conditions.py --h5 ../../dataset/geometry_generation/ex1_deepjeb.h5 --csv D:/CAE_datasets_raw/deepjeb/Scalar/bracket_labels.csv --dry_run
+python add_fea_conditions.py --h5 ../../dataset/geometry_generation/ex1_deepjeb.h5 --csv D:/CAE_datasets_raw/deepjeb/Scalar/bracket_labels.csv
 python add_fea_conditions.py --list_names
 ```
 

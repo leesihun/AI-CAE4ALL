@@ -16,10 +16,10 @@ import torch
 
 class UpsampleBlock(nn.Module):
     """Upsampling block using transposed convolution.
-    
+
     Basic building block for decoder that increases spatial resolution
     while transforming channel dimensions.
-    
+
     Args:
         in_channel (int): Number of input channels
         out_channel (int): Number of output channels
@@ -34,10 +34,10 @@ class UpsampleBlock(nn.Module):
 
     def forward(self, x):
         """Forward pass through the upsampling block.
-        
+
         Args:
             x (torch.Tensor): Input tensor of shape [batch, in_channel, sequence_length]
-            
+
         Returns:
             torch.Tensor: Output tensor of shape [batch, out_channel, sequence_length]
         """
@@ -45,14 +45,14 @@ class UpsampleBlock(nn.Module):
 
 class DecoderBlock(nn.Module):
     """Decoder block consisting of multiple UpsampleBlocks.
-    
+
     Creates a sequence of upsampling blocks that progressively reconstruct
     features from compressed representations.
-    
+
     Args:
         channels (list): List of channel dimensions for each layer transition
         small (bool): Whether to use small variant (currently unused in UpsampleBlock)
-    
+
     Example:
         channels=[256, 128, 64] creates two UpsampleBlocks:
         - 256 -> 128 channels
@@ -69,10 +69,10 @@ class DecoderBlock(nn.Module):
 
     def forward(self, x):
         """Forward pass through all UpsampleBlocks in sequence.
-        
+
         Args:
             x (torch.Tensor): Input tensor
-            
+
         Returns:
             torch.Tensor: Output tensor after passing through all UpsampleBlocks
         """
@@ -83,11 +83,11 @@ class DecoderBlock(nn.Module):
 
 class Decoder(nn.Module):
     """Main hierarchical decoder network for VAE.
-    
+
     Implements a multi-scale decoder that reconstructs simulation data from latent
     representations. Uses skip connections and hierarchical latent conditioning
     for better reconstruction quality and gradient flow.
-    
+
     Args:
         z_dim (int): Dimension of the main latent space
         hierarchical_dim (int): Dimension of hierarchical latent spaces
@@ -96,7 +96,7 @@ class Decoder(nn.Module):
         num_time (int): Number of time steps in output data
         batch_size (int): Batch size for initialization
         small (bool): Whether to use smaller model variant
-    
+
     Attributes:
         decoder_blocks (nn.ModuleList): List of decoder blocks for feature reconstruction
         decoder_residual_blocks (nn.ModuleList): Residual blocks for skip connections
@@ -198,16 +198,16 @@ class Decoder(nn.Module):
                 # Clamp log_var for numerical stability before computing std
                 log_var = torch.clamp(log_var, min=-30, max=30)
                 std = torch.exp(0.5*log_var)
-                
+
                 if mode=="fix" and i<freeze_level:
                     if len(self.zs) < freeze_level+1:
-                        z = reparameterize(mu, std*1e-10)
+                        z = mu
                         self.zs.append(z)
                     else:
                         z = self.zs[i+1]
 
                 elif mode== "fix":
-                    z= reparameterize(mu, std*1e-10)
+                    z = mu
                 else:
                     z=reparameterize(mu, std)
 

@@ -10,6 +10,7 @@ from typing import Dict, List
 from torch_geometric.data import Data
 
 from general_modules.dataset_stats import compute_normalization_stats, finalize_moments
+from general_modules.state_geometry import deformed_positions, displacement_indices
 from general_modules.edge_features import EDGE_FEATURE_DIM, compute_edge_attr
 from general_modules.positional_features import compute_positional_features
 from general_modules.time_integration import (
@@ -87,12 +88,8 @@ def _copy_edge_stat(entry):
     return entry.copy()
 
 
-def _deformed_positions_from_state(ref_pos: np.ndarray, state: np.ndarray) -> np.ndarray:
-    """Apply at most the first three state channels as XYZ displacement."""
-    displacement = np.zeros_like(ref_pos)
-    num_components = min(3, state.shape[1])
-    displacement[:, :num_components] = state[:, :num_components]
-    return ref_pos + displacement
+def _deformed_positions_from_state(ref_pos, state, config=None):
+    return deformed_positions(ref_pos, state, config)
 
 
 class MeshGraphDataset(Dataset):
@@ -100,6 +97,7 @@ class MeshGraphDataset(Dataset):
     def __init__(self, h5_file: str, config: Dict):
         self.h5_file = h5_file
         self.config = config
+        displacement_indices(config, int(config['input_var']))
         # Graph and feature parameters
         self.input_dim = config.get('input_var')  # Physical features only (4)
         self.output_dim = config.get('output_var')  # Physical features only (4)
@@ -514,6 +512,8 @@ class MeshGraphDataset(Dataset):
         serializing rather than skipping is enough; the last writer wins with
         the same content.
         """
+        if not self.config.get('write_preprocessing', True):
+            return
         if any(value is None for value in (
             self.node_mean, self.node_std,
             self.edge_mean, self.edge_std,
@@ -599,6 +599,10 @@ class MeshGraphDataset(Dataset):
 
     def _resolve_split_ids(self, train_ratio: float, val_ratio: float, test_ratio: float, seed: int):
         """Always generate a deterministic seeded split."""
+        if self.config.get('split_group_attr'):
+            from general_modules.grouped_split import grouped_split_ids
+            return grouped_split_ids(self.h5_file, self.sample_ids, self.config['split_group_attr'],
+                                     train_ratio, val_ratio, seed)
         rng = np.random.default_rng(seed)
         shuffled_ids = self.sample_ids.copy()
         rng.shuffle(shuffled_ids)
@@ -619,7 +623,7 @@ class MeshGraphDataset(Dataset):
             self.h5_file, self.sample_ids, self.input_dim, self.output_dim,
             self.num_timesteps, self.num_pos_features,
             use_parallel=self.config.get('use_parallel_stats', True),
-            cond_dim=self.cond_dim,
+            cond_dim=self.cond_dim, geometry_config=self.config,
         )
 
         self.node_mean, self.node_std = finalize_moments(
@@ -791,7 +795,7 @@ class MeshGraphDataset(Dataset):
                         )
                     else:
                         state = data_h5[3:3 + self.input_dim, t, :].T
-                    deformed_pos = _deformed_positions_from_state(ref_pos, state)
+                    deformed_pos = _deformed_positions_from_state(ref_pos, state, getattr(self, 'config', {}))
 
                     cur_ref, cur_def = ref_pos, deformed_pos
                     for level, entry in enumerate(hierarchy):
@@ -1114,7 +1118,7 @@ class MeshGraphDataset(Dataset):
         # features beyond the first `input_dim` columns are never displacement.
         # Static x_phys is zero, so deformed_pos == pos.
         deformed_pos = _deformed_positions_from_state(
-            pos, x_raw[:, :self.input_dim],
+            pos, x_raw[:, :self.input_dim], self.config,
         )
 
         # Compute 8-D edge features from current and reference geometry.

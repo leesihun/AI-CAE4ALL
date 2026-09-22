@@ -160,7 +160,7 @@ and **pooling** (mean vs seed-gather) are used downstream.
 ## Configuration reference (multiscale keys)
 
 Canonical example:
-[`configs/MeshGraphNets/ex1/config_train_himgn.txt`](../../configs/MeshGraphNets/ex1/config_train_himgn.txt).
+[`configs/MeshGraphNets/deterministic/ex1/baseline/config_train_himgn.txt`](../../configs/MeshGraphNets/deterministic/ex1/baseline/config_train_himgn.txt).
 All the flat-MGN keys from [01](01_MeshGraphNets_MGN.md#configuration-reference) still
 apply. The multiscale-specific keys are:
 
@@ -201,8 +201,8 @@ time_integration   ar_ot
 ```
 
 Shipped multiscale training configs include
-[`configs/MeshGraphNets/ex1/config_train_himgn.txt`](../../configs/MeshGraphNets/ex1/config_train_himgn.txt)
-and [`configs/MeshGraphNets/ex2/config_train_himgn.txt`](../../configs/MeshGraphNets/ex2/config_train_himgn.txt),
+[`configs/MeshGraphNets/deterministic/ex1/baseline/config_train_himgn.txt`](../../configs/MeshGraphNets/deterministic/ex1/baseline/config_train_himgn.txt)
+and [`configs/MeshGraphNets/deterministic/ex2/baseline/config_train_himgn.txt`](../../configs/MeshGraphNets/deterministic/ex2/baseline/config_train_himgn.txt),
 with matching `config_infer_himgn.txt` files in each directory.
 
 ---

@@ -202,6 +202,8 @@ def build_model_config(config) -> dict:
         'input_var':         config.get('input_var'),
         'output_var':        config.get('output_var'),
         'cond_var':          config.get('cond_var', 0),
+        'geometry_state_mode': config.get('geometry_state_mode', 'displacement'),
+        'displacement_state_indices': config.get('displacement_state_indices'),
         'edge_var':          config.get('edge_var'),
         'latent_dim':        config.get('latent_dim'),
         'message_passing_num': config.get('message_passing_num'),

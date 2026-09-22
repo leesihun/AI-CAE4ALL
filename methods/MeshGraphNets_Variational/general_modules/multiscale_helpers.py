@@ -150,6 +150,7 @@ def attach_coarse_levels_to_graph(
     device: Optional[torch.device] = None,
     world_edge_index: Optional[np.ndarray] = None,
     expose_anchors: bool = False,
+    periodic_box=None,
 ) -> None:
     """
     Compute per-level centroids and coarse edge features for a single timestep,
@@ -185,7 +186,7 @@ def attach_coarse_levels_to_graph(
             c_ea_raw = compute_edge_attr(
                 coarse_ref.astype(np.float32),
                 coarse_def.astype(np.float32),
-                c_ei,
+                c_ei, periodic_box,
             )
         else:
             c_ea_raw = np.zeros((0, EDGE_FEATURE_DIM), dtype=np.float32)

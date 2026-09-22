@@ -164,7 +164,7 @@ Linear). For temporal runs the projection's last layer starts scaled by `0.01`.
 ```text
 model               fno
 mode                train
-dataset_dir         ../dataset/ex1.h5
+dataset_dir         ../dataset/deterministic/ex1_static_thermoelastic.h5
 input_var           4
 output_var          4
 positional_features 4

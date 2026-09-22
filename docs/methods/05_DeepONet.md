@@ -122,7 +122,7 @@ Both `branch_mlp` and `trunk_mlp` are `build_deep_mlp(..., depth, activation, la
 ## Configuration reference
 
 Canonical example:
-[`configs/Neural_Operator/ex1/config_train_deeponet.txt`](../../configs/Neural_Operator/ex1/config_train_deeponet.txt).
+[`configs/Neural_Operator/deterministic/ex1/baseline/config_train_deeponet.txt`](../../configs/Neural_Operator/deterministic/ex1/baseline/config_train_deeponet.txt).
 Common Neural-Operator keys (shared by all four backends) are listed in
 [07_FNO.md](07_FNO.md#shared-neural-operator-config-keys); DeepONet-specific keys:
 
@@ -155,7 +155,7 @@ Common Neural-Operator keys (shared by all four backends) are listed in
 ```text
 model                      deeponet
 mode                       train
-dataset_dir                ../dataset/ex1.h5
+dataset_dir                ../dataset/deterministic/ex1_static_thermoelastic.h5
 input_var                  4
 output_var                 4
 positional_features        4

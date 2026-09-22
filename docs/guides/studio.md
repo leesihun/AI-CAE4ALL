@@ -77,16 +77,16 @@ route has a default profile, and each one passes Validate on a fresh checkout
 except the design-optimization pipeline, which by design needs checkpoints that
 do not exist yet (see below):
 
-- **Mesh field surrogates** — all on ex9 plasticity (`dataset/ex9.h5` to train,
-  `dataset/ex9_infer.h5` held out; 900 / 87 samples, 20 steps, 3131 nodes):
+- **Mesh field surrogates** — all on ex9 plasticity (`dataset/deterministic/ex9_plasticity.h5` to train,
+  `dataset/deterministic/ex9_plasticity_infer.h5` held out; 900 / 87 samples, 20 steps, 3131 nodes):
   HI-MGN multiscale (the default), MeshGraphNets flat, MeshGraphNets-V,
   cHI-MGNflow, Transolver, FNO, GINO, DeepONet, Point-DeepONet. They wire
   dataset → trainer → Train Metrics, with the held-out file — not the training
   file — feeding Inference and Evaluate. Each mirrors its own checked-in
   training config: the two MeshGraphNets pipelines follow
-  `configs/MeshGraphNets/ex9/`, cHI-MGNflow `configs/HI_MGNFlow/ex9/`,
-  Transolver `configs/Transolver/ex9/`, and the four operators
-  `configs/Neural_Operator/ex9/`. MeshGraphNets-V has no checked-in ex9 config —
+  `configs/MeshGraphNets/deterministic/ex9/`, cHI-MGNflow `configs/HI_MGNFlow/ex9/`,
+  Transolver `configs/Transolver/deterministic/ex9/`, and the four operators
+  `configs/Neural_Operator/deterministic/ex9/`. MeshGraphNets-V has no checked-in ex9 config —
   it was deliberately left out of the ex4–ex9 roster as a one-to-many method —
   so its template reuses the same ex9 dataset keys (`cond_var 2` included) with
   MGN-V's own architecture.
@@ -94,9 +94,9 @@ do not exist yet (see below):
   the only staged mesh dataset with one fixed `(T, N)` besides ex6/ex8;
   conditions come from the dataset's own `cond_var` rows via
   `lc_data_type hdf5`, no CSV) and Parametric response estimation (MLP on
-  `dataset/mlp/train.h5` → `infer.h5`, `input_var 3` / `output_var 2`).
+  `dataset/deterministic/mlp/train.h5` → `infer.h5`, `input_var 3` / `output_var 2`).
 - **Generative geometry (SDFFlow)** — SDFFlow train (DeepJEB) trains the merged
-  VAE → flow-matching pipeline on `dataset/deepjeb.h5` and feeds a sample-mode
+  VAE → flow-matching pipeline on `dataset/geometry_generation/ex1_deepjeb.h5` and feeds a sample-mode
   CAD Generator; Design optimization consumes the checkpoints that run writes
   (`output/geometry_generation/studio/sdfflow_{vae,fm}.pth`) and therefore
   preflights red until they exist.

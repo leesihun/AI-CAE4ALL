@@ -27,7 +27,7 @@ per-axis displacements: DeepJEB omits `ver_x_disp` entirely, so a uniform
 same silent degeneracy that made an earlier dataset spend half its loss on
 constant targets.
 
-  python dataset/build_deepjeb_mgn.py --out dataset/deepjeb_mgn.h5
+  python dataset/build_deepjeb_mgn.py --out dataset/deterministic/ex10_deepjeb_mgn.h5
 
 Dataset: Hong, Kwon, Shin, Park & Kang, ASME JMD 147(4) 041703 (2025), ODC-By v1.0.
 """
@@ -316,7 +316,7 @@ def write_contract(out_path, records, split_of):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--raw', default=RAW_ROOT)
-    parser.add_argument('--out', default='dataset/deepjeb_mgn.h5')
+    parser.add_argument('--out', default='dataset/deterministic/ex10_deepjeb_mgn.h5')
     parser.add_argument('--target-nodes', type=int, default=5000)
     parser.add_argument('--limit', type=int, default=0, help='cap brackets (0 = all present)')
     parser.add_argument('--infer-only', action='store_true',

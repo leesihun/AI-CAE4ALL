@@ -509,7 +509,7 @@ export async function applyPreset() {
   // 2*levels+1 entries. Emitting only the three switches left every multiscale
   // preset four errors deep in preflight, with the two missing keys carrying no
   // "required" badge anywhere in the sheet to hint at it. These mirror the
-  // checked-in configs/MeshGraphNets/ex9 pair, which are known to run.
+  // checked-in configs/MeshGraphNets/deterministic/ex9 pair, which are known to run.
   if (preset === "mgn_hi") values = {
     use_multiscale: "True", coarsening_type: "voronoi_seedmean", multiscale_levels: "2",
     voronoi_clusters: "500, 100", mp_per_level: "4, 6, 8, 6, 4"

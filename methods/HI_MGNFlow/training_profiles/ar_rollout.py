@@ -73,6 +73,9 @@ def describe_ar_rt(window: int) -> str:
             f"full unroll, per-step gradient checkpointing)")
 
 
+from general_modules.state_geometry import displacement_from_state
+
+
 class RolloutContext:
     """Device-resident constants for an unroll: normalization stats and switches.
 
@@ -92,6 +95,7 @@ class RolloutContext:
         def to_tensor(value):
             return torch.as_tensor(value, dtype=dtype, device=device)
 
+        self.geometry_config = config
         self.input_var = int(config['input_var'])
         self.output_var = int(config['output_var'])
 
@@ -167,7 +171,7 @@ def _refresh_multiscale(graph, deformed_pos, ctx):
         coarse_edge_index = graph[f'coarse_edge_index_{level}']
         previous_attr = graph[f'coarse_edge_attr_{level}']
         if coarse_edge_index.shape[1] > 0:
-            deformed_half = deformed_edge_attr_torch(coarse_pos, coarse_edge_index)
+            deformed_half = deformed_edge_attr_torch(coarse_pos, coarse_edge_index, ctx.geometry_config.get('periodic_box'))
             if level < len(ctx.coarse_edge_means):
                 deformed_half = ((deformed_half - ctx.coarse_edge_means[level])
                                  / ctx.coarse_edge_stds[level])
@@ -188,9 +192,9 @@ def _apply_state(graph, state, ctx, static_node_features, reference_edge_attr):
     normalized = (physical - ctx.node_mean) / ctx.node_std
     graph.x = torch.cat([normalized, static_node_features], dim=1)
 
-    deformed_pos = graph.pos + state[:, :3]
+    deformed_pos = graph.pos + displacement_from_state(state, ctx.geometry_config, ctx.input_var)
 
-    deformed_half = deformed_edge_attr_torch(deformed_pos, graph.edge_index)
+    deformed_half = deformed_edge_attr_torch(deformed_pos, graph.edge_index, ctx.geometry_config.get('periodic_box'))
     deformed_half = (deformed_half - ctx.edge_mean_def) / ctx.edge_std_def
     graph.edge_attr = torch.cat([deformed_half, reference_edge_attr], dim=1)
 

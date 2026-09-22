@@ -19,14 +19,14 @@ Run these commands from the `AI-CAE4ALL` root:
 python AI_CAE4ALL_main.py --describe simulgenvae
 
 # Validate or print the native command without launching.
-python AI_CAE4ALL_main.py --config configs/SimulGenVAE/ex1/config_train.txt --check
-python AI_CAE4ALL_main.py --config configs/SimulGenVAE/ex1/config_train.txt --dry-run
+python AI_CAE4ALL_main.py --config configs/SimulGenVAE/deterministic/ex6/baseline/config_train_lsh_vae.txt --check
+python AI_CAE4ALL_main.py --config configs/SimulGenVAE/deterministic/ex6/baseline/config_train_lsh_vae.txt --dry-run
 
 # Train the VAE and then the latent conditioner.
-python AI_CAE4ALL_main.py --config configs/SimulGenVAE/ex1/config_train.txt
+python AI_CAE4ALL_main.py --config configs/SimulGenVAE/deterministic/ex6/baseline/config_train_lsh_vae.txt
 
 # Decode conditions through LC -> VAE into a field HDF5 artifact.
-python AI_CAE4ALL_main.py --config configs/SimulGenVAE/ex1/config_reconstruct.txt
+python AI_CAE4ALL_main.py --config configs/SimulGenVAE/deterministic/ex6/baseline/config_infer_lsh_vae.txt
 ```
 
 Direct backend execution is also supported. Run it from the method directory so
@@ -35,7 +35,7 @@ meaning:
 
 ```bash
 cd methods/SimulGenVAE
-python SimulGenVAE_main.py --config ../../configs/SimulGenVAE/ex1/config_train.txt
+python SimulGenVAE_main.py --config ../../configs/SimulGenVAE/deterministic/ex6/baseline/config_train_lsh_vae.txt
 ```
 
 ## Modes

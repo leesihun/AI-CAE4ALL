@@ -219,7 +219,7 @@ class EvaluationContractTests(unittest.TestCase):
     def test_coordinate_less_prediction_with_four_rows_keeps_every_channel(self) -> None:
         """The coordinate rule must key on the array name, not the row count.
 
-        configs/SimulGenVAE/ex3/config_reconstruct.txt sets num_var 4, so that
+        configs/SimulGenVAE/deterministic/ex3_mid/baseline/config_infer_lsh_vae.txt sets num_var 4, so that
         reconstruct writes four physical rows and no coordinates. A row-count
         guess ("more than three rows means the first three are coordinates")
         silently dropped three of the four channels and then failed the mapping

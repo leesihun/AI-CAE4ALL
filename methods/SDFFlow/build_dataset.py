@@ -88,10 +88,25 @@ def main():
                         help='Parallel real-mesh workers (0 or 1 runs sequentially)')
     parser.add_argument('--append_missing', action='store_true',
                         help='Append sources not already recorded in an existing HDF5 file')
+    parser.add_argument('--infer_output', type=str, default=None,
+                        help='If given (with --mesh_dir), split the found meshes once, '
+                             'seeded by --seed, and write the held-out fraction here instead '
+                             'of reprocessing them: --output gets the rest. Mirrors the exN.h5 '
+                             '/ exN_infer.h5 convention used by the other method repos.')
+    parser.add_argument('--infer_fraction', type=float, default=0.2,
+                        help='Fraction of meshes routed to --infer_output (default 0.2, i.e. an '
+                             '80/20 split); ignored without --infer_output')
     args = parser.parse_args()
 
     if (args.mesh_dir is None) == (args.synthetic == 0):
         raise SystemExit('Specify exactly one of --mesh_dir or --synthetic N')
+    if args.infer_output is not None:
+        if args.mesh_dir is None:
+            raise SystemExit('--infer_output requires --mesh_dir')
+        if args.append_missing:
+            raise SystemExit('--infer_output and --append_missing are mutually exclusive')
+        if not (0.0 < args.infer_fraction < 1.0):
+            raise SystemExit('--infer_fraction must be in (0, 1)')
 
     # argparse applies `type` to string defaults, but be explicit in case the
     # default is ever handed in as a tuple.
@@ -113,50 +128,7 @@ def main():
     sdf_backend = 'analytic' if args.synthetic > 0 else sdf_backend_name()
     print(f'near_sigmas: {list(near_sigmas)}  sdf_backend: {sdf_backend}')
 
-    h5_mode = 'a' if args.append_missing and os.path.exists(args.output) else 'w'
-    with h5py.File(args.output, h5_mode) as h5:
-        shapes_grp = h5.require_group('shapes')
-        written = len(shapes_grp)
-
-        if args.synthetic > 0:
-            for i in tqdm(range(args.synthetic), desc='Synthetic shapes'):
-                sample, cond = synthetic_sample(
-                    rng, args.num_surface, args.num_near, args.num_uniform,
-                    near_sigmas=near_sigmas)
-                _write_shape(shapes_grp, written, sample, cond, source=f'synthetic_{i}')
-                written += 1
-        else:
-            paths = sorted(p for ext in MESH_EXTENSIONS
-                           for p in glob.glob(os.path.join(args.mesh_dir, '**', ext), recursive=True))
-            if not paths:
-                raise SystemExit(f'No meshes found under {args.mesh_dir}')
-            print(f'Found {len(paths)} meshes')
-            if args.append_missing:
-                existing_sources = {
-                    os.path.normcase(str(grp.attrs.get('source', '')))
-                    for grp in shapes_grp.values()
-                }
-                paths = [
-                    path for path in paths
-                    if os.path.normcase(path) not in existing_sources
-                ]
-                print(f'Processing {len(paths)} sources missing from the existing dataset')
-            tasks = [
-                (path, args.num_surface, args.num_near, args.num_uniform,
-                 args.seed + i, args.repair, args.max_faces,
-                 args.sharp_edge_fraction, args.sharp_edge_angle, near_sigmas)
-                for i, path in enumerate(paths)
-            ]
-            if args.workers > 1:
-                with ProcessPoolExecutor(max_workers=args.workers) as executor:
-                    results = executor.map(_process_mesh, tasks, chunksize=1)
-                    for result in tqdm(results, total=len(tasks), desc='Meshes'):
-                        written += _consume_mesh_result(shapes_grp, written, result)
-            else:
-                for task in tqdm(tasks, desc='Meshes'):
-                    written += _consume_mesh_result(
-                        shapes_grp, written, _process_mesh(task))
-
+    def write_root_attrs(h5, written, split_role=None, split_sibling=None):
         h5.attrs['num_shapes'] = written
         h5.attrs['cond_names'] = COND_NAMES
         h5.attrs['num_near'] = args.num_near
@@ -170,9 +142,99 @@ def main():
         h5.attrs['near_sigmas'] = np.asarray(near_sigmas, dtype=np.float64)
         h5.attrs['seed'] = int(args.seed)
         h5.attrs['sdf_backend'] = str(sdf_backend)
+        if split_role is not None:
+            h5.attrs['split_role'] = split_role
+            h5.attrs['split_fraction'] = float(args.infer_fraction)
+            h5.attrs['split_seed'] = int(args.seed)
+            h5.attrs['split_sibling'] = os.path.abspath(split_sibling)
+
+    if args.synthetic > 0:
+        with h5py.File(args.output, 'w') as h5:
+            shapes_grp = h5.require_group('shapes')
+            written = 0
+            for i in tqdm(range(args.synthetic), desc='Synthetic shapes'):
+                sample, cond = synthetic_sample(
+                    rng, args.num_surface, args.num_near, args.num_uniform,
+                    near_sigmas=near_sigmas)
+                _write_shape(shapes_grp, written, sample, cond, source=f'synthetic_{i}')
+                written += 1
+            write_root_attrs(h5, written)
+        print(f'\nWrote {written} shapes to {args.output}')
+        if written == 0:
+            raise SystemExit('Dataset is empty.')
+        return
+
+    paths = sorted(p for ext in MESH_EXTENSIONS
+                   for p in glob.glob(os.path.join(args.mesh_dir, '**', ext), recursive=True))
+    if not paths:
+        raise SystemExit(f'No meshes found under {args.mesh_dir}')
+    print(f'Found {len(paths)} meshes')
+
+    h5_mode = 'a' if args.append_missing and os.path.exists(args.output) else 'w'
+    with h5py.File(args.output, h5_mode) as h5:
+        shapes_grp = h5.require_group('shapes')
+        written = len(shapes_grp)
+        if args.append_missing:
+            existing_sources = {
+                os.path.normcase(str(grp.attrs.get('source', '')))
+                for grp in shapes_grp.values()
+            }
+            paths = [
+                path for path in paths
+                if os.path.normcase(path) not in existing_sources
+            ]
+            print(f'Processing {len(paths)} sources missing from the existing dataset')
+
+        infer_paths = set()
+        if args.infer_output is not None:
+            shuffled = rng.permutation(len(paths))
+            n_infer = round(len(paths) * args.infer_fraction)
+            infer_paths = {paths[i] for i in shuffled[:n_infer]}
+            print(f'Split: {len(paths) - len(infer_paths)} train / {len(infer_paths)} infer '
+                  f'(seed {args.seed}, infer_fraction {args.infer_fraction})')
+
+        tasks = [
+            (path, args.num_surface, args.num_near, args.num_uniform,
+             args.seed + i, args.repair, args.max_faces,
+             args.sharp_edge_fraction, args.sharp_edge_angle, near_sigmas)
+            for i, path in enumerate(paths)
+        ]
+
+        infer_h5 = h5py.File(args.infer_output, 'w') if args.infer_output is not None else None
+        try:
+            infer_grp = infer_h5.require_group('shapes') if infer_h5 is not None else None
+            written_infer = 0
+
+            def consume(result):
+                nonlocal written, written_infer
+                if infer_h5 is not None and result.get('path') in infer_paths:
+                    written_infer += _consume_mesh_result(infer_grp, written_infer, result)
+                else:
+                    written += _consume_mesh_result(shapes_grp, written, result)
+
+            if args.workers > 1:
+                with ProcessPoolExecutor(max_workers=args.workers) as executor:
+                    for result in tqdm(executor.map(_process_mesh, tasks, chunksize=1),
+                                        total=len(tasks), desc='Meshes'):
+                        consume(result)
+            else:
+                for task in tqdm(tasks, desc='Meshes'):
+                    consume(_process_mesh(task))
+
+            write_root_attrs(h5, written,
+                              split_role='train' if infer_h5 is not None else None,
+                              split_sibling=args.infer_output)
+            if infer_h5 is not None:
+                write_root_attrs(infer_h5, written_infer, split_role='infer',
+                                  split_sibling=args.output)
+        finally:
+            if infer_h5 is not None:
+                infer_h5.close()
 
     print(f'\nWrote {written} shapes to {args.output}')
-    if written == 0:
+    if args.infer_output is not None:
+        print(f'Wrote {written_infer} shapes to {args.infer_output}')
+    if written == 0 or (args.infer_output is not None and written_infer == 0):
         raise SystemExit('Dataset is empty.')
 
 

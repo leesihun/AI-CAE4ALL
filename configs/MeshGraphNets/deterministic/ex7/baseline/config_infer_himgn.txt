@@ -1,0 +1,66 @@
+% deterministic/ex7 - himgn; paper-informed native adaptation, not an exact reproduction.
+% Field storage order (0-based): input -> output -> conditioner -> partNo.
+% input [0:3]: x_coord, y_coord, z_coord
+% output/state [3:]: velocity_x, velocity_y, pressure, nu_t
+% conditioner: u_inf_x, u_inf_y, sdf, normal_x, normal_y
+% partNo: partNo
+% Static state input is zero; temporal input is current state and target is next-state delta.
+% Reference: https://arxiv.org/abs/2608.13827
+% See configs/campaigns/dataset_matrix/README.md for deviations and verification boundaries.
+% No source HDF5 writes. Checkpoints are created by the paired training config.
+
+model                            meshgraphnets
+mode                             inference
+gpu_ids                          6
+parallel_mode                    ddp
+split_seed                       42
+dataset_dir                      ../../dataset/deterministic/ex7_airfrans.h5
+infer_dataset                    ../../dataset/deterministic/ex7_airfrans_infer.h5
+modelpath                        ../../output/dataset_matrix/deterministic/ex7/himgn/model.pth
+log_file_dir                     ../../output/dataset_matrix/deterministic/ex7/himgn/train.log
+inference_output_dir             ../../output/dataset_matrix/deterministic/ex7/himgn/infer
+infer_timesteps                  1
+input_var                        4
+output_var                       4
+cond_var                         5
+feature_loss_weights             1, 1, 1, 1
+use_node_types                   True
+positional_features              4
+time_integration                 ar_ot
+training_epochs                  500
+batch_size                       1
+learningr                        0.0001
+weight_decay                     0.0001
+warmup_epochs                    5
+num_workers                      2
+prefetch_factor                  2
+grad_accum_steps                 1
+augment_geometry                 False
+std_noise                        0.0
+use_amp                          True
+use_checkpointing                True
+use_ema                          True
+ema_decay                        0.99
+use_parallel_stats               False
+val_interval                     5
+test_interval                    50
+test_batch_idx                   0, 1
+plot_feature_idx                 0
+display_trainset                 True
+display_testset                  True
+write_preprocessing              False
+use_world_edges                  False
+use_multiscale                   True
+edge_var                         8
+latent_dim                       128
+message_passing_num              15
+geometry_state_mode              fixed
+coarsening_type                  voronoi_seedmean
+multiscale_levels                2
+voronoi_clusters                 4096, 256
+mp_per_level                     2, 3, 5, 3, 2
+pool_type                        mean
+unpool_type                      sum
+learned_interpolation            True
+voronoi_branches                 1, 1
+coarse_world_edges               False

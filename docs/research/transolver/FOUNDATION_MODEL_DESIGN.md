@@ -131,7 +131,7 @@ LLM 비유가 깨지는 지점을 분명히 해야 한다: **LLM 토큰은 이�
 > 소형 모델, 합성 데이터, 출력 1채널. 목적은 "BC를 어떻게 주는가(A vs B)"와 "출력
 > 스케일을 어떻게 두는가(B vs C)"를 **다른 모든 조건을 고정한 채** 비교하는 것이다.
 
-**문제 설정** (ex1.h5와 같은 static T=1 형태, 열변형 모사)
+**문제 설정** (ex1_static_thermoelastic.h5와 같은 static T=1 형태, 열변형 모사)
 
 ```
 u(x) = g(ΔT) · shape(x; geometry)          출력 1채널
@@ -210,8 +210,8 @@ u(x) = g(ΔT) · shape(x; geometry)          출력 1채널
 실측:
 
 ```
-ex1.h5   100 samples,  T=1,  25,203 nodes,  source_filename = dp0 … dp99
-ex2.h5    50 samples, T=50, 199,993 nodes,  source_filename = dp0 … dp49
+ex1_static_thermoelastic.h5   100 samples,  T=1,  25,203 nodes,  source_filename = dp0 … dp99
+ex2_dynamic_contact.h5    50 samples, T=50, 199,993 nodes,  source_filename = dp0 … dp49
 feature_names = [x,y,z coord, x/y/z disp(mm), stress(MPa), Part No.]
 ```
 
@@ -474,7 +474,7 @@ def _slice_attend(self, tokens, cond=None):     # tokens [H, M, D], cond [K, C]
 
 - 공개 코퍼스로 사전학습 → design point로 fine-tune. (MPP/Poseidon의 근거: 다물리
   사전학습 모델을 fine-tune하면 처음 보는 물리에서 from-scratch보다 낫다.)
-- 이미 `dataset/deepjeb.h5`(730MB)를 갖고 있고, The Well / PDEBench /
+- 이미 `dataset/geometry_generation/ex1_deepjeb.h5`(730MB)를 갖고 있고, The Well / PDEBench /
   DrivAerNet++ / CarBench가 후보다.
 - 목표 규모: geometry × BC × physics 조합으로 O(10⁴) 해석.
 
@@ -608,8 +608,8 @@ HuggingFace(`GeoPT/Downstream_Physics_Simulation`)에 공개돼 있어 이식 �
 ### 실측 증거: 지금 스키마로 두 파일을 합치면 손상된다
 
 ```
-ex1.h5  part ids = {0,1,2,3}   counts 예: [  461,  24528,  107,  107]   2D 판, bbox 4578×2116×0 mm
-ex2.h5  part ids = {0,1,2,3}   counts 예: [38773, 155647, 4096, 1477]   3D,   bbox 1000× 960×1000 mm
+ex1_static_thermoelastic.h5  part ids = {0,1,2,3}   counts 예: [  461,  24528,  107,  107]   2D 판, bbox 4578×2116×0 mm
+ex2_dynamic_contact.h5  part ids = {0,1,2,3}   counts 예: [38773, 155647, 4096, 1477]   3D,   bbox 1000× 960×1000 mm
 두 파일 모두 전 샘플이 동일한 part-id 집합 (distinct sets = 1)
 ```
 

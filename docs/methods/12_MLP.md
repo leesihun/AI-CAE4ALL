@@ -44,7 +44,7 @@ MAE/RMSE. The launcher validates this as `dataset_kind=table_hdf5`
 ([cae_suite/dataset_probe.py](../../cae_suite/dataset_probe.py)) and **cross-checks
 `X`/`Y` widths against `input_var`/`output_var` before launch** (`DATASET-FEATURES-001/002`).
 A tiny sample generator ships at
-[dataset/mlp/make_sample.py](../../dataset/mlp/make_sample.py).
+[dataset/deterministic/mlp/make_sample.py](../../dataset/deterministic/mlp/make_sample.py).
 
 ## Training details
 
@@ -84,7 +84,7 @@ truth. Minimal train example:
 model mlp
 mode train
 gpu_ids -1
-dataset_dir ../dataset/mlp/train.h5
+dataset_dir ../dataset/deterministic/mlp/train.h5
 modelpath ../output/mlp/ex1/mlp.pth
 input_var 3
 output_var 2
@@ -96,8 +96,10 @@ batch_size 32
 learningr 0.001
 ```
 
-Checked-in templates: `configs/MLP/ex1/config_train_mlp.txt` and
-`config_infer_mlp.txt`.
+**No checked-in config.** MLP is not part of the `configs/campaigns/dataset_matrix`
+baseline roster (it is tabular, not mesh), so `configs/MLP/` is currently empty.
+The Studio's MLP template is the only runnable starting point; the last checked-in
+pair is recoverable with `git show HEAD:configs/MLP/ex1/config_train_mlp.txt`.
 
 ## Dependencies
 

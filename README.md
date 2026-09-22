@@ -11,7 +11,7 @@ full browser Studio that turns the whole thing into a drag-and-drop pipeline.
 Pick a method by writing **one word** in a text config:
 
 ```bash
-python AI_CAE4ALL_main.py --config configs/MeshGraphNets/ex1/config_train_himgn_base.txt
+python AI_CAE4ALL_main.py --config configs/MeshGraphNets/deterministic/ex1/baseline/config_train_himgn.txt
 ```
 
 …or never touch a terminal at all:
@@ -174,13 +174,13 @@ inside the config**, not on the CLI.
 
 ```bash
 # Validate only — reports every missing or conflicting setting together, no launch:
-python AI_CAE4ALL_main.py --config configs/Transolver/ex2/config_train_transolver.txt --check
+python AI_CAE4ALL_main.py --config configs/Transolver/deterministic/ex2/baseline/config_train_transolver3.txt --check
 
 # Print the exact native command without launching:
-python AI_CAE4ALL_main.py --config configs/Neural_Operator/ex1/config_train_fno.txt --dry-run
+python AI_CAE4ALL_main.py --config configs/Neural_Operator/deterministic/ex1/baseline/config_train_fno.txt --dry-run
 
 # A clean preflight auto-launches the native process:
-python AI_CAE4ALL_main.py --config configs/MeshGraphNets/ex1/config_train_himgn_base.txt
+python AI_CAE4ALL_main.py --config configs/MeshGraphNets/deterministic/ex1/baseline/config_train_himgn.txt
 
 # Introspection (no config needed):
 python AI_CAE4ALL_main.py --list-models

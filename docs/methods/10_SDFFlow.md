@@ -383,7 +383,7 @@ root (optional, appended by add_fea_conditions.py; read as extra cond columns):
 ```text
 model            SDFFlow
 mode             train
-dataset_dir      ../dataset/deepjeb.h5
+dataset_dir      ../dataset/geometry_generation/ex1_deepjeb.h5
 latent_tokens    1
 latent_dim       256
 decoder_type     mlp

@@ -165,6 +165,7 @@ def vae_worker(config, config_filename='config.txt'):
             'ema_state': (D.unwrap_model(ema_model).state_dict() if ema_model is not None else None),
             'config': config,
             'normalization': normalization,
+            'split_manifest': train_dataset.split_manifest,
             'num_channels': num_channels,
             'num_time': num_time,
             'num_filter_enc': num_filter_enc,

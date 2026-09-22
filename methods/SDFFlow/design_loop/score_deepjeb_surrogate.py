@@ -16,7 +16,7 @@ candidates is what determines whether a search moves in the right direction.
 Read both; they can disagree, and when they do the disagreement is the finding.
 
   python methods/SDFFlow/design_loop/score_deepjeb_surrogate.py \
-      --truth dataset/deepjeb_mgn_infer.h5 \
+      --truth dataset/deterministic/ex10_deepjeb_mgn_infer.h5 \
       --rollout-dir output/deepjeb_himgn/rollout_fixed
 """
 
@@ -87,7 +87,7 @@ def spearman(a, b):
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('--truth', default='dataset/deepjeb_mgn_infer.h5')
+    ap.add_argument('--truth', default='dataset/deterministic/ex10_deepjeb_mgn_infer.h5')
     ap.add_argument('--rollout-dir', default='output/deepjeb_himgn/rollout_fixed')
     ap.add_argument('--json-out', default=None)
     args = ap.parse_args(argv)

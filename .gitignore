@@ -15,6 +15,11 @@ cae_suite.local.toml
 dataset/benchmarks/**/source/**/*.npy
 dataset/benchmarks/**/source/.cache/
 *.npy
+# Everything under dataset/ is local-only (raw + derived); git never tracks it.
+# (dataset/DATASET_FORMAT.md is already tracked on origin from before this rule
+# and is left alone -- ask before untracking it.)
+/dataset/*
+!/dataset/DATASET_FORMAT.md
 *.npz
 *.pth
 *.pt

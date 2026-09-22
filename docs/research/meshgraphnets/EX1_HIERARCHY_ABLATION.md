@@ -15,7 +15,7 @@ Axes:
 4. **`voronoi_clusters`** — the ladder that makes axis 1 a controlled experiment
 5. **total message-passing budget** — 14 / 28 / 56, plus the flat-MGN control
 
-Status: **design only.** Measurements are real, on `dataset/ex1.h5`
+Status: **design only.** Measurements are real, on `dataset/deterministic/ex1_static_thermoelastic.h5`
 (100 samples) with a standalone reimplementation of `model/coarsening.py`.
 Representative sample for per-level numbers: sid 24, N = 38,682 (the median).
 
@@ -62,7 +62,7 @@ falsifiable control rather than a formality.
 
 ### The problem with what's shipped
 
-`configs/MeshGraphNets/ex1/config_train_himgn.txt` carries
+`configs/MeshGraphNets/deterministic/ex1/baseline/config_train_himgn.txt` carries
 `voronoi_clusters 5000, 100`, copied from ex2 where N ≈ 200k. On ex1 that means:
 
 | | N | level-0 reduction at k=5000 | nodes per cluster |

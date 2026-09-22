@@ -1,0 +1,72 @@
+% deterministic/ex3_full - transolver3; paper-informed native adaptation, not an exact reproduction.
+% Field storage order (0-based): input -> output -> conditioner -> partNo.
+% input [0:3]: x_coord, y_coord, z_coord
+% output/state [3:]: cp, cf_x, cf_y, cf_z
+% conditioner: mach, aoa_deg, aileron_inboard_deg, aileron_outboard_deg, elevator_deg, htp_deg, normal_x, normal_y, normal_z, surface_area
+% partNo: absent
+% Static state input is zero; temporal input is current state and target is next-state delta.
+% Reference: https://arxiv.org/abs/2602.04940
+% See configs/campaigns/dataset_matrix/README.md for deviations and verification boundaries.
+% No source HDF5 writes. Checkpoints are created by the paired training config.
+
+model                            transolver
+mode                             inference
+gpu_ids                          5
+parallel_mode                    ddp
+split_seed                       42
+dataset_dir                      ../../dataset/deterministic/ex3_NASA_CRM_full.h5
+infer_dataset                    ../../dataset/deterministic/ex3_NASA_CRM_full_infer.h5
+modelpath                        ../../output/dataset_matrix/deterministic/ex3_full/transolver3/model.pth
+log_file_dir                     ../../output/dataset_matrix/deterministic/ex3_full/transolver3/train.log
+inference_output_dir             ../../output/dataset_matrix/deterministic/ex3_full/transolver3/infer
+infer_timesteps                  1
+input_var                        4
+output_var                       4
+cond_var                         10
+feature_loss_weights             1, 1, 1, 1
+use_node_types                   False
+positional_features              4
+time_integration                 ar_ot
+training_epochs                  500
+batch_size                       1
+learningr                        0.001
+weight_decay                     0.05
+warmup_epochs                    25
+num_workers                      2
+prefetch_factor                  2
+grad_accum_steps                 1
+augment_geometry                 False
+std_noise                        0.0
+use_amp                          True
+use_checkpointing                True
+use_ema                          True
+ema_decay                        0.99
+use_parallel_stats               False
+val_interval                     5
+test_interval                    50
+test_batch_idx                   0, 1
+plot_feature_idx                 0
+display_trainset                 True
+display_testset                  True
+write_preprocessing              False
+use_world_edges                  False
+use_multiscale                   False
+coordinate_normalization         centered_isotropic
+latent_dim                       256
+num_layers                       24
+num_heads                        8
+slice_num                        64
+mlp_ratio                        4
+attention_kernel                 slice_space
+chunk_size                       4096
+dropout                          0.0
+temperature_init                 0.5
+temperature_min                  0.1
+temperature_max                  5
+amortized_training               False
+amortized_cache_nodes            0
+amortized_query_nodes            0
+infer_mode                       decoupled
+infer_chunk_size                 8192
+write_test_predictions           True
+max_grad_norm                    1

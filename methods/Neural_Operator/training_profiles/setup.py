@@ -202,7 +202,7 @@ def build_normalization_dict(train_dataset) -> dict:
 
 def _lightweight_file_fingerprint(path: str) -> dict:
     """Fast fingerprint (size + mtime + hash of the first 1 MB), not a full
-    cryptographic hash: ex2.h5 is over 8 GB and hashing it in full on every
+    cryptographic hash: ex2_dynamic_contact.h5 is over 8 GB and hashing it in full on every
     checkpoint save would dominate wall-clock time."""
     if not path or not os.path.exists(path):
         return {'path': path, 'size': None, 'mtime': None, 'head_sha1': None}

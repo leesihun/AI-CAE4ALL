@@ -10,6 +10,7 @@ MODEL_NAMES = {"point_deeponet", "deeponet", "fno", "gino"}
 
 # Keys recognized regardless of which model is selected (section 11.2).
 COMMON_KEYS = {
+    "split_group_attr",
     "model", "mode", "gpu_ids", "parallel_mode",
     "log_file_dir", "modelpath", "dataset_dir", "infer_dataset",
     "inference_output_dir", "infer_timesteps", "split_seed",

@@ -1,0 +1,79 @@
+% probabilistic/ex1 - chi_mgnflow; paper-informed native adaptation, not an exact reproduction.
+% Field storage order (0-based): input -> output -> conditioner -> partNo.
+% input [0:3]: x_coord, y_coord, z_coord
+% output/state [3:]: density, pressure, velocity_x, velocity_y
+% conditioner: tcool
+% partNo: absent
+% Static state input is zero; temporal input is current state and target is next-state delta.
+% Reference: https://arxiv.org/abs/2504.02843
+% See configs/campaigns/dataset_matrix/README.md for deviations and verification boundaries.
+% No source HDF5 writes. Checkpoints are created by the paired training config.
+
+model                            chi-mgnflow
+mode                             train
+gpu_ids                          0
+parallel_mode                    ddp
+split_seed                       42
+dataset_dir                      ../../dataset/probabilistic/ex1_turbulent_radiative_layer.h5
+infer_dataset                    ../../dataset/probabilistic/ex1_turbulent_radiative_layer_infer.h5
+modelpath                        ../../output/dataset_matrix/probabilistic/ex1/chi_mgnflow/model.pth
+log_file_dir                     ../../output/dataset_matrix/probabilistic/ex1/chi_mgnflow/train.log
+inference_output_dir             ../../output/dataset_matrix/probabilistic/ex1/chi_mgnflow/infer
+infer_timesteps                  100
+input_var                        4
+output_var                       4
+cond_var                         1
+feature_loss_weights             1, 1, 1, 1
+use_node_types                   False
+positional_features              0
+time_integration                 ar_ot
+training_epochs                  500
+batch_size                       2
+learningr                        0.0001
+weight_decay                     0.0001
+warmup_epochs                    5
+num_workers                      2
+prefetch_factor                  2
+grad_accum_steps                 1
+augment_geometry                 False
+use_amp                          True
+use_checkpointing                True
+use_ema                          True
+ema_decay                        0.99
+use_parallel_stats               False
+val_interval                     10
+test_interval                    50
+test_batch_idx                   0, 1
+plot_feature_idx                 0
+display_trainset                 True
+display_testset                  True
+write_preprocessing              False
+use_world_edges                  False
+use_multiscale                   True
+edge_var                         8
+latent_dim                       128
+message_passing_num              15
+geometry_state_mode              fixed
+coarsening_type                  voronoi_seedmean
+multiscale_levels                2
+voronoi_clusters                 4096, 256
+mp_per_level                     2, 3, 5, 3, 2
+hierarchy_variants               2
+hierarchy_seed                   42
+training_seed                    42
+best_by                          crps
+num_vae_samples                  16
+vae_batch_size                   2
+periodic_box                     1.0078740157480315, 0.0, 0.0
+latent_ch                        4
+ae_kl_weight                     0.000001
+ae_epochs                        500
+prior_blocks                     4
+flow_time_freqs                  16
+flow_t_sampling                  uniform
+flow_loss_weighting              uniform
+flow_steps                       30
+flow_solver                      heun
+flow_predict                     sample
+val_flow_steps                   20
+val_num_samples                  8

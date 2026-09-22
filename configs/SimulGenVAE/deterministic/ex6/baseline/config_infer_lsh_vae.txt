@@ -1,0 +1,60 @@
+% deterministic/ex6 - lsh_vae; paper-informed native adaptation, not an exact reproduction.
+% Field storage order (0-based): input -> output -> conditioner -> partNo.
+% input [0:3]: x_coord, y_coord, z_coord
+% output/state [3:]: ux, uy, uz
+% conditioner: none
+% partNo: partNo
+% Full-trajectory LSH-VAE + latent conditioner. Prediction uses conditions only, not target fields.
+% Reference: https://doi.org/10.1007/s00366-023-01916-6
+% See configs/campaigns/dataset_matrix/README.md for deviations and verification boundaries.
+% No source HDF5 writes. Checkpoints are created by the paired training config.
+% LC CSV order is declared in the accompanying *_conditions.json sidecar.
+
+model                            simulgenvae
+mode                             reconstruct
+gpu_ids                          6
+parallel_mode                    single
+split_seed                       42
+dataset_dir                      ../../dataset/deterministic/ex6_flag_simple_infer.h5
+num_var                          3
+field_start_row                  3
+cond_var                         0
+node_start                       0
+node_end                         0
+timesteps_reduced                0
+latent_dim                       8
+latent_dim_end                   32
+num_filter_enc                   64, 64, 48, 48, 32, 24, 16
+network_size                     small
+loss_type                        1
+alpha                            1000
+init_beta_divisor                4
+lc_data_type                     csv
+lc_filter                        128, 128, 128
+lc_dropout                       0.1
+vae_training_epochs              2000
+vae_batch_size                   8
+vae_learningr                    0.001
+vae_weight_decay                 0.0
+vae_warmup_epochs                20
+vae_use_amp                      False
+vae_use_ema                      False
+vae_num_workers                  0
+lc_training_epochs               2000
+lc_batch_size                    16
+lc_learningr                     0.001
+lc_weight_decay                  0.00001
+lc_warmup_epochs                 20
+lc_num_workers                   0
+vae_modelpath                    ../../output/dataset_matrix/deterministic/ex6/lsh_vae/vae.pth
+lc_modelpath                     ../../output/dataset_matrix/deterministic/ex6/lsh_vae/lc.pth
+pipeline_log_file                ../../output/dataset_matrix/deterministic/ex6/lsh_vae/pipeline.log
+vae_log_file_dir                 ../../output/dataset_matrix/deterministic/ex6/lsh_vae/vae.log
+lc_log_file_dir                  ../../output/dataset_matrix/deterministic/ex6/lsh_vae/lc.log
+output_dir                       ../../output/dataset_matrix/deterministic/ex6/lsh_vae/infer
+skip_completed_stages            True
+test_interval                    50
+display_testset                  True
+num_test_samples                 2
+param_dir                        ../../dataset/derived/config_matrix/ex6_flag_simple_infer_conditions.csv
+batch_size                       2

@@ -68,6 +68,8 @@ def checkpoint_status(path, stage, expected_config):
     epoch = int(checkpoint.get('epoch', -1))
     if epoch < expected_epoch:
         return False, f'checkpoint epoch {epoch} is below required epoch {expected_epoch}'
+    if 'split_manifest' not in checkpoint:
+        return False, 'checkpoint predates disjoint train-only preprocessing; retraining required'
     saved_config = checkpoint.get('config', {})
     keys = _VAE_COMPATIBILITY_KEYS if stage == 'vae' else _LC_COMPATIBILITY_KEYS
     mismatched = [k for k in keys

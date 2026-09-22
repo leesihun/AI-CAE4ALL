@@ -9,6 +9,7 @@ from .meshgraphnets import validate_meshgraphnets
 # config.get(...) reachable from methods/MeshGraphNets_Variational/MeshGraphNets_main.py).
 VAR_KEYS = frozenset(
     {
+        "geometry_state_mode", "displacement_state_indices", "periodic_box", "write_preprocessing",
         "model", "mode", "gpu_ids", "parallel_mode", "log_file_dir", "modelpath",
         "dataset_dir", "infer_dataset", "eval_dataset", "inference_output_dir",
         "infer_timesteps", "split_seed", "input_var", "output_var", "cond_var",

@@ -42,7 +42,7 @@ encoder mean들의 경험 분포를 별도의 rectified flow가 다시 학습한
 
 ##### A.0.1 데이터가 모델에 들어가는 방식
 
-`dataset/deepjeb.h5`의 각 형상은 `surface_points`, `surface_normals`, `sdf_points`, `sdf_values`, `cond`를
+`dataset/geometry_generation/ex1_deepjeb.h5`의 각 형상은 `surface_points`, `surface_normals`, `sdf_points`, `sdf_values`, `cond`를
 가진다. 현재 파일은 2138형상이고, 형상당 표면점 8192개와 SDF 쿼리 10240개(near-surface 8192 + uniform
 2048)를 저장한다. 한 VAE step에서는 이 중 표면점/법선 4096개와 SDF 쿼리/값 4096개를 무작위로 다시
 뽑는다.

@@ -16,8 +16,8 @@ Registered as launcher model `mlp` (repository `MLP/`, entrypoint `MLP_main.py`)
 Runs through the suite launcher or standalone:
 
 ```bash
-python AI_CAE4ALL_main.py --config configs/MLP/ex1/config_train_mlp.txt --check
-python AI_CAE4ALL_main.py --config configs/MLP/ex1/config_train_mlp.txt
+python AI_CAE4ALL_main.py --config <your-mlp-config>.txt --check
+python AI_CAE4ALL_main.py --config <your-mlp-config>.txt
 python MLP/MLP_main.py --config <abs-or-repo-relative config>   # standalone
 ```
 

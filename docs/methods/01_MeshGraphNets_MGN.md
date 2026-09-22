@@ -144,7 +144,7 @@ When training, Gaussian noise of std `std_noise` is added to the leading
 
 ## Configuration reference
 
-Canonical example: [`configs/MeshGraphNets/ex1/config_train_meshgraphnets.txt`](../../configs/MeshGraphNets/ex1/config_train_meshgraphnets.txt).
+Canonical example: [`configs/MeshGraphNets/deterministic/ex1/baseline/config_train_meshgraphnets.txt`](../../configs/MeshGraphNets/deterministic/ex1/baseline/config_train_meshgraphnets.txt).
 The exhaustive, live-code-backed catalog is
 [`CONFIGURATION.md`](../CONFIGURATION.md).
 
@@ -234,7 +234,7 @@ The exhaustive, live-code-backed catalog is
 model               MeshGraphNets
 mode                train
 gpu_ids             0
-dataset_dir         ../dataset/ex1.h5
+dataset_dir         ../dataset/deterministic/ex1_static_thermoelastic.h5
 input_var           4
 output_var          4
 edge_var            8

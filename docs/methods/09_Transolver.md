@@ -125,7 +125,7 @@ head starts scaled by `0.01` (`small_output_init`).
 ## Configuration reference
 
 Canonical example:
-[`configs/Transolver/ex2/config_train_transolver.txt`](../../configs/Transolver/ex2/config_train_transolver.txt).
+[`configs/Transolver/deterministic/ex2/baseline/config_train_transolver3.txt`](../../configs/Transolver/deterministic/ex2/baseline/config_train_transolver3.txt).
 Transolver shares the same optimization/runtime/evaluation keys as the Neural
 Operators ([07_FNO.md](07_FNO.md#shared-neural-operator-config-keys)); the model-specific
 keys are:
@@ -156,7 +156,7 @@ and `time_integration` keys. It does **not** use `use_world_edges` / `use_multis
 ```text
 model              transolver
 mode               train
-dataset_dir        ../dataset/ex2.h5
+dataset_dir        ../dataset/deterministic/ex2_dynamic_contact.h5
 input_var          4
 output_var         4
 positional_features 4

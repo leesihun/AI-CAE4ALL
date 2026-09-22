@@ -1,0 +1,74 @@
+% deterministic/ex3_mid - deeponet; paper-informed native adaptation, not an exact reproduction.
+% Field storage order (0-based): input -> output -> conditioner -> partNo.
+% input [0:3]: x_coord, y_coord, z_coord
+% output/state [3:]: cp, cf_x, cf_y, cf_z
+% conditioner: mach, aoa_deg, aileron_inboard_deg, aileron_outboard_deg, elevator_deg, htp_deg, normal_x, normal_y, normal_z, surface_area
+% partNo: absent
+% Static state input is zero; temporal input is current state and target is next-state delta.
+% Reference: https://doi.org/10.1038/s42256-021-00302-5
+% See configs/campaigns/dataset_matrix/README.md for deviations and verification boundaries.
+% No source HDF5 writes. Checkpoints are created by the paired training config.
+
+model                            deeponet
+mode                             inference
+gpu_ids                          4
+parallel_mode                    ddp
+split_seed                       42
+dataset_dir                      ../../dataset/derived/config_matrix/ex3_NASA_CRM_mid_canonical.h5
+infer_dataset                    ../../dataset/derived/config_matrix/ex3_NASA_CRM_mid_canonical_infer.h5
+modelpath                        ../../output/dataset_matrix/deterministic/ex3_mid/deeponet/model.pth
+log_file_dir                     ../../output/dataset_matrix/deterministic/ex3_mid/deeponet/train.log
+inference_output_dir             ../../output/dataset_matrix/deterministic/ex3_mid/deeponet/infer
+infer_timesteps                  1
+input_var                        4
+output_var                       4
+cond_var                         10
+feature_loss_weights             1, 1, 1, 1
+use_node_types                   False
+positional_features              4
+time_integration                 ar_ot
+training_epochs                  500
+batch_size                       1
+learningr                        0.0005
+weight_decay                     0.0001
+warmup_epochs                    5
+num_workers                      2
+prefetch_factor                  2
+grad_accum_steps                 1
+augment_geometry                 False
+std_noise                        0.0
+use_amp                          True
+use_checkpointing                True
+use_ema                          True
+ema_decay                        0.99
+use_parallel_stats               False
+val_interval                     5
+test_interval                    50
+test_batch_idx                   0, 1
+plot_feature_idx                 0
+display_trainset                 True
+display_testset                  True
+write_preprocessing              False
+use_world_edges                  False
+use_multiscale                   False
+coordinate_normalization         centered_isotropic
+operator_dim                     3
+dimension_tolerance              0.0001
+grid_padding                     0.1
+out_of_bounds_policy             error
+sdf_source                       none
+global_condition_features        none
+integration_weight_source        none
+write_test_predictions           True
+max_grad_norm                    1
+checkpoint_interval              50
+deeponet_branch_source           fixed_sensors
+deeponet_sensor_resolution       16, 16, 8
+deeponet_hidden_channels         256
+deeponet_branch_depth            4
+deeponet_trunk_depth             4
+deeponet_basis_dim               128
+deeponet_activation              gelu
+deeponet_multi_output            split_both
+deeponet_max_branch_params       100000000
+infer_query_chunk_size           16384

@@ -15,7 +15,7 @@ Status: **Parts I and II are implemented** (see the "As-built" sections below
 for what shipped and where each deviates from the plan — Part II in
 particular ships a deliberately narrower scope than §5-7 describe). Part III
 remains an analysis/argument, not something with its own code to build.
-All measurements are on `dataset/ex2.h5` sample 0 (N = 199,993), normalized
+All measurements are on `dataset/deterministic/ex2_dynamic_contact.h5` sample 0 (N = 199,993), normalized
 stress at the last timestep, with broadcast-reconstruction RMSE as the proxy
 for how much field information the coarse level retains.
 

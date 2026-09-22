@@ -13,7 +13,7 @@ This document ablates the *hierarchy those operators run on*. The two studies
 share the baseline, the runner, and the arm generator.
 
 Status: **design only — nothing here is implemented yet.** All measurements
-below are real, taken on `dataset/ex2.h5` sample 0 (N = 199,993, E = 763,224
+below are real, taken on `dataset/deterministic/ex2_dynamic_contact.h5` sample 0 (N = 199,993, E = 763,224
 undirected) with normalized stress at the last timestep, using a standalone
 reimplementation of `model/coarsening.py`'s algorithms. The FPS/seedmean
 number at k=5000 reproduces ATTENTION_TRANSFER_DESIGN.md §1's 0.2009 exactly,
@@ -234,7 +234,7 @@ arm does not clear IDW by a comfortable margin, the 265k parameters it costs
 
 ## 4. Arm definitions
 
-Baseline for all four axes: `configs/MeshGraphNets/ex2/config_train_himgn.txt`
+Baseline for all four axes: `configs/MeshGraphNets/deterministic/ex2/baseline/config_train_himgn.txt`
 (AR-OT), **not** `_base.txt` (AR-RT). Rationale: 13 arms of AR-RT on ex2 is not
 affordable, coarsening effects show up in one-step prediction, and AR-OT is
 already the shipped reference. Promote the per-axis winner to AR-RT afterwards.

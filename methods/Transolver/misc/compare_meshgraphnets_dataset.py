@@ -15,7 +15,7 @@ the parity surface (baseline Transolver does not consume them).
 
 Usage:
     python misc/compare_meshgraphnets_dataset.py \\
-      --dataset ..\\MeshGraphNets\\dataset\\ex1.h5 \\
+      --dataset ..\\MeshGraphNets\\dataset\\ex1_static_thermoelastic.h5 \\
       --meshgraphnets-root ..\\MeshGraphNets \\
       --config ex1\\config_train_smoke.txt
 """

@@ -10,7 +10,7 @@ A model can win at one step and lose badly over a rollout. This script is what
 distinguishes the two.
 
     python misc/score_rollouts.py \\
-        --gt ../dataset/ex9_infer.h5 \\
+        --gt ../dataset/deterministic/ex9_plasticity_infer.h5 \\
         --roll det=../output/ex9flow/roll_det fmx0=../output/ex9flow/roll_fmx0_mean \\
         [--out rollout_error.png] [--channels 0 1]
 

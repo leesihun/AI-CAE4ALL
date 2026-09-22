@@ -6,6 +6,7 @@ import numpy as np
 import torch
 from torch_geometric.data import Data
 
+from general_modules.state_geometry import deformed_positions
 from general_modules.edge_features import EDGE_FEATURE_DIM, compute_edge_attr
 from general_modules.positional_features import compute_positional_features
 from general_modules.removed_feature_guard import validate_checkpoint
@@ -339,14 +340,7 @@ def run_rollout(config, config_filename='config.txt'):
                     node_type_onehot[np.arange(num_nodes), node_type_indices] = 1.0
                     x_norm = np.concatenate([x_norm, node_type_onehot], axis=1)
 
-                # Rows 3:6 are the displacement vector by the shared contract;
-                # zeros for a statically-trained model, so deformed == reference.
-                if input_dim >= 3:
-                    displacement = current_state[:, :3]
-                else:
-                    displacement = np.zeros((num_nodes, 3), dtype=np.float32)
-                    displacement[:, :input_dim] = current_state[:, :input_dim]
-                deformed_pos = ref_pos + displacement
+                deformed_pos = deformed_positions(ref_pos, current_state, config, input_dim)
                 edge_attr_raw = compute_edge_attr(ref_pos, deformed_pos, edge_index)
                 edge_attr_norm = (edge_attr_raw - edge_mean) / edge_std
 

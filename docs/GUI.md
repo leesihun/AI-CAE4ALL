@@ -68,12 +68,12 @@ route has a default profile.
 | Data preparation | Geometry to HDF5 (ingest) |
 | Start from scratch | Untitled pipeline |
 
-The mesh templates all target **ex9 plasticity**: `dataset/ex9.h5` to train and
-`dataset/ex9_infer.h5` held out (900 / 87 samples, 20 steps, 3131 nodes). Each
+The mesh templates all target **ex9 plasticity**: `dataset/deterministic/ex9_plasticity.h5` to train and
+`dataset/deterministic/ex9_plasticity_infer.h5` held out (900 / 87 samples, 20 steps, 3131 nodes). Each
 mirrors its own checked-in training config — the two MeshGraphNets pipelines
-follow `configs/MeshGraphNets/ex9/`, cHI-MGNflow `configs/HI_MGNFlow/ex9/`,
-Transolver `configs/Transolver/ex9/`, the four operators
-`configs/Neural_Operator/ex9/`. MeshGraphNets-V has no checked-in ex9 config
+follow `configs/MeshGraphNets/deterministic/ex9/`, cHI-MGNflow `configs/HI_MGNFlow/ex9/`,
+Transolver `configs/Transolver/deterministic/ex9/`, the four operators
+`configs/Neural_Operator/deterministic/ex9/`. MeshGraphNets-V has no checked-in ex9 config
 (it was left out of the ex4–ex9 roster as a one-to-many method), so its template
 reuses the ex9 dataset keys with MGN-V's own architecture.
 

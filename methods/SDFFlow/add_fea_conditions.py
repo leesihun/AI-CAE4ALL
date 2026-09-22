@@ -2,9 +2,9 @@
 """
 Append DeepJEB FEA labels to an SDFFlow HDF5 as the ``cond_extra`` sidecar.
 
-    python add_fea_conditions.py --h5 ../../dataset/deepjeb.h5 \
+    python add_fea_conditions.py --h5 ../../dataset/geometry_generation/ex1_deepjeb.h5 \
         --csv D:/CAE_datasets_raw/deepjeb/Scalar/bracket_labels.csv --dry_run
-    python add_fea_conditions.py --h5 ../../dataset/deepjeb.h5 \
+    python add_fea_conditions.py --h5 ../../dataset/geometry_generation/ex1_deepjeb.h5 \
         --csv D:/CAE_datasets_raw/deepjeb/Scalar/bracket_labels.csv
     python add_fea_conditions.py --list_names
 

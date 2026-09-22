@@ -178,7 +178,7 @@ and outputs in separate datasets, so conditions are just extra `X` columns.
 
 ### ex2 transient layout
 
-`dataset/ex2.h5` contains 50 samples with 50 stored timesteps and uses:
+`dataset/deterministic/ex2_dynamic_contact.h5` contains 50 samples with 50 stored timesteps and uses:
 
 ```text
 rows 0:3  x, y, z                                  reference coordinates
@@ -202,12 +202,23 @@ delta_hat_t = network(state_hat_t, static geometry)
 state_hat_(t+1) = state_hat_t + delta_hat_t
 ```
 
-### ex3 full-resolution reordered layout
+### ex3 CRM layout: full and mid resolution
 
-`dataset/ex3_train_reordered.h5` and `dataset/ex3_test_reordered.h5` use the
-transient-safe ordering below. They are reproducibly derived from the original
-full-resolution files by `dataset/reorder_ex3_features.py`; the originals are
-not modified.
+NASA CRM ships as two resolutions, each a plain `dataset` + `_infer` pair like
+every other example:
+
+- Full: `dataset/deterministic/ex3_NASA_CRM_full.h5` /
+  `ex3_NASA_CRM_full_infer.h5` (454,404 nodes/sample). Rows are stored directly
+  in the transient-safe order below; produced upstream (outside this repo, per
+  the raw-data convention) and checked in as-is.
+- Mid: `dataset/deterministic/ex3_NASA_CRM_mid.h5` / `ex3_NASA_CRM_mid_infer.h5`
+  (122,778 nodes/sample). These keep the original solver row order and are
+  never read directly by a config. `configs/campaigns/dataset_matrix/prepare.py`
+  (`reorder_crm`) reorders them into the same transient-safe layout as a
+  zero-copy virtual dataset at `dataset/derived/config_matrix/
+  ex3_NASA_CRM_mid_canonical.h5` / `..._mid_canonical_infer.h5`, which is what
+  the `ex3_mid` configs actually point at. The VDS is relative-path,
+  zero-copy: moving it without the `dataset/` tree it points into breaks it.
 
 ```text
 rows  0:3   x, y, z                                      reference coordinates
@@ -470,8 +481,8 @@ table.h5
 - **Normalization is not stored in the dataset.** Input/output scaling is fit on
   the train split and saved into the checkpoint, so the source HDF5 stays
   read-only (mirroring the operators' `write_preprocessing False` stance).
-- A tiny sample generator is at `dataset/mlp/make_sample.py` (writes `train.h5`
-  and `infer.h5`; the shipped `configs/MLP/ex1` templates point at them).
+- A tiny sample generator is at `dataset/deterministic/mlp/make_sample.py` (writes `train.h5`
+  and `infer.h5`; the shipped `configs/MLP/deterministic/ex1` templates point at them).
 
 **Before training an MLP, check:** `X` has exactly `input_var` columns, `Y` has
 exactly `output_var` columns, and both share the same number of rows.

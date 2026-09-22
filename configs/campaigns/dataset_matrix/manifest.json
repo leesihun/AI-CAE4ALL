@@ -1,0 +1,1066 @@
+{
+  "version": 1,
+  "excluded": [
+    "shell_buckling",
+    "grainpaint"
+  ],
+  "cases": [
+    {
+      "key": "ex1",
+      "category": "deterministic",
+      "train": "deterministic/ex1_static_thermoelastic.h5",
+      "infer": "deterministic/ex1_static_thermoelastic_infer.h5",
+      "input": [
+        "x_coord",
+        "y_coord",
+        "z_coord"
+      ],
+      "output": [
+        "ux",
+        "uy",
+        "uz",
+        "stress"
+      ],
+      "conditioner": [],
+      "partNo": [
+        "partNo"
+      ],
+      "steps": 1,
+      "dim": 2,
+      "clusters": [
+        1000,
+        100
+      ],
+      "geometry": "fixed",
+      "indices": null,
+      "epochs": 2000,
+      "batch": 2,
+      "loss_weights": [
+        1,
+        1,
+        0,
+        1
+      ]
+    },
+    {
+      "key": "ex2",
+      "category": "deterministic",
+      "train": "deterministic/ex2_dynamic_contact.h5",
+      "infer": "deterministic/ex2_dynamic_contact_infer.h5",
+      "input": [
+        "x_coord",
+        "y_coord",
+        "z_coord"
+      ],
+      "output": [
+        "ux",
+        "uy",
+        "uz",
+        "stress"
+      ],
+      "conditioner": [],
+      "partNo": [
+        "partNo"
+      ],
+      "steps": 49,
+      "dim": 3,
+      "clusters": [
+        5000,
+        250
+      ],
+      "geometry": "displacement",
+      "indices": [
+        0,
+        1,
+        2
+      ],
+      "epochs": 500,
+      "batch": 1
+    },
+    {
+      "key": "ex3_full",
+      "category": "deterministic",
+      "train": "deterministic/ex3_NASA_CRM_full.h5",
+      "infer": "deterministic/ex3_NASA_CRM_full_infer.h5",
+      "input": [
+        "x_coord",
+        "y_coord",
+        "z_coord"
+      ],
+      "output": [
+        "cp",
+        "cf_x",
+        "cf_y",
+        "cf_z"
+      ],
+      "conditioner": [
+        "mach",
+        "aoa_deg",
+        "aileron_inboard_deg",
+        "aileron_outboard_deg",
+        "elevator_deg",
+        "htp_deg",
+        "normal_x",
+        "normal_y",
+        "normal_z",
+        "surface_area"
+      ],
+      "partNo": [],
+      "steps": 1,
+      "dim": 3,
+      "clusters": [
+        5000,
+        250
+      ],
+      "geometry": "fixed",
+      "indices": null,
+      "epochs": 500,
+      "batch": 1,
+      "dense": true
+    },
+    {
+      "key": "ex3_mid",
+      "category": "deterministic",
+      "train": "derived/config_matrix/ex3_NASA_CRM_mid_canonical.h5",
+      "infer": "derived/config_matrix/ex3_NASA_CRM_mid_canonical_infer.h5",
+      "input": [
+        "x_coord",
+        "y_coord",
+        "z_coord"
+      ],
+      "output": [
+        "cp",
+        "cf_x",
+        "cf_y",
+        "cf_z"
+      ],
+      "conditioner": [
+        "mach",
+        "aoa_deg",
+        "aileron_inboard_deg",
+        "aileron_outboard_deg",
+        "elevator_deg",
+        "htp_deg",
+        "normal_x",
+        "normal_y",
+        "normal_z",
+        "surface_area"
+      ],
+      "partNo": [],
+      "steps": 1,
+      "dim": 3,
+      "clusters": [
+        4096,
+        256
+      ],
+      "geometry": "fixed",
+      "indices": null,
+      "epochs": 500,
+      "batch": 1,
+      "dense": true
+    },
+    {
+      "key": "ex4",
+      "category": "deterministic",
+      "train": "deterministic/ex4_cylinder_flow.h5",
+      "infer": "deterministic/ex4_cylinder_flow_infer.h5",
+      "input": [
+        "x_coord",
+        "y_coord",
+        "z_coord"
+      ],
+      "output": [
+        "velocity_x",
+        "velocity_y",
+        "pressure"
+      ],
+      "conditioner": [],
+      "partNo": [
+        "partNo"
+      ],
+      "steps": 599,
+      "dim": 2,
+      "clusters": [
+        256,
+        32
+      ],
+      "geometry": "fixed",
+      "indices": null,
+      "epochs": 420,
+      "batch": 2
+    },
+    {
+      "key": "ex5",
+      "category": "deterministic",
+      "train": "deterministic/ex5_deforming_plate.h5",
+      "infer": "deterministic/ex5_deforming_plate_infer.h5",
+      "input": [
+        "x_coord",
+        "y_coord",
+        "z_coord"
+      ],
+      "output": [
+        "ux",
+        "uy",
+        "uz",
+        "stress"
+      ],
+      "conditioner": [],
+      "partNo": [
+        "partNo"
+      ],
+      "steps": 399,
+      "dim": 3,
+      "clusters": [
+        256,
+        32
+      ],
+      "geometry": "displacement",
+      "indices": [
+        0,
+        1,
+        2
+      ],
+      "epochs": 500,
+      "batch": 2
+    },
+    {
+      "key": "ex6",
+      "category": "deterministic",
+      "train": "deterministic/ex6_flag_simple.h5",
+      "infer": "deterministic/ex6_flag_simple_infer.h5",
+      "input": [
+        "x_coord",
+        "y_coord",
+        "z_coord"
+      ],
+      "output": [
+        "ux",
+        "uy",
+        "uz"
+      ],
+      "conditioner": [],
+      "partNo": [
+        "partNo"
+      ],
+      "steps": 400,
+      "dim": 2,
+      "clusters": [
+        256,
+        32
+      ],
+      "geometry": "displacement",
+      "indices": [
+        0,
+        1,
+        2
+      ],
+      "epochs": 500,
+      "batch": 2,
+      "dense": true
+    },
+    {
+      "key": "ex7",
+      "category": "deterministic",
+      "train": "deterministic/ex7_airfrans.h5",
+      "infer": "deterministic/ex7_airfrans_infer.h5",
+      "input": [
+        "x_coord",
+        "y_coord",
+        "z_coord"
+      ],
+      "output": [
+        "velocity_x",
+        "velocity_y",
+        "pressure",
+        "nu_t"
+      ],
+      "conditioner": [
+        "u_inf_x",
+        "u_inf_y",
+        "sdf",
+        "normal_x",
+        "normal_y"
+      ],
+      "partNo": [
+        "partNo"
+      ],
+      "steps": 1,
+      "dim": 2,
+      "clusters": [
+        4096,
+        256
+      ],
+      "geometry": "fixed",
+      "indices": null,
+      "epochs": 500,
+      "batch": 1
+    },
+    {
+      "key": "ex8",
+      "category": "deterministic",
+      "train": "deterministic/ex8_elasticity.h5",
+      "infer": "deterministic/ex8_elasticity_infer.h5",
+      "input": [
+        "x_coord",
+        "y_coord",
+        "z_coord"
+      ],
+      "output": [
+        "sigma"
+      ],
+      "conditioner": [],
+      "partNo": [],
+      "steps": 1,
+      "dim": 2,
+      "clusters": [
+        128,
+        16
+      ],
+      "geometry": "fixed",
+      "indices": null,
+      "epochs": 500,
+      "batch": 16
+    },
+    {
+      "key": "ex9",
+      "category": "deterministic",
+      "train": "deterministic/ex9_plasticity.h5",
+      "infer": "deterministic/ex9_plasticity_infer.h5",
+      "input": [
+        "x_coord",
+        "y_coord",
+        "z_coord"
+      ],
+      "output": [
+        "ux",
+        "uy"
+      ],
+      "conditioner": [
+        "uz_zero",
+        "die_profil"
+      ],
+      "partNo": [],
+      "steps": 19,
+      "dim": 2,
+      "clusters": [
+        512,
+        64
+      ],
+      "geometry": "displacement",
+      "indices": [
+        0,
+        1,
+        -1
+      ],
+      "epochs": 500,
+      "batch": 8,
+      "dense": true
+    },
+    {
+      "key": "ex10",
+      "category": "deterministic",
+      "train": "deterministic/ex10_deepjeb_mgn.h5",
+      "infer": "deterministic/ex10_deepjeb_mgn_infer.h5",
+      "input": [
+        "x_coord",
+        "y_coord",
+        "z_coord"
+      ],
+      "output": [
+        "stress",
+        "displacement_magnitude"
+      ],
+      "conditioner": [
+        "lc_ver",
+        "lc_hor",
+        "lc_dia",
+        "lc_tor"
+      ],
+      "partNo": [],
+      "steps": 1,
+      "dim": 3,
+      "clusters": [
+        512,
+        64
+      ],
+      "geometry": "fixed",
+      "indices": null,
+      "epochs": 500,
+      "batch": 4,
+      "split_group_attr": "bracket"
+    },
+    {
+      "key": "ex1",
+      "category": "probabilistic",
+      "train": "probabilistic/ex1_turbulent_radiative_layer.h5",
+      "infer": "probabilistic/ex1_turbulent_radiative_layer_infer.h5",
+      "input": [
+        "x_coord",
+        "y_coord",
+        "z_coord"
+      ],
+      "output": [
+        "density",
+        "pressure",
+        "velocity_x",
+        "velocity_y"
+      ],
+      "conditioner": [
+        "tcool"
+      ],
+      "partNo": [],
+      "steps": 100,
+      "dim": 2,
+      "clusters": [
+        4096,
+        256
+      ],
+      "geometry": "fixed",
+      "indices": null,
+      "epochs": 500,
+      "batch": 2,
+      "periodic_box": [
+        1.0078740157480315,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "key": "ex2",
+      "category": "probabilistic",
+      "train": "probabilistic/ex2_crack_path.h5",
+      "infer": "probabilistic/ex2_crack_path_infer.h5",
+      "input": [
+        "x_coord",
+        "y_coord",
+        "z_coord"
+      ],
+      "output": [
+        "damage",
+        "ux",
+        "uy"
+      ],
+      "conditioner": [],
+      "partNo": [],
+      "steps": 19,
+      "dim": 2,
+      "clusters": [
+        4096,
+        256
+      ],
+      "geometry": "displacement",
+      "indices": [
+        1,
+        2,
+        -1
+      ],
+      "epochs": 500,
+      "batch": 2
+    }
+  ],
+  "pairs": [
+    {
+      "category": "deterministic",
+      "example": "ex1",
+      "method": "deeponet",
+      "train": "configs/Neural_Operator/deterministic/ex1/baseline/config_train_deeponet.txt",
+      "infer": "configs/Neural_Operator/deterministic/ex1/baseline/config_infer_deeponet.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex1",
+      "method": "point_deeponet",
+      "train": "configs/Neural_Operator/deterministic/ex1/baseline/config_train_point_deeponet.txt",
+      "infer": "configs/Neural_Operator/deterministic/ex1/baseline/config_infer_point_deeponet.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex1",
+      "method": "fno",
+      "train": "configs/Neural_Operator/deterministic/ex1/baseline/config_train_fno.txt",
+      "infer": "configs/Neural_Operator/deterministic/ex1/baseline/config_infer_fno.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex1",
+      "method": "gino",
+      "train": "configs/Neural_Operator/deterministic/ex1/baseline/config_train_gino.txt",
+      "infer": "configs/Neural_Operator/deterministic/ex1/baseline/config_infer_gino.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex1",
+      "method": "transolver3",
+      "train": "configs/Transolver/deterministic/ex1/baseline/config_train_transolver3.txt",
+      "infer": "configs/Transolver/deterministic/ex1/baseline/config_infer_transolver3.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex1",
+      "method": "meshgraphnets",
+      "train": "configs/MeshGraphNets/deterministic/ex1/baseline/config_train_meshgraphnets.txt",
+      "infer": "configs/MeshGraphNets/deterministic/ex1/baseline/config_infer_meshgraphnets.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex1",
+      "method": "himgn",
+      "train": "configs/MeshGraphNets/deterministic/ex1/baseline/config_train_himgn.txt",
+      "infer": "configs/MeshGraphNets/deterministic/ex1/baseline/config_infer_himgn.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex2",
+      "method": "deeponet",
+      "train": "configs/Neural_Operator/deterministic/ex2/baseline/config_train_deeponet.txt",
+      "infer": "configs/Neural_Operator/deterministic/ex2/baseline/config_infer_deeponet.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex2",
+      "method": "point_deeponet",
+      "train": "configs/Neural_Operator/deterministic/ex2/baseline/config_train_point_deeponet.txt",
+      "infer": "configs/Neural_Operator/deterministic/ex2/baseline/config_infer_point_deeponet.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex2",
+      "method": "fno",
+      "train": "configs/Neural_Operator/deterministic/ex2/baseline/config_train_fno.txt",
+      "infer": "configs/Neural_Operator/deterministic/ex2/baseline/config_infer_fno.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex2",
+      "method": "gino",
+      "train": "configs/Neural_Operator/deterministic/ex2/baseline/config_train_gino.txt",
+      "infer": "configs/Neural_Operator/deterministic/ex2/baseline/config_infer_gino.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex2",
+      "method": "transolver3",
+      "train": "configs/Transolver/deterministic/ex2/baseline/config_train_transolver3.txt",
+      "infer": "configs/Transolver/deterministic/ex2/baseline/config_infer_transolver3.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex2",
+      "method": "meshgraphnets",
+      "train": "configs/MeshGraphNets/deterministic/ex2/baseline/config_train_meshgraphnets.txt",
+      "infer": "configs/MeshGraphNets/deterministic/ex2/baseline/config_infer_meshgraphnets.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex2",
+      "method": "himgn",
+      "train": "configs/MeshGraphNets/deterministic/ex2/baseline/config_train_himgn.txt",
+      "infer": "configs/MeshGraphNets/deterministic/ex2/baseline/config_infer_himgn.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex3_full",
+      "method": "deeponet",
+      "train": "configs/Neural_Operator/deterministic/ex3_full/baseline/config_train_deeponet.txt",
+      "infer": "configs/Neural_Operator/deterministic/ex3_full/baseline/config_infer_deeponet.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex3_full",
+      "method": "point_deeponet",
+      "train": "configs/Neural_Operator/deterministic/ex3_full/baseline/config_train_point_deeponet.txt",
+      "infer": "configs/Neural_Operator/deterministic/ex3_full/baseline/config_infer_point_deeponet.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex3_full",
+      "method": "fno",
+      "train": "configs/Neural_Operator/deterministic/ex3_full/baseline/config_train_fno.txt",
+      "infer": "configs/Neural_Operator/deterministic/ex3_full/baseline/config_infer_fno.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex3_full",
+      "method": "gino",
+      "train": "configs/Neural_Operator/deterministic/ex3_full/baseline/config_train_gino.txt",
+      "infer": "configs/Neural_Operator/deterministic/ex3_full/baseline/config_infer_gino.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex3_full",
+      "method": "transolver3",
+      "train": "configs/Transolver/deterministic/ex3_full/baseline/config_train_transolver3.txt",
+      "infer": "configs/Transolver/deterministic/ex3_full/baseline/config_infer_transolver3.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex3_full",
+      "method": "meshgraphnets",
+      "train": "configs/MeshGraphNets/deterministic/ex3_full/baseline/config_train_meshgraphnets.txt",
+      "infer": "configs/MeshGraphNets/deterministic/ex3_full/baseline/config_infer_meshgraphnets.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex3_full",
+      "method": "himgn",
+      "train": "configs/MeshGraphNets/deterministic/ex3_full/baseline/config_train_himgn.txt",
+      "infer": "configs/MeshGraphNets/deterministic/ex3_full/baseline/config_infer_himgn.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex3_full",
+      "method": "lsh_vae",
+      "train": "configs/SimulGenVAE/deterministic/ex3_full/baseline/config_train_lsh_vae.txt",
+      "infer": "configs/SimulGenVAE/deterministic/ex3_full/baseline/config_infer_lsh_vae.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex3_mid",
+      "method": "deeponet",
+      "train": "configs/Neural_Operator/deterministic/ex3_mid/baseline/config_train_deeponet.txt",
+      "infer": "configs/Neural_Operator/deterministic/ex3_mid/baseline/config_infer_deeponet.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex3_mid",
+      "method": "point_deeponet",
+      "train": "configs/Neural_Operator/deterministic/ex3_mid/baseline/config_train_point_deeponet.txt",
+      "infer": "configs/Neural_Operator/deterministic/ex3_mid/baseline/config_infer_point_deeponet.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex3_mid",
+      "method": "fno",
+      "train": "configs/Neural_Operator/deterministic/ex3_mid/baseline/config_train_fno.txt",
+      "infer": "configs/Neural_Operator/deterministic/ex3_mid/baseline/config_infer_fno.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex3_mid",
+      "method": "gino",
+      "train": "configs/Neural_Operator/deterministic/ex3_mid/baseline/config_train_gino.txt",
+      "infer": "configs/Neural_Operator/deterministic/ex3_mid/baseline/config_infer_gino.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex3_mid",
+      "method": "transolver3",
+      "train": "configs/Transolver/deterministic/ex3_mid/baseline/config_train_transolver3.txt",
+      "infer": "configs/Transolver/deterministic/ex3_mid/baseline/config_infer_transolver3.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex3_mid",
+      "method": "meshgraphnets",
+      "train": "configs/MeshGraphNets/deterministic/ex3_mid/baseline/config_train_meshgraphnets.txt",
+      "infer": "configs/MeshGraphNets/deterministic/ex3_mid/baseline/config_infer_meshgraphnets.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex3_mid",
+      "method": "himgn",
+      "train": "configs/MeshGraphNets/deterministic/ex3_mid/baseline/config_train_himgn.txt",
+      "infer": "configs/MeshGraphNets/deterministic/ex3_mid/baseline/config_infer_himgn.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex3_mid",
+      "method": "lsh_vae",
+      "train": "configs/SimulGenVAE/deterministic/ex3_mid/baseline/config_train_lsh_vae.txt",
+      "infer": "configs/SimulGenVAE/deterministic/ex3_mid/baseline/config_infer_lsh_vae.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex4",
+      "method": "deeponet",
+      "train": "configs/Neural_Operator/deterministic/ex4/baseline/config_train_deeponet.txt",
+      "infer": "configs/Neural_Operator/deterministic/ex4/baseline/config_infer_deeponet.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex4",
+      "method": "point_deeponet",
+      "train": "configs/Neural_Operator/deterministic/ex4/baseline/config_train_point_deeponet.txt",
+      "infer": "configs/Neural_Operator/deterministic/ex4/baseline/config_infer_point_deeponet.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex4",
+      "method": "fno",
+      "train": "configs/Neural_Operator/deterministic/ex4/baseline/config_train_fno.txt",
+      "infer": "configs/Neural_Operator/deterministic/ex4/baseline/config_infer_fno.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex4",
+      "method": "gino",
+      "train": "configs/Neural_Operator/deterministic/ex4/baseline/config_train_gino.txt",
+      "infer": "configs/Neural_Operator/deterministic/ex4/baseline/config_infer_gino.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex4",
+      "method": "transolver3",
+      "train": "configs/Transolver/deterministic/ex4/baseline/config_train_transolver3.txt",
+      "infer": "configs/Transolver/deterministic/ex4/baseline/config_infer_transolver3.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex4",
+      "method": "meshgraphnets",
+      "train": "configs/MeshGraphNets/deterministic/ex4/baseline/config_train_meshgraphnets.txt",
+      "infer": "configs/MeshGraphNets/deterministic/ex4/baseline/config_infer_meshgraphnets.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex4",
+      "method": "himgn",
+      "train": "configs/MeshGraphNets/deterministic/ex4/baseline/config_train_himgn.txt",
+      "infer": "configs/MeshGraphNets/deterministic/ex4/baseline/config_infer_himgn.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex5",
+      "method": "deeponet",
+      "train": "configs/Neural_Operator/deterministic/ex5/baseline/config_train_deeponet.txt",
+      "infer": "configs/Neural_Operator/deterministic/ex5/baseline/config_infer_deeponet.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex5",
+      "method": "point_deeponet",
+      "train": "configs/Neural_Operator/deterministic/ex5/baseline/config_train_point_deeponet.txt",
+      "infer": "configs/Neural_Operator/deterministic/ex5/baseline/config_infer_point_deeponet.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex5",
+      "method": "fno",
+      "train": "configs/Neural_Operator/deterministic/ex5/baseline/config_train_fno.txt",
+      "infer": "configs/Neural_Operator/deterministic/ex5/baseline/config_infer_fno.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex5",
+      "method": "gino",
+      "train": "configs/Neural_Operator/deterministic/ex5/baseline/config_train_gino.txt",
+      "infer": "configs/Neural_Operator/deterministic/ex5/baseline/config_infer_gino.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex5",
+      "method": "transolver3",
+      "train": "configs/Transolver/deterministic/ex5/baseline/config_train_transolver3.txt",
+      "infer": "configs/Transolver/deterministic/ex5/baseline/config_infer_transolver3.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex5",
+      "method": "meshgraphnets",
+      "train": "configs/MeshGraphNets/deterministic/ex5/baseline/config_train_meshgraphnets.txt",
+      "infer": "configs/MeshGraphNets/deterministic/ex5/baseline/config_infer_meshgraphnets.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex5",
+      "method": "himgn",
+      "train": "configs/MeshGraphNets/deterministic/ex5/baseline/config_train_himgn.txt",
+      "infer": "configs/MeshGraphNets/deterministic/ex5/baseline/config_infer_himgn.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex6",
+      "method": "deeponet",
+      "train": "configs/Neural_Operator/deterministic/ex6/baseline/config_train_deeponet.txt",
+      "infer": "configs/Neural_Operator/deterministic/ex6/baseline/config_infer_deeponet.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex6",
+      "method": "point_deeponet",
+      "train": "configs/Neural_Operator/deterministic/ex6/baseline/config_train_point_deeponet.txt",
+      "infer": "configs/Neural_Operator/deterministic/ex6/baseline/config_infer_point_deeponet.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex6",
+      "method": "fno",
+      "train": "configs/Neural_Operator/deterministic/ex6/baseline/config_train_fno.txt",
+      "infer": "configs/Neural_Operator/deterministic/ex6/baseline/config_infer_fno.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex6",
+      "method": "gino",
+      "train": "configs/Neural_Operator/deterministic/ex6/baseline/config_train_gino.txt",
+      "infer": "configs/Neural_Operator/deterministic/ex6/baseline/config_infer_gino.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex6",
+      "method": "transolver3",
+      "train": "configs/Transolver/deterministic/ex6/baseline/config_train_transolver3.txt",
+      "infer": "configs/Transolver/deterministic/ex6/baseline/config_infer_transolver3.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex6",
+      "method": "meshgraphnets",
+      "train": "configs/MeshGraphNets/deterministic/ex6/baseline/config_train_meshgraphnets.txt",
+      "infer": "configs/MeshGraphNets/deterministic/ex6/baseline/config_infer_meshgraphnets.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex6",
+      "method": "himgn",
+      "train": "configs/MeshGraphNets/deterministic/ex6/baseline/config_train_himgn.txt",
+      "infer": "configs/MeshGraphNets/deterministic/ex6/baseline/config_infer_himgn.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex6",
+      "method": "lsh_vae",
+      "train": "configs/SimulGenVAE/deterministic/ex6/baseline/config_train_lsh_vae.txt",
+      "infer": "configs/SimulGenVAE/deterministic/ex6/baseline/config_infer_lsh_vae.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex7",
+      "method": "deeponet",
+      "train": "configs/Neural_Operator/deterministic/ex7/baseline/config_train_deeponet.txt",
+      "infer": "configs/Neural_Operator/deterministic/ex7/baseline/config_infer_deeponet.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex7",
+      "method": "point_deeponet",
+      "train": "configs/Neural_Operator/deterministic/ex7/baseline/config_train_point_deeponet.txt",
+      "infer": "configs/Neural_Operator/deterministic/ex7/baseline/config_infer_point_deeponet.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex7",
+      "method": "fno",
+      "train": "configs/Neural_Operator/deterministic/ex7/baseline/config_train_fno.txt",
+      "infer": "configs/Neural_Operator/deterministic/ex7/baseline/config_infer_fno.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex7",
+      "method": "gino",
+      "train": "configs/Neural_Operator/deterministic/ex7/baseline/config_train_gino.txt",
+      "infer": "configs/Neural_Operator/deterministic/ex7/baseline/config_infer_gino.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex7",
+      "method": "transolver3",
+      "train": "configs/Transolver/deterministic/ex7/baseline/config_train_transolver3.txt",
+      "infer": "configs/Transolver/deterministic/ex7/baseline/config_infer_transolver3.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex7",
+      "method": "meshgraphnets",
+      "train": "configs/MeshGraphNets/deterministic/ex7/baseline/config_train_meshgraphnets.txt",
+      "infer": "configs/MeshGraphNets/deterministic/ex7/baseline/config_infer_meshgraphnets.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex7",
+      "method": "himgn",
+      "train": "configs/MeshGraphNets/deterministic/ex7/baseline/config_train_himgn.txt",
+      "infer": "configs/MeshGraphNets/deterministic/ex7/baseline/config_infer_himgn.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex8",
+      "method": "deeponet",
+      "train": "configs/Neural_Operator/deterministic/ex8/baseline/config_train_deeponet.txt",
+      "infer": "configs/Neural_Operator/deterministic/ex8/baseline/config_infer_deeponet.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex8",
+      "method": "point_deeponet",
+      "train": "configs/Neural_Operator/deterministic/ex8/baseline/config_train_point_deeponet.txt",
+      "infer": "configs/Neural_Operator/deterministic/ex8/baseline/config_infer_point_deeponet.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex8",
+      "method": "fno",
+      "train": "configs/Neural_Operator/deterministic/ex8/baseline/config_train_fno.txt",
+      "infer": "configs/Neural_Operator/deterministic/ex8/baseline/config_infer_fno.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex8",
+      "method": "gino",
+      "train": "configs/Neural_Operator/deterministic/ex8/baseline/config_train_gino.txt",
+      "infer": "configs/Neural_Operator/deterministic/ex8/baseline/config_infer_gino.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex8",
+      "method": "transolver3",
+      "train": "configs/Transolver/deterministic/ex8/baseline/config_train_transolver3.txt",
+      "infer": "configs/Transolver/deterministic/ex8/baseline/config_infer_transolver3.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex8",
+      "method": "meshgraphnets",
+      "train": "configs/MeshGraphNets/deterministic/ex8/baseline/config_train_meshgraphnets.txt",
+      "infer": "configs/MeshGraphNets/deterministic/ex8/baseline/config_infer_meshgraphnets.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex8",
+      "method": "himgn",
+      "train": "configs/MeshGraphNets/deterministic/ex8/baseline/config_train_himgn.txt",
+      "infer": "configs/MeshGraphNets/deterministic/ex8/baseline/config_infer_himgn.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex9",
+      "method": "deeponet",
+      "train": "configs/Neural_Operator/deterministic/ex9/baseline/config_train_deeponet.txt",
+      "infer": "configs/Neural_Operator/deterministic/ex9/baseline/config_infer_deeponet.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex9",
+      "method": "point_deeponet",
+      "train": "configs/Neural_Operator/deterministic/ex9/baseline/config_train_point_deeponet.txt",
+      "infer": "configs/Neural_Operator/deterministic/ex9/baseline/config_infer_point_deeponet.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex9",
+      "method": "fno",
+      "train": "configs/Neural_Operator/deterministic/ex9/baseline/config_train_fno.txt",
+      "infer": "configs/Neural_Operator/deterministic/ex9/baseline/config_infer_fno.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex9",
+      "method": "gino",
+      "train": "configs/Neural_Operator/deterministic/ex9/baseline/config_train_gino.txt",
+      "infer": "configs/Neural_Operator/deterministic/ex9/baseline/config_infer_gino.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex9",
+      "method": "transolver3",
+      "train": "configs/Transolver/deterministic/ex9/baseline/config_train_transolver3.txt",
+      "infer": "configs/Transolver/deterministic/ex9/baseline/config_infer_transolver3.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex9",
+      "method": "meshgraphnets",
+      "train": "configs/MeshGraphNets/deterministic/ex9/baseline/config_train_meshgraphnets.txt",
+      "infer": "configs/MeshGraphNets/deterministic/ex9/baseline/config_infer_meshgraphnets.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex9",
+      "method": "himgn",
+      "train": "configs/MeshGraphNets/deterministic/ex9/baseline/config_train_himgn.txt",
+      "infer": "configs/MeshGraphNets/deterministic/ex9/baseline/config_infer_himgn.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex9",
+      "method": "lsh_vae",
+      "train": "configs/SimulGenVAE/deterministic/ex9/baseline/config_train_lsh_vae.txt",
+      "infer": "configs/SimulGenVAE/deterministic/ex9/baseline/config_infer_lsh_vae.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex10",
+      "method": "deeponet",
+      "train": "configs/Neural_Operator/deterministic/ex10/baseline/config_train_deeponet.txt",
+      "infer": "configs/Neural_Operator/deterministic/ex10/baseline/config_infer_deeponet.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex10",
+      "method": "point_deeponet",
+      "train": "configs/Neural_Operator/deterministic/ex10/baseline/config_train_point_deeponet.txt",
+      "infer": "configs/Neural_Operator/deterministic/ex10/baseline/config_infer_point_deeponet.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex10",
+      "method": "fno",
+      "train": "configs/Neural_Operator/deterministic/ex10/baseline/config_train_fno.txt",
+      "infer": "configs/Neural_Operator/deterministic/ex10/baseline/config_infer_fno.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex10",
+      "method": "gino",
+      "train": "configs/Neural_Operator/deterministic/ex10/baseline/config_train_gino.txt",
+      "infer": "configs/Neural_Operator/deterministic/ex10/baseline/config_infer_gino.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex10",
+      "method": "transolver3",
+      "train": "configs/Transolver/deterministic/ex10/baseline/config_train_transolver3.txt",
+      "infer": "configs/Transolver/deterministic/ex10/baseline/config_infer_transolver3.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex10",
+      "method": "meshgraphnets",
+      "train": "configs/MeshGraphNets/deterministic/ex10/baseline/config_train_meshgraphnets.txt",
+      "infer": "configs/MeshGraphNets/deterministic/ex10/baseline/config_infer_meshgraphnets.txt"
+    },
+    {
+      "category": "deterministic",
+      "example": "ex10",
+      "method": "himgn",
+      "train": "configs/MeshGraphNets/deterministic/ex10/baseline/config_train_himgn.txt",
+      "infer": "configs/MeshGraphNets/deterministic/ex10/baseline/config_infer_himgn.txt"
+    },
+    {
+      "category": "probabilistic",
+      "example": "ex1",
+      "method": "himgn_v",
+      "train": "configs/MeshGraphNets_Variational/probabilistic/ex1/baseline/config_train_himgn_v.txt",
+      "infer": "configs/MeshGraphNets_Variational/probabilistic/ex1/baseline/config_infer_himgn_v.txt"
+    },
+    {
+      "category": "probabilistic",
+      "example": "ex1",
+      "method": "chi_mgnflow",
+      "train": "configs/HI_MGNFlow/probabilistic/ex1/baseline/config_train_chi_mgnflow.txt",
+      "infer": "configs/HI_MGNFlow/probabilistic/ex1/baseline/config_infer_chi_mgnflow.txt"
+    },
+    {
+      "category": "probabilistic",
+      "example": "ex2",
+      "method": "himgn_v",
+      "train": "configs/MeshGraphNets_Variational/probabilistic/ex2/baseline/config_train_himgn_v.txt",
+      "infer": "configs/MeshGraphNets_Variational/probabilistic/ex2/baseline/config_infer_himgn_v.txt"
+    },
+    {
+      "category": "probabilistic",
+      "example": "ex2",
+      "method": "chi_mgnflow",
+      "train": "configs/HI_MGNFlow/probabilistic/ex2/baseline/config_train_chi_mgnflow.txt",
+      "infer": "configs/HI_MGNFlow/probabilistic/ex2/baseline/config_infer_chi_mgnflow.txt"
+    },
+    {
+      "category": "geometry_generation",
+      "example": "ex1",
+      "method": "sdfflow",
+      "train": "configs/SDFFlow/geometry_generation/ex1/baseline/config_train_sdfflow.txt",
+      "infer": "configs/SDFFlow/geometry_generation/ex1/baseline/config_infer_sdfflow.txt"
+    }
+  ]
+}

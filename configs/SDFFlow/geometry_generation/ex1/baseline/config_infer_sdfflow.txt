@@ -1,0 +1,24 @@
+% geometry_generation/ex1 - sdfflow; paper-informed native adaptation, not an exact reproduction.
+% Logical order: input -> output -> conditioner -> partNo (named HDF5 arrays, not nodal rows).
+% Train input: surface_points, surface_normals, query_xyz; generation input: latent noise and query_xyz.
+% Output: signed_distance (zero level set is the generated surface).
+% Conditioner order: volume, area; partNo: absent.
+% The default infer config samples the unconditional branch; add named cond_values for conditional generation.
+% Reference: https://arxiv.org/abs/2301.11445 ; https://arxiv.org/abs/2210.02747
+% See configs/campaigns/dataset_matrix/README.md for deviations and verification boundaries.
+% No source HDF5 writes. Checkpoints are created by the paired training config.
+
+model                            sdfflow
+mode                             sample
+gpu_ids                          6
+parallel_mode                    single
+seed                             42
+vae_modelpath                    ../../output/dataset_matrix/geometry_generation/ex1/sdfflow/vae.pth
+fm_modelpath                     ../../output/dataset_matrix/geometry_generation/ex1/sdfflow/fm_best.pth
+output_dir                       ../../output/dataset_matrix/geometry_generation/ex1/sdfflow/samples
+num_samples                      16
+mc_resolution                    128
+ode_steps                        50
+cfg_scale                        1
+condition_ood_policy             error
+max_condition_z                  3

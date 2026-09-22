@@ -1,0 +1,61 @@
+% deterministic/ex5 - meshgraphnets; paper-informed native adaptation, not an exact reproduction.
+% Field storage order (0-based): input -> output -> conditioner -> partNo.
+% input [0:3]: x_coord, y_coord, z_coord
+% output/state [3:]: ux, uy, uz, stress
+% conditioner: none
+% partNo: partNo
+% Static state input is zero; temporal input is current state and target is next-state delta.
+% Reference: https://arxiv.org/abs/2010.03409
+% See configs/campaigns/dataset_matrix/README.md for deviations and verification boundaries.
+% No source HDF5 writes. Checkpoints are created by the paired training config.
+
+model                            meshgraphnets
+mode                             train
+gpu_ids                          0
+parallel_mode                    ddp
+split_seed                       42
+dataset_dir                      ../../dataset/deterministic/ex5_deforming_plate.h5
+infer_dataset                    ../../dataset/deterministic/ex5_deforming_plate_infer.h5
+modelpath                        ../../output/dataset_matrix/deterministic/ex5/meshgraphnets/model.pth
+log_file_dir                     ../../output/dataset_matrix/deterministic/ex5/meshgraphnets/train.log
+inference_output_dir             ../../output/dataset_matrix/deterministic/ex5/meshgraphnets/infer
+infer_timesteps                  399
+input_var                        4
+output_var                       4
+cond_var                         0
+feature_loss_weights             1, 1, 1, 1
+use_node_types                   True
+positional_features              4
+time_integration                 ar_ot
+training_epochs                  500
+batch_size                       2
+learningr                        0.0001
+weight_decay                     0.0001
+warmup_epochs                    5
+num_workers                      2
+prefetch_factor                  2
+grad_accum_steps                 1
+augment_geometry                 False
+std_noise                        0.01
+use_amp                          True
+use_checkpointing                True
+use_ema                          True
+ema_decay                        0.99
+use_parallel_stats               False
+val_interval                     5
+test_interval                    50
+test_batch_idx                   0, 1
+plot_feature_idx                 0
+display_trainset                 True
+display_testset                  True
+write_preprocessing              False
+use_world_edges                  True
+use_multiscale                   False
+edge_var                         8
+latent_dim                       128
+message_passing_num              15
+geometry_state_mode              displacement
+displacement_state_indices       0, 1, 2
+world_radius_multiplier          1.5
+world_max_num_neighbors          64
+world_edge_backend               scipy_kdtree

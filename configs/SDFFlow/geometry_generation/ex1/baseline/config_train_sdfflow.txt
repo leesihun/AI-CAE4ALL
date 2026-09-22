@@ -1,0 +1,92 @@
+% geometry_generation/ex1 - sdfflow; paper-informed native adaptation, not an exact reproduction.
+% Logical order: input -> output -> conditioner -> partNo (named HDF5 arrays, not nodal rows).
+% Train input: surface_points, surface_normals, query_xyz; generation input: latent noise and query_xyz.
+% Output: signed_distance (zero level set is the generated surface).
+% Conditioner order: volume, area; partNo: absent.
+% The default infer config samples the unconditional branch; add named cond_values for conditional generation.
+% Reference: https://arxiv.org/abs/2301.11445 ; https://arxiv.org/abs/2210.02747
+% See configs/campaigns/dataset_matrix/README.md for deviations and verification boundaries.
+% No source HDF5 writes. Checkpoints are created by the paired training config.
+
+model                            sdfflow
+mode                             train
+gpu_ids                          6
+parallel_mode                    single
+seed                             42
+split_seed                       42
+dataset_dir                      ../../dataset/geometry_generation/ex1_deepjeb.h5
+split_by_parent                  True
+num_encoder_points               6144
+num_query_points                 8192
+latent_tokens                    32
+latent_dim                       32
+encoder_query_type               fps
+encoder_dim                      256
+encoder_heads                    8
+encoder_blocks                   4
+encoder_self_attention           True
+decoder_type                     attention
+decoder_hidden                   256
+decoder_layers                   4
+decoder_heads                    8
+fourier_bands                    8
+kl_weight                        0.0001
+clamp_dist                       0.1
+deterministic_warmup_epochs      50
+posterior_noise_warmup_epochs    100
+posterior_noise_max_scale        1
+kl_warmup_epochs                 200
+posterior_min_std_rel            0.05
+surface_weight                   1
+normal_weight                    0.1
+eikonal_weight                   0.1
+hybrid_grad_points               1024
+use_conditions                   True
+condition_names                  volume, area
+min_condition_std                0.00001
+condition_clip                   5
+cond_dropout                     0.2
+cond_dropout_mode                all
+fm_arch                          dit
+fm_hidden                        256
+fm_blocks                        8
+fm_heads                         8
+fm_cond_hidden                   128
+fm_time_sampling                 uniform
+encode_batch_size                8
+ode_steps                        50
+vae_training_epochs              1500
+vae_batch_size                   8
+vae_learningr                    0.0001
+vae_weight_decay                 0.0001
+vae_warmup_epochs                20
+vae_num_workers                  2
+vae_use_amp                      False
+vae_use_ema                      True
+vae_ema_decay                    0.99
+vae_val_interval                 5
+vae_test_interval                100
+vae_num_test_shapes              2
+vae_mc_resolution_test           64
+fm_training_epochs               500
+fm_batch_size                    64
+fm_learningr                     0.0001
+fm_weight_decay                  0.0001
+fm_warmup_epochs                 10
+fm_num_workers                   0
+fm_use_amp                       True
+fm_use_ema                       True
+fm_ema_decay                     0.99
+fm_val_interval                  5
+fm_test_interval                 50
+fm_num_test_shapes               2
+fm_mc_resolution_test            64
+display_testset                  True
+skip_completed_stages            True
+output_dir                       ../../output/dataset_matrix/geometry_generation/ex1/sdfflow/samples
+vae_modelpath                    ../../output/dataset_matrix/geometry_generation/ex1/sdfflow/vae.pth
+fm_modelpath                     ../../output/dataset_matrix/geometry_generation/ex1/sdfflow/fm.pth
+fm_best_modelpath                ../../output/dataset_matrix/geometry_generation/ex1/sdfflow/fm_best.pth
+pipeline_log_file                ../../output/dataset_matrix/geometry_generation/ex1/sdfflow/pipeline.log
+vae_log_file_dir                 ../../output/dataset_matrix/geometry_generation/ex1/sdfflow/vae.log
+fm_log_file_dir                  ../../output/dataset_matrix/geometry_generation/ex1/sdfflow/fm.log

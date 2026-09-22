@@ -67,6 +67,9 @@ def describe_ar_rt(window: int) -> str:
             f"full unroll, per-step gradient checkpointing)")
 
 
+from general_modules.state_geometry import displacement_from_state
+
+
 class RolloutContext:
     """Device-resident constants for an unroll: normalization stats and switches.
 
@@ -86,6 +89,7 @@ class RolloutContext:
         def to_tensor(value):
             return torch.as_tensor(value, dtype=dtype, device=device)
 
+        self.geometry_config = config
         self.input_var = int(config['input_var'])
         self.output_var = int(config['output_var'])
 
@@ -243,26 +247,7 @@ def _refresh_multiscale(graph, deformed_pos, ctx):
 
 
 def _displacement(state, ctx):
-    """The 3-D displacement implied by `state`, whatever its channel count.
-
-    Rows 3:6 of the shared contract are a displacement vector, but a model may
-    predict fewer than three of them -- ex9 plasticity solves a 2-D problem and
-    carries `input_var 2`. `inference_profiles/rollout.py` has always padded for
-    that case; AR-RT, which its own docstring calls the training-time twin of
-    that construction, sliced `state[:, :3]` unconditionally and so died on the
-    first step with "size of tensor a (3) must match the size of tensor b (2)".
-    Rollout training was therefore impossible for every 2-D dataset in the
-    suite, ex9 included.
-
-    Padding with a fresh zero block rather than assigning in place keeps the
-    result safe to differentiate through the gradient checkpoint.
-    """
-    if ctx.input_var >= 3:
-        return state[:, :3]
-    pad = torch.zeros(
-        state.shape[0], 3 - ctx.input_var, dtype=state.dtype, device=state.device
-    )
-    return torch.cat([state[:, :ctx.input_var], pad], dim=1)
+    return displacement_from_state(state, getattr(ctx, 'geometry_config', {}), ctx.input_var)
 
 
 def _world_edge_search(graph, state, ctx):

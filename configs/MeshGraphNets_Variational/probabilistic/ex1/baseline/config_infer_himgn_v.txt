@@ -1,0 +1,89 @@
+% probabilistic/ex1 - himgn_v; paper-informed native adaptation, not an exact reproduction.
+% Field storage order (0-based): input -> output -> conditioner -> partNo.
+% input [0:3]: x_coord, y_coord, z_coord
+% output/state [3:]: density, pressure, velocity_x, velocity_y
+% conditioner: tcool
+% partNo: absent
+% Static state input is zero; temporal input is current state and target is next-state delta.
+% Reference: https://arxiv.org/abs/1706.02262
+% See configs/campaigns/dataset_matrix/README.md for deviations and verification boundaries.
+% No source HDF5 writes. Checkpoints are created by the paired training config.
+
+model                            meshgraphnets-v
+mode                             inference
+gpu_ids                          1
+parallel_mode                    ddp
+split_seed                       42
+dataset_dir                      ../../dataset/probabilistic/ex1_turbulent_radiative_layer.h5
+infer_dataset                    ../../dataset/probabilistic/ex1_turbulent_radiative_layer_infer.h5
+modelpath                        ../../output/dataset_matrix/probabilistic/ex1/himgn_v/model.pth
+log_file_dir                     ../../output/dataset_matrix/probabilistic/ex1/himgn_v/train.log
+inference_output_dir             ../../output/dataset_matrix/probabilistic/ex1/himgn_v/infer
+infer_timesteps                  100
+input_var                        4
+output_var                       4
+cond_var                         1
+feature_loss_weights             1, 1, 1, 1
+use_node_types                   False
+positional_features              0
+time_integration                 ar_ot
+training_epochs                  500
+batch_size                       2
+learningr                        0.0001
+weight_decay                     0.0001
+warmup_epochs                    5
+num_workers                      2
+prefetch_factor                  2
+grad_accum_steps                 1
+augment_geometry                 False
+std_noise                        0.0
+use_amp                          True
+use_checkpointing                True
+use_ema                          True
+ema_decay                        0.99
+use_parallel_stats               False
+val_interval                     10
+test_interval                    50
+test_batch_idx                   0, 1
+plot_feature_idx                 0
+display_trainset                 True
+display_testset                  True
+write_preprocessing              False
+use_world_edges                  False
+use_multiscale                   True
+edge_var                         8
+latent_dim                       128
+message_passing_num              15
+geometry_state_mode              fixed
+coarsening_type                  voronoi_seedmean
+multiscale_levels                2
+voronoi_clusters                 4096, 256
+mp_per_level                     2, 3, 5, 3, 2
+hierarchy_variants               2
+hierarchy_seed                   42
+training_seed                    42
+best_by                          crps
+num_vae_samples                  16
+vae_batch_size                   2
+periodic_box                     1.0078740157480315, 0.0, 0.0
+use_vae                          True
+vae_latent_dim                   32
+vae_mp_layers                    3
+vae_graph_aware                  True
+recon_loss                       mse
+alpha_recon                      1000
+lambda_mmd                       1
+mmd_bandwidth                    median
+posterior_min_std                0.05
+beta_aux                         10
+z_conditioning                   adaln
+use_conditional_prior            True
+prior_type                       gnn_e2e
+prior_family                     fm
+prior_mp_layers                  3
+prior_hidden_dim                 128
+prior_nll_weight                 1
+prior_grad_to_encoder            0.0
+prior_fm_steps                   30
+prior_fm_solver                  heun
+prior_freeze_epoch               350

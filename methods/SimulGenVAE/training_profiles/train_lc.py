@@ -95,15 +95,19 @@ def lc_worker(config, config_filename='config.txt'):
     rank0 = D.is_main_process()
     world_size = D.get_world_size()
 
-    # Dataset (shared array) + frozen VAE.
-    train_dataset, _val, _test = build_dataset_splits(config, split_seed)
-    data_nct = train_dataset.data
-    num_channels, num_time = train_dataset.num_channels, train_dataset.num_time
-
+    # The frozen VAE owns both its field scaler and its holdout partition.
     vae_path = config.get('vae_modelpath', '../../output/simulgenvae/simulgenvae_vae.pth')
     ckpt = load_checkpoint(vae_path, device)
     if ckpt.get('stage') != 'vae':
         raise ValueError(f"vae_modelpath is a {ckpt.get('stage')!r} checkpoint, expected 'vae'.")
+    if 'split_manifest' not in ckpt or 'normalization' not in ckpt:
+        raise ValueError('VAE checkpoint lacks train-only split/scaler provenance; retrain the VAE.')
+    train_dataset, val_dataset, test_dataset = build_dataset_splits(
+        config, split_seed, normalization=ckpt['normalization'],
+        split_manifest=ckpt['split_manifest'])
+    data_nct = train_dataset.data
+    num_channels, num_time = train_dataset.num_channels, train_dataset.num_time
+    train_indices = train_dataset.indices
     vae, num_filter_enc = build_vae(config, num_channels, num_time,
                                     int(config.get('batch_size', 16)))
     vae.apply(add_sn)   # match the spectral-norm parametrization saved by the VAE stage
@@ -124,12 +128,12 @@ def lc_worker(config, config_filename='config.txt'):
             "Condition rows/images must be ordered to match sorted sample IDs.")
 
     # Scale main + hier latent targets and (csv) inputs; keep scalers for the checkpoint.
-    main_norm = fit_minmax(main)
-    hier_norm = fit_minmax(hier)
+    main_norm = fit_minmax(main[train_indices])
+    hier_norm = fit_minmax(hier[train_indices])
     main_s = apply_minmax(main, main_norm)
     hier_s = apply_minmax(hier, hier_norm)
     if str(config.get('lc_data_type', 'csv')).lower() in ('csv', 'hdf5'):
-        input_norm = fit_minmax(conditions)
+        input_norm = fit_minmax(conditions[train_indices])
         conditions = apply_minmax(conditions, input_norm)
     else:
         input_norm = None
@@ -138,11 +142,8 @@ def lc_worker(config, config_filename='config.txt'):
         torch.from_numpy(np.float32(conditions)),
         torch.from_numpy(np.float32(main_s)),
         torch.from_numpy(np.float32(hier_s)))
-    n = len(dataset)
-    n_train = max(int(0.7 * n), 1)
-    perm = np.random.default_rng(split_seed).permutation(n)
-    train_ds = torch.utils.data.Subset(dataset, perm[:n_train].tolist())
-    val_ds = torch.utils.data.Subset(dataset, perm[n_train:].tolist()) if n_train < n else train_ds
+    train_ds = torch.utils.data.Subset(dataset, train_indices)
+    val_ds = torch.utils.data.Subset(dataset, val_dataset.indices)
 
     batch_size = int(config.get('batch_size', 16))
     if world_size > 1:
@@ -180,6 +181,7 @@ def lc_worker(config, config_filename='config.txt'):
             'normalization': {'main': main_norm, 'hier': hier_norm, 'input': input_norm},
             'num_levels': num_levels,
             'input_shape': input_shape,
+            'split_manifest': train_dataset.split_manifest,
         }
 
     for epoch in range(total_epochs):

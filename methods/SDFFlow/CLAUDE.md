@@ -176,6 +176,27 @@ train fell to 0.194, so the 1000-epoch run shipped its worst model.
 
 ## Data and condition invariants
 
+`sdf_points` is `[Q, 3]` and `sdf_values` is `[Q]` because they are a
+coordinate/value pair, not two parallel per-axis arrays: row `i` of
+`sdf_points` is the 3D location `(x, y, z)` of query point `i`, and
+`sdf_values[i]` is the single signed-distance scalar at that location. The
+"3" is the point's spatial dimensionality (always 3, since these are surface
+meshes in 3D), not a batch or channel count -- `Q` (the number of sampled
+query points, `num_near + num_uniform`) is the shared leading axis.
+
+`build_dataset.py --repair` actively **tries** to make a mesh watertight
+before giving up, it does not just detect and skip: first the cheap
+trimesh-native tier (`remove_unreferenced_vertices`, `merge_vertices`,
+dedupe/drop degenerate faces, `fix_normals(multibody=True)`,
+`fill_holes()`), then, only if still not watertight, `pymeshfix.MeshFix(...,
+joincomp=True)` followed by re-running `fix_normals`. A mesh that is still
+not watertight after **both** tiers is skipped (`{'error': 'not watertight
+after preprocessing'}`), not force-converted through a more aggressive
+fallback like voxel remeshing -- SDF sign correctness depends on
+watertightness, and there is no tier past pymeshfix in this pipeline. Passing
+`--repair` is required to get any of this; without the flag a non-watertight
+input mesh is skipped immediately.
+
 The HDF5 layout is
 `shapes/{index:05d}/{surface_points,surface_normals,sdf_points,sdf_values,cond}`.
 Root `cond_names` and every `cond` row contain the raw five descriptors:
@@ -281,6 +302,66 @@ diversity tradeoff, not a substitute for condition accuracy or OOD validation:
 measured on ex1 (36 samples, 6 held-out shapes), `cfg_scale 3.0` made the
 volume error 2.5x worse than 1.0 (8.5% -> 21.2%). Condition accuracy comes from
 the sample-time tools below and from `candidate_multiplier`, not from CFG.
+
+## Conditioning datasets beyond DeepJEB
+
+`GEOMETRIC_NAMES` (`bbox_x/y/z, volume, area`) and `FEA_CONDITIONS` in
+`general_modules/condition_names.py` are DeepJEB-shaped, not a generic
+contract. `GEOMETRIC_NAMES` is always computed and always present -- it comes
+from `sdf_sampling.mesh_descriptors` on every normalized shape regardless of
+source dataset -- but `FEA_CONDITIONS` + `add_fea_conditions.py` are tied to
+one CSV (`bracket_labels.csv`), one join key (`item_name` from the DeepJEB
+filename stem), and one label vocabulary (per-load-case stress/displacement,
+eigenfrequencies, mass, CG, inertia). **Do not route a new dataset's labels
+through `FEA_CONDITIONS`.** The generic part of the mechanism is the sidecar
+itself: `cond_extra` is just a root `[num_shapes, k]` float32 dataset plus a
+`cond_extra_names` attr, and `SDFShapeDataset` concatenates it onto the five
+geometric names with no assumption about what `k` or the names mean
+(`sdf_dataset.py::read_cond_extra`/`_cond`). A new dataset should get its own
+small writer script that mirrors `add_fea_conditions.py`'s shape (a
+source-name join key, `--dry_run`/`--overwrite`/`--allow_missing`, a
+per-name `identity`/`log` transform chosen by checking skew, verification
+against `SDFShapeDataset`), writing straight to `cond_extra` with names that
+describe *that* dataset -- without touching or extending `FEA_CONDITIONS`.
+
+Per-dataset plan for the three raw sources staged at
+`D:/CAE_datasets_raw/{drivaerml,mcb,thingi10k}` (see
+[docs/reference/PUBLIC_DATASETS.md](../../docs/reference/PUBLIC_DATASETS.md)):
+
+- **DrivAerML** ships real continuous per-case labels -- CFD force/moment
+  coefficients plus `geo_parameters_all.csv`'s parametric design variables --
+  the same shape of signal as DeepJEB's FEA CSV, just a different join key
+  (case id, not a filename stem) and a different label set. This is a
+  straight `cond_extra` sidecar: a new `add_drivaerml_conditions.py` with its
+  own small name registry, one entry per CFD/geometry column, picking
+  `identity` vs `log` the way the FEA registry's comment does (check the raw
+  skew first).
+- **MCB** is fundamentally a shape-*classification* benchmark -- its label is
+  categorical (mechanical part class), not a continuous scalar. A raw class
+  id has no metric structure and is not a usable flow-matching condition by
+  itself, and one-hot blows up `cond_dim` for a benchmark with dozens of
+  classes. Prefer, in order:
+  1. Train a small shape classifier (or reuse an existing point-cloud/mesh
+     encoder) on MCB and store its class-probability vector or a
+     penultimate-layer embedding as `cond_extra` -- compact, continuous, and
+     information-rich, and reusable later for OOD/coverage checks.
+  2. If a classifier is out of scope for now, store the class id as
+     `cond_extra` for **stratified splitting and per-class evaluation only**,
+     and leave it out of `condition_names` for FM training.
+  Do not feed the raw class id straight into FM conditioning without first
+  checking the class count.
+- **Thingi10K** metadata (`category`/`subcategory`/`tags`/`author`/`license`)
+  is uploader-supplied, sparse, and inconsistent -- most shapes lack a clean
+  category. Do not force a `cond_extra` out of it. Treat Thingi10K as an
+  **unconditional** VAE reconstruction/generation benchmark first; if a
+  coarse category grouping later proves useful, add it the same way as MCB
+  option 2 (stratification only, not an FM input).
+
+The common thread: a dataset's `cond_extra` should describe what that
+dataset's own labels actually are, not be forced into the five-descriptor or
+DeepJEB-FEA shape. A dataset with no usable per-shape labels should skip
+`cond_extra` entirely and train on the five geometric descriptors alone, or
+unconditionally.
 
 ## Sample-time descriptor accuracy (C2 guidance, E2 Newton, calibration, audit)
 

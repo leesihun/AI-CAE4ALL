@@ -118,12 +118,11 @@ class MeshGraphDataset(Dataset):
                 f"output_var={self.output_dim}) + cond_var={self.cond_dim})."
             )
 
-        if self.use_node_types and self.num_features <= 7:
+        if self.use_node_types and self.num_features < required_rows + 1:
             raise ValueError(
-                f"use_node_types=True but nodal_data has only {self.num_features} feature "
-                f"rows (need row index -1, i.e. row 7, to exist). This dataset has no node "
-                f"type / part-number row; set use_node_types False or use a dataset that "
-                f"provides one (IMPLEMENTATION_PLAN.md section 5.1)."
+                f"use_node_types=True requires a trailing partNo row after "
+                f"{required_rows} coordinate/state/condition rows; "
+                f"nodal_data has only {self.num_features} rows."
             )
 
         config['num_timesteps'] = self.num_timesteps
@@ -256,6 +255,10 @@ class MeshGraphDataset(Dataset):
     def _resolve_split_ids(self, train_ratio: float, val_ratio: float, test_ratio: float, seed: int):
         """Always generate a deterministic seeded split. Stored HDF5 splits are
         ignored (they are empty in the shared dataset and not authoritative)."""
+        if self.config.get('split_group_attr'):
+            from general_modules.grouped_split import grouped_split_ids
+            return grouped_split_ids(self.h5_file, self.sample_ids, self.config['split_group_attr'],
+                                     train_ratio, val_ratio, seed)
         rng = np.random.default_rng(seed)
         shuffled_ids = self.sample_ids.copy()
         rng.shuffle(shuffled_ids)
@@ -318,7 +321,7 @@ class MeshGraphDataset(Dataset):
             warnings.append(
                 f"  WARNING: target delta channel(s) at index {idx.tolist()} have raw std <= "
                 f"{floor:.0e} (floored) -- see IMPLEMENTATION_PLAN.md section 5.2 for the "
-                f"accepted-tradeoff decision on ex1.h5's dz/stress channels."
+                f"accepted-tradeoff decision on ex1_static_thermoelastic.h5's dz/stress channels."
             )
         if np.any(self.node_std > 100):
             warnings.append(f"  WARNING: Very large node std (> 100): {self.node_std[self.node_std > 100]}")

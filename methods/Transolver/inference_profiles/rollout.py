@@ -221,7 +221,9 @@ def _run_temporal_rollout(model, dataset, device, output_dir, config, modelpath,
                         f"has only {num_features} feature rows."
                     )
                 cond_feat = step0[cond_start:cond_start + cond_dim, :].T.astype(np.float32)
-            part_ids = step0[-1, :].astype(np.int32) if (use_node_types and num_features > 7) else None
+            if use_node_types and num_features < 3 + max(input_dim, output_dim) + cond_dim + 1:
+                raise ValueError("Checkpoint requires a trailing partNo row after state/conditions.")
+            part_ids = step0[-1, :].astype(np.int32) if use_node_types else None
 
             edge_index = np.concatenate([mesh_edge, mesh_edge[[1, 0], :]], axis=1)
             pos_feat = (compute_positional_features(ref_pos, edge_index, num_pos_features)

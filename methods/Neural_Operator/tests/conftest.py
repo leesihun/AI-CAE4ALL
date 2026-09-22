@@ -1,7 +1,7 @@
 """Shared pytest fixtures: tiny synthetic HDF5 datasets in the exact MGN schema
 (IMPLEMENTATION_PLAN.md section 4.1), used instead of the real ex1/ex2 files
 so the full test suite runs in seconds. Real-data smoke tests (Phase 8) use
-ex1.h5/hex_dataset.h5 directly and live outside this fixture set.
+ex1_static_thermoelastic.h5/hex_dataset.h5 directly and live outside this fixture set.
 """
 
 import h5py

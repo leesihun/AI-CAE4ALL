@@ -7,6 +7,7 @@ from typing import Dict, List
 from torch_geometric.data import Data
 
 from general_modules.dataset_stats import compute_normalization_stats, finalize_moments
+from general_modules.state_geometry import deformed_positions, displacement_indices
 from general_modules.edge_features import EDGE_FEATURE_DIM, compute_edge_attr
 from general_modules.positional_features import compute_positional_features
 from general_modules.time_integration import (
@@ -28,17 +29,8 @@ except ImportError:
     HAS_COARSENING = False
 
 
-def _deformed_positions_from_state(
-    reference_pos: np.ndarray,
-    state_features: np.ndarray,
-    input_dim: int,
-) -> np.ndarray:
-    """Apply the displacement prefix of the model state to reference positions."""
-    displacement = np.zeros((reference_pos.shape[0], 3), dtype=np.float32)
-    vector_dim = min(3, int(input_dim), state_features.shape[1])
-    if vector_dim > 0:
-        displacement[:, :vector_dim] = state_features[:, :vector_dim]
-    return reference_pos + displacement
+def _deformed_positions_from_state(reference_pos, state_features, input_dim, config=None):
+    return deformed_positions(reference_pos, state_features, config, input_dim)
 
 
 class MeshGraphDataset(Dataset):
@@ -46,6 +38,7 @@ class MeshGraphDataset(Dataset):
     def __init__(self, h5_file: str, config: Dict):
         self.h5_file = h5_file
         self.config = config
+        displacement_indices(config, int(config['input_var']))
         # Graph and feature parameters
         self.input_dim = config.get('input_var')  # Physical features only (4)
         self.output_dim = config.get('output_var')  # Physical features only (4)
@@ -388,6 +381,8 @@ class MeshGraphDataset(Dataset):
         (six small arrays) takes milliseconds, so a short backoff clears the
         window; it does not paper over a real problem with the file.
         """
+        if not self.config.get('write_preprocessing', True):
+            return
         if any(value is None for value in (
             self.node_mean, self.node_std,
             self.edge_mean, self.edge_std,
@@ -504,7 +499,7 @@ class MeshGraphDataset(Dataset):
             self.h5_file, self.sample_ids, self.input_dim, self.output_dim,
             self.num_timesteps, self.num_pos_features,
             use_parallel=self.config.get('use_parallel_stats', True),
-            cond_dim=self.cond_dim,
+            cond_dim=self.cond_dim, geometry_config=self.config,
         )
 
         self.node_mean, self.node_std = finalize_moments(
@@ -619,7 +614,7 @@ class MeshGraphDataset(Dataset):
                     else:
                         state = data_h5[3:3 + self.input_dim, t, :].T
                     deformed_pos = _deformed_positions_from_state(
-                        ref_pos, state, self.input_dim,
+                        ref_pos, state, self.input_dim, getattr(self, 'config', {}),
                     )
 
                     cur_ref, cur_def = ref_pos, deformed_pos
@@ -643,7 +638,7 @@ class MeshGraphDataset(Dataset):
                             c_edge_attr = compute_edge_attr(
                                 coarse_ref.astype(np.float32),
                                 coarse_def.astype(np.float32),
-                                c_ei_l
+                                c_ei_l, getattr(self, 'config', {}).get('periodic_box')
                             )
                             level_sum[level] += np.sum(c_edge_attr, axis=0)
                             level_sumsq[level] += np.sum(c_edge_attr ** 2, axis=0)
@@ -951,10 +946,10 @@ class MeshGraphDataset(Dataset):
 
         # The first min(3, input_var) state channels are displacement; for T=1
         # they are zeros, so target or conditioning columns cannot act as motion.
-        deformed_pos = _deformed_positions_from_state(pos, x_raw, self.input_dim)
+        deformed_pos = _deformed_positions_from_state(pos, x_raw, self.input_dim, self.config)
 
         # Compute 8-D edge features from current and reference geometry.
-        edge_attr_raw = compute_edge_attr(pos, deformed_pos, edge_index)
+        edge_attr_raw = compute_edge_attr(pos, deformed_pos, edge_index, self.config.get('periodic_box'))
 
         # Apply z-score normalization to all features
         # Node features: z-score normalization
@@ -1052,6 +1047,7 @@ class MeshGraphDataset(Dataset):
                 self.coarse_edge_means, self.coarse_edge_stds,
                 world_edge_index=world_ei_for_coarse,
                 expose_anchors=self.time_integration == AR_RT,
+                periodic_box=self.config.get('periodic_box'),
             )
 
         return graph_data

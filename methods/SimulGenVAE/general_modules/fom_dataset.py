@@ -157,17 +157,17 @@ def _split_indices(num_samples, split_seed):
     """Seeded 80/10/10 split over sample order (suite convention)."""
     rng = np.random.default_rng(split_seed)
     perm = rng.permutation(num_samples)
-    n_train = max(int(round(0.8 * num_samples)), 1)
-    n_val = max(int(round(0.1 * num_samples)), 1)
+    if num_samples < 3:
+        raise ValueError('At least three samples are required for disjoint train/val/test splits.')
+    n_train = min(max(int(0.8 * num_samples), 1), num_samples - 2)
+    n_val = min(max(int(0.1 * num_samples), 1), num_samples - n_train - 1)
     train_idx = perm[:n_train]
     val_idx = perm[n_train:n_train + n_val]
     test_idx = perm[n_train + n_val:]
-    if len(test_idx) == 0:
-        test_idx = val_idx
     return train_idx, val_idx, test_idx
 
 
-def build_dataset_splits(config, split_seed):
+def build_dataset_splits(config, split_seed, normalization=None, split_manifest=None):
     """Load + scale the FOM tensor and return seeded (train, val, test) datasets.
 
     Derived dimensions (``num_channels``, ``num_time``, ``num_samples``) and the
@@ -176,17 +176,34 @@ def build_dataset_splits(config, split_seed):
     ``config``). All three splits share one in-memory array.
     """
     data_ntc, ids = load_fom_from_hdf5(config)          # [N, T, C]
-    norm = fit_minmax(data_ntc)
-    scaled = apply_minmax(data_ntc, norm)               # [N, T, C]
-    data_nct = np.ascontiguousarray(np.transpose(scaled, (0, 2, 1)))  # [N, C, T]
-
-    num_samples = data_nct.shape[0]
-    train_idx, val_idx, test_idx = _split_indices(num_samples, split_seed)
+    num_samples = data_ntc.shape[0]
+    if split_manifest is None:
+        train_idx, val_idx, test_idx = _split_indices(num_samples, split_seed)
+        split_manifest = {
+            'sample_ids': ids, 'seed': int(split_seed),
+            'train': train_idx.tolist(), 'val': val_idx.tolist(), 'test': test_idx.tolist(),
+        }
+    else:
+        if list(split_manifest['sample_ids']) != ids:
+            raise ValueError('VAE split sample IDs do not match the LC training dataset.')
+        if int(split_manifest['seed']) != int(split_seed):
+            raise ValueError('LC split_seed must match the frozen VAE split_seed.')
+        train_idx, val_idx, test_idx = (
+            np.asarray(split_manifest[key], dtype=np.int64) for key in ('train', 'val', 'test'))
+        combined = np.concatenate([train_idx, val_idx, test_idx])
+        if (any(len(x) == 0 for x in (train_idx, val_idx, test_idx))
+                or not np.array_equal(np.sort(combined), np.arange(num_samples))):
+            raise ValueError('VAE split must be a disjoint, complete train/val/test partition.')
+    # Fit on training samples ONLY; held-out extremes may map outside [-0.7, 0.7].
+    norm = fit_minmax(data_ntc[train_idx]) if normalization is None else normalization
+    scaled = apply_minmax(data_ntc, norm)
+    data_nct = np.ascontiguousarray(np.transpose(scaled, (0, 2, 1)))
 
     def make(idx):
         ds = FomFieldDataset(data_nct, idx)
         ds.normalization = norm
         ds.sample_ids = ids
+        ds.split_manifest = split_manifest
         return ds
 
     train_ds, val_ds, test_ds = make(train_idx), make(val_idx), make(test_idx)

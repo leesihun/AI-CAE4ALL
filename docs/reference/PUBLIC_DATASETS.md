@@ -20,7 +20,7 @@ Everything here is **< 100 GB** and redistributable for research.
 > inflow speed for cylinder_flow, actuator indentation depth for deforming_plate, and (since
 > flag_simple stores no per-trajectory control parameter -- the HANDLE nodes barely move at all)
 > overall cloth-motion magnitude as an outcome-based proxy for flag_simple. Every `exN` now has
-> exactly two files, matching the `ex1.h5`/`ex1_infer.h5` convention: `exN.h5` (train) and
+> exactly two files, matching the `ex1_static_thermoelastic.h5`/`ex1_static_thermoelastic_infer.h5` convention: `exN.h5` (train) and
 > `exN_infer.h5` (extrapolation test). See the per-dataset sections below and
 > `build_public_mgn.py`'s module docstring for the exact axis definitions.
 >
@@ -39,7 +39,7 @@ Everything here is **< 100 GB** and redistributable for research.
 
 | Existing | Kind | Exercises |
 | --- | --- | --- |
-| `ex1.h5`, `ex2.h5` | proprietary warpage | temporal, node types, multiscale |
+| `ex1_static_thermoelastic.h5`, `ex2_dynamic_contact.h5` | proprietary warpage | temporal, node types, multiscale |
 | `ex3_NASA_CRM_*.h5` | public, static surface aero, 149 samples | `cond_var`, large meshes (454k nodes) |
 | `deepjeb.h5` | structural, fixed geometry | SimulGenVAE dense FOM |
 | `benchmarks/*` | paper-replication (Darcy, elasticity, …) | Neural_Operator / Transolver baselines |
@@ -184,13 +184,13 @@ a self-reference bug where `dataset_dir`/`infer_dataset` both pointed at the ide
 `scarce_train.h5`, so "inference" evaluated on the same 200 samples the model trained on -- no
 real generalization test at all.
 
-**2026-08-19: consolidated to a single `ex7.h5`/`ex7_infer.h5` pair.** Checked whether the
+**2026-08-19: consolidated to a single `ex7_airfrans.h5`/`ex7_airfrans_infer.h5` pair.** Checked whether the
 `scarce_train`/`full_test`/`reynolds_{train,test}`/`aoa_{train,test}` splits were independent or
 overlapping data by comparing sample IDs across all six built files: they are **six different
 train/test partitions of the exact same 1000 unique AirfRANS samples** -- the aoa-split union
 alone already equals the union of all six files, zero unique samples anywhere else. So nothing was
-lost by keeping only one: `ex7_airfrans_aoa_train.h5` -> `ex7.h5`, `ex7_airfrans_aoa_test.h5` ->
-`ex7_infer.h5` (rename, not rebuild), and the other four files (~7.7 GB, confirmed fully
+lost by keeping only one: `ex7_airfrans_aoa_train.h5` -> `ex7_airfrans.h5`, `ex7_airfrans_aoa_test.h5` ->
+`ex7_airfrans_infer.h5` (rename, not rebuild), and the other four files (~7.7 GB, confirmed fully
 redundant) were deleted. `ex7` now matches every other `exN` slot's plain two-file convention.
 If a different extrapolation axis (Reynolds) or the plain interpolation/data-scarce regime is
 wanted later, rebuild it with `build_public_airfrans.py --task reynolds_train` etc. --the
@@ -214,16 +214,16 @@ filenames agree:
 
 | `exN` | Dataset | File(s) |
 | --- | --- | --- |
-| `ex4` | `cylinder_flow` | `dataset/ex4.h5`, `dataset/ex4_infer.h5` |
-| `ex5` | `deforming_plate` | `dataset/ex5.h5`, `dataset/ex5_infer.h5` |
-| `ex6` | `flag_simple` | `dataset/ex6.h5`, `dataset/ex6_infer.h5` |
-| `ex7` | AirfRANS | `dataset/ex7.h5` (804 train), `dataset/ex7_infer.h5` (196 test, AoA extrapolation) |
-| `ex8` | Geo-FNO elasticity | `dataset/ex8.h5` (1000 train), `dataset/ex8_infer.h5` (200 test) -- rebuilt 2026-08-19 via `dataset/build_geo_fno_elasticity.py`, canonical ntrain/ntest split (not extrapolation, see the script's docstring) |
-| `ex9` | Geo-FNO plasticity | `dataset/ex9.h5` (900 train), `dataset/ex9_infer.h5` (87 test) -- rebuilt 2026-08-19 via `dataset/build_geo_fno_plasticity.py`, plain held-out split (not extrapolation). **Read the channel-semantics note below before writing an `ex9` config.** |
+| `ex4` | `cylinder_flow` | `dataset/deterministic/ex4_cylinder_flow.h5`, `dataset/deterministic/ex4_cylinder_flow_infer.h5` |
+| `ex5` | `deforming_plate` | `dataset/deterministic/ex5_deforming_plate.h5`, `dataset/deterministic/ex5_deforming_plate_infer.h5` |
+| `ex6` | `flag_simple` | `dataset/deterministic/ex6_flag_simple.h5`, `dataset/deterministic/ex6_flag_simple_infer.h5` |
+| `ex7` | AirfRANS | `dataset/deterministic/ex7_airfrans.h5` (804 train), `dataset/deterministic/ex7_airfrans_infer.h5` (196 test, AoA extrapolation) |
+| `ex8` | Geo-FNO elasticity | `dataset/deterministic/ex8_elasticity.h5` (1000 train), `dataset/deterministic/ex8_elasticity_infer.h5` (200 test) -- rebuilt 2026-08-19 via `dataset/build_geo_fno_elasticity.py`, canonical ntrain/ntest split (not extrapolation, see the script's docstring) |
+| `ex9` | Geo-FNO plasticity | `dataset/deterministic/ex9_plasticity.h5` (900 train), `dataset/deterministic/ex9_plasticity_infer.h5` (87 test) -- rebuilt 2026-08-19 via `dataset/build_geo_fno_plasticity.py`, plain held-out split (not extrapolation). **Read the channel-semantics note below before writing an `ex9` config.** |
 
 ### `ex9` channel semantics -- `cond_var 2`, not `input_var 4` (corrected 2026-08-19)
 
-`ex9.h5`'s 7 rows are `[x, y, z | ux, uy | uz, die_profile]`. Only **two** of those carry a
+`ex9_plasticity.h5`'s 7 rows are `[x, y, z | ux, uy | uz, die_profile]`. Only **two** of those carry a
 predictable signal:
 
 | row | content | verified property |
@@ -246,15 +246,15 @@ the **trailing** rows, which is exactly where `uz`/`die_profile` sit, so the lay
 touching the data. Confirmed at runtime: the loader now reports
 `cond_dim: 2 (input-only conditioning rows 5:7)` and non-degenerate delta stats
 (`std: [0.132, 0.085]` instead of two `1e-8` floors), and the constant-target CRITICAL is gone.
-`configs/SimulGenVAE/ex9` uses `num_var 2` for the same reason (SimulGenVAE has no `cond_var`
+`configs/SimulGenVAE/deterministic/ex9` uses `num_var 2` for the same reason (SimulGenVAE has no `cond_var`
 mechanism, so those rows are excluded rather than re-tagged).
 
 | Directory | Contents |
 | --- | --- |
-| `configs/MeshGraphNets/ex4..ex9/` | one train config per dataset above |
-| `configs/Transolver/ex4..ex9/` | same, `use_world_edges False` everywhere (see below); `use_node_types False` on `ex4`/`ex6` (7-row files) |
-| `configs/Neural_Operator/ex4..ex7/` | `gino` (one representative alias); `ex8`/`ex9` additionally have `deeponet`/`fno`/`point_deeponet` |
-| `configs/SimulGenVAE/ex6,ex8,ex9/` | standalone `train_vae`, fixed-topology datasets only (see below) |
+| `configs/MeshGraphNets/deterministic/ex4..ex9/` | one train config per dataset above |
+| `configs/Transolver/deterministic/ex4..ex9/` | same, `use_world_edges False` everywhere (see below); `use_node_types False` on `ex4`/`ex6` (7-row files) |
+| `configs/Neural_Operator/deterministic/ex4..ex7/` | `gino` (one representative alias); `ex8`/`ex9` additionally have `deeponet`/`fno`/`point_deeponet` |
+| `configs/SimulGenVAE/deterministic/ex6,ex8,ex9/` | standalone `train_vae`, fixed-topology datasets only (see below) |
 
 **`configs/MeshGraphNets_Variational/` intentionally has no `ex4`-`ex9` entries.** The variational tree
 exists for **one-to-many** problems (stochastic process variation -> a distribution of plausible
@@ -302,8 +302,8 @@ Rebuilt `dataset/build_geo_fno_elasticity.py`/`build_geo_fno_plasticity.py` from
 (commit `18e7e854`), renamed outputs to the `exN.h5`/`exN_infer.h5` convention (flat in `dataset/`,
 not a `dataset/benchmarks/<name>/` subdirectory), and repointed all 15 `ex8`/`ex9` configs
 (MeshGraphNets x2, Neural_Operator x4 x2, Transolver x2, SimulGenVAE x2). Also fixed three
-pre-existing copy-paste bugs found along the way: `configs/MeshGraphNets/ex8` had its
-`log_file_dir`/`modelpath` pointing at `ex6`, and `configs/SimulGenVAE/ex8`/`ex9` had theirs
+pre-existing copy-paste bugs found along the way: `configs/MeshGraphNets/deterministic/ex8` had its
+`log_file_dir`/`modelpath` pointing at `ex6`, and `configs/SimulGenVAE/deterministic/ex8`/`ex9` had theirs
 pointing at `ex6`/`ex7` respectively.
 
 Real (not just `--check`) training launches, one per method, watched until a full loss value
@@ -343,7 +343,7 @@ doesn't touch mesh data at all, needs a pre-built tabular `X`/`Y` table). Checke
 
 | `exN` | Fixed mesh? | SimulGenVAE | MLP |
 | --- | --- | --- | --- |
-| `ex1`/`ex2` (warpage) | ❌ (varying per-sample topology, confirmed by attempting `ex1.h5`) | ❌ | ❌ (no derived table exists; `configs/MLP/ex1` trains on an unrelated synthetic toy table, not `ex1.h5`) |
+| `ex1`/`ex2` (warpage) | ❌ (varying per-sample topology, confirmed by attempting `ex1_static_thermoelastic.h5`) | ❌ | ❌ (no derived table exists; `configs/MLP/deterministic/ex1` trains on an unrelated synthetic toy table, not `ex1_static_thermoelastic.h5`) |
 | `ex3` (NASA-CRM) | ✅ | ✅ | ✅ (`build_ex3_mlp_table.py` derives `X`/`Y` from the fixed mesh's global conditions + surface-integrated Cp/Cf) |
 | `ex4`/`ex5`/`ex7` (cylinder/plate/airfrans) | ❌ (per-trajectory or per-sample mesh) | ❌ | ❌ |
 | `ex6` (flag_simple) | ✅ (1579 nodes, every sample) | ✅ (after the 2026-08-10 fix, see below) | not built |
@@ -366,8 +366,8 @@ elasticity/plasticity would be new scope (e.g. die-profile parameters -> integra
 a fix.
 
 **2026-08-18:** that 2026-08-10 `ex6` verification never actually got a committed config --
-`configs/SimulGenVAE/ex6/` didn't exist until this session (`config_train_vae.txt`, `num_var 3`
-= `disp_x/disp_y/disp_z`, `field_start_row 3`, `--check` PASSED against the rebuilt `ex6.h5`).
+`configs/SimulGenVAE/deterministic/ex6/` didn't exist until this session (`config_train_vae.txt`, `num_var 3`
+= `disp_x/disp_y/disp_z`, `field_start_row 3`, `--check` PASSED against the rebuilt `ex6_flag_simple.h5`).
 `ex8`/`ex9`'s SimulGenVAE configs were blocked on missing `dataset/benchmarks/` data until the
 2026-08-19 rebuild (see above); both now pass `--check` and were real-execution-verified (see the
 2026-08-19 note below).
@@ -436,9 +436,9 @@ classic Darcy-GRF sets) does **not** qualify no matter how big it is.
 
 | Output (`X.h5` + `X_infer.h5`) | Source | License | What is stochastic | train + infer | Shape / size |
 | --- | --- | --- | --- | --- | --- |
-| `dataset/ex10.h5` | [The Well](https://polymathic-ai.org/the_well/) `turbulent_radiative_layer_2D` (Polymathic AI, NeurIPS 2024 D&B) | CC-BY-4.0 | 9 `t_cool` values x 10 random seeds; the paper itself cites seed sensitivity as motivating a probabilistic treatment | 72 + 18 | `[8, 101, 49152]`, 4.7 + 1.2 GB |
-| `dataset/ex12.h5` | [ASME 2023 Hackathon SPPARKS dataset](https://zenodo.org/record/8241535) (Sandia, GrainPaint) | CC-BY-4.0 | 1000 Potts Monte Carlo runs, one random seed each, explicitly built to capture microstructure-induced aleatory uncertainty | 900 + 100 | `[4, 1, 125000]`, 56 + 7 MB |
-| `dataset/ex11.h5` | [Mechanical MNIST Crack Path, extended](https://zenodo.org/records/5149019) (Lejeune Lab, Boston University) | CC0 | identical loading protocol for every case; only the random rigid-inclusion placement differs, so the crack path is the stochastic outcome | 1750 + 250 | `[6, 20, 65536]`, 9.6 + 1.4 GB |
+| `dataset/probabilistic/ex1_turbulent_radiative_layer.h5` | [The Well](https://polymathic-ai.org/the_well/) `turbulent_radiative_layer_2D` (Polymathic AI, NeurIPS 2024 D&B) | CC-BY-4.0 | 9 `t_cool` values x 10 random seeds; the paper itself cites seed sensitivity as motivating a probabilistic treatment | 72 + 18 | `[8, 101, 49152]`, 4.7 + 1.2 GB |
+| `dataset/probabilistic/ex3_grainpaint.h5` | [ASME 2023 Hackathon SPPARKS dataset](https://zenodo.org/record/8241535) (Sandia, GrainPaint) | CC-BY-4.0 | 1000 Potts Monte Carlo runs, one random seed each, explicitly built to capture microstructure-induced aleatory uncertainty | 900 + 100 | `[4, 1, 125000]`, 56 + 7 MB |
+| `dataset/probabilistic/ex2_crack_path.h5` | [Mechanical MNIST Crack Path, extended](https://zenodo.org/records/5149019) (Lejeune Lab, Boston University) | CC0 | identical loading protocol for every case; only the random rigid-inclusion placement differs, so the crack path is the stochastic outcome | 1750 + 250 | `[6, 20, 65536]`, 9.6 + 1.4 GB |
 
 Raw downloads live on `D:/CAE_datasets_raw/probabilistic/`; the one-off downloader and the three
 converters are in `junk/` (gitignored).
@@ -549,6 +549,38 @@ training set. The full-mesh `dmg-init` / `last-step` FEniCS archives in the same
 downloaded but unused -- they are single snapshots at native mesh resolution, redundant with the
 uniform-grid time series.
 
+## SDFFlow candidate datasets (staged, not yet ingested)
+
+Everything above is the shared mesh HDF5 contract (`data/{id}/nodal_data`).
+SDFFlow uses a **different SDF-sidecar layout** entirely
+(`shapes/{index}/{surface_points, surface_normals, sdf_points, sdf_values,
+cond}` -- see [SDFFlow/CLAUDE.md](../../methods/SDFFlow/CLAUDE.md#data-and-condition-invariants)),
+built by `methods/SDFFlow/build_dataset.py --mesh_dir`, not by anything in
+`dataset/`. These three are staged raw sources for exercising SDFFlow's VAE
+reconstruction/generation on non-bracket "general mechanical CAD" geometry,
+benchmarked against the existing `deepjeb.h5`:
+
+| Dataset | Raw size (staged) | Location | What it's for |
+| --- | --- | --- | --- |
+| [MCB](https://mcb.eecs.umich.edu/) (Mechanical Components Benchmark, part A) | 2.4 GB (`MCB_A.tar.gz`, not yet extracted) | `D:/CAE_datasets_raw/mcb/` | general geometric VAE benchmark; shape-classification labels (mechanical part category) available as a per-shape condition |
+| [Thingi10K](https://ten-thousand-models.appspot.com/) | 37 GB, 10,005 meshes | `D:/CAE_datasets_raw/thingi10k/` | general geometric VAE benchmark; wide, unconstrained mesh variety, sparse/inconsistent per-model metadata |
+| [DrivAerML](https://caemldatasets.org/drivaerml/) | 203 GB, 484 cases (STL+STEP+CFD CSVs) | `D:/CAE_datasets_raw/drivaerml/` | general geometric VAE benchmark with real continuous CFD force/moment + `geo_parameters_all.csv` labels available as conditions |
+
+`ShapeNet-Car` (Umetani & Bickel, listed below) was also attempted via
+`gdown` but is blocked by Google Drive's anti-abuse download quota from this
+environment; abandoned, DrivAerML covers the same "cars" niche with a
+redistributable source and richer per-case labels.
+
+**Do not reuse DeepJEB's `FEA_CONDITIONS` registry or `add_fea_conditions.py`
+CSV schema for these.** Each dataset's own labels are structurally different
+(MCB/Thingi10K have no FEA simulation at all; DrivAerML's labels are CFD, not
+structural), so each needs its own small `cond_extra` sidecar writer and, for
+MCB's categorical class label, a decision between a learned embedding and a
+split-only usage rather than a raw one-hot. The full per-dataset conditioning
+plan is documented in
+[SDFFlow/CLAUDE.md § Conditioning datasets beyond DeepJEB](../../methods/SDFFlow/CLAUDE.md#conditioning-datasets-beyond-deepjeb) --
+read that before writing a new sidecar script or an ingestion config.
+
 ## Other candidates, not downloaded
 
 | Dataset | Size | Why it might be worth it |
@@ -560,6 +592,13 @@ uniform-grid time series.
 
 `flag_simple` (was listed here previously) is now staged and built -- see section 3 above; its
 "dynamic node type" framing turned out not to hold up against the real data.
+
+**DrivAerML's STL/STEP geometry is now staged** (203 GB, see the *SDFFlow
+candidate datasets* section above) for SDFFlow's SDF contract, which needs
+only surface geometry and CFD-label CSVs, not the full mesh-HDF5
+`nodal_data`/`mesh_edge` conversion this table's row is about -- the "over
+budget" note above still applies to that mesh-contract conversion, unrelated
+to the SDF use.
 
 Sources: [DeepMind meshgraphnets](https://github.com/google-deepmind/deepmind-research/tree/master/meshgraphnets),
 [AirfRANS](https://airfrans.readthedocs.io/en/latest/notes/dataset.html),

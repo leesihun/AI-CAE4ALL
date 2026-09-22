@@ -17,6 +17,7 @@ from .base import (
 
 COMMON_KEYS = frozenset(
     {
+        "split_group_attr",
         "model", "mode", "gpu_ids", "parallel_mode", "log_file_dir", "modelpath",
         "dataset_dir", "infer_dataset", "inference_output_dir", "infer_timesteps",
         "split_seed", "input_var", "output_var", "cond_var", "feature_loss_weights",
@@ -31,7 +32,7 @@ COMMON_KEYS = frozenset(
         "time_integration",
         "use_checkpointing", "use_ema", "ema_decay", "use_compile", "val_interval",
         "test_interval", "test_max_batches", "test_batch_idx", "plot_feature_idx",
-        "display_trainset", "display_testset", "checkpoint_interval",
+        "display_trainset", "display_testset", "write_test_predictions", "checkpoint_interval",
         "train_query_chunk_size", "infer_query_chunk_size", "write_preprocessing",
         "use_world_edges", "use_multiscale", "profile_batches", "pipeline_microbatches",
         # Injected at runtime by setup.py/dataset construction; the native

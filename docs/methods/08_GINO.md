@@ -128,7 +128,7 @@ scaled by `0.01` for temporal runs.
 ## Configuration reference
 
 Canonical example:
-[`configs/Neural_Operator/ex1/config_train_gino.txt`](../../configs/Neural_Operator/ex1/config_train_gino.txt).
+[`configs/Neural_Operator/deterministic/ex1/baseline/config_train_gino.txt`](../../configs/Neural_Operator/deterministic/ex1/baseline/config_train_gino.txt).
 Shared Neural-Operator keys are in
 [07_FNO.md](07_FNO.md#shared-neural-operator-config-keys). GINO-specific:
 
@@ -153,7 +153,7 @@ Shared Neural-Operator keys are in
 ```text
 model                          gino
 mode                           train
-dataset_dir                    ../dataset/ex1.h5
+dataset_dir                    ../dataset/deterministic/ex1_static_thermoelastic.h5
 input_var                      4
 output_var                     4
 gino_grid_resolution           48, 48

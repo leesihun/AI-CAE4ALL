@@ -98,7 +98,7 @@ selects which file to read.
   more than 7 feature rows; `use_node_types True` on a 7-row file is an error.
 - Static (`T==1`) targets are the direct stored field from zero input;
   temporal (`T>1`) targets are `state[t+1] - state[t]`.
-- `ex1.h5` is planar (z ≡ 0, `operator_dim` resolves to 2); `ex2.h5` is
+- `ex1_static_thermoelastic.h5` is planar (z ≡ 0, `operator_dim` resolves to 2); `ex2_dynamic_contact.h5` is
   genuinely 3D. Neither fact is hardcoded — both come from
   `dataset_stats.resolve_active_axes` on the actual training geometry.
 - The stored `metadata/normalization_params`/`metadata/splits` groups are
@@ -130,7 +130,7 @@ selects which file to read.
 
 `pytest tests/` runs entirely on tiny synthetic HDF5 fixtures
 (`tests/conftest.py`) and finishes in well under a minute. It does not touch
-`dataset/ex1.h5`/`ex2.h5`. Real-data smoke runs use the `ex1/config_*_smoke_*.txt`
+`dataset/deterministic/ex1_static_thermoelastic.h5`/`ex2_dynamic_contact.h5`. Real-data smoke runs use the `ex1/config_*_smoke_*.txt`
 configs directly via `main.py`.
 
 ## Documentation Notes

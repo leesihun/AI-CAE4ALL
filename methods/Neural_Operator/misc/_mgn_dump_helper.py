@@ -7,7 +7,7 @@ into** the MeshGraphNets checkout and run there, where its own
 `general_modules.mesh_dataset.MeshGraphDataset` is importable.
 
 Usage (run from inside ..\\MeshGraphNets, after copying this file there):
-    python _mgn_dump_helper.py --dataset dataset/ex1.h5 --split-seed 42 \
+    python _mgn_dump_helper.py --dataset dataset/deterministic/ex1_static_thermoelastic.h5 --split-seed 42 \
         --input-var 4 --output-var 4 --positional-features 4 \
         --use-node-types --out mgn_dump_ex1.npz
 

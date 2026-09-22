@@ -33,7 +33,7 @@ Marching Cubes STL을 **그대로** gmsh에 넣는 게 정답이다. "먼저 dec
 
 측정 대상: `output/geometry_generation/ex1/{sdfflow_vae.pth, sdfflow_fm.pth}`
 (2026-07-22 학습, VAE 500 epoch / FM 300 epoch, latent 1×256, MLP decoder, `config_train.txt`)
-데이터: `dataset/deepjeb.h5`, 2138 shapes, split seed 42 → train 1710 / val 214 / test 214.
+데이터: `dataset/geometry_generation/ex1_deepjeb.h5`, 2138 shapes, split seed 42 → train 1710 / val 214 / test 214.
 길이 단위는 전부 **정규화 좌표**(형상 최대변 = 1.8)이다.
 
 ### 1.1 재구성 품질 — held-out에서 무너진다
@@ -87,7 +87,7 @@ Adam 600 step으로 최적화했다 (DeepSDF auto-decoder 방식). latent 크기
 
 ### 1.3 조건 벡터가 거의 비어 있다
 
-`dataset/deepjeb.h5`의 2138개 `cond` 전수 통계:
+`dataset/geometry_generation/ex1_deepjeb.h5`의 2138개 `cond` 전수 통계:
 
 | descriptor | mean | std | **CV** | min | max | 상태 |
 |---|---|---|---|---|---|---|
@@ -138,7 +138,7 @@ descriptor를 재측정해 요청값과 비교한 **중앙값 상대오차**:
 **형상당 10,240점은 held-out 일반화에 명백히 부족**하고, 1.1/1.2의 인코더 격차와 직결된다.
 `--sharp_edge_fraction`(Dora) 적용도 어차피 데이터셋 재빌드가 필요하므로 같이 처리하면 된다.
 
-> 주의: 원본 DeepJEB STL이 로컬에 없다(`dataset/deepjeb.h5`만 존재). 재빌드하려면
+> 주의: 원본 DeepJEB STL이 로컬에 없다(`dataset/geometry_generation/ex1_deepjeb.h5`만 존재). 재빌드하려면
 > <https://www.narnia.ai/dataset> 에서 다시 받아야 한다 — 그리고 이건 1.6과 4.2의 기회다.
 
 ### 1.6 지금 안 쓰고 있는 것: DeepJEB의 FEA 라벨

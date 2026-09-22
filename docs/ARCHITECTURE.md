@@ -137,8 +137,8 @@ AI-CAE4ALL/
 │   └── campaigns/                #   multi-arm runners: ex1, ex2, ex3, benchmarks_all
 │
 ├── dataset/                      # shared HDF5 data (payloads are git-ignored)
-│   ├── ex1.h5 … ex9.h5           #   training datasets, one per experiment slot
-│   ├── ex1_infer.h5 … ex9_infer.h5  # the matching held-out inference inputs
+│   ├── ex1_static_thermoelastic.h5 … ex9_plasticity.h5           #   training datasets, one per experiment slot
+│   ├── ex1_static_thermoelastic_infer.h5 … ex9_plasticity_infer.h5  # the matching held-out inference inputs
 │   └── deepjeb.h5, deepjeb_mgn.h5   # SDFFlow geometry + its MGN surrogate bridge
 │
 ├── output/                       # THE ONLY artifact root: checkpoints, logs, rollouts, samples
@@ -230,13 +230,13 @@ Everything routes through the launcher. `--config` selects the file; `mode`
 
 ```bash
 # Validate all applicable checks and report every problem together (no launch):
-python AI_CAE4ALL_main.py --config configs/Transolver/ex2/config_train_transolver.txt --check
+python AI_CAE4ALL_main.py --config configs/Transolver/deterministic/ex2/baseline/config_train_transolver3.txt --check
 
 # Print the exact native command without launching:
-python AI_CAE4ALL_main.py --config configs/Neural_Operator/ex1/config_train_fno.txt --dry-run
+python AI_CAE4ALL_main.py --config configs/Neural_Operator/deterministic/ex1/baseline/config_train_fno.txt --dry-run
 
 # A clean preflight auto-launches the native process:
-python AI_CAE4ALL_main.py --config configs/MeshGraphNets/ex1/config_train1.txt
+python AI_CAE4ALL_main.py --config configs/MeshGraphNets/deterministic/ex1/baseline/config_train_himgn.txt
 
 # Introspection (no config needed):
 python AI_CAE4ALL_main.py --list-models        # registered models + install health
@@ -587,7 +587,7 @@ Design pillars from the repo's own notes:
 - **`parallel_mode model_split`** (FNO/GINO only) partitions the sequential
   latent stack into a 1F1B pipeline; DeepONets and `augment_geometry True` are
   rejected there.
-- `ex1.h5` is planar (`operator_dim` resolves to 2); `ex2.h5` is genuinely 3D —
+- `ex1_static_thermoelastic.h5` is planar (`operator_dim` resolves to 2); `ex2_dynamic_contact.h5` is genuinely 3D —
   both discovered from geometry, neither hardcoded.
 
 ---
@@ -723,11 +723,11 @@ dataset/campaign. Counts drift; use
 
 | Location | Coverage |
 | --- | --- |
-| `configs/MeshGraphNets/ex1` … `ex9` | Deterministic and Hi-MGN train/inference profiles, including the ex1 ablation (§11.1) |
+| `configs/MeshGraphNets/deterministic/ex1` … `ex9` | Deterministic and Hi-MGN train/inference profiles, including the ex1 ablation (§11.1) |
 | `configs/MeshGraphNets_Variational/` | B8 and SAOI variational training/inference campaigns |
 | `configs/HI_MGNFlow/` | DeepJEB, ex9, SAOI, and wave0 flow campaigns |
-| `configs/Neural_Operator/ex1` … `ex9` | Point-DeepONet, DeepONet, FNO, and GINO profiles |
-| `configs/Transolver/ex1` … `ex9` | Transolver training/inference profiles |
+| `configs/Neural_Operator/deterministic/ex1` … `ex9` | Point-DeepONet, DeepONet, FNO, and GINO profiles |
+| `configs/Transolver/deterministic/ex1` … `ex9` | Transolver training/inference profiles |
 | `configs/SDFFlow/` | SDFFlow train (ex1 / v2 / v3 / 8-GPU b300 / FEA-conditioned ex5), evaluate (reconstruction, descriptor calibration, conditional benchmark), sample (unconditional, extrapolation, partial conditional), interpolate (slerp, condition sweep), and optimize profiles, plus the `arms/` VAE ablation sweep (`A0`..`A9`, mostly single-axis) |
 | `configs/SimulGenVAE/`, `configs/MLP/`, `configs/GeometryIngest/` | Fixed-geometry latent, tabular, and ingestion workflows |
 | `configs/campaigns/benchmarks_all/` | Cross-method campaign scheduling, roster, inference, and scoring helpers; no bundled paper dataset or reproduced-result report |
@@ -736,27 +736,28 @@ Paper-profile modules and optional tests exist, but the previously described
 `dataset/benchmarks/` evidence bundle is not present in this checkout. Do not
 infer a reproduced paper metric from those structural tests or campaign tools.
 
-### 11.1 The current Hi-MGN ex1 ablation
+### 11.1 The Hi-MGN ex1 ablation (removed from the checkout)
 
-The executable study in this checkout is the ex1-only campaign documented by
-[its runbook](../configs/MeshGraphNets/ex1/ABLATION.md) and driven by
-[`ablation.py`](../configs/MeshGraphNets/ex1/ablation.py). It compares five axes:
-hierarchy depth, message-passing placement, coarsening operator, total
-message-passing budget, and learned versus broadcast interpolation.
+`configs/` was reduced to one `baseline/` train+infer pair per method per
+dataset slot, so the ex1-only ablation campaign -- its `ABLATION.md` runbook,
+the `ablation.py` driver, `run_ablation.sh`, and the 22 generated arm configs --
+**is no longer in the tree**. It compared five axes: hierarchy depth,
+message-passing placement, coarsening operator, total message-passing budget,
+and learned versus broadcast interpolation, over 11 run entries (nine distinct
+configurations, the baseline repeated three times to expose unseeded training
+scatter).
 
-The driver defines 11 run entries representing nine distinct configurations.
-The baseline is run three times to expose unseeded training scatter. `gen`
-derives one training and one inference file per entry from `config_train1.txt`,
-so the generated set contains 22 configs; edit the base or the driver's `ARMS`
-table rather than editing a generated arm.
+Recover any of it from git history if the study is picked up again:
 
-[`run_ablation.sh`](../configs/MeshGraphNets/ex1/run_ablation.sh) deliberately runs
-the checked-in, frozen configs through cost, train, inference, evaluation, and
-report stages. Generation is a separate explicit step. Reports are written
-under `output/meshgraphnets/ex1/ablation/` and include R2, RMSE, peak error,
-stress-specific R2, parameter count, and estimated forward FLOPs. No completed
-ablation scores are claimed here; consult a generated report artifact for a
-particular run.
+```bash
+git show HEAD:configs/MeshGraphNets/ex1/ABLATION.md
+git show HEAD:configs/MeshGraphNets/ex1/ablation.py
+git show HEAD:configs/MeshGraphNets/ex1/run_ablation.sh
+```
+
+Its design notes survive in
+[docs/research/meshgraphnets/](research/meshgraphnets/). No completed ablation
+scores were ever claimed here.
 
 ---
 
@@ -764,13 +765,13 @@ particular run.
 
 | File | Used by | Notes |
 | --- | --- | --- |
-| `dataset/ex1.h5` | mesh methods | **Planar** geometry (z≡0 → operator_dim 2) |
-| `dataset/ex2.h5` | mesh methods | Genuinely **3D** geometry |
+| `dataset/deterministic/ex1_static_thermoelastic.h5` | mesh methods | **Planar** geometry (z≡0 → operator_dim 2) |
+| `dataset/deterministic/ex2_dynamic_contact.h5` | mesh methods | Genuinely **3D** geometry |
 | `dataset/ex*.mscache.*.h5` | MGN | Transient per-run hierarchy cache — deleted at end of training; leftovers mean a killed run and are pruned on next start |
-| `dataset/deepjeb.h5` | SDFFlow | Geometry-generation shapes + descriptors |
-| `dataset/ex1_infer.h5` | mesh methods | ex1 single-sample hex-mesh inference input; state rows carry the ground-truth field (was `hex_GT.h5`) |
-| `dataset/ex2_infer.h5` | mesh methods | ex2 held-out inference set: 5 unseen scenes × 50 timesteps; rollout is seeded from t=0 and scored against t=1..49 |
-| `dataset/hex_dataset.h5` | mesh methods | Same mesh with the state rows zeroed — legacy, superseded by `ex1_infer.h5` |
+| `dataset/geometry_generation/ex1_deepjeb.h5` | SDFFlow | Geometry-generation shapes + descriptors |
+| `dataset/deterministic/ex1_static_thermoelastic_infer.h5` | mesh methods | ex1 single-sample hex-mesh inference input; state rows carry the ground-truth field (was `hex_GT.h5`) |
+| `dataset/deterministic/ex2_dynamic_contact_infer.h5` | mesh methods | ex2 held-out inference set: 5 unseen scenes × 50 timesteps; rollout is seeded from t=0 and scored against t=1..49 |
+| `dataset/hex_dataset.h5` | mesh methods | Same mesh with the state rows zeroed — legacy, superseded by `ex1_static_thermoelastic_infer.h5` |
 
 Dataset builders live in the method repos (`methods/SDFFlow/build_dataset.py`
 for SDFFlow) and under `dataset/` for the mesh methods.

@@ -100,13 +100,13 @@ export const MODEL_CATALOG = {
     defaults: {
       model: "simulgenvae", mode: "train", gpu_ids: "0", parallel_mode: "single",
       // ex9, not ex1: SimulGen-VAE needs ONE fixed (T, N) for every sample and
-      // ex1.h5 holds 100 different shapes, so this default could never train
+      // ex1_static_thermoelastic.h5 holds 100 different shapes, so this default could never train
       // (STUDIO-SGV-FIXED-001). num_var 2 = ux,uy per
-      // configs/SimulGenVAE/ex9/config_train_vae.txt; cond_var 2 + lc_data_type
+      // configs/SimulGenVAE/deterministic/ex9/baseline/config_train_lsh_vae.txt; cond_var 2 + lc_data_type
       // hdf5 reads the conditioner from ex9's own trailing input-only rows,
       // which is why no param_dir is set -- the ex1_conditions.csv this used to
       // point at does not exist on disk (STUDIO-SGV-PARAM-001).
-      dataset_dir: "../../dataset/ex9.h5", split_seed: "42", output_dir: "../../output/simulgenvae/studio",
+      dataset_dir: "../../dataset/deterministic/ex9_plasticity.h5", split_seed: "42", output_dir: "../../output/simulgenvae/studio",
       vae_modelpath: "../../output/simulgenvae/studio/simulgenvae_vae.pth",
       lc_modelpath: "../../output/simulgenvae/studio/simulgenvae_lc.pth",
       num_var: "2", cond_var: "2", field_start_row: "3", node_start: "0", node_end: "0", timesteps_reduced: "0",
@@ -169,7 +169,7 @@ export const MODEL_CATALOG = {
     // point_feature_dim / pointnet_depth / point_trunk_depth were missing here --
     // NOVAR-REQ rejects a Point-DeepONet train block on all three, same class of
     // bug as sdfflow's missing dataset_dir. Values mirror
-    // configs/Neural_Operator/ex9/config_train_point_deeponet_plasticity.txt,
+    // configs/Neural_Operator/deterministic/ex9/baseline/config_train_point_deeponet.txt,
     // the one benchmarked, working Point-DeepONet configuration in the repo.
     defaults: { model: "point_deeponet", mode: "train", gpu_ids: "0", modelpath: "../../output/point_deeponet/studio/point_deeponet.pth", coordinate_normalization: "centered_isotropic", point_sensor_count: "2048", point_hidden_channels: "128", point_feature_dim: "128", pointnet_depth: "3", point_trunk_depth: "3", training_epochs: "500", batch_size: "4", learningr: "0.0001" }
   },
@@ -178,7 +178,7 @@ export const MODEL_CATALOG = {
     description: "Branch/trunk neural operator on the shared mesh dataset contract.", dataset: "mesh HDF5",
     // deeponet_sensor_resolution / deeponet_basis_dim were missing -- both
     // NOVAR-REQ required. Values mirror
-    // configs/Neural_Operator/ex9/config_train_deeponet_plasticity.txt.
+    // configs/Neural_Operator/deterministic/ex9/baseline/config_train_deeponet.txt.
     defaults: { model: "deeponet", mode: "train", gpu_ids: "0", modelpath: "../../output/deeponet/studio/deeponet.pth", coordinate_normalization: "centered_isotropic", deeponet_sensor_resolution: "32,16", deeponet_hidden_channels: "256", deeponet_branch_depth: "3", deeponet_trunk_depth: "3", deeponet_basis_dim: "128", training_epochs: "500", batch_size: "4", learningr: "0.0001" }
   },
   fno: {
@@ -192,7 +192,7 @@ export const MODEL_CATALOG = {
     // gino_fno_hidden_channels / gino_fno_layers / gino_kernel_hidden were
     // missing -- all three NOVAR-REQ required, so a freshly dropped GINO block
     // never reached preflight. Values mirror
-    // configs/Neural_Operator/ex9/config_train_gino_plasticity.txt.
+    // configs/Neural_Operator/deterministic/ex9/baseline/config_train_gino.txt.
     defaults: { model: "gino", mode: "train", gpu_ids: "0", modelpath: "../../output/gino/studio/gino.pth", coordinate_normalization: "centered_isotropic", gino_grid_resolution: "64,64,64", gino_fno_modes: "16,16,16", gino_fno_hidden_channels: "64", gino_fno_layers: "4", gino_kernel_hidden: "64", gino_in_radius: "0.05", gino_out_radius: "0.05", training_epochs: "500", batch_size: "2", learningr: "0.0001" }
   },
   transolver: {
@@ -213,7 +213,7 @@ export const MODEL_CATALOG = {
       // freshly dropped block failed preflight on a required field nothing in
       // this table ever set (CFG-REQ-001). deepjeb.h5 is the only staged SDF
       // dataset; its cond_names attr is exactly this five-column order.
-      dataset_dir: "../../dataset/deepjeb.h5", split_seed: "42",
+      dataset_dir: "../../dataset/geometry_generation/ex1_deepjeb.h5", split_seed: "42",
       // use_conditions defaults to FALSE in the spec, so shipping
       // condition_names without it left the FM stage unconditioned and the
       // whole list inert -- and the downstream "generative" pipeline, which
@@ -407,8 +407,8 @@ export const BLOCK_SPECS = {
     outputs: [{ id: "data", type: "dataset", label: "configured dataset" }],
     // ex9 is what every shipped template trains on and the only staged dataset
     // every route (SimulGen-VAE included) accepts; a bare dataset block used to
-    // default to ex1.h5, which SimulGen-VAE rejects outright.
-    defaults: { path: "dataset/ex9.h5", split: "seeded 80/10/10", edit_mode: "immutable overlay" }, sampleLabel: "900 samples"
+    // default to ex1_static_thermoelastic.h5, which SimulGen-VAE rejects outright.
+    defaults: { path: "dataset/deterministic/ex9_plasticity.h5", split: "seeded 80/10/10", edit_mode: "immutable overlay" }, sampleLabel: "900 samples"
   },
   "source.parameters": {
     label: "Design Parameters", category: "Sources", icon: "parameters", accent: "#b0713f", visual: "parameters", maturity: "adapter",
@@ -638,8 +638,8 @@ export function registerLiveModel(model) {
  * the loss would sit on constant targets.
  */
 const EX9_MESH = {
-  dataset_dir: "../../dataset/ex9.h5",
-  infer_dataset: "../../dataset/ex9_infer.h5",
+  dataset_dir: "../../dataset/deterministic/ex9_plasticity.h5",
+  infer_dataset: "../../dataset/deterministic/ex9_plasticity_infer.h5",
   input_var: "2", output_var: "2", cond_var: "2",
   feature_loss_weights: "1.0, 1.0", positional_features: "4",
   use_node_types: "False", infer_timesteps: "19", split_seed: "42"
@@ -649,14 +649,14 @@ function meshPipeline(name, modelType, trainerConfig = {}, inferenceConfig = {})
   return {
     name,
     nodes: [
-      ["dataset", "source.hdf5", 35, 70, { path: "dataset/ex9.h5" }],
+      ["dataset", "source.hdf5", 35, 70, { path: "dataset/deterministic/ex9_plasticity.h5" }],
       // The inference dataset is its own source block on purpose. Wiring the
       // training dataset into the Inference block made the graph *say* "predict
       // the data you trained on", and because the graph wins over the trainer's
       // own infer_dataset, that is exactly what it did -- silently replacing
-      // ex9_infer.h5 with ex9.h5 on every run. Two blocks keep the held-out
+      // ex9_plasticity_infer.h5 with ex9_plasticity.h5 on every run. Two blocks keep the held-out
       // split visible on the canvas, which is where the user can see it.
-      ["infer_dataset_src", "source.hdf5", 35, 300, { path: "dataset/ex9_infer.h5" }],
+      ["infer_dataset_src", "source.hdf5", 35, 300, { path: "dataset/deterministic/ex9_plasticity_infer.h5" }],
       ["trainer", modelType, 330, 70, { ...EX9_MESH, ...trainerConfig }],
       ["train_metrics", "evaluate.training_metrics", 625, 390],
       // inferenceConfig: run-time readout choices that belong to the Inference
@@ -678,7 +678,7 @@ function meshPipeline(name, modelType, trainerConfig = {}, inferenceConfig = {})
 }
 
 export const TEMPLATES = {
-  // Default pipeline. Mirrors configs/MeshGraphNets/ex9/config_train_hi_plasticity.txt:
+  // Default pipeline. Mirrors configs/MeshGraphNets/deterministic/ex9/baseline/config_train_himgn.txt:
   // a 2-level Voronoi hierarchy (voronoi_seedmean — the bare "voronoi" alias was
   // removed and the native hierarchy build raises on it).
   himgn: meshPipeline("HI-MGN multiscale (ex9 plasticity)", "model.meshgraphnets", {
@@ -693,7 +693,7 @@ export const TEMPLATES = {
    * SimulGen-VAE, on ex9 rather than ex1, reading its conditions out of the
    * dataset instead of a CSV. Both changes fix a template that could not run:
    *
-   *  - ex1.h5 is NOT fixed geometry. SimulGen-VAE flattens the field rows into a
+   *  - ex1_static_thermoelastic.h5 is NOT fixed geometry. SimulGen-VAE flattens the field rows into a
    *    dense [samples, channels, time] tensor, so every sample must share one
    *    (T, N); ex1 holds 100 *different* shapes and preflight rejected it with
    *    STUDIO-SGV-FIXED-001. The node even carried a "fixed N and T required"
@@ -706,17 +706,17 @@ export const TEMPLATES = {
    *    external file entirely -- so the separate parameters block and its two
    *    edges are gone, matching how every mesh template in this file is wired.
    *
-   * num_var 2 = ux,uy (rows 3:5), mirroring configs/SimulGenVAE/ex9/
+   * num_var 2 = ux,uy (rows 3:5), mirroring configs/SimulGenVAE/deterministic/ex9/
    * config_train_vae.txt; the trailing rows are conditions, not field channels.
    */
   simulgen: {
     name: "SimulGen-VAE reconstruction (ex9)",
     nodes: [
-      ["dataset", "source.hdf5", 35, 70, { path: "dataset/ex9.h5", compatibility: "fixed N and T required" }],
+      ["dataset", "source.hdf5", 35, 70, { path: "dataset/deterministic/ex9_plasticity.h5", compatibility: "fixed N and T required" }],
       // Held out on purpose: reconstructing the training split is not evidence.
-      ["infer_dataset_src", "source.hdf5", 35, 300, { path: "dataset/ex9_infer.h5" }],
+      ["infer_dataset_src", "source.hdf5", 35, 300, { path: "dataset/deterministic/ex9_plasticity_infer.h5" }],
       ["simulgen", "model.simulgenvae", 330, 70, {
-        dataset_dir: "../../dataset/ex9.h5", num_var: "2", field_start_row: "3",
+        dataset_dir: "../../dataset/deterministic/ex9_plasticity.h5", num_var: "2", field_start_row: "3",
         cond_var: "2", lc_data_type: "hdf5", vae_training_epochs: "20"
       }],
       ["train_metrics", "evaluate.training_metrics", 625, 390],
@@ -828,13 +828,13 @@ export const TEMPLATES = {
   // consistent (same length both sides) so it clears NOVAR-FNO-001/NOVAR-GINO-001
   // at the spec layer, but it fits a 3rd axis that does not exist in this
   // dataset. Values below instead mirror
-  // configs/Neural_Operator/ex9/config_train_fno_plasticity.txt exactly, the
+  // configs/Neural_Operator/deterministic/ex9/baseline/config_train_fno.txt exactly, the
   // benchmarked, actually-run FNO configuration on this data.
   fno: meshPipeline("FNO (ex9 plasticity)", "model.fno", {
     fno_variant: "mesh", fno_grid_resolution: "64, 32", fno_modes: "16, 12", fno_hidden_channels: "64",
     fno_layers: "4", training_epochs: "500", batch_size: "20", learningr: "0.001"
   }),
-  // Mirrors configs/Neural_Operator/ex9/config_train_gino_plasticity.txt (same
+  // Mirrors configs/Neural_Operator/deterministic/ex9/baseline/config_train_gino.txt (same
   // 2-D dimensionality note as fno above).
   gino: meshPipeline("GINO (ex9 plasticity)", "model.gino", {
     gino_variant: "mesh_state", gino_grid_resolution: "64, 32", gino_fno_modes: "16, 12",
@@ -842,7 +842,7 @@ export const TEMPLATES = {
     gino_in_radius: "0.08", gino_out_radius: "0.08",
     training_epochs: "500", batch_size: "1", learningr: "0.001"
   }),
-  // Mirrors configs/Neural_Operator/ex9/config_train_deeponet_plasticity.txt.
+  // Mirrors configs/Neural_Operator/deterministic/ex9/baseline/config_train_deeponet.txt.
   // deeponet_sensor_resolution and deeponet_basis_dim were previously absent
   // here -- both NOVAR-REQ required, so this template failed preflight before
   // a user could even open it.
@@ -852,7 +852,7 @@ export const TEMPLATES = {
     deeponet_activation: "silu",
     training_epochs: "500", batch_size: "20", learningr: "0.001"
   }),
-  // Mirrors configs/Neural_Operator/ex9/config_train_point_deeponet_plasticity.txt.
+  // Mirrors configs/Neural_Operator/deterministic/ex9/baseline/config_train_point_deeponet.txt.
   // point_feature_dim, pointnet_depth, and point_trunk_depth were previously
   // absent -- all three NOVAR-REQ required, same missing-required-field bug as
   // the other three operator templates above.
@@ -865,23 +865,23 @@ export const TEMPLATES = {
     name: "Parametric response estimation",
     nodes: [
       ["parameters", "source.parameters", 35, 295],
-      ["dataset", "source.hdf5", 35, 55, { path: "dataset/mlp/train.h5" }],
+      ["dataset", "source.hdf5", 35, 55, { path: "dataset/deterministic/mlp/train.h5" }],
       // Same reason as meshPipeline: this template used to feed the *training*
       // table into the Inference block, so the shipped pipeline scored the MLP
       // on rows it had already fitted. The held-out split was sitting unused
       // next to it the whole time.
-      ["infer_dataset_src", "source.hdf5", 35, 470, { path: "dataset/mlp/infer.h5" }],
+      ["infer_dataset_src", "source.hdf5", 35, 470, { path: "dataset/deterministic/mlp/infer.h5" }],
       // input_var/output_var are stated rather than left to the user here, and
       // that is safe *only* because MLP is the suite's one tabular route
       // (dataset_kind=table_hdf5): the contract is X[S,N] -> Y[S,M] with no
       // cond_var rows, so 3 and 2 are literally X.shape[1] and Y.shape[1] of
-      // dataset/mlp/train.h5. Do not copy this to a mesh template -- there
+      // dataset/deterministic/mlp/train.h5. Do not copy this to a mesh template -- there
       // input_var is NOT the feature-row count and hardcoding it reintroduces
       // the ex9 constant-target class of bug. Without these three keys the
       // shipped template failed preflight with CFG-REQ-001 x3 before the user
       // touched anything.
       ["mlp", "model.mlp", 330, 115, {
-        dataset_dir: "../../dataset/mlp/train.h5", infer_dataset: "../../dataset/mlp/infer.h5",
+        dataset_dir: "../../dataset/deterministic/mlp/train.h5", infer_dataset: "../../dataset/deterministic/mlp/infer.h5",
         input_var: "3", output_var: "2", split_seed: "42", val_interval: "5"
       }],
       ["train_metrics", "evaluate.training_metrics", 625, 430],
@@ -915,7 +915,7 @@ export const TEMPLATES = {
   sdfflow_train: {
     name: "SDFFlow train (DeepJEB)",
     nodes: [
-      ["dataset", "source.hdf5", 35, 70, { path: "dataset/deepjeb.h5" }],
+      ["dataset", "source.hdf5", 35, 70, { path: "dataset/geometry_generation/ex1_deepjeb.h5" }],
       ["trainer", "model.sdfflow", 330, 70, { mode: "train" }],
       ["train_metrics", "evaluate.training_metrics", 330, 390],
       ["generator", "run.cad_generator", 625, 70, { mode: "sample" }],

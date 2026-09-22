@@ -65,7 +65,7 @@ guarantee is direction-specific) when `gino_out_radius` is below this floor.
 `training_profiles/setup.py::build_model_and_ema` runs the preflight
 automatically on one training batch before training starts.
 
-**Measured on real `ex1.h5` (2026-07-17):** with `augment_geometry True` the
+**Measured on real `ex1_static_thermoelastic.h5` (2026-07-17):** with `augment_geometry True` the
 grid box is sized for the worst-case *rotated* footprint (section 4.5), so
 any single unrotated sample only occupies the box's central ~35-45% region;
 the remaining latent grid points have no nearby mesh node by construction,

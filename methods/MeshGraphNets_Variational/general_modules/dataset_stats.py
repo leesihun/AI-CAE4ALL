@@ -13,6 +13,7 @@ import h5py
 import numpy as np
 
 from general_modules.edge_features import EDGE_FEATURE_DIM, compute_edge_attr
+from general_modules.state_geometry import deformed_positions, displacement_indices
 from general_modules.positional_features import compute_positional_features
 
 # Sub-sample long trajectories: statistics converge well before 500 timesteps.
@@ -52,7 +53,8 @@ def _empty_accumulators(node_dim: int, output_dim: int) -> Dict:
 
 def _process_sample_chunk(h5_file: str, sample_ids: List[int], input_dim: int,
                           output_dim: int, num_timesteps: int,
-                          num_pos_features: int = 0, cond_dim: int = 0) -> Dict:
+                          num_pos_features: int = 0, cond_dim: int = 0,
+                          geometry_config=None) -> Dict:
     """Accumulate stats over one chunk of samples. Runs in a pool worker.
 
     Node features are laid out `[state | conditions | positional]`, matching
@@ -60,6 +62,7 @@ def _process_sample_chunk(h5_file: str, sample_ids: List[int], input_dim: int,
     data, but the conditioning block is always the real stored values, so it
     gets real statistics in both the static and temporal cases.
     """
+    displacement_indices(geometry_config or {}, input_dim)
     acc = _empty_accumulators(input_dim + cond_dim + num_pos_features, output_dim)
     cond_start = 3 + input_dim
 
@@ -92,7 +95,7 @@ def _process_sample_chunk(h5_file: str, sample_ids: List[int], input_dim: int,
                         deformed_pos = ref_pos  # no displacement
                     else:
                         node_feat = data[3:3 + input_dim, t, :].T  # [N, input_dim]
-                        deformed_pos = ref_pos + data[3:6, t, :].T
+                        deformed_pos = deformed_positions(ref_pos, node_feat, geometry_config, input_dim)
 
                     if cond_dim > 0:
                         cond_feat = data[cond_start:cond_start + cond_dim, t, :].T
@@ -104,7 +107,7 @@ def _process_sample_chunk(h5_file: str, sample_ids: List[int], input_dim: int,
                     acc['node_sumsq'] += np.sum(node_feat ** 2, axis=0)
                     acc['node_count'] += node_feat.shape[0]
 
-                    edge_feat = compute_edge_attr(ref_pos, deformed_pos, edge_idx)
+                    edge_feat = compute_edge_attr(ref_pos, deformed_pos, edge_idx, (geometry_config or {}).get('periodic_box'))
                     acc['edge_sum'] += np.sum(edge_feat, axis=0)
                     acc['edge_sumsq'] += np.sum(edge_feat ** 2, axis=0)
                     acc['edge_count'] += edge_feat.shape[0]
@@ -154,7 +157,7 @@ def _merge_accumulators(results: List[Dict], node_dim: int, output_dim: int) -> 
 def compute_normalization_stats(h5_file: str, sample_ids: List[int], input_dim: int,
                                 output_dim: int, num_timesteps: int,
                                 num_pos_features: int, use_parallel: bool = True,
-                                cond_dim: int = 0) -> Dict:
+                                cond_dim: int = 0, geometry_config=None) -> Dict:
     """Compute raw stat sums over a sample split, in parallel when worthwhile.
 
     Returns the accumulator dict (see `_empty_accumulators`); use
@@ -173,7 +176,7 @@ def compute_normalization_stats(h5_file: str, sample_ids: List[int], input_dim: 
                   else f'serial ({n} samples < {_MIN_SAMPLES_FOR_PARALLEL})')
         print(f'  Normalization stats: {reason}')
         return _process_sample_chunk(h5_file, sample_ids, input_dim, output_dim,
-                                     num_timesteps, num_pos_features, cond_dim)
+                                     num_timesteps, num_pos_features, cond_dim, geometry_config)
 
     print(f'  Normalization stats: {num_workers} parallel workers for {n} samples')
     chunk_size = max(1, n // num_workers)
@@ -181,7 +184,7 @@ def compute_normalization_stats(h5_file: str, sample_ids: List[int], input_dim: 
     try:
         with mp.Pool(num_workers) as pool:
             results = pool.starmap(_process_sample_chunk, [
-                (h5_file, chunk, input_dim, output_dim, num_timesteps, num_pos_features, cond_dim)
+                (h5_file, chunk, input_dim, output_dim, num_timesteps, num_pos_features, cond_dim, geometry_config)
                 for chunk in chunks
             ])
         merged = _merge_accumulators(results, input_dim + cond_dim + num_pos_features, output_dim)
@@ -192,4 +195,4 @@ def compute_normalization_stats(h5_file: str, sample_ids: List[int], input_dim: 
     except Exception as e:
         print(f'  Warning: Parallel processing failed ({e}), falling back to serial')
         return _process_sample_chunk(h5_file, sample_ids, input_dim, output_dim,
-                                     num_timesteps, num_pos_features, cond_dim)
+                                     num_timesteps, num_pos_features, cond_dim, geometry_config)

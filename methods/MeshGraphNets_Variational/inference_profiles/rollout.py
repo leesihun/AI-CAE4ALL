@@ -6,6 +6,7 @@ import numpy as np
 import torch
 from torch_geometric.data import Batch, Data
 
+from general_modules.state_geometry import deformed_positions
 from general_modules.edge_features import EDGE_FEATURE_DIM, compute_edge_attr
 from general_modules.positional_features import compute_positional_features
 from general_modules.world_edges import HAS_TORCH_CLUSTER, compute_world_edges
@@ -168,6 +169,7 @@ class _SampleContext:
 
     def __init__(self, config, checkpoint_norm, ref_pos, edge_index, part_ids, device,
                  cond_feat=None):
+        self.geometry_config = config
         self.device = device
         self.ref_pos = ref_pos                  # [N, 3]
         self.edge_index = edge_index            # [2, 2M] bidirectional
@@ -326,15 +328,8 @@ class _SampleContext:
         if self.node_type_onehot is not None:
             x_norm = np.concatenate([x_norm, self.node_type_onehot], axis=1)
 
-        # Rows 3:6 are the displacement vector by the shared contract; zeros for
-        # a statically-trained model, so deformed == reference.
-        if self.input_dim >= 3:
-            displacement = current_state[:, :3]
-        else:
-            displacement = np.zeros((self.num_nodes, 3), dtype=np.float32)
-            displacement[:, :self.input_dim] = current_state[:, :self.input_dim]
-        deformed_pos = self.ref_pos + displacement
-        edge_attr = (compute_edge_attr(self.ref_pos, deformed_pos, self.edge_index)
+        deformed_pos = deformed_positions(self.ref_pos, current_state, self.geometry_config, self.input_dim)
+        edge_attr = (compute_edge_attr(self.ref_pos, deformed_pos, self.edge_index, self.geometry_config.get('periodic_box'))
                      - self.edge_mean) / self.edge_std
 
         DataClass = MultiscaleData if self.use_multiscale else Data
@@ -369,6 +364,7 @@ class _SampleContext:
                 graph, self.hierarchy, self.ref_pos, deformed_pos,
                 self.coarse_edge_means, self.coarse_edge_stds,
                 device=device, world_edge_index=world_ei_for_coarse,
+                periodic_box=self.geometry_config.get('periodic_box'),
             )
 
         return graph

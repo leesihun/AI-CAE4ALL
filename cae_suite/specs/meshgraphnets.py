@@ -17,6 +17,8 @@ from .base import (
 # config.get(...) reachable from MeshGraphNets_main.py).
 MGN_KEYS = frozenset(
     {
+        "geometry_state_mode", "displacement_state_indices", "write_preprocessing",
+        "split_group_attr",
         "model", "mode", "gpu_ids", "parallel_mode", "log_file_dir", "modelpath",
         # Warm start: weights to initialize training from. The pretrain-one-step
         # then fine-tune-on-rollout recipe (time_integration ar_ot -> ar_rt) is

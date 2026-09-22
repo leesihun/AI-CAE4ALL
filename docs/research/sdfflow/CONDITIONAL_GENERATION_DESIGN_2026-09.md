@@ -4,7 +4,7 @@
 model.** No `ex5` checkpoint exists (`output/geometry_generation/` is absent in
 this checkout), and the user asked for no training. Everything numeric in this
 note comes from one of three sources, each labelled: (a) the DeepJEB label CSV
-and `dataset/deepjeb.h5` (exact, re-runnable), (b) the ex1 guidance pilot of
+and `dataset/geometry_generation/ex1_deepjeb.h5` (exact, re-runnable), (b) the ex1 guidance pilot of
 `GUIDANCE_MECHANISMS_SOTA_AND_PLAN_2026-08.md` section 2 (measured on an old
 checkpoint, method-selection evidence only), (c) the literature (cited by URL in
 section 9). Section 6 lists what stays unverified until `config_train_v3_fea.txt`
@@ -526,9 +526,9 @@ config is `../../...` because the native process runs in `methods/SDFFlow`.
 # 0. Append the FEA labels to the dataset once (dry run first; refuses unmatched shapes
 #    and an existing sidecar; --list_names prints the registry).
 cd methods/SDFFlow
-python add_fea_conditions.py --h5 ../../dataset/deepjeb.h5 \
+python add_fea_conditions.py --h5 ../../dataset/geometry_generation/ex1_deepjeb.h5 \
     --csv D:/CAE_datasets_raw/deepjeb/Scalar/bracket_labels.csv --dry_run
-python add_fea_conditions.py --h5 ../../dataset/deepjeb.h5 \
+python add_fea_conditions.py --h5 ../../dataset/geometry_generation/ex1_deepjeb.h5 \
     --csv D:/CAE_datasets_raw/deepjeb/Scalar/bracket_labels.csv
 cd ../..
 

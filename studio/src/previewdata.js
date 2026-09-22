@@ -1,15 +1,15 @@
 /**
  * Real CAE data baked into the block previews.
  *
- * Generated from dataset/ex9.h5 (plasticity: 900 samples, 3131 nodes, 20 steps) —
+ * Generated from dataset/deterministic/ex9_plasticity.h5 (plasticity: 900 samples, 3131 nodes, 20 steps) —
  * the dataset the shipped default pipeline trains on. The mesh is a contiguous
  * aspect-matched crop with every one of its edges kept, and the field is the real
  * state channel at the final timestep rasterised through the Studio's own colour
  * ramp. Previews used to be hand-drawn squiggles and invented gradients, which read
  * as noise and implied data that did not exist.
  *
- * Source: ex9.h5 sample 1 (plasticity, 3131 nodes, 6130 edges)
- * Field:  ex9.h5 sample 1 · plasticity · row 3 (state channel), t=19
+ * Source: ex9_plasticity.h5 sample 1 (plasticity, 3131 nodes, 6130 edges)
+ * Field:  ex9_plasticity.h5 sample 1 · plasticity · row 3 (state channel), t=19
  */
 
 export const MESH_PREVIEW = {

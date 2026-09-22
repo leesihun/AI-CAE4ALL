@@ -126,7 +126,7 @@ def run_rollout(config, config_filename='config.txt'):
 
         part_ids = None
         if use_node_types:
-            if num_features <= 7:
+            if num_features < 3 + max(input_var, output_var) + cond_var + 1:
                 raise ValueError(
                     f"Checkpoint requires node types but '{dataset_dir}' sample "
                     f"{sample_id} has only {num_features} feature rows."
