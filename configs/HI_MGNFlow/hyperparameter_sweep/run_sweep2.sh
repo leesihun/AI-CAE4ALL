@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # SAOI cHI-MGNflow SWEEP 2 -- the compressor axes sweep 1 holds fixed.
 #
-#   ./run_sweep2.sh                    # A -> B -> C -> report, unattended
-#   GPUS="4 5 6 7" ./run_sweep2.sh     # pin the physical cards to use
-#   GPUS="4 4 5 5" ./run_sweep2.sh     # a card listed twice runs two jobs
+#   ./run_sweep2.sh                    # A -> B -> C -> report, on GPUs 0-7
+#   GPUS="4 5 6 7" ./run_sweep2.sh     # only these physical cards
+#   JOBS_PER_GPU=2 ./run_sweep2.sh     # two sweep-2 jobs per card
 #   ./run_sweep2.sh A | B | C | report | clean | help
 #
 # Safe to run BESIDE run_sweep.sh (sweep 1): every artifact goes under
@@ -27,11 +27,15 @@
 #
 # GPU POOL. Every config says gpu_ids 0; each job is launched with
 # CUDA_VISIBLE_DEVICES=<physical card>, so the pool is just a list of cards.
-# Without GPUS the script takes every card using less than IDLE_MB right now --
-# check the printed pool if sweep 1 is between phases (its cards look idle then).
+# The default is GPUs 0-7, the same eight cards sweep 1 uses, busy or not --
+# sweep 2 runs ON TOP of sweep 1 there, JOBS_PER_GPU slots per card, so the
+# 8 jobs of A and of B are one sweep-2 job per card. The cards' current memory
+# use is printed at start (when nvidia-smi exists). A job that
+# runs out of VRAM beside its neighbour fails alone: its chain is skipped,
+# the rest of the campaign continues.
 #
 # Environment:
-#   PYTHON=python   GPUS=<auto>   IDLE_MB=2000   STAGGER=20   POLL=30
+#   PYTHON=python   GPUS="0 1 2 3 4 5 6 7"   JOBS_PER_GPU=1   STAGGER=20   POLL=30
 #   HALVES="bot top"   ARMS="n200c4 n400c4 n400c8 c8m16"
 #   PREFLIGHT=1, STRICT_PREFLIGHT=1, EVAL_PREFLIGHT=1, KEEP_CACHE=0
 
@@ -56,7 +60,8 @@ ARMS="${ARMS:-n200c4 n400c4 n400c8 c8m16}"
 TAGS="s26fe_main s26fe_sec sm_l345u_main"
 HIER_TAGS="v1000_100 v1000_200 v1000_400"
 
-IDLE_MB="${IDLE_MB:-2000}"
+GPUS="${GPUS:-0 1 2 3 4 5 6 7}"
+JOBS_PER_GPU="${JOBS_PER_GPU:-1}"
 STAGGER="${STAGGER:-20}"
 POLL="${POLL:-30}"
 PREFLIGHT="${PREFLIGHT:-1}"
@@ -74,7 +79,8 @@ POOL=()
 PIDS=()
 
 usage() {
-    sed -n '2,36p' "$SELF" | sed 's/^# \{0,1\}//'
+    # the header comment block, up to the first line that is not a comment
+    awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$SELF"
 }
 
 log() { printf '[%s] %s\n' "$(date '+%F %T')" "$*"; }
@@ -92,22 +98,24 @@ cleanup() {
 trap cleanup INT TERM
 
 build_pool() {
-    if [ -n "${GPUS:-}" ]; then
-        read -r -a POOL <<< "$GPUS"
-    else
-        if ! command -v nvidia-smi > /dev/null 2>&1; then
-            echo "nvidia-smi not found; set GPUS=\"<card ids>\" explicitly." >&2
-            return 1
-        fi
-        read -r -a POOL <<< "$(nvidia-smi --query-gpu=index,memory.used \
-            --format=csv,noheader,nounits \
-            | awk -F', *' -v lim="$IDLE_MB" '$2 + 0 < lim { printf "%s ", $1 }')"
-    fi
-    if [ "${#POOL[@]}" -eq 0 ]; then
-        echo "No idle GPU (memory.used < ${IDLE_MB} MiB). Set GPUS=\"<card ids>\"." >&2
+    # Busy cards are NOT skipped: sweep 2 is meant to share them with sweep 1.
+    cards=()
+    read -r -a cards <<< "$GPUS"
+    if [ "${#cards[@]}" -eq 0 ]; then
+        echo "GPUS is empty. Set GPUS=\"<card ids>\"." >&2
         return 1
     fi
-    log "GPU pool (physical ids): ${POOL[*]}"
+    # Round-robin, so the first jobs land on different cards before any card
+    # gets a second one: JOBS_PER_GPU=2 on "0 1" gives slots 0 1 0 1.
+    POOL=()
+    for ((r = 0; r < JOBS_PER_GPU; r++)); do
+        POOL+=("${cards[@]}")
+    done
+    log "GPU pool (physical ids, one slot each): ${POOL[*]}"
+    if command -v nvidia-smi > /dev/null 2>&1; then
+        nvidia-smi --query-gpu=index,memory.used,memory.total,utilization.gpu \
+            --format=csv,noheader | sed 's/^/    card /'
+    fi
 }
 
 ae_ckpt()    { echo "$OUT_ROOT/$1.ae_$2.pth"; }
@@ -304,6 +312,9 @@ case "$PHASE" in
     report) run_report || rc=1 ;;
     clean) clean_cache ;;
     *)
+        case "$JOBS_PER_GPU" in
+            ''|*[!0-9]*|0) echo "JOBS_PER_GPU must be a positive integer." >&2; exit 2 ;;
+        esac
         build_pool || exit 4
         case "$PHASE" in
             all) run_all ;;

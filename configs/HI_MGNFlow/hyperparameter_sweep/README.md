@@ -356,14 +356,17 @@ larger than sweep 1's and 4 blocks reach a smaller fraction of them) and its own
 Phase C, so every arm is measured end to end: 8 AE + 8 prior + 24 inference jobs.
 
 ```bash
-GPUS="4 5 6 7" ./run_sweep2.sh   # recommended: name the free cards
-./run_sweep2.sh                  # else: every card under IDLE_MB (2000 MiB) now
+./run_sweep2.sh                  # GPUs 0-7, on top of sweep 1, one sweep-2 job per card
+JOBS_PER_GPU=2 ./run_sweep2.sh   # two per card (16 slots)
+GPUS="4 5 6 7" ./run_sweep2.sh   # only these cards
 ./run_sweep2.sh A|B|C|report|clean|help
 ```
 
 **Running beside sweep 1.** Every config says `gpu_ids 0`; the runner launches
 each job with `CUDA_VISIBLE_DEVICES=<card>` (and `CUDA_DEVICE_ORDER=PCI_BUS_ID`)
-from a pool, one job per pool entry (list a card twice to pack two jobs). The
+from a pool -- GPUs 0-7 by default, the same cards sweep 1 uses, busy or not,
+`JOBS_PER_GPU` slots each. A job that runs out of VRAM beside sweep 1 fails
+alone and only its own chain is skipped. The
 isolation is in the configs: all artifacts under `output/chi-mgnflow/saoi_sweep2/`,
 one log directory per arm (the dumps are keyed by `gpu_ids`, which is 0
 everywhere), `write_preprocessing False` (sweep 2 never writes the shared HDF5),

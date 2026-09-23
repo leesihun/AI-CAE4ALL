@@ -17,9 +17,11 @@ the routes are compared on the same axis instead of across separate PNGs.
     python configs/campaigns/dataset_matrix/score_spread.py
     python configs/campaigns/dataset_matrix/score_spread.py --csv report.csv
 
-Run it after `run_matrix.sh` finishes, or at any point during it: arms that
-have not produced metrics yet are listed as missing rather than skipped
-silently, because a quietly absent arm is how a broken route survives a sweep.
+Run it after the campaign (configs/run_all_135.sh / run_all_136.sh) finishes,
+or at any point during it: arms that have not produced metrics yet are listed
+as missing rather than skipped silently, because a quietly absent arm is how a
+broken route survives a sweep. run_matrix.py also runs it at the end of every
+run that was not stopped; there the other machine's example shows as missing.
 """
 from __future__ import annotations
 

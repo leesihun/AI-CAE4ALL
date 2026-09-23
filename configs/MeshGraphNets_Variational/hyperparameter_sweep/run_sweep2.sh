@@ -4,7 +4,7 @@
 #   nohup bash configs/MeshGraphNets_Variational/hyperparameter_sweep/run_sweep2.sh \
 #       > output/meshgraphnets-v/run_sweep2.out 2>&1 &
 #
-# Runs ALONGSIDE run_sweep.sh (sweep1), on the cards sweep1 is not using. The
+# Runs ALONGSIDE run_sweep.sh (sweep1), on the same cards. The
 # only results that count are sweep1's and this one's; the older SAOI sweeps,
 # the FM-v2 ablation and sweep3 (beta_aux, no dump ever recovered) are treated
 # as nonexistent, so nothing here is excluded or justified by them.
@@ -30,9 +30,8 @@
 # the report marks them `incomplete`; re-read from disk afterwards with
 #   TRAIN=0 INFER=0 PVP=0 bash .../run_sweep2.sh
 #
-# GPUS defaults to 8..15 (sweep1 holds 0..7). Before any GPU stage runs the
-# script refuses a card that does not exist or already has a compute process,
-# so it can never double up with sweep1 or anyone else. Same halves, lanes,
+# GPUS defaults to 0..7, the same eight cards as sweep1: each card then
+# carries one sweep1 arm and one sweep2 arm side by side. Same halves, lanes,
 # stale-checkpoint guard and stage switches as run_sweep.sh.
 #
 # Useful overrides:
@@ -42,9 +41,6 @@ set -uo pipefail
 
 PYTHON="${PYTHON:-python}"
 export PYTHONUNBUFFERED=1
-# nvidia-smi numbers cards in PCI bus order; make CUDA use the same order so
-# the card checked below is the card CUDA_VISIBLE_DEVICES selects.
-export CUDA_DEVICE_ORDER=PCI_BUS_ID
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
@@ -57,7 +53,7 @@ ARMS_DEFAULT="${ARMS:-aux0 aux3 aux30 aux100 mmd10 mmd100 vel512 fmmom}"
 # reads them from there.
 REPORT_ARMS_DEFAULT="${REPORT_ARMS:-base seed arecon $ARMS_DEFAULT}"
 INFER_TAGS="${INFER_TAGS:-s26fe_main s26fe_sec sm_l345u_main}"
-GPUS="${GPUS:-8 9 10 11 12 13 14 15}"
+GPUS="${GPUS:-0 1 2 3 4 5 6 7}"
 EVAL_PREFLIGHT="${EVAL_PREFLIGHT:-1}"
 PREFLIGHT="${PREFLIGHT:-1}"
 STRICT_PREFLIGHT="${STRICT_PREFLIGHT:-1}"
@@ -89,37 +85,6 @@ echo "  arms (report) : $REPORT_ARMS_DEFAULT"
 echo "  eval sets     : $INFER_TAGS"
 echo "  gpus          : $GPUS  ($NG lanes)"
 echo "  method python : $METHOD_PYTHON"
-
-# ------------------------------------------------------------------ GPU guard
-# sweep1 is running on this box. A card that is missing, or already running a
-# compute process, is refused rather than shared: Batch_size 16 is per-rank
-# and each arm needs a card to itself.
-if [ "$TRAIN" = "1" ] || [ "$INFER" = "1" ] || [ "$PVP" = "1" ]; then
-    echo "---- gpu check ---------------------------------------------------"
-    if ! command -v nvidia-smi >/dev/null 2>&1; then
-        echo "  WARNING: nvidia-smi not found -- cannot verify that '$GPUS' are free" >&2
-    else
-        GPU_TABLE="$(nvidia-smi --query-gpu=index,uuid --format=csv,noheader 2>/dev/null | tr -d ' ')"
-        BUSY_UUIDS="$(nvidia-smi --query-compute-apps=gpu_uuid --format=csv,noheader 2>/dev/null | tr -d ' ' | sort -u)"
-        gpu_bad=0
-        for g in "${GPU_ARR[@]}"; do
-            uuid="$(echo "$GPU_TABLE" | awk -F, -v i="$g" '$1 == i { print $2 }')"
-            if [ -z "$uuid" ]; then
-                echo "  gpu $g  DOES NOT EXIST" >&2
-                gpu_bad=1
-            elif echo "$BUSY_UUIDS" | grep -qx "$uuid"; then
-                echo "  gpu $g  BUSY (compute process already running)" >&2
-                gpu_bad=1
-            else
-                echo "  gpu $g  free"
-            fi
-        done
-        if [ "$gpu_bad" = "1" ]; then
-            echo "Pick free cards with GPUS=\"...\" (nvidia-smi shows which)." >&2
-            exit 1
-        fi
-    fi
-fi
 
 # Deal the arms onto lanes. Arms cost within a few percent of each other (same
 # epochs, same data, same architecture bar one key), so round-robin is balanced

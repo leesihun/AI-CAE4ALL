@@ -227,6 +227,48 @@ the case written in the config is the case opened. A stale lowercase twin of
 error and yields wrong numbers. Keep `SAOI/`, `S26FE-MAIN`, `S26FE-SEC` and
 `SM-L345U-MAIN` uppercase as written.
 
+## Sweep 2 (`run_sweep2.sh`, alongside sweep1)
+
+```bash
+nohup bash configs/MeshGraphNets_Variational/hyperparameter_sweep/run_sweep2.sh \
+    > output/meshgraphnets-v/run_sweep2.out 2>&1 &
+```
+
+**Only sweep1 and sweep2 results count.** The older SAOI sweeps, the FM-v2
+ablation, and sweep3 (a beta_aux axis that never recovered a dump) are treated
+as nonexistent. Where this README cites them above, they are background for
+sweep1's roster, not evidence. That is why `beta_aux` and velocity width are
+tested again here.
+
+| Arm | Change | Why |
+|---|---|---|
+| `aux0` `aux3` `aux30` `aux100` | `beta_aux` 10 → 0 / 3 / 30 / 100 | the PV term is the only one tied to the scored spread; `aux0` asks whether it is load-bearing at all |
+| `mmd10` `mmd100` | `lambda_mmd` 1 → 10 / 100 | encoder-only: changes the aggregate posterior the flow must fit, not the decoder |
+| `vel512` | `prior_velocity_hidden_dim` 256 → 512 | prior-side capacity; sweep1 has no prior-side arm |
+| `fmmom` | `prior_fm_moments` False → True | the FM base gets a learned per-condition mean/scale, so width is an explicit output; identical to base at init |
+
+At `prior_grad_to_encoder 0`, Adam makes sweep1's `arecon` (α 1000→100) the
+same as λ_mmd ×10 **and** β_aux ×10 together. That makes `base`/`mmd10`/`aux100`/`arecon`
+a 2×2 factorial that splits `arecon` into its MMD part and its aux part.
+
+There is **no base/seed of its own.** Every arm writes into sweep1's roots
+(`saoi_sweep/`, `saoi_sweep_top/`) under its own name, so sweep1's `base` and
+`seed` are the reference and the floor. The arm names are disjoint from
+sweep1's, and the report goes to `run_logs/report_sweep2.txt`, so nothing of
+sweep1's is overwritten. The shared hierarchy cache is lock-guarded, so
+concurrent jobs on the same data are safe.
+
+`GPUS` defaults to `0 … 7`, the same eight cards as sweep1, so each card
+carries one sweep1 arm and one sweep2 arm side by side. Override with
+`GPUS="..."` as usual.
+
+If sweep1's `base`/`seed` are not finished when the report stage runs, the
+script says so at the end. Re-read from disk once sweep1 is done:
+
+```bash
+TRAIN=0 INFER=0 PVP=0 bash configs/MeshGraphNets_Variational/hyperparameter_sweep/run_sweep2.sh
+```
+
 ## One thing the sweep cannot fix
 
 The objective has **no term that penalizes a too-narrow ensemble**. It is
