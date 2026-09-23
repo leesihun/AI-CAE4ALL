@@ -77,22 +77,11 @@ def build_dataset_splits(config, split_seed: int):
 
 def build_model_and_ema(config, train_dataset, device):
     """
-    Build the selected OperatorWrapper via the factory, run GINO's mandatory
-    coverage preflight when applicable, wrap with EMA if configured, and
-    optionally compile with torch.compile.
+    Build the selected OperatorWrapper via the factory, wrap with EMA if
+    configured, and optionally compile with torch.compile.
     """
     model, data_spec, coordinate_domain = build_model(config, train_dataset)
     model = model.to(device)
-
-    if model.model_name == 'gino':
-        from torch_geometric.loader import DataLoader
-        probe_loader = DataLoader(train_dataset, batch_size=1, shuffle=False)
-        probe_batch = next(iter(probe_loader)).to(device)
-        print("[gino] Running mandatory coverage preflight (section 8.4)...")
-        report = model.core.coverage_preflight(probe_batch)
-        for r in report['reports']:
-            print(f"  graph {r['graph']}: input_gno={r['input_gno']}  output_gno={r['output_gno']}")
-        print("[gino] Coverage preflight passed.")
 
     ema_model = build_ema_model(model, config)
     if ema_model is not None:

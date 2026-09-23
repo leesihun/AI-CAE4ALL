@@ -11,7 +11,7 @@
 
 model                            chi-mgnflow
 mode                             train
-gpu_ids                          5
+gpu_ids                          7
 parallel_mode                    ddp
 split_seed                       42
 dataset_dir                      ../../dataset/probabilistic/ex2_crack_path.h5
@@ -28,7 +28,7 @@ use_node_types                   False
 positional_features              0
 time_integration                 ar_ot
 training_epochs                  500
-batch_size                       2
+batch_size                       16
 learningr                        0.0001
 weight_decay                     0.0001
 warmup_epochs                    5
@@ -64,7 +64,7 @@ hierarchy_seed                   42
 training_seed                    42
 best_by                          crps
 num_vae_samples                  16
-vae_batch_size                   2
+vae_batch_size                   16
 latent_ch                        4
 ae_kl_weight                     0.000001
 ae_epochs                        500

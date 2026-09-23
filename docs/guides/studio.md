@@ -59,7 +59,7 @@ If a terminal still prints `Serving HTTP on 127.0.0.1 port 8080`, that is the
 wrong static server. Stop it with `Ctrl+C`, then run `START_STUDIO.bat`.
 The correct console starts with `AI-CAE4ALL Studio is ready`. The top-right
 badge reports repository/entrypoint discovery dynamically (for example,
-`12/12 entrypoints found`); both numbers must match the current
+`11/11 entrypoints found`); both numbers must match the current
 `GET /api/models` response. This is not an environment or data validation:
 run Preflight on a concrete block before execution.
 
@@ -80,12 +80,12 @@ do not exist yet (see below):
 - **Mesh field surrogates** — all on ex9 plasticity (`dataset/deterministic/ex9_plasticity.h5` to train,
   `dataset/deterministic/ex9_plasticity_infer.h5` held out; 900 / 87 samples, 20 steps, 3131 nodes):
   HI-MGN multiscale (the default), MeshGraphNets flat, MeshGraphNets-V,
-  cHI-MGNflow, Transolver, FNO, GINO, DeepONet, Point-DeepONet. They wire
+  cHI-MGNflow, Transolver, FNO, DeepONet, Point-DeepONet. They wire
   dataset → trainer → Train Metrics, with the held-out file — not the training
   file — feeding Inference and Evaluate. Each mirrors its own checked-in
   training config: the two MeshGraphNets pipelines follow
   `configs/MeshGraphNets/deterministic/ex9/`, cHI-MGNflow `configs/HI_MGNFlow/ex9/`,
-  Transolver `configs/Transolver/deterministic/ex9/`, and the four operators
+  Transolver `configs/Transolver/deterministic/ex9/`, and the three operators
   `configs/Neural_Operator/deterministic/ex9/`. MeshGraphNets-V has no checked-in ex9 config —
   it was deliberately left out of the ex4–ex9 roster as a one-to-many method —
   so its template reuses the same ex9 dataset keys (`cond_var 2` included) with

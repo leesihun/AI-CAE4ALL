@@ -22,7 +22,7 @@ def detect_family(checkpoint_path: str) -> str:
     writes -- no filename convention, no user-supplied hint required.
 
     - schema_version == 'deeponet_repo_v1'      -> neural_operator
-      (point_deeponet / deeponet / fno / gino; checkpoint['selected_model']
+      (point_deeponet / deeponet / fno; checkpoint['selected_model']
       picks the exact architecture inside the family)
     - schema_version == 'sdfflow_infer_v1', or an SDFFlow-identified
       legacy 'stage' in {'vae', 'fm'}           -> geometry (SDFFlow)

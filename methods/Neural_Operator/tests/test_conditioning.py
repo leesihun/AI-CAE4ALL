@@ -1,4 +1,4 @@
-"""Input-only conditioning rows (`cond_var`) across all four architectures.
+"""Input-only conditioning rows (`cond_var`) across all three architectures.
 
 Contract under test (dataset/DATASET_FORMAT.md):
 
@@ -33,8 +33,6 @@ MODEL_EXTRAS = {
                  'deeponet_sensor_resolution': [6, 6]},
     'fno': {'fno_grid_resolution': [8, 8], 'fno_modes': [3, 3],
             'fno_hidden_channels': 8, 'fno_layers': 2},
-    'gino': {'gino_variant': 'mesh_state', 'gino_grid_resolution': [8, 8],
-             'gino_fno_modes': [3, 3]},
 }
 
 

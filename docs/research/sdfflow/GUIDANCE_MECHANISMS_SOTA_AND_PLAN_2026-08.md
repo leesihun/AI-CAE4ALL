@@ -341,7 +341,7 @@ Tier 2의 응력/벽두께 상하한에 쓸 때도 surrogate/proxy calibration�
 gradient로 닫은 버전이다. 저자 표의 airfoil loss는 `4.80e-8` 대 strongest energy baseline `4.80e-4`, 시간은
 801s 대 3136.75s(74.47% 감소)다. abstract는 wing L/D 11.8% 개선을 주장하지만 표의 mean
 `21.1845 vs 18.3998`로 직접 계산하면 LHS 대비 약 15.1%라 내부 불일치가 있다. 더구나 이는 surrogate
-평가이고 high-fidelity CFD 검증이 아니다. SDFFlow에서 같은 형태를 만들려면 GINO/Transolver를 단지 "연결"하는
+평가이고 high-fidelity CFD 검증이 아니다. SDFFlow에서 같은 형태를 만들려면 Transolver를 단지 "연결"하는
 것 외에 end-to-end differentiability, geometry/mesh 표현 연결, surrogate OOD 검증이 필요하다.
 
 ### 1.C 엔지니어링 역설계 통합 시스템 — (A)+(B)를 실제로 조립하면
@@ -381,7 +381,7 @@ unconditional −15.47%, DrivAerNet++ conditional −6.53%다. `15.47~22.70%`는
 
 **SDFFlow와의 대응은 roadmap analogy다.** shape decoder 자리는 비슷하지만 PhysGen 재현에는 physics label을
 공유 latent로 공동학습하는 SP-VAE, pressure/drag head, drag-regularized flow, pressure-force refinement,
-re-noise alternation이 모두 필요하다. 별도 GINO/Transolver를 붙이는 것만으로 같은 latent/gradient 경로가 생기지
+re-noise alternation이 모두 필요하다. 별도 Transolver를 붙이는 것만으로 같은 latent/gradient 경로가 생기지
 않는다. C2/E2는 그중 "sampling-time differentiable objective와 최종 검증"을 시험한 인프라 조각이다.
 
 #### C.2 3DID(arXiv 2512.08987) — triplane latent + 2단계(guidance 후 위상보존 정제)

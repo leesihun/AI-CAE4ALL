@@ -60,33 +60,23 @@ def _fno_cfg(**overrides):
     return cfg
 
 
-def _gino_cfg(**overrides):
-    cfg = {'model': 'gino', 'output_var': 4, 'std_noise': 0.0, 'split_seed': SEED,
-           'gino_grid_resolution': [6, 6], 'gino_fno_modes': [2, 3],
-           'gino_fno_hidden_channels': 12, 'gino_fno_layers': 2,
-           'gino_in_radius': 0.35, 'gino_out_radius': 0.35}
-    cfg.update(overrides)
-    return cfg
-
-
 def test_partition_stages_minmax():
-    # Heavy entry/exit, light middles (the GINO shape): the partitioner must
-    # not lump both heavy blocks onto one stage.
+    # Heavy entry/exit, light middles: the partitioner must not lump both
+    # heavy blocks onto one stage.
     assignment = partition_stages([100.0, 1.0, 1.0, 100.0], 2)
     assert assignment == [[0, 1], [2, 3]] or assignment == [[0, 1, 2], [3]]
     stage_costs = [sum([100.0, 1.0, 1.0, 100.0][b] for b in blocks) for blocks in assignment]
     assert max(stage_costs) < 202.0  # never everything on one stage
 
 
-@pytest.mark.parametrize('model_name', ['fno', 'gino'])
-def test_stage_pruning_partitions_state_dict(model_name):
+def test_stage_pruning_partitions_state_dict():
     """Union of the stages' state-dict keys == the full wrapper's keys, with
     no overlap: the rank-0 merge reconstructs exactly the single-GPU model."""
     spec, domain = _make_spec_domain()
-    cfg = _fno_cfg() if model_name == 'fno' else _gino_cfg()
+    cfg = _fno_cfg()
 
     torch.manual_seed(SEED)
-    core = MODEL_REGISTRY[model_name](cfg, spec, domain)
+    core = MODEL_REGISTRY['fno'](cfg, spec, domain)
     full_keys = set(OperatorWrapper(core, cfg).state_dict().keys())
 
     assignment = [[0, 1], [2, 3]]  # 2 layers -> 4 blocks
@@ -140,10 +130,9 @@ def test_model_split_config_gating():
                                 'parallel_mode': 'model_split', 'augment_geometry': True})
     validate_common_config({'model': 'fno', 'mode': 'train',
                             'parallel_mode': 'model_split', 'pipeline_microbatches': 4})
-    validate_common_config({'model': 'gino', 'mode': 'train', 'parallel_mode': 'model_split'})
 
 
-def _pipeline_worker(rank, world_size, port, model_name):
+def _pipeline_worker(rank, world_size, port):
     """Two-stage CPU/gloo pipeline; each rank asserts its stage's loss/grads
     against an in-process single-model reference built with the same seed."""
     import torch.distributed as dist
@@ -158,7 +147,7 @@ def _pipeline_worker(rank, world_size, port, model_name):
         set_pipeline_process_groups(pg_data, pg_grad)
 
         spec, domain = _make_spec_domain()
-        cfg = _fno_cfg() if model_name == 'fno' else _gino_cfg()
+        cfg = _fno_cfg()
         assignment = [[0, 1], [2, 3]]
         device = torch.device('cpu')
 
@@ -175,7 +164,7 @@ def _pipeline_worker(rank, world_size, port, model_name):
 
         # Reference: the full single-process model, same seed, same graph.
         torch.manual_seed(SEED)
-        ref_core = MODEL_REGISTRY[model_name](cfg, spec, domain)
+        ref_core = MODEL_REGISTRY['fno'](cfg, spec, domain)
         ref = OperatorWrapper(ref_core, cfg)
         ref.train()
         ref_graph = _make_graph(120)
@@ -202,11 +191,10 @@ def _pipeline_worker(rank, world_size, port, model_name):
         dist.destroy_process_group()
 
 
-@pytest.mark.parametrize('model_name', ['fno', 'gino'])
-def test_two_stage_pipeline_matches_single_model(model_name):
+def test_two_stage_pipeline_matches_single_model():
     """End-to-end: forward+backward through a real 2-process gloo pipeline
     reproduces the single-model loss and every parameter gradient."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(('127.0.0.1', 0))
         port = s.getsockname()[1]
-    mp.spawn(_pipeline_worker, args=(2, port, model_name), nprocs=2, join=True)
+    mp.spawn(_pipeline_worker, args=(2, port), nprocs=2, join=True)

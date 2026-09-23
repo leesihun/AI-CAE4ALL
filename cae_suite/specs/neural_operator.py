@@ -59,26 +59,11 @@ DEEPO_KEYS = frozenset(
 FNO_KEYS = frozenset(
     {"fno_grid_resolution", "fno_modes", "fno_hidden_channels", "fno_layers", "fno_use_channel_mlp", "fno_norm", "fno_variant"}
 )
-# Exact mirror of Neural_Operator/general_modules/config_validation.py GINO_KEYS.
-GINO_KEYS = frozenset(
-    {
-        "gino_variant", "gino_grid_resolution", "gino_fno_modes", "gino_fno_hidden_channels",
-        "gino_fno_layers", "gino_in_radius", "gino_out_radius", "gino_kernel_hidden",
-        "gino_max_empty_input_fraction", "gino_query_chunk_size", "gino_use_torch_cluster",
-        "gino_group_shared_geometry", "gino_cache_neighbors",
-        # Opt-in ShapeNet Car paper decoder. These keys are inert for mesh_state.
-        "gino_tucker_rank", "gino_channel_mlp_expansion", "gino_lifting_hidden",
-        "gino_kernel_widths", "gino_projection_widths", "gino_max_num_neighbors",
-        "gino_pos_embedding_type", "gino_coord_embed_dim",
-        "gino_include_grid_coordinates", "gino_domain_padding",
-    }
-)
 
 VARIANT_KEYS = {
     "point_deeponet": POINT_KEYS,
     "deeponet": DEEPO_KEYS,
     "fno": FNO_KEYS,
-    "gino": GINO_KEYS,
 }
 
 # Exact mirror of Neural_Operator/general_modules/config_validation.py REMOVED_KEYS.
@@ -97,7 +82,6 @@ REQUIRED_VARIANT_TRAIN = {
     "point_deeponet": frozenset({"point_sensor_count", "point_hidden_channels", "point_feature_dim", "pointnet_depth", "point_trunk_depth"}),
     "deeponet": frozenset({"deeponet_sensor_resolution", "deeponet_hidden_channels", "deeponet_branch_depth", "deeponet_trunk_depth", "deeponet_basis_dim"}),
     "fno": frozenset({"fno_grid_resolution", "fno_modes", "fno_hidden_channels", "fno_layers"}),
-    "gino": frozenset({"gino_grid_resolution", "gino_fno_modes", "gino_fno_hidden_channels", "gino_fno_layers", "gino_in_radius", "gino_out_radius", "gino_kernel_hidden"}),
 }
 
 
@@ -142,45 +126,6 @@ def _validate_minimum_int_entries(
                 f"{name}[{index}] must be an integer >= {minimum}; got {raw!r}.",
                 field_name=name,
             )
-
-
-def _validate_paper_decoder_grid(ctx: SpecValidationContext) -> None:
-    """Validate the CarCFD decoder's centered-total-frequency convention.
-
-    Unlike SpectralConvNd, the paper decoder interprets each configured mode as
-    the total centered span and converts only the final axis to rFFT storage.
-    Scalars are expanded to all three axes by the native implementation.
-    """
-    for name, minimum in (("gino_grid_resolution", 2), ("gino_fno_modes", 1)):
-        if name not in ctx.values:
-            continue
-        entries = as_list(ctx.values[name])
-        if len(entries) not in {1, 3}:
-            ctx.add(
-                "NOVAR-GINO-PAPER-GRID",
-                Severity.ERROR,
-                f"{name} must be a scalar or exactly three integers for gino_variant=paper_decoder.",
-                field_name=name,
-            )
-            continue
-        _validate_minimum_int_entries(ctx, name, minimum, "NOVAR-GINO-PAPER-GRID")
-    if "gino_grid_resolution" in ctx.values and "gino_fno_modes" in ctx.values:
-        resolution = list(as_list(ctx.values["gino_grid_resolution"]))
-        modes = list(as_list(ctx.values["gino_fno_modes"]))
-        if len(resolution) == 1:
-            resolution *= 3
-        if len(modes) == 1:
-            modes *= 3
-        if len(resolution) == len(modes) == 3:
-            for index, (size_raw, mode_raw) in enumerate(zip(resolution, modes)):
-                size, mode = integer(size_raw), integer(mode_raw)
-                if size is not None and mode is not None and mode > size:
-                    ctx.add(
-                        "NOVAR-GINO-PAPER-GRID",
-                        Severity.ERROR,
-                        f"gino_fno_modes[{index}]={mode} exceeds gino_grid_resolution[{index}]={size}.",
-                        field_name="gino_fno_modes",
-                    )
 
 
 def validate_neural_operator(ctx: SpecValidationContext) -> None:
@@ -233,8 +178,8 @@ def validate_neural_operator(ctx: SpecValidationContext) -> None:
     if str(values.get("out_of_bounds_policy", "error")).lower() not in {"error", "clamp"}:
         ctx.add("NOVAR-OOB-001", Severity.ERROR, "out_of_bounds_policy must be error or clamp.", field_name="out_of_bounds_policy")
     sdf_source = str(values.get("sdf_source", "none")).lower()
-    if sdf_source not in {"none", "dataset", "sidecar"}:
-        ctx.add("NOVAR-SDF-SOURCE", Severity.ERROR, "sdf_source must be none, dataset, or sidecar.", field_name="sdf_source")
+    if sdf_source not in {"none", "dataset", "sidecar", "mesh"}:
+        ctx.add("NOVAR-SDF-SOURCE", Severity.ERROR, "sdf_source must be none, dataset, sidecar, or mesh.", field_name="sdf_source")
     if str(values.get("integration_weight_source", "none")).lower() != "none":
         ctx.add(
             "NOVAR-INTEGRATION-WEIGHTS",
@@ -247,14 +192,14 @@ def validate_neural_operator(ctx: SpecValidationContext) -> None:
     if parallel not in {"ddp", "model_split"}:
         ctx.add("NOVAR-PARALLEL-001", Severity.ERROR, "parallel_mode must be 'ddp' or 'model_split'.", field_name="parallel_mode")
     if parallel == "model_split":
-        if model not in {"fno", "gino"}:
-            ctx.add("NOVAR-PARALLEL-002", Severity.ERROR, "model_split supports only fno and gino.", field_name="parallel_mode")
+        if model != "fno":
+            ctx.add("NOVAR-PARALLEL-002", Severity.ERROR, "model_split supports only fno.", field_name="parallel_mode")
         if values.get("augment_geometry", False) is True:
             ctx.add("NOVAR-PARALLEL-003", Severity.ERROR, "augment_geometry must be False with model_split.", field_name="augment_geometry")
         if len(as_list(values.get("gpu_ids", []))) < 2:
             ctx.add("NOVAR-PARALLEL-004", Severity.ERROR, "model_split requires at least two gpu_ids.", field_name="gpu_ids")
 
-    validate_nonnegative_int_fields(ctx, ("train_query_chunk_size", "infer_query_chunk_size", "gino_query_chunk_size"), "NOVAR-CHUNK-001")
+    validate_nonnegative_int_fields(ctx, ("train_query_chunk_size", "infer_query_chunk_size"), "NOVAR-CHUNK-001")
     validate_positive_fields(ctx, ("train_eval_subset_size",), "NOVAR-EVAL-SUBSET")
     if model == "fno":
         _validate_grid_modes(ctx, "fno_grid_resolution", "fno_modes", "NOVAR-FNO-001")
@@ -263,64 +208,6 @@ def validate_neural_operator(ctx: SpecValidationContext) -> None:
             ctx.add("NOVAR-FNO-VARIANT", Severity.ERROR, "fno_variant must be mesh or paper_darcy.", field_name="fno_variant")
         if str(values.get("fno_norm", "none")).lower() != "none":
             ctx.add("NOVAR-FNO-NORM", Severity.ERROR, "fno_norm must be none.", field_name="fno_norm")
-    elif model == "gino":
-        variant = str(values.get("gino_variant", "mesh_state")).lower()
-        if variant not in {"mesh_state", "paper_decoder"}:
-            ctx.add(
-                "NOVAR-GINO-VARIANT",
-                Severity.ERROR,
-                "gino_variant must be 'mesh_state' or the opt-in 'paper_decoder'.",
-                field_name="gino_variant",
-            )
-        if parallel == "model_split" and variant == "paper_decoder":
-            ctx.add(
-                "NOVAR-GINO-PARALLEL",
-                Severity.ERROR,
-                "gino_variant=paper_decoder does not implement model-split execution; use parallel_mode=ddp.",
-                field_name="parallel_mode",
-            )
-        if variant == "paper_decoder":
-            _validate_paper_decoder_grid(ctx)
-        else:
-            _validate_grid_modes(ctx, "gino_grid_resolution", "gino_fno_modes", "NOVAR-GINO-001")
-        validate_positive_fields(ctx, ("gino_fno_hidden_channels", "gino_fno_layers", "gino_in_radius", "gino_out_radius", "gino_kernel_hidden"), "NOVAR-GINO-POSITIVE")
-        validate_nonnegative_int_fields(ctx, ("gino_max_num_neighbors",), "NOVAR-GINO-NEIGHBORS")
-        if "gino_max_empty_input_fraction" in values:
-            value = numeric(values["gino_max_empty_input_fraction"])
-            if value is None or not 0 <= value <= 1:
-                ctx.add("NOVAR-GINO-COVERAGE", Severity.ERROR, "gino_max_empty_input_fraction must be in [0, 1].", field_name="gino_max_empty_input_fraction")
-        if "gino_domain_padding" in values:
-            value = numeric(values["gino_domain_padding"])
-            if value is None or not 0 <= value < 1:
-                ctx.add("NOVAR-GINO-PADDING", Severity.ERROR, "gino_domain_padding must be in [0, 1).", field_name="gino_domain_padding")
-            elif variant != "paper_decoder":
-                ctx.add(
-                    "NOVAR-GINO-PADDING-INACTIVE",
-                    Severity.WARNING,
-                    "gino_domain_padding is active only for gino_variant=paper_decoder.",
-                    field_name="gino_domain_padding",
-                    promote_in_strict=True,
-                )
-        if variant == "paper_decoder":
-            if str(values.get("gino_pos_embedding_type", "nerf")).lower() not in {"nerf", "paper_2023"}:
-                ctx.add("NOVAR-GINO-EMBED", Severity.ERROR, "gino_pos_embedding_type must be nerf or paper_2023.", field_name="gino_pos_embedding_type")
-            validate_positive_fields(
-                ctx,
-                ("gino_coord_embed_dim", "gino_lifting_hidden", "gino_channel_mlp_expansion"),
-                "NOVAR-GINO-PAPER-POSITIVE",
-            )
-            for name in ("gino_kernel_widths", "gino_projection_widths"):
-                if name in values:
-                    for raw in as_list(values[name]):
-                        if integer(raw) is None or integer(raw) <= 0:
-                            ctx.add("NOVAR-GINO-WIDTHS", Severity.ERROR, f"{name} entries must be positive integers.", field_name=name)
-                            break
-            if "gino_tucker_rank" in values:
-                rank = numeric(values["gino_tucker_rank"])
-                if rank is None or not 0 < rank <= 1:
-                    ctx.add("NOVAR-GINO-TUCKER", Severity.ERROR, "gino_tucker_rank must be in (0, 1].", field_name="gino_tucker_rank")
-            if values.get("gino_include_grid_coordinates", True) is not True:
-                ctx.add("NOVAR-GINO-GRID-COORDS", Severity.ERROR, "gino_include_grid_coordinates must be True for paper_decoder.", field_name="gino_include_grid_coordinates")
     elif model == "point_deeponet":
         validate_nonnegative_int_fields(ctx, ("point_sensor_count",), "NOVAR-POINT-SENSORS")
         validate_positive_fields(ctx, ("point_hidden_channels", "point_feature_dim", "pointnet_depth", "point_condition_depth", "point_trunk_depth", "point_refiner_depth", "point_siren_omega0"), "NOVAR-POINT-POSITIVE")
@@ -361,11 +248,11 @@ def validate_neural_operator(ctx: SpecValidationContext) -> None:
 
 
 def build_neural_operator_spec() -> MethodSpec:
-    all_keys = COMMON_KEYS | POINT_KEYS | DEEPO_KEYS | FNO_KEYS | GINO_KEYS | NO_REMOVED_KEYS
+    all_keys = COMMON_KEYS | POINT_KEYS | DEEPO_KEYS | FNO_KEYS | NO_REMOVED_KEYS
     return MethodSpec(
         spec_id="neural_operator",
         display_name="Neural Operator",
-        model_ids=("point_deeponet", "deeponet", "fno", "gino"),
+        model_ids=("point_deeponet", "deeponet", "fno"),
         repository="methods/Neural_Operator",
         entrypoint="main.py",
         valid_modes=("train", "inference"),

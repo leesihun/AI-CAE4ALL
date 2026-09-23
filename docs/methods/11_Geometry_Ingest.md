@@ -25,7 +25,7 @@ One artifact serves every mesh-consuming method, because in this suite the
 point-based models already treat mesh nodes as a point cloud:
 
 - **MeshGraphNets / -variational** use `mesh_edge` (the graph).
-- **DeepONet / FNO / GINO / Transolver** ignore `mesh_edge` and use the nodes as a
+- **DeepONet / FNO / Transolver** ignore `mesh_edge` and use the nodes as a
   **point cloud** (optionally resampled to a fixed count).
 
 ## The two representations, one pipeline

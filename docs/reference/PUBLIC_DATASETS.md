@@ -253,7 +253,7 @@ mechanism, so those rows are excluded rather than re-tagged).
 | --- | --- |
 | `configs/MeshGraphNets/deterministic/ex4..ex9/` | one train config per dataset above |
 | `configs/Transolver/deterministic/ex4..ex9/` | same, `use_world_edges False` everywhere (see below); `use_node_types False` on `ex4`/`ex6` (7-row files) |
-| `configs/Neural_Operator/deterministic/ex4..ex7/` | `gino` (one representative alias); `ex8`/`ex9` additionally have `deeponet`/`fno`/`point_deeponet` |
+| `configs/Neural_Operator/deterministic/ex4..ex9/` | `deeponet`/`fno`/`point_deeponet`, one train + one infer config each |
 | `configs/SimulGenVAE/deterministic/ex6,ex8,ex9/` | standalone `train_vae`, fixed-topology datasets only (see below) |
 
 **`configs/MeshGraphNets_Variational/` intentionally has no `ex4`-`ex9` entries.** The variational tree
@@ -266,7 +266,7 @@ but were removed afterward as a wrong fit for the tool, not because they failed 
 
 `ex4`-`ex6` train configs set both `dataset_dir` (train split) and `infer_dataset` (extrapolation
 split) in the same file, matching the `ex1`/`ex2` convention -- no separate `config_infer_*.txt`
-needed since MeshGraphNets/Transolver/GINO all run an inference pass against `infer_dataset` from
+needed since MeshGraphNets/Transolver/Neural_Operator all run an inference pass against `infer_dataset` from
 the same config. No `_arrt`/`_smoke` tiers or configs exist anymore (see the 2026-08-18 note
 above).
 
@@ -287,10 +287,6 @@ not re-run against the new files:
 | Transolver, `ex5` (plate) | ✅ full epoch 0, TrainOpt 0.526->Valid 0.46 |
 | Transolver, `ex6` (flag) | ✅ 98% epoch 0, no crash |
 | Transolver, `ex7` (airfrans) | preflight only |
-| GINO, `ex4` (cylinder) | ✅ full run incl. rollout viz -- caught and fixed a real config bug (`gino_grid_resolution` needs 2 entries for this planar dataset, not 3; z-coordinate is always 0 even though `disp_z` genuinely varies) |
-| GINO, `ex5` (plate) | ✅ 75% epoch 0 |
-| GINO, `ex6` (flag) | ✅ full 20 epochs, same 2D grid-resolution fix applied |
-| GINO, `ex7` (airfrans) | preflight only |
 
 ### 2026-08-19: ex8/ex9 rebuilt, real-execution-verified across all four methods
 
@@ -313,7 +309,6 @@ printed then stopped:
 | --- | --- |
 | MeshGraphNets, `ex8` (elasticity) | ✅ 2 full epochs, TrainOpt 1.20e+00 -> 7.27e-01 |
 | MeshGraphNets, `ex9` (plasticity) | ✅ real per-step loss (500-epoch config, stopped mid-epoch-0 by design) |
-| GINO, `ex8` (elasticity) | ✅ coverage preflight passed, real per-step loss |
 | Transolver, `ex9` (plasticity) | ✅ real per-step loss |
 | SimulGenVAE, `ex8` (elasticity) | ✅ Epoch 0 Recon: 4.77e-01, KL: 2.09e+01 |
 
@@ -332,7 +327,7 @@ whole tree, not just the top PID, or GPU memory stays pinned by zombie workers.
 refuses the flag at config-validation time (`TRANS-WORLD-001`); Neural_Operator accepts the flag
 but "No model consumes MGN edge attributes" per its own CLAUDE.md, so it would silently ignore
 world edges even if set. `deforming_plate` and `flag_simple`'s contact physics can only be
-*meaningfully* modeled by MeshGraphNets today, even though Transolver/GINO can train on the same
+*meaningfully* modeled by MeshGraphNets today, even though Transolver/Neural_Operator can train on the same
 files.
 
 ### SimulGenVAE and MLP: fixed-mesh-only, and what that means concretely
@@ -411,7 +406,7 @@ No, and it was never intended to be -- each method has a different data contract
 | --- | --- | --- | --- |
 | `meshgraphnets`, `meshgraphnets-v` | Yes (config-verified) | Yes (config-verified) | native format |
 | `transolver` | Yes, `use_world_edges` forced False | Yes | same HDF5, no edge consumption; TRANS-WORLD-001 rejects world edges |
-| `point_deeponet`/`deeponet`/`fno`/`gino` | Yes (config-verified this session, `gino`) | Yes (config-verified this session, `gino`) | reads identical HDF5 per Neural_Operator/CLAUDE.md; simply never had a config before now |
+| `point_deeponet`/`deeponet`/`fno` | Yes | Yes | reads identical HDF5 per Neural_Operator/CLAUDE.md; simply never had a config before now |
 | `simulgenvae` | **No** for cylinder/plate (per-trajectory mesh, node count varies 88-96 ways across 100 samples) | **No** (199 distinct node counts across 200 samples) | dense-FOM contract hard-requires one fixed node count for the whole file. `flag_simple`'s fixed 1579-node topology is the one exception, structurally, but untested |
 | `mlp` | No | No | tabular X/Y contract, not mesh; nothing here is a scalar-in/scalar-out design table |
 | `sdfflow` | No | No | different SDF-sidecar layout entirely, no relation to `data/{id}/nodal_data` |

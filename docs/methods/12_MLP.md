@@ -43,8 +43,12 @@ output_names  str   [M]                optional column labels
 MAE/RMSE. The launcher validates this as `dataset_kind=table_hdf5`
 ([cae_suite/dataset_probe.py](../../cae_suite/dataset_probe.py)) and **cross-checks
 `X`/`Y` widths against `input_var`/`output_var` before launch** (`DATASET-FEATURES-001/002`).
-A tiny sample generator ships at
-[dataset/deterministic/mlp/make_sample.py](../../dataset/deterministic/mlp/make_sample.py).
+Two tabular datasets ship: `dataset/deterministic/ex3_NASA_CRM_mlp_train.h5`
+(`X [105, 6]`, `Y [105, 4]`) and `ex3_NASA_CRM_mlp_test.h5` (`X [44, 6]`,
+`Y [44, 4]`), both carrying `input_names`/`output_names`/`sample_ids` and a
+`target_definition` attribute ("surface-area-weighted mean over full-resolution
+surface nodes"). The `dataset/deterministic/mlp/` directory and its
+`make_sample.py` generator referenced by earlier revisions no longer exist.
 
 ## Training details
 
@@ -84,10 +88,11 @@ truth. Minimal train example:
 model mlp
 mode train
 gpu_ids -1
-dataset_dir ../dataset/deterministic/mlp/train.h5
-modelpath ../output/mlp/ex1/mlp.pth
-input_var 3
-output_var 2
+dataset_dir ../../dataset/deterministic/ex3_NASA_CRM_mlp_train.h5
+infer_dataset ../../dataset/deterministic/ex3_NASA_CRM_mlp_test.h5
+modelpath ../../output/mlp/ex3/mlp.pth
+input_var 6
+output_var 4
 hidden_layers 256, 256, 128
 activation gelu
 loss mse
@@ -95,6 +100,11 @@ training_epochs 200
 batch_size 32
 learningr 0.001
 ```
+
+> Native paths are **cwd-relative to the method repository**, because the launcher
+> runs the native entrypoint with its cwd set to `methods/<Name>/`. That is why
+> every checked-in config spells datasets `../../dataset/...` and artifacts
+> `../../output/...`.
 
 **No checked-in config.** MLP is not part of the `configs/campaigns/dataset_matrix`
 baseline roster (it is tabular, not mesh), so `configs/MLP/` is currently empty.

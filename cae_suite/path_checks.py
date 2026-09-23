@@ -12,6 +12,43 @@ from .specs import MethodSpec, PathKind
 _PATH_SENTINELS = {"", "none", "null", "false"}
 
 
+# Which runtimes write the train-derived normalizers back into the *source*
+# HDF5, in which modes, and what the native default is when the config leaves
+# ``write_preprocessing`` out.  Every one of these call sites is gated on that
+# key, so a check that ignores it warns about a mutation that cannot happen:
+#
+#   methods/MeshGraphNets/general_modules/mesh_dataset.py:517
+#   methods/MeshGraphNets_Variational/general_modules/mesh_dataset.py:386
+#   methods/HI_MGNFlow/general_modules/mesh_dataset.py:386
+#       -> ``config.get('write_preprocessing', True)``   (default ON)
+#   methods/Transolver/training_profiles/{distributed,sharded}_training.py
+#       -> ``config.get('write_preprocessing', False)``  (default OFF)
+#
+# chi-MGNflow reaches the writer from every one of its training modes (they all
+# go through training_profiles/), which is why all three are listed.  The
+# Neural Operator runtime has no writer at all and its spec forbids the key, so
+# it is deliberately absent.
+_PREPROCESSING_WRITERS: dict[str, tuple[frozenset[str], bool]] = {
+    "meshgraphnets": (frozenset({"train"}), True),
+    "meshgraphnets_variational": (frozenset({"train"}), True),
+    "chi_mgnflow": (frozenset({"train", "train_ae", "train_prior"}), True),
+    "transolver": (frozenset({"train"}), False),
+}
+
+
+def _preprocessing_enabled(value: Any) -> bool:
+    """Read ``write_preprocessing`` the way the native ``if not ...:`` gate does.
+
+    The parser yields a real ``bool`` for ``true``/``false``, but a config may
+    also spell it ``1``/``0``, so accept what Python's truth test would.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return str(value).strip().lower() in {"true", "1", "yes", "on"}
+
+
 def _absolute_native_path(value: str, repository_root: Path) -> Path:
     """Absolutize a native path value, keeping the case the config spelled.
 
@@ -136,22 +173,36 @@ def validate_paths(
                     location=parsed.location(rule.field),
                 )
 
-    if spec.spec_id in {"meshgraphnets", "meshgraphnets_variational"} and mode == "train" and "dataset_dir" in resolved:
-        dataset = resolved["dataset_dir"]
-        if dataset.exists() and not os.access(dataset, os.W_OK):
-            report.add(
-                "PATH-MUTATE-002",
-                Severity.ERROR,
-                "The selected MeshGraphNets training path may write preprocessing statistics, but the HDF5 file is read-only.",
-                field_name="dataset_dir",
-                location=parsed.location("dataset_dir"),
-            )
-        else:
-            report.add(
-                "PATH-MUTATE-001",
-                Severity.WARNING,
-                "MeshGraphNets training may write preprocessing statistics into the source HDF5 file.",
-                field_name="dataset_dir",
-                location=parsed.location("dataset_dir"),
-            )
+    writer = _PREPROCESSING_WRITERS.get(spec.spec_id)
+    if writer is not None and mode in writer[0] and "dataset_dir" in resolved:
+        modes, default = writer
+        enabled = _preprocessing_enabled(parsed.values.get("write_preprocessing", default))
+        if enabled:
+            dataset = resolved["dataset_dir"]
+            # ``write_preprocessing`` may be defaulted rather than written down;
+            # point the diagnostic at the key when the config actually has it,
+            # and fall back to dataset_dir when the default is what turned it on.
+            field = "write_preprocessing" if "write_preprocessing" in parsed.values else "dataset_dir"
+            source = ("write_preprocessing is on" if field == "write_preprocessing"
+                      else f"write_preprocessing is unset and defaults to {default} here")
+            if dataset.exists() and not os.access(dataset, os.W_OK):
+                report.add(
+                    "PATH-MUTATE-002",
+                    Severity.ERROR,
+                    f"{spec.display_name} training writes preprocessing statistics into the source "
+                    f"HDF5 ({source}), but the file is read-only.",
+                    field_name=field,
+                    location=parsed.location(field),
+                    hint="Set write_preprocessing False, or make the HDF5 writable.",
+                )
+            else:
+                report.add(
+                    "PATH-MUTATE-001",
+                    Severity.WARNING,
+                    f"{spec.display_name} training will write preprocessing statistics into the "
+                    f"source HDF5 file ({source}).",
+                    field_name=field,
+                    location=parsed.location(field),
+                    hint="Set write_preprocessing False to keep the dataset untouched.",
+                )
     return resolved

@@ -1,9 +1,11 @@
-"""Radius-neighbor search for GINO's input/output graph-neural-operator kernels
-(IMPLEMENTATION_PLAN.md section 7.4). scipy cKDTree is the baseline backend;
-torch_cluster.radius is an optional accelerator, enabled only after a parity
-test on random fixtures (test_radius_neighbors.py) proves it returns the same
-edge set. Both operate on a single graph at a time -- GINO loops over `ptr`
-per graph anyway (section 8.4), so no batched/ragged radius search is needed.
+"""Radius-neighbor search utilities (IMPLEMENTATION_PLAN.md section 7.4). scipy
+cKDTree is the baseline backend; torch_cluster.radius is an optional
+accelerator, enabled only after a parity test on random fixtures
+(test_radius_neighbors.py) proves it returns the same edge set. Both operate on
+a single graph at a time; there is no batched/ragged radius search.
+
+No operator core builds radius graphs; `min_reachable_radius` feeds the
+grid-coverage report in misc/audit_input_identifiability.py.
 """
 
 from typing import Tuple
@@ -45,7 +47,7 @@ def radius_neighbors_scipy(queries: np.ndarray, sources: np.ndarray, r: float) -
     # Vectorized assembly: np.repeat + np.concatenate over the per-query lists
     # (O(num_queries) Python, not O(num_edges)) -- the old double for-loop built
     # the edge list with one .append() per edge, which is tens of millions of
-    # Python ops per GINO forward on real meshes.
+    # Python ops per call on real meshes.
     q_idx = np.repeat(np.arange(queries.shape[0], dtype=np.int64), counts)
     s_idx = np.concatenate(
         [np.asarray(nb, dtype=np.int64) for nb in neighbor_lists if len(nb) > 0])
@@ -64,8 +66,8 @@ def radius_neighbors_torch_cluster(queries: torch.Tensor, sources: torch.Tensor,
     preallocates against: too small silently DROPS neighbors (changing the
     kernel-integral result), too large wastes O(num_queries * cap) memory.
     <= 0 means "no cap" (= number of sources) -- callers that know the true max
-    (e.g. MeshGINO's auto-growing cap) should pass a snug value. Truncation
-    detection is the caller's job (this function does not grow the cap).
+    should pass a snug value. Truncation detection is the caller's job (this
+    function does not grow the cap).
 
     `query_chunk` > 0 splits the queries into contiguous blocks and searches
     each separately, bounding the preallocation to `query_chunk * cap` rows.
@@ -95,21 +97,9 @@ def radius_neighbors_torch_cluster(queries: torch.Tensor, sources: torch.Tensor,
     return torch.cat(parts, dim=1)
 
 
-def radius_neighbor_count_sum(queries: np.ndarray, sources: np.ndarray, r: float) -> int:
-    """Total number of (query, source) pairs within distance r, without
-    materializing the edge list. Used by the model-split stage partitioner's
-    cost model (parallelism/stages.py) -- `query_ball_point(...,
-    return_length=True)` is vectorized and avoids the O(E) python loop of
-    `radius_neighbors_scipy` on million-node probes."""
-    if sources.shape[0] == 0 or queries.shape[0] == 0:
-        return 0
-    tree = cKDTree(sources)
-    return int(np.sum(tree.query_ball_point(queries, r, return_length=True)))
-
-
 def neighbor_stats(edge_index: np.ndarray, num_queries: int) -> dict:
-    """min/median/max neighbor count per query and the empty-query fraction,
-    used by GINO's mandatory coverage preflight (section 8.4)."""
+    """min/median/max neighbor count per query and the empty-query fraction
+    (section 8.4's coverage diagnostic)."""
     if num_queries == 0:
         return {'min': 0, 'median': 0.0, 'max': 0, 'empty_fraction': 1.0}
     counts = np.zeros(num_queries, dtype=np.int64)

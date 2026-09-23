@@ -1,0 +1,39 @@
+% geometry_generation/ex4 - sdfflow on Thingi10K; held-out RECONSTRUCTION scoring of the VAE
+%   trained by the paired config_train_sdfflow.txt. Measurement config, not a generator: mode
+%   evaluate decodes each shape through the VAE and reports SDF/occupancy error. For new
+%   geometry use config_infer_sdfflow.txt (mode sample).
+% This route is unconditional (the training config sets use_conditions False); eval_task
+%   reconstruction needs no conditioner either way.
+% dataset_dir is ex4_thingi10k_infer.h5 (split_role infer, 1807 models) -- the sibling file the
+%   packer held out of ex4_thingi10k.h5 (split_role train, 7234 models). Nothing in it was seen
+%   in training, so the whole file is the test set.
+% overfit_all_shapes True is what makes "the whole file" the candidate pool: without it
+%   build_dataset_splits would re-cut this already-held-out file 80/10/10 and score only its
+%   last ~10%. It is a split selector here (see SPLIT_KEYS in
+%   methods/SDFFlow/inference_profiles/evaluate.py), not an overfitting switch -- nothing trains.
+% eval_num_shapes 256 caps the run: marching cubes at 128^3 on all 1807 models is hours, and
+%   evaluate draws a SEEDED RANDOM subset (eval_seed), not a head slice, so 256 is unbiased.
+%   Set it to 0 to score the whole file.
+% num_encoder_points/num_query_points mirror the training config; the encoder is point-count
+%   sensitive, so scoring at a different density measures the shift, not the model.
+% Writes eval_test.json (aggregate) + eval_test.csv (per shape) under output_dir.
+% Reference: https://arxiv.org/abs/1605.04797 ; https://arxiv.org/abs/2301.11445
+% No source HDF5 writes. Checkpoints are created by the paired training config.
+
+model                            sdfflow
+mode                             evaluate
+gpu_ids                          2
+parallel_mode                    single
+dataset_dir                      ../../dataset/geometry_generation/ex4_thingi10k_infer.h5
+split_seed                       42
+split_by_parent                  False
+overfit_all_shapes               True
+num_encoder_points               6144
+num_query_points                 8192
+eval_task                        reconstruction
+eval_split                       test
+eval_num_shapes                  256
+eval_seed                        0
+mc_resolution                    128
+vae_modelpath                    ../../output/geometry_generation/ex4_thingi10k/sdfflow/vae.pth
+output_dir                       ../../output/geometry_generation/ex4_thingi10k/sdfflow/eval

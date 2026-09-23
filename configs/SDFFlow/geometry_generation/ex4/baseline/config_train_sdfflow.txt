@@ -1,0 +1,96 @@
+% geometry_generation/ex4 - sdfflow on Thingi10K (7234 train / 1807 infer, 8:2 split).
+% Logical order: input -> output -> conditioner -> partNo (named HDF5 arrays, not nodal rows).
+% Train input: surface_points, surface_normals, query_xyz; generation input: latent noise and query_xyz.
+% Output: signed_distance (zero level set is the generated surface).
+% Conditioner: ABSENT -- this route is unconditional (use_conditions False), per
+%   methods/SDFFlow/CLAUDE.md. Thingi10K is a heterogeneous grab bag of user-uploaded models with
+%   no shared parameterization, no labels and no lineage, so the only signal available would be the
+%   five geometric descriptors; they stay in the HDF5 cond rows (~3.5 effective degrees of freedom,
+%   the richest of the three new sets) and can be selected later via condition_names without
+%   rebuilding the dataset. partNo: absent.
+% Warmup schedules are scaled to the shorter run (400 vs ex1's 1500 VAE epochs) so KL annealing
+%   still finishes in the first ~14% of training rather than halfway through it.
+% Mesh complexity is extremely wide here (1st..99th percentile 28..277k faces; 282 shapes under 100
+%   faces). Those are genuinely simple source models, not decimation artifacts -- median
+%   processed/original face retention is 1.00.
+% split_by_parent False: Thingi10K models have no lineage attr (unlike DeepJEB).
+% Reference: https://arxiv.org/abs/1605.04797 ; https://arxiv.org/abs/2301.11445 ; https://arxiv.org/abs/2210.02747
+% No source HDF5 writes. Checkpoints are created by this config; the paired infer config reads them.
+
+model                            sdfflow
+mode                             train
+gpu_ids                          2
+parallel_mode                    single
+seed                             42
+split_seed                       42
+dataset_dir                      ../../dataset/geometry_generation/ex4_thingi10k.h5
+split_by_parent                  False
+num_encoder_points               6144
+num_query_points                 8192
+latent_tokens                    32
+latent_dim                       32
+encoder_query_type               fps
+encoder_dim                      256
+encoder_heads                    8
+encoder_blocks                   4
+encoder_self_attention           True
+decoder_type                     attention
+decoder_hidden                   256
+decoder_layers                   4
+decoder_heads                    8
+fourier_bands                    8
+kl_weight                        0.0001
+clamp_dist                       0.1
+deterministic_warmup_epochs      15
+posterior_noise_warmup_epochs    30
+posterior_noise_max_scale        1
+kl_warmup_epochs                 55
+posterior_min_std_rel            0.05
+surface_weight                   1
+normal_weight                    0.1
+eikonal_weight                   0.1
+hybrid_grad_points               1024
+use_conditions                   False
+fm_arch                          dit
+fm_hidden                        256
+fm_blocks                        8
+fm_heads                         8
+fm_cond_hidden                   128
+fm_time_sampling                 uniform
+encode_batch_size                8
+ode_steps                        50
+vae_training_epochs              400
+vae_batch_size                   8
+vae_learningr                    0.0001
+vae_weight_decay                 0.0001
+vae_warmup_epochs                10
+vae_num_workers                  2
+vae_use_amp                      False
+vae_use_ema                      True
+vae_ema_decay                    0.99
+vae_val_interval                 5
+vae_test_interval                50
+vae_num_test_shapes              2
+vae_mc_resolution_test           64
+fm_training_epochs               500
+fm_batch_size                    64
+fm_learningr                     0.0001
+fm_weight_decay                  0.0001
+fm_warmup_epochs                 10
+fm_num_workers                   0
+fm_use_amp                       True
+fm_use_ema                       True
+fm_ema_decay                     0.99
+fm_val_interval                  5
+fm_test_interval                 50
+fm_num_test_shapes               2
+fm_mc_resolution_test            64
+display_testset                  True
+skip_completed_stages            True
+output_dir                       ../../output/geometry_generation/ex4_thingi10k/sdfflow/samples
+vae_modelpath                    ../../output/geometry_generation/ex4_thingi10k/sdfflow/vae.pth
+fm_modelpath                     ../../output/geometry_generation/ex4_thingi10k/sdfflow/fm.pth
+fm_best_modelpath                ../../output/geometry_generation/ex4_thingi10k/sdfflow/fm_best.pth
+pipeline_log_file                ../../output/geometry_generation/ex4_thingi10k/sdfflow/pipeline.log
+vae_log_file_dir                 ../../output/geometry_generation/ex4_thingi10k/sdfflow/vae.log
+fm_log_file_dir                  ../../output/geometry_generation/ex4_thingi10k/sdfflow/fm.log

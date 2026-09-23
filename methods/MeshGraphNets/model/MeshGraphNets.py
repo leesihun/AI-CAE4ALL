@@ -4,6 +4,7 @@ from torch_geometric.data import Data
 from torch_geometric.utils import scatter
 
 from general_modules.edge_features import EDGE_FEATURE_DIM
+from general_modules.input_noise import InputNoise
 from model.checkpointing import process_with_checkpointing, run_checkpointed
 from model.coarsening import pool_features
 from model.encoder_decoder import Decoder, Encoder, GnBlock
@@ -18,6 +19,7 @@ class MeshGraphNets(nn.Module):
 
         self.model = EncoderProcessorDecoder(config).to(device)
         self.model.apply(init_weights)
+        self.input_noise = InputNoise(config)
 
         # For time-transient delta prediction, start near "no change".
         num_timesteps = config.get('num_timesteps', None)
@@ -68,22 +70,10 @@ class MeshGraphNets(nn.Module):
             add_noise = self.training
 
         if add_noise:
-            noise_std = self.config.get('std_noise', 0.0)
-            if noise_std > 0:
-                output_var = self.config['output_var']
-                noise = torch.randn(
-                    graph.x.shape[0], output_var,
-                    device=graph.x.device, dtype=graph.x.dtype
-                ) * noise_std
-                noise_padded = torch.zeros_like(graph.x)
-                noise_padded[:, :output_var] = noise
-                graph.x = graph.x + noise_padded
-                noise_gamma = self.config.get('noise_gamma', 1)
-                noise_std_ratio = self.config.get('noise_std_ratio', None)
-                if noise_std_ratio is not None:
-                    ratio = torch.tensor(noise_std_ratio, device=graph.x.device, dtype=graph.x.dtype)
-                    graph.y = graph.y - noise_gamma * noise * ratio
-                graph.edge_attr = graph.edge_attr + torch.randn_like(graph.edge_attr) * noise_std
+            # Perturb the state, then rebuild the features that state implies
+            # (node AND edge), which is the order arXiv:2010.03409 specifies.
+            # See general_modules/input_noise.py for the units contract.
+            self.input_noise(graph)
 
         predicted = self.model(graph)
         return predicted, getattr(graph, 'y', None)

@@ -4,7 +4,7 @@ Turn CAD/geometry files (**STEP / IGES / STL / PLY / OBJ**) into the repository'
 shared mesh HDF5 contract — one artifact that feeds every mesh-consuming method:
 
 - **MeshGraphNets / -variational** read `data/{id}/mesh_edge` (the graph).
-- **Neural_Operator (DeepONet/FNO/GINO) / Transolver** read the same nodes as a
+- **Neural_Operator (DeepONet/FNO) / Transolver** read the same nodes as a
   **point cloud** (they ignore `mesh_edge`).
 
 Because it emits the existing
@@ -21,7 +21,7 @@ downstream changes**. It is a registered launcher model (`model geometry_ingest`
 ```bash
 python AI_CAE4ALL_main.py --config configs/GeometryIngest/config_ingest_volume.txt --check     # validate
 python AI_CAE4ALL_main.py --config configs/GeometryIngest/config_ingest_volume.txt --dry-run   # show native command
-python AI_CAE4ALL_main.py --config configs/GeometryIngest/config_ingest_surface.txt            # run
+python AI_CAE4ALL_main.py --config configs/GeometryIngest/config_ingest_volume.txt             # run
 python AI_CAE4ALL_main.py --describe geometry_ingest                                             # modes + required keys
 ```
 
@@ -53,9 +53,8 @@ root (`methods/GeometryIngest/`), matching the suite's native-path convention.
 > Comments must be on their own `%` line. An inline `% ...` after a value is **not**
 > stripped by the suite parser and becomes part of the value.
 
-Shipped templates in `configs/GeometryIngest/`: `config_ingest_volume.txt`
-(CAD → volume, needs gmsh), `config_ingest_surface.txt` (STL/PLY → surface,
-trimesh only), `config_inspect_surface.txt` (stats-only).
+Shipped template in `configs/GeometryIngest/`: `config_ingest_volume.txt`
+(CAD → volume, needs gmsh).
 
 ### The preview render
 

@@ -1,0 +1,33 @@
+% geometry_generation/ex1 - sdfflow; held-out RECONSTRUCTION scoring of the VAE trained by the
+%   paired config_train_sdfflow.txt. This is the measurement config, not a generator: mode
+%   evaluate decodes each test shape through the VAE and reports SDF/occupancy error. No STL
+%   sampling happens here -- use config_infer_sdfflow.txt (mode sample) for new geometry.
+% The split is reproduced from the training config, not re-drawn: split_seed and split_by_parent
+%   must stay identical to config_train_sdfflow.txt or the "held-out" set is not held out.
+% DeepJEB's 2138 shapes are variants of 263 parent brackets, so split_by_parent True is
+%   load-bearing: measured on this file it yields 209/26/28 parents -> 1713/216/209 shapes with
+%   ZERO parent overlap between train and val/test. A per-shape seed-42 split instead puts a
+%   sibling of every test shape into train and inflates the score.
+% num_encoder_points/num_query_points mirror the training config; the encoder is point-count
+%   sensitive, so scoring at a different density measures the shift, not the model.
+% eval_split test: the 209 parent-disjoint shapes. eval_num_shapes 0 scores all of them.
+% Writes eval_test.json (aggregate) + eval_test.csv (per shape) under output_dir.
+% Reference: https://arxiv.org/abs/2301.11445
+% No source HDF5 writes. Checkpoints are created by the paired training config.
+
+model                            sdfflow
+mode                             evaluate
+gpu_ids                          7
+parallel_mode                    single
+dataset_dir                      ../../dataset/geometry_generation/ex1_deepjeb.h5
+split_seed                       42
+split_by_parent                  True
+num_encoder_points               6144
+num_query_points                 8192
+eval_task                        reconstruction
+eval_split                       test
+eval_num_shapes                  0
+eval_seed                        0
+mc_resolution                    128
+vae_modelpath                    ../../output/dataset_matrix/geometry_generation/ex1/sdfflow/vae.pth
+output_dir                       ../../output/dataset_matrix/geometry_generation/ex1/sdfflow/eval

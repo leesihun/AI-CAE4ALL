@@ -12,7 +12,7 @@
 
 model                            simulgenvae
 mode                             reconstruct
-gpu_ids                          3
+gpu_ids                          6
 parallel_mode                    single
 split_seed                       42
 dataset_dir                      ../../dataset/derived/config_matrix/ex3_NASA_CRM_mid_canonical_infer.h5
@@ -27,7 +27,7 @@ latent_dim_end                   32
 num_filter_enc                   64, 64, 48, 48, 32, 24, 16
 network_size                     small
 loss_type                        1
-alpha                            1000
+alpha                            1000000
 init_beta_divisor                4
 lc_data_type                     hdf5
 lc_filter                        128, 128, 128

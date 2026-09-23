@@ -7,11 +7,15 @@
 % Static state input is zero; temporal input is current state and target is next-state delta.
 % Reference: https://arxiv.org/abs/2010.03409
 % See configs/campaigns/dataset_matrix/README.md for deviations and verification boundaries.
+% training_epochs 420 (not the roster's 500) is the paper's CylinderFlow budget:
+%   80 train trajectories x 599 windows = 47,920 items/epoch; 420 epochs = 20.1M
+%   sample presentations = the 10M steps x batch 2 of arXiv:2010.03409. Batch- and
+%   world-size-invariant, so it holds under ddp. Do not 'normalize' it to 500.
 % No source HDF5 writes. Checkpoints are created by the paired training config.
 
 model                            meshgraphnets
 mode                             inference
-gpu_ids                          2
+gpu_ids                          4
 parallel_mode                    ddp
 split_seed                       42
 dataset_dir                      ../../dataset/deterministic/ex4_cylinder_flow.h5
@@ -30,7 +34,7 @@ time_integration                 ar_ot
 training_epochs                  420
 batch_size                       2
 learningr                        0.0001
-weight_decay                     0.0001
+weight_decay                     0.0
 warmup_epochs                    5
 num_workers                      2
 prefetch_factor                  2

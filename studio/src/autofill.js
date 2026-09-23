@@ -404,7 +404,7 @@ function genericAutofill(desired, node) {
       }
       // Name the output directory explicitly, beside the checkpoint -- the
       // convention every checked-in benchmark config already follows
-      // (.../gino/model.pth -> .../gino/inference). Left blank, the native
+      // (.../fno/model.pth -> .../fno/inference). Left blank, the native
       // default ("../../output/<slug>/rollout") is invisible in the config text
       // the Studio reads back, and its fallback scan could not find it either
       // once the natives stopped writing inside their own repositories -- so a

@@ -4,7 +4,6 @@
 % output/state [3:]: ux, uy, uz, stress
 % conditioner: none
 % partNo: partNo
-% Masked from the loss (identically zero in this dataset): uz.
 % Static state input is zero; temporal input is current state and target is next-state delta.
 % Reference: https://arxiv.org/abs/2602.04940
 % See configs/campaigns/dataset_matrix/README.md for deviations and verification boundaries.
@@ -12,7 +11,7 @@
 
 model                            transolver
 mode                             train
-gpu_ids                          4
+gpu_ids                          3
 parallel_mode                    ddp
 split_seed                       42
 dataset_dir                      ../../dataset/deterministic/ex1_static_thermoelastic.h5
@@ -24,15 +23,15 @@ infer_timesteps                  1
 input_var                        4
 output_var                       4
 cond_var                         0
-feature_loss_weights             1, 1, 0, 1
+feature_loss_weights             1, 1, 0.001, 1
 use_node_types                   True
 positional_features              4
 time_integration                 ar_ot
 training_epochs                  2000
-batch_size                       2
-learningr                        0.0002
-weight_decay                     0.0001
-warmup_epochs                    5
+batch_size                       1
+learningr                        0.001
+weight_decay                     0.05
+warmup_epochs                    100
 num_workers                      2
 prefetch_factor                  2
 grad_accum_steps                 1

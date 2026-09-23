@@ -42,7 +42,7 @@ in that method's working directory and Python interpreter.
 
 ---
 
-## The model zoo — 12 routes, one contract
+## The model zoo — 11 routes, one contract
 
 Every one of these is selected purely by the `model` field in a flat text config.
 No code changes, no format conversion, no per-method CLI to memorize.
@@ -55,7 +55,6 @@ No code changes, no format conversion, no per-method CLI to memorize.
 | `point_deeponet` | **Point-DeepONet** — PointNet branch + SIREN trunk with early fusion; arbitrary query points | [methods/Neural_Operator/](methods/Neural_Operator/) | `train`, `inference` |
 | `deeponet` | **DeepONet** — canonical fixed-sensor branch/trunk operator | [methods/Neural_Operator/](methods/Neural_Operator/) | `train`, `inference` |
 | `fno` | **FNO** — native spectral (Fourier) convolutions, no `neuraloperator` dependency | [methods/Neural_Operator/](methods/Neural_Operator/) | `train`, `inference` |
-| `gino` | **GINO** — GNO in ↔ latent FNO ↔ GNO out; mesh→grid→query via radius neighborhoods | [methods/Neural_Operator/](methods/Neural_Operator/) | `train`, `inference` |
 | `transolver` | **Transolver** — transformer surrogate over learned Physics-Attention "slices": `O(N²)` → `O(N·slice_num)` | [methods/Transolver/](methods/Transolver/) | `train`, `inference` |
 | `sdfflow` | **SDFFlow** — *generates new 3D shapes*: SDF-VAE + rectified-flow matching, conditioned on geometric descriptors, meshed with marching cubes | [methods/SDFFlow/](methods/SDFFlow/) | `train`, `train_vae`, `train_fm`, `sample`, `reconstruct`, `interpolate`, `optimize` |
 | `simulgenvae` | **SimulGenVAE** — hierarchical VAE + latent conditioner: conditions → full simulation field, no FOM solve | [methods/SimulGenVAE/](methods/SimulGenVAE/) | `train`, `train_vae`, `train_lc`, `reconstruct` |
@@ -66,9 +65,9 @@ No code changes, no format conversion, no per-method CLI to memorize.
 python AI_CAE4ALL_main.py --list-models   # every route + install health
 ```
 
-**Four operator architectures live in one repo** ([methods/Neural_Operator/](methods/Neural_Operator/))
+**Three operator architectures live in one repo** ([methods/Neural_Operator/](methods/Neural_Operator/))
 sharing a single split / target / normalization / noise / optimizer / scheduler /
-checkpoint / rollout convention. Switching `model fno` → `model gino` must never
+checkpoint / rollout convention. Switching `model deeponet` → `model fno` must never
 require touching dataset, training-loop, loss, checkpoint, or inference code —
 and it doesn't.
 
@@ -153,9 +152,8 @@ python -m pip install -r methods/MLP/requirements.txt          # CPU-only
 python -m pip install -r inference/requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
 ```
 
-The mesh/operator methods need PyTorch matched to your CUDA build; GINO optionally
-uses `torch_cluster` for neighbor search and falls back to a scipy `cKDTree` path
-without it. `geometry_ingest` needs `trimesh` for surface meshes and `gmsh` for
+The mesh/operator methods need PyTorch matched to your CUDA build.
+`geometry_ingest` needs `trimesh` for surface meshes and `gmsh` for
 volume tet meshes. `--list-models` reports install health per route, and
 preflight's environment layer tells you what a specific config is missing before
 it launches. The Studio shell needs a browser and the launcher's Python; its
@@ -229,7 +227,7 @@ AI-CAE4ALL/
 │   ├── MeshGraphNets/            #   model = meshgraphnets
 │   ├── MeshGraphNets_Variational/#   model = meshgraphnets-v
 │   ├── HI_MGNFlow/               #   model = chi-mgnflow
-│   ├── Neural_Operator/          #   model = point_deeponet | deeponet | fno | gino
+│   ├── Neural_Operator/          #   model = point_deeponet | deeponet | fno
 │   ├── Transolver/               #   model = transolver
 │   ├── SDFFlow/                  #   model = sdfflow
 │   ├── SimulGenVAE/              #   model = simulgenvae

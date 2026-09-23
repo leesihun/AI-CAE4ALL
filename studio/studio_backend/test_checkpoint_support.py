@@ -23,7 +23,7 @@ from studio_backend.system_info import deployment_status
 class _Registry:
     model_ids = (
         "meshgraphnets", "meshgraphnets-v", "chi-mgnflow", "transolver",
-        "fno", "gino", "deeponet", "point_deeponet", "mlp",
+        "fno", "deeponet", "point_deeponet", "mlp",
         "simulgenvae", "sdfflow",
     )
 
@@ -66,7 +66,7 @@ class CheckpointSupportContractTests(unittest.TestCase):
     def test_deployment_inventory_distinguishes_models_from_drivers(self) -> None:
         status = deployment_status()
         self.assertEqual(status["models"], list(PORTABLE_INFERENCE_MODELS))
-        self.assertEqual(len(status["models"]), 8)
+        self.assertEqual(len(status["models"]), 7)
         self.assertEqual(len(status["driver_families"]), 5)
 
     def test_sdfflow_schema_is_reported_as_the_model_source(self) -> None:
@@ -104,7 +104,7 @@ class CheckpointSupportContractTests(unittest.TestCase):
     def test_non_geometry_portable_jobs_require_input_before_creating_a_process(self) -> None:
         models = (
             "meshgraphnets", "meshgraphnets-v", "transolver", "fno",
-            "gino", "deeponet", "point_deeponet",
+            "deeponet", "point_deeponet",
         )
         with tempfile.TemporaryDirectory(dir=RUNTIME_ROOT) as directory:
             checkpoint = Path(directory) / "portable.pth"

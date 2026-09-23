@@ -287,10 +287,22 @@ class PhysicsAttentionIrregular(nn.Module):
           the untiled footprint one slab at a time.
 
         So per-tile recompute follows `chunk_size`, NOT `use_checkpointing` --
-        the latter is block-level checkpointing (model/checkpointing.py) and is
-        orthogonal. `use_checkpointing` here only force-enables recompute for
-        the untiled case, which is rarely what you want (the rebuilt whole-mesh
-        matrix then becomes the transient and peak barely moves).
+        the latter is block-level checkpointing (model/checkpointing.py), and it
+        covers a DIFFERENT region rather than a redundant one. Tiling recomputes
+        the attention; the block's FFN activations are only checkpointed by
+        `use_checkpointing`. Upstream Transolver-3 wraps both in one per-chunk
+        checkpoint -- its `chunk_compute` closure holds the deslice AND
+        `mlp(ln_2(x)) + x` -- so `chunk_size` together with
+        `use_checkpointing True`, which is what every shipped config sets, is
+        the arrangement that matches upstream; `chunk_size` alone recomputes
+        strictly less. The price of splitting it across two mechanisms is that
+        the tile checkpoints nest inside the block one, so the attention is
+        recomputed twice where upstream recomputes it once -- same peak, same
+        numerics, a little more compute.
+
+        `use_checkpointing` additionally force-enables per-tile recompute in
+        the untiled case, which is rarely useful by itself (the rebuilt
+        whole-mesh matrix then becomes the transient and peak barely moves).
         """
         fused_w, fused_b = self._fused_slice_weights()
         tiled = len(tile_ranges) > 1

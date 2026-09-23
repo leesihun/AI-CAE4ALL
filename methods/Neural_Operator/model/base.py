@@ -10,8 +10,8 @@ import torch.nn as nn
 
 
 class OperatorCore(nn.Module):
-    """Base class for the four architecture cores (DeepONet, PointDeepONet,
-    MeshFNO, MeshGINO). Subclasses must set `model_name` and implement
+    """Base class for the three architecture cores (DeepONet, PointDeepONet,
+    MeshFNO). Subclasses must set `model_name` and implement
     `forward(graph) -> prediction [sum_N, output_var]` plus `export_model_config`.
     """
 

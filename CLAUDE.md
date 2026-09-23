@@ -20,7 +20,7 @@ live in [cae_suite/specs/](cae_suite/specs/):
 | `meshgraphnets` | `methods/MeshGraphNets/` | `MeshGraphNets_main.py` | — |
 | `meshgraphnets-v` | `methods/MeshGraphNets_Variational/` | `MeshGraphNets_main.py` | — |
 | `chi-mgnflow` | `methods/HI_MGNFlow/` | `CHiMGNFlow_main.py` | — (see its README.md) |
-| `point_deeponet`, `deeponet`, `fno`, `gino` | `methods/Neural_Operator/` | `main.py` | [yes](methods/Neural_Operator/CLAUDE.md) |
+| `point_deeponet`, `deeponet`, `fno` | `methods/Neural_Operator/` | `main.py` | [yes](methods/Neural_Operator/CLAUDE.md) |
 | `transolver` | `methods/Transolver/` | `Transolver_main.py` | — |
 | `sdfflow` | `methods/SDFFlow/` | `SDFFlow_main.py` | [yes](methods/SDFFlow/CLAUDE.md) |
 | `simulgenvae` | `methods/SimulGenVAE/` | `SimulGenVAE_main.py` | [yes](methods/SimulGenVAE/CLAUDE.md) |
@@ -148,7 +148,7 @@ The launch pipeline is: **parse → resolve → layered preflight → command �
   detection), deliberately **mirroring the native parsers' quirks** (see
   gotchas below).
 - [registry.py](cae_suite/registry.py) — `MethodRegistry` maps `model` →
-  `MethodSpec` → repo root + entrypoint. Aliased model IDs (e.g. the four
+  `MethodSpec` → repo root + entrypoint. Aliased model IDs (e.g. the three
   neural-operator names) share one spec.
 - [specs/base.py](cae_suite/specs/base.py) + `specs/<method>.py` — each
   `MethodSpec` declares `known_keys`, required/recommended/default fields per

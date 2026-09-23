@@ -1,0 +1,63 @@
+%   ============================================================
+%
+%   SAOI inference, cHI-MGNflow SWEEP 2, PHASE C -- one arm on one eval set.
+%
+%   infer_dataset is the ONE part to generate for; eval_dataset is its _compare_
+%   half, the 125 ground-truth realizations of that same part. The pairs are
+%   the same files sweep 1 uses, so its check_eval_inputs.py already covers
+%   them.
+%
+%   Board half top, compressor arm n200c4 + prior p8u, eval set s26fe_sec.
+%
+%   ============================================================
+model	chi-mgnflow
+mode	inference
+gpu_ids	0  # logical; run_sweep2.sh maps it to a physical card
+log_file_dir	../../output/chi-mgnflow/saoi_sweep2/infer/top/n200c4/s26fe_sec/infer.log
+modelpath	../../output/chi-mgnflow/saoi_sweep2/top.prior_n200c4.pth
+inference_output_dir	../../output/chi-mgnflow/saoi_sweep2/infer/top/n200c4/s26fe_sec
+
+%   Datasets
+infer_dataset	../../dataset/SAOI/test_S26FE-SEC_infer_top.h5
+eval_dataset	../../dataset/SAOI/test_S26FE-SEC_compare_top.h5  # ground truth for the histogram -- the _compare_ half
+infer_timesteps	1
+
+%   Channel layout. The SAOI columns are x y z dx dy dz thickness "Part No.",
+%   so rows 0:3 are the reference coordinates (never predicted), 3:6 the
+%   displacement state and 6:9 the input-only conditions the model reads every
+%   step but never predicts.
+input_var	3  # x/y/z displacement -- the state block
+output_var	3  # what the model generates
+cond_var	3  # input-only rows: thickness and part id
+edge_var	8  # deformed dx/dy/dz/dist + reference dx/dy/dz/dist
+positional_features	4  # rotation-invariant node features
+
+use_node_types	False
+use_world_edges	False
+
+%   Hierarchy -- identical to this arm's training configs. Inference builds it
+%   in-process (no disk cache), seeded, and fixed for a whole ODE solve.
+use_multiscale	True
+coarsening_type	voronoi_seedmean
+voronoi_clusters	1000, 200
+multiscale_levels	2
+mp_per_level	4, 6, 8, 6, 4  # V-cycle depth: pre / coarsest / post
+hierarchy_seed	0, 1, 2, 3
+
+%   Architecture, repeated from the training config. The checkpoint's own
+%   model_config is the authority and overrides these at load time.
+latent_dim	128
+latent_ch	4
+prior_blocks	8
+flow_time_freqs	16
+
+%   Sampling -- identical to sweep 1, so the histograms compare directly.
+num_vae_samples	2000
+flow_steps	30
+flow_solver	heun
+
+%   The histogram and spread_values.npz, which report_sweep2.py collects.
+make_histogram	True
+show_histogram	False  # headless box: save the PNG, never open a viewer
+histogram_bins	60
+save_rollouts	False  # the spreads still reach spread_values.npz

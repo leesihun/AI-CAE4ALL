@@ -178,8 +178,8 @@ The exhaustive, live-code-backed catalog is
 | `edge_var` | **Must be 8** (validated against `EDGE_FEATURE_DIM`) |
 | `positional_features` | # rotation-invariant node features (centroid dist, mean edge len, RWPE) |
 | `use_node_types` | Append one-hot node types (feature row 7) |
-| `num_node_types` | Filled from the dataset when node types are enabled |
-| `latent_dim` (`Latent_dim`) | Processor hidden width (e.g. 128) |
+| `num_node_types` | **Derived, not settable.** Counted from the dataset at load time (`general_modules/mesh_dataset.py:861`); it is not in the spec's `known_keys`, so writing it into a config raises `CFG-UNKNOWN-001` |
+| `latent_dim` | Processor hidden width (e.g. 128). Config keys are case-folded, so `Latent_dim` also parses, but every checked-in config spells it lowercase |
 | `message_passing_num` | **# flat GnBlocks** (flat model only; e.g. 15–20) |
 
 ### World edges
@@ -231,20 +231,27 @@ The exhaustive, live-code-backed catalog is
 ### Minimal flat-MGN config sketch
 
 ```text
-model               MeshGraphNets
+model               meshgraphnets
 mode                train
 gpu_ids             0
-dataset_dir         ../dataset/deterministic/ex1_static_thermoelastic.h5
+dataset_dir         ../../dataset/deterministic/ex1_static_thermoelastic.h5
+modelpath           ../../output/dataset_matrix/deterministic/ex1/meshgraphnets/model.pth
 input_var           4
 output_var          4
+cond_var            0
 edge_var            8
 positional_features 4
 use_node_types      True
-message_passing_num 20        # flat processor depth
-Latent_dim          128
+message_passing_num 15        # flat processor depth (the ex1 baseline value)
+latent_dim          128
 use_multiscale      False     # <-- flat baseline
 time_integration    ar_ot
 ```
+
+> Native paths are **cwd-relative to the method repository**, because the launcher
+> runs the native entrypoint with its cwd set to `methods/<Name>/`. That is why
+> every checked-in config spells datasets `../../dataset/...` and artifacts
+> `../../output/...`.
 
 ---
 

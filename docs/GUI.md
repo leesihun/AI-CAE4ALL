@@ -27,7 +27,7 @@ python start_studio.py 8090     # any other port
 `START_STUDIO.bat` does the same on Windows and opens a browser.
 
 The console must print `AI-CAE4ALL Studio is ready`. The badge at top right
-reports live discovery (for example `12/12 entrypoints found`) and must agree
+reports live discovery (for example `11/11 entrypoints found`) and must agree
 with `GET /api/models`.
 
 **One server per port.** `StudioHTTPServer` sets `allow_reuse_address = False`
@@ -62,7 +62,7 @@ route has a default profile.
 
 | Group | Templates |
 | --- | --- |
-| Mesh field surrogates | HI-MGN multiscale (default), MeshGraphNets flat, MeshGraphNets-V, cHI-MGNflow, Transolver, FNO, GINO, DeepONet, Point-DeepONet |
+| Mesh field surrogates | HI-MGN multiscale (default), MeshGraphNets flat, MeshGraphNets-V, cHI-MGNflow, Transolver, FNO, DeepONet, Point-DeepONet |
 | Fixed-geometry and tabular | SimulGen-VAE reconstruction, Parametric response estimation (MLP) |
 | Generative geometry | SDFFlow train (DeepJEB), Design optimization |
 | Data preparation | Geometry to HDF5 (ingest) |
@@ -72,7 +72,7 @@ The mesh templates all target **ex9 plasticity**: `dataset/deterministic/ex9_pla
 `dataset/deterministic/ex9_plasticity_infer.h5` held out (900 / 87 samples, 20 steps, 3131 nodes). Each
 mirrors its own checked-in training config — the two MeshGraphNets pipelines
 follow `configs/MeshGraphNets/deterministic/ex9/`, cHI-MGNflow `configs/HI_MGNFlow/ex9/`,
-Transolver `configs/Transolver/deterministic/ex9/`, the four operators
+Transolver `configs/Transolver/deterministic/ex9/`, the three operators
 `configs/Neural_Operator/deterministic/ex9/`. MeshGraphNets-V has no checked-in ex9 config
 (it was left out of the ex4–ex9 roster as a one-to-many method), so its template
 reuses the ex9 dataset keys with MGN-V's own architecture.
@@ -90,7 +90,7 @@ exist until *SDFFlow train* writes them. Its name says so.
 
 ## Blocks
 
-24 block types. `native` means a real launcher route or backend endpoint;
+23 block types. `native` means a real launcher route or backend endpoint;
 `adapter` means the Studio composes existing outputs rather than computing new
 physics.
 
@@ -98,14 +98,14 @@ physics.
 | --- | --- |
 | Sources (4) | CAD, HDF5 Dataset, Design Parameters, Saved ML Model |
 | Preparation (1) | Geometry → HDF5 Dataset |
-| Models (11) | one per live route: MeshGraphNets, MeshGraphNets-V, cHI-MGNflow, Transolver, FNO, GINO, DeepONet, Point-DeepONet, SimulGen-VAE, SDFFlow, Simple MLP |
+| Models (10) | one per live route: MeshGraphNets, MeshGraphNets-V, cHI-MGNflow, Transolver, FNO, DeepONet, Point-DeepONet, SimulGen-VAE, SDFFlow, Simple MLP |
 | Execution (2) | Inference Run, CAD Generator |
 | Optimization (1) | Optimization |
 | Evaluation (3) | Evaluate Predictions, Train Metrics, Compare Models |
 | Outputs (1) | Export Results |
 | Deployment (1) | API Deployment |
 
-`geometry_ingest` is the twelfth live route; it is exposed as the
+`geometry_ingest` is the eleventh live route; it is exposed as the
 **Geometry → HDF5 Dataset** block rather than a model block, because it prepares
 data instead of learning.
 
@@ -249,7 +249,7 @@ array contracts"). Shape bookkeeping columns (`fields`, `timesteps`, `nodes`,
 
 | Workspace | What it gives you |
 | --- | --- |
-| **Models** | All 12 live routes: repository, entrypoint, modes, key count, dataset kind, install health; per-route details and checked-in examples |
+| **Models** | All 11 live routes: repository, entrypoint, modes, key count, dataset kind, install health; per-route details and checked-in examples |
 | **Data** | The HDF5 catalog with a sample viewer (mesh, points, field, timestep player); "Inspect HDF5" renders the file's contract inline |
 | **Runs** | Studio-launched jobs with status, step and log; Train Metrics plots every metric parsed from a real run log |
 | **Optimization** | Feasible Pareto set and crowding-distance top-k from a real candidate CSV. It ranks numbers you give it; it does not invent physics. Constraints are checked against the chosen CSV as you type; an all-infeasible result names the constraint that rejected each row and the closest value observed; the selected designs are written back as a CSV in the source's own columns |
@@ -294,5 +294,8 @@ Front-end modules: `constants.js` (catalog), `graph.js` (canvas), `inspector.js`
 jobs, `analysis.py` evaluation/comparison/optimization, `suite_bridge.py` the
 launcher bridge.
 
-Tests: `python -m pytest -q studio/studio_backend` for the backend;
-`python -m pytest -q tests/` for the launcher contracts the GUI depends on.
+Tests: `python -m pytest -q studio/studio_backend` for the backend (10 modules,
+43 tests). The root `tests/` suite that used to cover the launcher contracts the
+GUI depends on was deleted in commit `9884fb1` and has no replacement — use
+`python AI_CAE4ALL_main.py --audit-configs` for that layer. See
+[guides/testing.md](guides/testing.md).

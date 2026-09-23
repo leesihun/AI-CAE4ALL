@@ -1,0 +1,97 @@
+% geometry_generation/ex3 - sdfflow on MCB (5-class nut subset; 1305 train / 329 infer, 8:2 split).
+% Logical order: input -> output -> conditioner -> partNo (named HDF5 arrays, not nodal rows).
+% Train input: surface_points, surface_normals, query_xyz; generation input: latent noise and query_xyz.
+% Output: signed_distance (zero level set is the generated surface).
+% Conditioner order: bbox_x, bbox_y, bbox_z, volume, area. partNo: absent.
+% All five geometric descriptors ARE selected here, unlike ex2: every one varies strongly on MCB
+%   (std 0.33..2.57, ~3.0 effective degrees of freedom) because different nut classes put their
+%   longest axis on different axes, so the 1.8 normalization does not pin any single one.
+% The five class_* one-hots written by add_mcb_class_conditions.py stay in the cond_extra sidecar
+%   for stratification and evaluation only -- they are NOT selected for FM conditioning, per
+%   methods/SDFFlow/CLAUDE.md. Add them to condition_names to train a class-conditional model.
+% split_by_parent False: MCB parts have no lineage attr (unlike DeepJEB).
+% Reference: https://doi.org/10.1007/978-3-030-58523-5_11 ; https://arxiv.org/abs/2301.11445 ; https://arxiv.org/abs/2210.02747
+% No source HDF5 writes. Checkpoints are created by this config; the paired infer config reads them.
+
+model                            sdfflow
+mode                             train
+gpu_ids                          1
+parallel_mode                    single
+seed                             42
+split_seed                       42
+dataset_dir                      ../../dataset/geometry_generation/ex3_mcb.h5
+split_by_parent                  False
+num_encoder_points               6144
+num_query_points                 8192
+latent_tokens                    32
+latent_dim                       32
+encoder_query_type               fps
+encoder_dim                      256
+encoder_heads                    8
+encoder_blocks                   4
+encoder_self_attention           True
+decoder_type                     attention
+decoder_hidden                   256
+decoder_layers                   4
+decoder_heads                    8
+fourier_bands                    8
+kl_weight                        0.0001
+clamp_dist                       0.1
+deterministic_warmup_epochs      50
+posterior_noise_warmup_epochs    100
+posterior_noise_max_scale        1
+kl_warmup_epochs                 200
+posterior_min_std_rel            0.05
+surface_weight                   1
+normal_weight                    0.1
+eikonal_weight                   0.1
+hybrid_grad_points               1024
+use_conditions                   True
+condition_names                  bbox_x, bbox_y, bbox_z, volume, area
+min_condition_std                0.00001
+condition_clip                   5
+cond_dropout                     0.2
+cond_dropout_mode                all
+fm_arch                          dit
+fm_hidden                        256
+fm_blocks                        8
+fm_heads                         8
+fm_cond_hidden                   128
+fm_time_sampling                 uniform
+encode_batch_size                8
+ode_steps                        50
+vae_training_epochs              1000
+vae_batch_size                   8
+vae_learningr                    0.0001
+vae_weight_decay                 0.0001
+vae_warmup_epochs                20
+vae_num_workers                  2
+vae_use_amp                      False
+vae_use_ema                      True
+vae_ema_decay                    0.99
+vae_val_interval                 5
+vae_test_interval                100
+vae_num_test_shapes              2
+vae_mc_resolution_test           64
+fm_training_epochs               500
+fm_batch_size                    64
+fm_learningr                     0.0001
+fm_weight_decay                  0.0001
+fm_warmup_epochs                 10
+fm_num_workers                   0
+fm_use_amp                       True
+fm_use_ema                       True
+fm_ema_decay                     0.99
+fm_val_interval                  5
+fm_test_interval                 50
+fm_num_test_shapes               2
+fm_mc_resolution_test            64
+display_testset                  True
+skip_completed_stages            True
+output_dir                       ../../output/geometry_generation/ex3_mcb/sdfflow/samples
+vae_modelpath                    ../../output/geometry_generation/ex3_mcb/sdfflow/vae.pth
+fm_modelpath                     ../../output/geometry_generation/ex3_mcb/sdfflow/fm.pth
+fm_best_modelpath                ../../output/geometry_generation/ex3_mcb/sdfflow/fm_best.pth
+pipeline_log_file                ../../output/geometry_generation/ex3_mcb/sdfflow/pipeline.log
+vae_log_file_dir                 ../../output/geometry_generation/ex3_mcb/sdfflow/vae.log
+fm_log_file_dir                  ../../output/geometry_generation/ex3_mcb/sdfflow/fm.log

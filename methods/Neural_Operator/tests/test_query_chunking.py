@@ -1,4 +1,4 @@
-"""Shared exact-chunk-decode parity across all four models (section 14.3 /
+"""Shared exact-chunk-decode parity across all three models (section 14.3 /
 16's "Inference: cache/chunk parity" row). Each model's own test file already
 covers this individually; this file adds the `inference_profiles.query_decode`
 helper on top and checks 3-way splits (not just a single midpoint split).
@@ -17,12 +17,10 @@ MODEL_EXTRAS = {
     'deeponet': {'deeponet_sensor_resolution': [8, 8]},
     'point_deeponet': {'point_sensor_count': 16},
     'fno': {'fno_grid_resolution': [8, 8], 'fno_modes': [3, 4], 'fno_hidden_channels': 16, 'fno_layers': 2},
-    'gino': {'gino_grid_resolution': [6, 6], 'gino_fno_modes': [2, 3], 'gino_fno_hidden_channels': 12,
-            'gino_fno_layers': 2, 'gino_in_radius': 0.35, 'gino_out_radius': 0.35},
 }
 
 
-@pytest.mark.parametrize('model_name', ['deeponet', 'point_deeponet', 'fno', 'gino'])
+@pytest.mark.parametrize('model_name', ['deeponet', 'point_deeponet', 'fno'])
 def test_decode_in_chunks_matches_full_decode(model_name, tiny_static_2d_h5):
     cfg = base_config_2d(tiny_static_2d_h5, model=model_name, **MODEL_EXTRAS[model_name])
     ds = MeshGraphDataset(tiny_static_2d_h5, cfg)
@@ -52,7 +50,7 @@ def test_decode_in_chunks_matches_full_decode(model_name, tiny_static_2d_h5):
             )
 
 
-@pytest.mark.parametrize('model_name', ['deeponet', 'point_deeponet', 'fno', 'gino'])
+@pytest.mark.parametrize('model_name', ['deeponet', 'point_deeponet', 'fno'])
 def test_supports_query_chunking_flag(model_name, tiny_static_2d_h5):
     cfg = base_config_2d(tiny_static_2d_h5, model=model_name, **MODEL_EXTRAS[model_name])
     ds = MeshGraphDataset(tiny_static_2d_h5, cfg)

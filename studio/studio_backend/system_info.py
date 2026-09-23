@@ -10,10 +10,10 @@ from studio_backend.paths import RUNTIME_ROOT, SUITE_ROOT, file_record, relative
 
 
 # Public model IDs accepted by inference/run_inference.py.  Keep this separate
-# from the five implementation families: the neural-operator driver serves four
+# from the five implementation families: the neural-operator driver serves three
 # distinct model IDs, while each of the other drivers serves one.
 PORTABLE_INFERENCE_MODELS = (
-    "point_deeponet", "deeponet", "fno", "gino", "transolver",
+    "point_deeponet", "deeponet", "fno", "transolver",
     "meshgraphnets", "meshgraphnets-v", "sdfflow",
 )
 PORTABLE_DRIVER_FAMILIES = (

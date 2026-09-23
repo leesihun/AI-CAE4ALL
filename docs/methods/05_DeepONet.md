@@ -25,7 +25,7 @@ is deterministically **splatted onto a regular sensor grid** (`grid.py`) — thi
 what makes it a true "DeepONet" rather than a set encoder, and the splat projection
 error is part of this baseline.
 
-All four Neural-Operator backends (`deeponet`, `point_deeponet`, `fno`, `gino`) share
+All three Neural-Operator backends (`deeponet`, `point_deeponet`, `fno`) share
 one repo, one dataset contract, one training loop, and one checkpoint/rollout
 convention; you switch models by changing the `model` field only.
 
@@ -37,11 +37,9 @@ convention; you switch models by changing the `model` field only.
   nodes (mesh-super-resolution, arbitrary probe points).
 - **Fixed-size operator input** via sensor-grid splatting (`deeponet_sensor_resolution`).
 - **Static (`T=1`) or autoregressive temporal** prediction (shared loop).
-- **Optional SDF channel** and (declared, currently unused) global conditions.
+- **Optional SDF channel** (`sdf_source none`/`dataset`/`sidecar`/`mesh`).
 - **Query chunking** (`infer_query_chunk_size`) for memory-bounded decoding — exact.
 - **DDP** data-parallel training.
-- **`global_conditions` branch source** (parameter-only operator) as an alternative to
-  the sensor grid.
 
 ## Strengths
 
@@ -63,7 +61,13 @@ convention; you switch models by changing the `model` field only.
 - **Global branch bottleneck**: the whole input function is squeezed into
   `output_var × basis_dim` coefficients — limited capacity for complex,
   spatially-varying operators.
-- **No native mesh awareness** (unlike [GINO](08_GINO.md) / MGN).
+- **No native mesh awareness** (unlike MGN).
+- **Only one branch source is executable**: `deeponet_branch_source` must be
+  `fixed_sensors`. The `global_conditions` (parameter-only) branch exists in
+  `model/deeponet.py` but is rejected before it is reached — by the native
+  validator (`general_modules/config_validation.py:183`) and by the launcher spec
+  (`NOVAR-DEEP-BRANCH`) — because the dataset loader attaches no global
+  conditions. `global_condition_features` must likewise stay `none`.
 - Sensor resolution is an **architecture change, not a memory knob** — changing it
   invalidates accuracy comparisons.
 
@@ -95,9 +99,10 @@ flowchart TD
 - **`fixed_sensors`** (default): `splat(values, coords, …, resolution)` returns a
   regular grid plus **occupancy** and **density** maps; these are flattened and fed to
   `branch_mlp`. Optional global conditions are appended.
-- **`global_conditions`**: branch input is just the global condition vector (a
-  parameter-only operator; currently unusable here because no dataset declares
-  conditions).
+- **`global_conditions`**: branch input would be just the global condition vector (a
+  parameter-only operator). Present in `model/deeponet.py`, but **not selectable** —
+  both the native validator and the launcher spec reject the value, because no
+  shipped dataset attaches global conditions.
 - Output reshaped to `[num_graphs, output_var, basis_dim]`.
 
 ### Trunk (`_query_features` → `trunk_mlp`)
@@ -128,7 +133,7 @@ Common Neural-Operator keys (shared by all four backends) are listed in
 
 | Key | Meaning |
 | --- | --- |
-| `deeponet_branch_source` | `fixed_sensors` (default) or `global_conditions` |
+| `deeponet_branch_source` | Must be `fixed_sensors` (also the default); `global_conditions` is rejected by both validators |
 | `deeponet_sensor_resolution` | Regular sensor-grid size per active axis (comma list, each ≥ 2) |
 | `deeponet_hidden_channels` | Branch/trunk MLP width (default 256) |
 | `deeponet_branch_depth` | Branch MLP depth (default 3) |
@@ -146,7 +151,7 @@ Common Neural-Operator keys (shared by all four backends) are listed in
 | `coordinate_normalization` | Must be `centered_isotropic` |
 | `grid_padding` | Fractional pad around the fitted `[0,1]^d` domain (default 0.05) |
 | `out_of_bounds_policy` | `error` or `clamp` for queries outside the domain |
-| `sdf_source` / `sdf_sidecar` | Optional signed-distance channel (`none`/`dataset`/`sidecar`) |
+| `sdf_source` / `sdf_sidecar` | Optional signed-distance channel (`none`/`dataset`/`sidecar`/`mesh`) |
 | `global_condition_features` | Must be `none` (declared conditions are rejected) |
 | `infer_query_chunk_size` | Inference query-decode chunk size (0 = unchunked) |
 
@@ -155,17 +160,21 @@ Common Neural-Operator keys (shared by all four backends) are listed in
 ```text
 model                      deeponet
 mode                       train
-dataset_dir                ../dataset/deterministic/ex1_static_thermoelastic.h5
+dataset_dir                ../../dataset/deterministic/ex1_static_thermoelastic.h5
 input_var                  4
 output_var                 4
+cond_var                   0
 positional_features        4
 use_node_types             True
+operator_dim               2
 deeponet_branch_source     fixed_sensors
-deeponet_sensor_resolution 64, 64
+deeponet_sensor_resolution 32, 16
 deeponet_hidden_channels   256
 deeponet_basis_dim         128
-deeponet_branch_depth      3
-deeponet_trunk_depth       3
+deeponet_branch_depth      4
+deeponet_trunk_depth       4
+deeponet_activation        gelu
+deeponet_multi_output      split_both
 ```
 
 ---
@@ -179,3 +188,11 @@ deeponet_trunk_depth       3
 | Fusion | dot product only | **early multiplicative fusion** + refiners + dot product |
 | Grid projection error | yes | **no** |
 | Role | reference/clean baseline | **primary** mesh-native operator |
+
+> Every path in a native config is **cwd-relative to the method repository**
+> (`methods/Neural_Operator/`), which is why datasets are spelled
+> `../../dataset/...` and artifacts `../../output/...`. The excerpt above is the
+> canonical ex1 config verbatim; the per-key *defaults* in the tables are the
+> native fallbacks in `model/deeponet.py`, which the shipped configs deliberately
+> override (e.g. `branch_depth`/`trunk_depth` 4 vs. the default 3,
+> `deeponet_activation gelu` vs. the default `silu`).

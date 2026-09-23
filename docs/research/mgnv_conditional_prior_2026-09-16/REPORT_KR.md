@@ -6,7 +6,7 @@
 
 ### 구현 상태
 
-이 제안은 이제 학습 코드와 sweep에 반영되어 있다. `ConditionalFMPrior`는 기존 MLP, 폭을 키운 MLP, residual FiLM velocity, conditional-moment residual FM을 선택할 수 있다. P3는 frozen posterior에서 50 epoch 동안 graph conditioner와 `μ(c),L(c)`를 보정한 다음 이를 동결하고 residual velocity만 250 epoch 학습한다. native와 packaged inference의 model 코드를 같은 구현으로 맞췄다. [conditional_prior.py](../../../methods/MeshGraphNets_Variational/model/conditional_prior.py), [sweep 실행](../../../configs/MeshGraphNets_Variational/SAOI_sweep/run_sweep.sh), [sweep 설명](../../../configs/MeshGraphNets_Variational/SAOI_sweep/README.md)
+이 제안은 이제 학습 코드와 sweep에 반영되어 있다. `ConditionalFMPrior`는 기존 MLP, 폭을 키운 MLP, residual FiLM velocity, conditional-moment residual FM을 선택할 수 있다. P3는 frozen posterior에서 50 epoch 동안 graph conditioner와 `μ(c),L(c)`를 보정한 다음 이를 동결하고 residual velocity만 250 epoch 학습한다. native와 packaged inference의 model 코드를 같은 구현으로 맞췄다. [conditional_prior.py](../../../methods/MeshGraphNets_Variational/model/conditional_prior.py), [sweep 실행](../../../configs/MeshGraphNets_Variational/hyperparameter_sweep/run_sweep.sh), [sweep 설명](../../../configs/MeshGraphNets_Variational/hyperparameter_sweep/README.md)
 
 실제 SAOI 데이터와 GPU 학습 결과는 이 로컬 작업공간에서 아직 생성하지 않았다. 따라서 아래의 구조적 우선순위는 구현된 가설이며 성능 순위는 `run_sweep.sh` 완료 후에만 확정한다.
 
@@ -60,7 +60,7 @@ z\sim p_\theta(z\mid c),\qquad \hat y=D_\psi(c,z).
 | Prior-only 학습 | `freeze_for_prior_fit`, `train_prior_epoch`, `misc/retrain_prior.py` 존재 | frozen E/D 실험을 시작할 기반은 이미 있다. |
 | 현재 SAOI FM-v2 sweep | P0/P1/P2/P3 × bot/top; `prior_grad_to_encoder=0` | velocity 용량, residual FiLM, conditional moments를 한 단계씩 분리한다. |
 
-근거: [conditional_prior.py](../../../methods/MeshGraphNets_Variational/model/conditional_prior.py), [mlp.py](../../../methods/MeshGraphNets_Variational/model/mlp.py), [vae.py](../../../methods/MeshGraphNets_Variational/model/vae.py), [SAOI 설정](../../../configs/MeshGraphNets_Variational/SAOI_all_input/config_train_bot.txt), [B8 설정](../../../configs/MeshGraphNets_Variational/b8_all_warpage_input/config_train8.txt), [현재 sweep](../../../configs/MeshGraphNets_Variational/SAOI_sweep/README.md).
+근거: [conditional_prior.py](../../../methods/MeshGraphNets_Variational/model/conditional_prior.py), [mlp.py](../../../methods/MeshGraphNets_Variational/model/mlp.py), [vae.py](../../../methods/MeshGraphNets_Variational/model/vae.py), [SAOI 설정](../../../configs/MeshGraphNets_Variational/SAOI_run/config_train_bot.txt), [현재 sweep](../../../configs/MeshGraphNets_Variational/hyperparameter_sweep/README.md).
 
 ### 2.1 조건 표현과 density head의 용량을 분리해야 한다
 

@@ -1,0 +1,32 @@
+% geometry_generation/ex1 - sdfflow; INTERPOLATION between two generated shapes, from the
+%   checkpoints trained by the paired config_train_sdfflow.txt. Like mode sample this produces
+%   NEW geometry -- it never opens the dataset; both endpoints are drawn from noise.
+% interpolation_space slerp_noise: the two endpoints are FM noise rows, spherically
+%   interpolated and then integrated through the ODE, so every intermediate is a real sample of
+%   the generator rather than a latent-space blend the decoder was never trained on.
+% seed 42 + source_num_samples 16 reproduce the SAME noise batch as config_infer_sdfflow.txt
+%   (seed 42, num_samples 16), so endpoints 0 and 1 here are exactly sample_42_000.stl and
+%   sample_42_001.stl from that run -- the interpolation is auditable against them.
+% alpha 0.5 writes the midpoint; the run also writes both endpoints and a comparison figure.
+% Writes .stl per shape under output_dir.
+% Reference: https://arxiv.org/abs/2301.11445 ; https://arxiv.org/abs/2210.02747
+% No source HDF5 writes. Checkpoints are created by the paired training config.
+
+model                            sdfflow
+mode                             interpolate
+gpu_ids                          7
+parallel_mode                    single
+seed                             42
+vae_modelpath                    ../../output/dataset_matrix/geometry_generation/ex1/sdfflow/vae.pth
+fm_modelpath                     ../../output/dataset_matrix/geometry_generation/ex1/sdfflow/fm_best.pth
+output_dir                       ../../output/dataset_matrix/geometry_generation/ex1/sdfflow/interpolation
+interpolation_space              slerp_noise
+source_num_samples               16
+sample_index_a                   0
+sample_index_b                   1
+alpha                            0.5
+ode_steps                        50
+cfg_scale                        1
+mc_resolution                    128
+plot_dpi                         180
+plot_max_faces                   0

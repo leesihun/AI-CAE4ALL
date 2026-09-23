@@ -4,7 +4,6 @@
 % output/state [3:]: ux, uy, uz, stress
 % conditioner: none
 % partNo: partNo
-% Masked from the loss (identically zero in this dataset): uz.
 % Static state input is zero; temporal input is current state and target is next-state delta.
 % Reference: https://doi.org/10.1038/s42256-021-00302-5
 % See configs/campaigns/dataset_matrix/README.md for deviations and verification boundaries.
@@ -12,7 +11,7 @@
 
 model                            deeponet
 mode                             inference
-gpu_ids                          5
+gpu_ids                          0
 parallel_mode                    ddp
 split_seed                       42
 dataset_dir                      ../../dataset/deterministic/ex1_static_thermoelastic.h5
@@ -24,7 +23,7 @@ infer_timesteps                  1
 input_var                        4
 output_var                       4
 cond_var                         0
-feature_loss_weights             1, 1, 0, 1
+feature_loss_weights             1, 1, 0.001, 1
 use_node_types                   True
 positional_features              4
 time_integration                 ar_ot

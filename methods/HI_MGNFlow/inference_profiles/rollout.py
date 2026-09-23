@@ -1,3 +1,4 @@
+import json
 import os
 import time
 
@@ -26,17 +27,33 @@ except ImportError:
 
 
 # ---------------------------------------------------------------------------
-# z_disp spread-histogram (generated vs ground-truth eval dataset)
+# Spread histogram + ensemble scores (generated vs ground-truth eval dataset)
 #
 # Spread metric (one scalar per realization):
-#     spread = max(z_disp_at_nodes) - min(z_disp_at_nodes)   at the final timestep.
+#     spread = max(field_at_nodes) - min(field_at_nodes)   at the final timestep.
 #
-# nodal_data layout is [x, y, z, x_disp, y_disp, z_disp, ...], so the z_disp
-# channel is index 5 for both the ground-truth eval datasets and the rollout
-# output (whose layout is [x, y, z, <output channels>, part_number]). This keeps
-# the inline plot identical to the standalone compare_histograms.py script.
+# WHICH field is `spread_channel`, an index into the OUTPUT block -- the same
+# index in both places it is read:
+#     ground truth : nodal_data row 3 + spread_channel   (rows 0:3 are coords)
+#     rollout      : output channel spread_channel       ([x, y, z, <out>, part])
+# It used to be the hardcoded row 5, which is z_disp only on a displacement
+# dataset laid out [x, y, z, ux, uy, uz, ...]. On the probabilistic slots row 5
+# is velocity_x (ex1) or uy (ex2), so the plot was labelled for a quantity it
+# was not measuring. The default 2 reproduces the old behaviour exactly.
 # ---------------------------------------------------------------------------
-Z_DISP_CHANNEL = 5
+SPREAD_CHANNEL_DEFAULT = 2
+
+# HOW that field is reduced to one number is `spread_stat`, applied identically
+# on both sides. `range` (max - min) is the original and the default, but it is
+# only informative when the field's extremes differ between realizations. On a
+# damage field that saturates at 1, or a displacement field driven to a
+# prescribed value, max - min is the boundary condition, not the solution: on
+# probabilistic ex2 it measures cv=0.000 across the 250 eval scenes, so every
+# calibration score computed from it would be noise. `mean` and `std` summarise
+# the field itself; on a 0/1 damage field `mean` is the damaged-node fraction
+# (cv=0.047 there), which is what the stochastic crack path actually moves.
+SPREAD_STATS = ('range', 'mean', 'std')
+SPREAD_STAT_DEFAULT = 'range'
 
 
 def _format_bytes(num_bytes):
@@ -54,32 +71,141 @@ def _is_cuda_oom(exc):
     return "out of memory" in str(exc).lower() and "cuda" in str(exc).lower()
 
 
-def _spread_max_minus_min(field_1d):
-    """max - min of a 1-D node field (the spread of a single realization)."""
+def _spread_stat(field_1d, stat=SPREAD_STAT_DEFAULT):
+    """Reduce a 1-D node field to the one scalar summarising a realization.
+
+    See SPREAD_STATS for why the choice is a config key and not just max - min.
+    """
     v = np.asarray(field_1d, dtype=np.float64)
     if v.size == 0:
         return float('nan')
-    return float(v.max() - v.min())
+    if stat == 'range':
+        return float(v.max() - v.min())
+    if stat == 'mean':
+        return float(v.mean())
+    if stat == 'std':
+        return float(v.std())
+    raise ValueError(f"spread_stat must be one of {SPREAD_STATS}, got {stat!r}")
 
 
-def _eval_dataset_spreads(h5_path, channel=Z_DISP_CHANNEL):
+def _spread_stat_expr(label, stat):
+    """Axis text for the statistic, e.g. 'max(damage) - min(damage)'."""
+    if stat == 'range':
+        return f"max({label}) - min({label})"
+    return f"{stat}({label})"
+
+
+def _eval_dataset_spreads(h5_path, out_channel=SPREAD_CHANNEL_DEFAULT,
+                          stat=SPREAD_STAT_DEFAULT):
     """(spreads, scene_ids): one ground-truth spread per sample in the eval HDF5.
+
+    `out_channel` indexes the OUTPUT block, so the ground-truth row is
+    3 + out_channel -- the same channel the rollout side reads.
 
     The ids are returned so the scorer can pair each truth with the ensemble
     generated for that same scene. Without them the generated side is a pooled
     marginal, and a model that ignores geometry entirely scores as well as one
     that conditions correctly.
     """
+    row = 3 + int(out_channel)
     spreads, ids = [], []
     with h5py.File(h5_path, 'r') as f:
         if 'data' not in f:
             raise RuntimeError(f"No /data group in {h5_path}")
         for sample_id in f['data'].keys():
-            spreads.append(
-                _spread_max_minus_min(f[f'data/{sample_id}/nodal_data'][channel, -1, :])
-            )
+            nodal = f[f'data/{sample_id}/nodal_data']
+            if row >= nodal.shape[0]:
+                raise RuntimeError(
+                    f"spread_channel {out_channel} needs nodal_data row {row}, but "
+                    f"{h5_path} sample {sample_id} has only {nodal.shape[0]} rows")
+            spreads.append(_spread_stat(nodal[row, -1, :], stat))
             ids.append(str(sample_id))
     return np.asarray(spreads, dtype=np.float64), np.asarray(ids, dtype=object)
+
+
+def _crps_ensemble(ensemble, truth):
+    """CRPS of a finite ensemble against one scalar truth (fair estimator).
+
+    CRPS = mean|x_i - y| - sum_ij|x_i - x_j| / (2 m (m-1)). The (m-1) denominator
+    is the fair form; with the biased 1/(2 m^2) version a K-member ensemble is
+    rewarded for being too narrow, which is the exact defect being scored here.
+    """
+    x = np.asarray(ensemble, dtype=np.float64)
+    m = x.size
+    if m == 0:
+        return float('nan')
+    term1 = float(np.abs(x - float(truth)).mean())
+    if m == 1:
+        return term1
+    term2 = float(np.abs(x[:, None] - x[None, :]).sum()) / (2.0 * m * (m - 1))
+    return term1 - term2
+
+
+def _spread_scores(gt, gt_scene, gen, gen_scene):
+    """Ensemble scores for the spread statistic, paired scene by scene.
+
+    Each held-out scene carries exactly ONE truth (the simulation ran once), so
+    the calibration question is where that truth falls among the draws for the
+    SAME scene. Pooling the draws instead measures the marginal, in which a model
+    that ignores the geometry entirely can still look perfect.
+
+    Keys and their targets:
+        crps_norm      mean per-scene CRPS / sd(gt)                       0
+        spread_skill   mean within-scene sd / RMSE of the ensemble mean   1
+        pit_ks         KS distance of the truth ranks from uniform        0
+        pit_tails      share of truths in the outer 2%                    0.04
+        w1_norm        pooled 1-Wasserstein(gt, gen) / sd(gt)             0
+        dmean_norm     pooled (mean gen - mean gt) / sd(gt)               0
+        sd_ratio       pooled sd(gen) / sd(gt)                            1
+    The last three describe the marginal -- the two curves the histogram draws.
+    """
+    gt = np.asarray(gt, dtype=np.float64)
+    gen = np.asarray(gen, dtype=np.float64)
+    gt_scene = np.asarray([str(s) for s in gt_scene])
+    gen_scene = np.asarray([str(s) for s in gen_scene])
+    gsd = float(gt.std())
+    denom = gsd if gsd > 0 else 1.0
+
+    out = {'n_gt': int(gt.size), 'n_gen': int(gen.size),
+           'gt_mean': float(gt.mean()), 'gt_sd': gsd,
+           'gen_mean': float(gen.mean()), 'gen_sd': float(gen.std())}
+
+    q = np.linspace(0.0, 1.0, 1001)
+    out['w1_norm'] = float(np.abs(np.quantile(gen, q) - np.quantile(gt, q)).mean()) / denom
+    out['dmean_norm'] = (float(gen.mean()) - float(gt.mean())) / denom
+    out['sd_ratio'] = float(gen.std()) / denom
+
+    truth_by_scene = {s: v for s, v in zip(gt_scene, gt)}
+    crps, ranks, spreads, errors = [], [], [], []
+    rng = np.random.default_rng(0)
+    for scene in np.unique(gen_scene):
+        if scene not in truth_by_scene:
+            continue
+        ens = gen[gen_scene == scene]
+        y = float(truth_by_scene[scene])
+        crps.append(_crps_ensemble(ens, y))
+        # Rank of the truth among the draws, ties broken at random so a
+        # degenerate ensemble does not pile every truth into one bin.
+        below = int((ens < y).sum())
+        tied = int((ens == y).sum())
+        ranks.append((below + (int(rng.integers(0, tied + 1)) if tied else 0)) / ens.size)
+        spreads.append(float(ens.std(ddof=1)) if ens.size > 1 else 0.0)
+        errors.append(float(ens.mean()) - y)
+    out['n_scenes'] = len(crps)
+    if not crps:
+        return out
+
+    out['crps_norm'] = float(np.mean(crps)) / denom
+    rmse = float(np.sqrt(np.mean(np.square(errors))))
+    out['ens_mean_rmse_norm'] = rmse / denom
+    out['spread_skill'] = (float(np.mean(spreads)) / rmse) if rmse > 0 else float('nan')
+
+    r = np.sort(np.asarray(ranks, dtype=np.float64))
+    n = r.size
+    out['pit_ks'] = float(np.max(np.abs(np.arange(1, n + 1) / n - r)))
+    out['pit_tails'] = float(((r < 0.02) | (r > 0.98)).mean())
+    out['pit_ranks'] = [float(v) for v in r]
+    return out
 
 
 def _open_in_viewer(path):
@@ -101,7 +227,9 @@ def _open_in_viewer(path):
 
 
 def _plot_spread_histogram(gt, gen, out_path, eval_path=None, rollout_dir=None,
-                           bins=60, clip_quantile=0.0, show=False, dpi=150):
+                           bins=60, clip_quantile=0.0, show=False, dpi=150,
+                           label='z_disp', scores=None,
+                           stat=SPREAD_STAT_DEFAULT):
     """Overlay GT vs generated spread histograms; save PNG, optionally display.
 
     Renders headlessly (Agg) so it works on a display-less box; when show=True
@@ -136,12 +264,24 @@ def _plot_spread_histogram(gt, gen, out_path, eval_path=None, rollout_dir=None,
             label=f"generated (n={gen.size:,})", color="darkorange")
     g_mu, g_sd, g_lo, g_hi = _stats(gt)
     p_mu, p_sd, p_lo, p_hi = _stats(gen)
+    score_line = ""
+    if scores:
+        bits = []
+        for key, target in (('crps_norm', '0'), ('spread_skill', '1'),
+                            ('pit_ks', '0'), ('sd_ratio', '1')):
+            value = scores.get(key)
+            if value is not None and np.isfinite(value):
+                bits.append(f"{key}={value:.3f} (->{target})")
+        if bits:
+            score_line = "\n" + "   ".join(bits)
+    expr = _spread_stat_expr(label, stat)
     ax.set_title(
-        "z_disp spread (max - min) per realization, final timestep\n"
+        f"{expr} per realization, final timestep\n"
         f"GT  mu={g_mu:.3e}  sigma={g_sd:.3e}  [{g_lo:.3e}, {g_hi:.3e}]\n"
         f"Gen mu={p_mu:.3e}  sigma={p_sd:.3e}  [{p_lo:.3e}, {p_hi:.3e}]"
+        f"{score_line}"
     )
-    ax.set_xlabel("max(z_disp) - min(z_disp)")
+    ax.set_xlabel(expr)
     ax.set_ylabel("density")
     ax.legend()
     ax.grid(alpha=0.3)
@@ -675,7 +815,14 @@ def run_rollout(config, config_filename='config.txt'):
     histogram_bins = int(config.get('histogram_bins', 60))
     histogram_clip_quantile = float(config.get('histogram_clip_quantile', 0.0))
     show_histogram = bool(config.get('show_histogram', True))
-    z_gen_idx = Z_DISP_CHANNEL - 3  # z_disp is the 3rd output channel (index 2)
+    # Output-channel index the spread statistic is taken over; the ground-truth
+    # side reads nodal_data row 3 + this. See SPREAD_CHANNEL_DEFAULT.
+    z_gen_idx = int(config.get('spread_channel', SPREAD_CHANNEL_DEFAULT))
+    spread_label = str(config.get('spread_label', f'channel {z_gen_idx}'))
+    spread_stat = str(config.get('spread_stat', SPREAD_STAT_DEFAULT)).lower()
+    if spread_stat not in SPREAD_STATS:
+        raise ValueError(f"spread_stat must be one of {SPREAD_STATS}, "
+                         f"got {spread_stat!r}")
     generated_spreads = []  # one spread scalar per generated rollout trajectory
     # Which scene each of those came from, same order. This is what lets
     # the scorer split within-scene ensemble width from between-scene
@@ -797,7 +944,7 @@ def run_rollout(config, config_filename='config.txt'):
 
                 if make_histogram and output_dim > z_gen_idx:
                     generated_spreads.append(
-                        _spread_max_minus_min(all_states[b, -1, :, z_gen_idx])
+                        _spread_stat(all_states[b, -1, :, z_gen_idx], spread_stat)
                     )
                     generated_scene_ids.append(str(sample_id))
 
@@ -913,7 +1060,8 @@ def run_rollout(config, config_filename='config.txt'):
     # ---- z_disp spread histogram: generated vs ground-truth eval set ------
     if make_histogram:
         print("\n" + "=" * 60)
-        print("HISTOGRAM COMPARE (z_disp spread, final timestep)")
+        print("HISTOGRAM COMPARE "
+              f"({_spread_stat_expr(spread_label, spread_stat)}, final timestep)")
         print("=" * 60)
         if not eval_dataset:
             print("  Skipped: no `eval_dataset` set in config "
@@ -922,10 +1070,11 @@ def run_rollout(config, config_filename='config.txt'):
             print(f"  Skipped: eval_dataset not found: {eval_dataset}")
         elif not generated_spreads:
             print("  Skipped: no generated spread values were collected "
-                  f"(output_var={output_dim} has no z_disp channel).")
+                  f"(output_var={output_dim} has no channel {z_gen_idx}).")
         else:
             try:
-                gt, gt_scene = _eval_dataset_spreads(str(eval_dataset))
+                gt, gt_scene = _eval_dataset_spreads(
+                    str(eval_dataset), z_gen_idx, spread_stat)
                 gen = np.asarray(generated_spreads, dtype=np.float64)
                 print(f"  GT spread values  (1 per eval sample): {gt.size:,}")
                 print(f"  Gen spread values (1 per rollout):     {gen.size:,}")
@@ -946,12 +1095,33 @@ def run_rollout(config, config_filename='config.txt'):
                     gt_scene=np.asarray([str(s) for s in gt_scene]),
                     gen_scene=np.asarray([str(s) for s in generated_scene_ids]))
                 print(f"  [SPREAD] values -> {npz_path}")
+
+                # Ensemble scores, paired scene by scene. Written beside the
+                # values so a campaign can tabulate every arm without rerunning
+                # inference; the headline four are stamped onto the figure.
+                scores = _spread_scores(gt, gt_scene, gen, generated_scene_ids)
+                scores['channel'] = int(z_gen_idx)
+                scores['label'] = spread_label
+                scores['stat'] = spread_stat
+                scores['eval_dataset'] = str(eval_dataset)
+                for key, target in (('crps_norm', 0.0), ('spread_skill', 1.0),
+                                    ('pit_ks', 0.0), ('pit_tails', 0.04),
+                                    ('w1_norm', 0.0), ('dmean_norm', 0.0),
+                                    ('sd_ratio', 1.0)):
+                    if key in scores:
+                        print(f"  [SCORE] {key}={scores[key]:.4f} (target {target:g})")
+                scores_path = os.path.join(output_dir, 'spread_metrics.json')
+                with open(scores_path, 'w', encoding='utf-8') as fh:
+                    json.dump(scores, fh, indent=2)
+                print(f"  [SCORE] metrics -> {scores_path}")
+
                 hist_path = os.path.join(output_dir, 'histogram_compare.png')
                 _plot_spread_histogram(
                     gt, gen, hist_path,
                     eval_path=str(eval_dataset), rollout_dir=output_dir,
                     bins=histogram_bins, clip_quantile=histogram_clip_quantile,
-                    show=show_histogram,
+                    show=show_histogram, label=spread_label, scores=scores,
+                    stat=spread_stat,
                 )
             except Exception as exc:  # never let plotting break a finished rollout
                 print(f"  Histogram generation failed: {exc}")

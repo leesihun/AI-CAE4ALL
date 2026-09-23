@@ -1,0 +1,34 @@
+% geometry_generation/ex3 - sdfflow on MCB (5-class nut subset); held-out RECONSTRUCTION
+%   scoring of the VAE trained by the paired config_train_sdfflow.txt. Measurement config,
+%   not a generator: mode evaluate decodes each shape through the VAE and reports
+%   SDF/occupancy error. For new geometry use config_infer_sdfflow.txt (mode sample).
+% dataset_dir is ex3_mcb_infer.h5 (split_role infer, 329 parts) -- the sibling file the
+%   packer held out of ex3_mcb.h5 (split_role train, 1305 parts). Nothing in it was seen in
+%   training, so the whole file is the test set.
+% overfit_all_shapes True is what makes "the whole file" the test set: without it
+%   build_dataset_splits would re-cut this already-held-out file 80/10/10 and score only its
+%   last ~10 shapes. It is a split selector here (see SPLIT_KEYS in
+%   methods/SDFFlow/inference_profiles/evaluate.py), not an overfitting switch -- nothing trains.
+% num_encoder_points/num_query_points mirror the training config; the encoder is point-count
+%   sensitive, so scoring at a different density measures the shift, not the model.
+% Writes eval_test.json (aggregate) + eval_test.csv (per shape) under output_dir.
+% Reference: https://doi.org/10.1007/978-3-030-58523-5_11 ; https://arxiv.org/abs/2301.11445
+% No source HDF5 writes. Checkpoints are created by the paired training config.
+
+model                            sdfflow
+mode                             evaluate
+gpu_ids                          1
+parallel_mode                    single
+dataset_dir                      ../../dataset/geometry_generation/ex3_mcb_infer.h5
+split_seed                       42
+split_by_parent                  False
+overfit_all_shapes               True
+num_encoder_points               6144
+num_query_points                 8192
+eval_task                        reconstruction
+eval_split                       test
+eval_num_shapes                  0
+eval_seed                        0
+mc_resolution                    128
+vae_modelpath                    ../../output/geometry_generation/ex3_mcb/sdfflow/vae.pth
+output_dir                       ../../output/geometry_generation/ex3_mcb/sdfflow/eval

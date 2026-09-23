@@ -36,7 +36,7 @@ The executable source of truth for config keys is always
 
 ## Methods
 
-[methods/](methods/) holds thirteen numbered write-ups covering the shared
+[methods/](methods/) holds twelve numbered write-ups covering the shared
 foundations and the architecture guides listed below:
 
 | | |
@@ -45,9 +45,8 @@ foundations and the architecture guides listed below:
 | [02_HI-MGN.md](methods/02_HI-MGN.md) | [03_BSMS-GNN.md](methods/03_BSMS-GNN.md) |
 | [04_MeshGraphNets_Variational.md](methods/04_MeshGraphNets_Variational.md) | [05_DeepONet.md](methods/05_DeepONet.md) |
 | [06_Point-DeepONet.md](methods/06_Point-DeepONet.md) | [07_FNO.md](methods/07_FNO.md) |
-| [08_GINO.md](methods/08_GINO.md) | [09_Transolver.md](methods/09_Transolver.md) |
-| [10_SDFFlow.md](methods/10_SDFFlow.md) | [11_Geometry_Ingest.md](methods/11_Geometry_Ingest.md) |
-| [12_MLP.md](methods/12_MLP.md) | |
+| [09_Transolver.md](methods/09_Transolver.md) | [10_SDFFlow.md](methods/10_SDFFlow.md) |
+| [11_Geometry_Ingest.md](methods/11_Geometry_Ingest.md) | [12_MLP.md](methods/12_MLP.md) |
 
 SimulGenVAE's current user guide remains beside its implementation:
 [methods/SimulGenVAE/README.md](../methods/SimulGenVAE/README.md).
@@ -61,7 +60,7 @@ behaviour — treat the mismatch as something to reconcile, not to ignore.
 
 - [research/meshgraphnets/](research/meshgraphnets/) — attention transfer, coarsening ablation, HI-MGN roadmap
 - [research/meshgraphnets_variational/](research/meshgraphnets_variational/) — distribution modelling, world edges, VRAM and performance work
-- [research/neural_operator/](research/neural_operator/) — GINO and Point-DeepONet parity, model capabilities
+- [research/neural_operator/](research/neural_operator/) — Point-DeepONet parity, model capabilities
 - [research/transolver/](research/transolver/) — foundation-model design
 - [research/sdfflow/](research/sdfflow/) — conditional geometry survey, meshing upgrade, guidance mechanisms, [conditional generation design](research/sdfflow/CONDITIONAL_GENERATION_DESIGN_2026-09.md) (FEA-label conditions, per-dim dropout, C2/E2, the load-unit correction)
 - [research/hi_mgnflow/](research/hi_mgnflow/) — deterministic mode, sweep plan
@@ -69,9 +68,10 @@ behaviour — treat the mismatch as something to reconcile, not to ignore.
 - [research/simulgenvae/](research/simulgenvae/) — technical documentation
 - [research/shell_buckling/](research/shell_buckling/) — design notes for the shell post-buckling benchmark: a static one-to-many dataset with an OOD geometry test set. Campaign source code, raw per-draw simulation output and local build logs live outside the repo at `D:\CAE_datasets_raw\shell_buckling\` (code, synced to the aarl compute server) and `aarl:/data/Lee/buckling_radioss/` (raw ANIM/deck/summary data); only the final packed `dataset/probabilistic/ex4_shell_buckling.h5` belongs in this repo's `dataset/`.
 
-Reflow equipment identification:
-[11-zone NARX experiment design](research/reflow/REFLOW_NARX_EXPERIMENT_DESIGN.md)
-includes randomized setpoint protocols, duration budgets, and an offline schedule generator.
+Reflow equipment identification: the 11-zone NARX experiment-design write-up was
+deleted in commit `9884fb1` (2026-09-21); what survives is the offline schedule
+generator [research/reflow/generate_schedule.py](research/reflow/generate_schedule.py)
+and [experiment_config.example.json](research/reflow/experiment_config.example.json).
 
 ## Per-method notes
 

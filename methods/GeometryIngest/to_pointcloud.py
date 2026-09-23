@@ -1,6 +1,6 @@
 """Node set -> fixed-size point cloud for the operator models.
 
-MeshGraphNets consumes the full node set + edges. DeepONet/FNO/GINO/Transolver
+MeshGraphNets consumes the full node set + edges. DeepONet/FNO/Transolver
 consume the nodes as a *point cloud* and several want a consistent point count,
 so this offers a deterministic resample. Farthest-point sampling (FPS) gives an
 even geometric spread; random subsampling is faster for large N.

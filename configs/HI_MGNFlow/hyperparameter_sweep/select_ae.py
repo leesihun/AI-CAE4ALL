@@ -40,6 +40,7 @@ Exit codes: 0 promoted cleanly; 3 promoted but NEEDS_ATTENTION (see above);
 from __future__ import annotations
 
 import argparse
+import io
 import re
 import subprocess
 import sys
@@ -160,7 +161,10 @@ def patch_key(path: Path, key: str, value: str) -> int:
             lines[i] = f"{m.group(1)}{m.group(2)}{value}{m.group(4)}"
             changed += 1
     if changed:
-        path.write_text("\n".join(lines), encoding="utf-8", newline="\n")
+        # io.open, not Path.write_text(newline=...): that keyword is 3.10+ and
+        # the training box runs 3.9, where it raised only when a non-c8 arm won.
+        with io.open(str(path), "w", encoding="utf-8", newline="\n") as fh:
+            fh.write("\n".join(lines))
     return changed
 
 

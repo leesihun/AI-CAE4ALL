@@ -1,0 +1,38 @@
+% geometry_generation/ex2 - sdfflow on DrivAerML; INTERPOLATION between two generated shapes,
+%   from the checkpoints trained by the paired config_train_sdfflow.txt. Like mode sample this
+%   produces NEW geometry -- it never opens the dataset; both endpoints are drawn from noise.
+% interpolation_space slerp_noise: the two endpoints are FM noise rows, spherically
+%   interpolated and then integrated through the ODE, so every intermediate is a real sample of
+%   the generator rather than a latent-space blend the decoder was never trained on.
+% Unconditional: slerp_noise integrates the null-condition branch (interpolate.py refuses
+%   cond_values here), i.e. the dropout-trained unconditional branch of the 21-name checkpoint --
+%   the same branch config_infer_sdfflow.txt samples. A sweep ACROSS conditions is
+%   interpolation_space cond_sweep with cond_values_a / cond_values_b (21 entries each, checkpoint
+%   order, no nan: the checkpoint is cond_dropout_mode all).
+% seed 42 + source_num_samples 16 draw the SAME noise batch as config_infer_sdfflow.txt
+%   (seed 42, num_samples 16, same device generator), so endpoints 0 and 1 here are the shapes of
+%   sample_42_000.stl and sample_42_001.stl from that run -- the interpolation is auditable
+%   against them.
+% alpha 0.5 writes the midpoint; the run also writes both endpoints and a comparison figure.
+% cfg_scale is not written: only cond_sweep reads it; slerp_noise has no condition to guide to.
+% Writes .stl per shape under output_dir.
+% Reference: https://arxiv.org/abs/2408.11969 ; https://arxiv.org/abs/2301.11445 ; https://arxiv.org/abs/2210.02747
+% No source HDF5 writes. Checkpoints are created by the paired training config.
+
+model                            sdfflow
+mode                             interpolate
+gpu_ids                          0
+parallel_mode                    single
+seed                             42
+vae_modelpath                    ../../output/geometry_generation/ex2_drivaerml/sdfflow/vae.pth
+fm_modelpath                     ../../output/geometry_generation/ex2_drivaerml/sdfflow/fm_best.pth
+output_dir                       ../../output/geometry_generation/ex2_drivaerml/sdfflow/interpolation
+interpolation_space              slerp_noise
+source_num_samples               16
+sample_index_a                   0
+sample_index_b                   1
+alpha                            0.5
+ode_steps                        50
+mc_resolution                    128
+plot_dpi                         180
+plot_max_faces                   0

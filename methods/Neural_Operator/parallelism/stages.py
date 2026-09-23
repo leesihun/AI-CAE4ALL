@@ -1,6 +1,6 @@
 """Pipeline stage construction and per-stage forward step for
 parallel_mode=model_split, adapted from MeshGraphNets' parallelism/model_split.py
-to the grid-latent operator cores (fno, gino).
+to the grid-latent operator core (fno).
 
 Design differences from the MGN original, both deliberate:
 
@@ -33,7 +33,7 @@ from model.adapters.coordinate_domain import CoordinateDomain
 from model.adapters.point_sampling import stable_hash
 from parallelism.comm import recv_upstream, send_downstream
 
-SPLIT_CAPABLE_MODELS = ("fno", "gino")
+SPLIT_CAPABLE_MODELS = ("fno",)
 
 
 def pipeline_noise_tensor(config, num_nodes: int, epoch: int, batch_idx: int,

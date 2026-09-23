@@ -193,10 +193,10 @@ apply. The multiscale-specific keys are:
 ```text
 use_multiscale     True
 coarsening_type    voronoi_seedmean
-voronoi_clusters   5000, 100         # level 0 → 5000 coarse, level 1 → 100 coarse
 multiscale_levels  2
-mp_per_level       4, 6, 8, 6, 4     # pre0, pre1, coarsest, post1, post0
-Latent_dim         128
+voronoi_clusters   1000, 100         # level 0 → 1000 coarse, level 1 → 100 coarse
+mp_per_level       2, 3, 5, 3, 2     # pre0, pre1, coarsest, post1, post0
+latent_dim         128
 time_integration   ar_ot
 ```
 

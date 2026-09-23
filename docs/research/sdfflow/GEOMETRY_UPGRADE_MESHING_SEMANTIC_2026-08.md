@@ -404,7 +404,7 @@ MC 표면을 복구하며(12k 면에서 다시 watertight, 부피 오차 0.1%), 
 이것이 Siemens Simcenter PhysicsAI Generate가 파는 것이고(설계 파라미터 + KPI 조건부 diffusion),
 PhysGen(CVPR 2026)이 하는 것이다(공유 latent에서 SDF + 압력 + 항력 디코더).
 
-이 저장소는 여기서 유리하다: **GINO / Transolver / MeshGraphNets surrogate가 이미 있다.**
+이 저장소는 여기서 유리하다: **Transolver / MeshGraphNets surrogate가 이미 있다.**
 생성 → 메싱(3장) → surrogate 채점 → 랭킹 루프가 벤더들이 파는 "generate + predict"다.
 게다가 §3의 메셔가 그 루프의 빠진 연결고리였다.
 
@@ -610,7 +610,7 @@ volume mean 0.2578, std 0.0763, **min 0.1198**. 즉 `mean − 2σ = 0.105`는 **
 **Phase 3 (조건 정확도 + 물리 루프)**
 
 6. Sampler guidance(4.6-1) → 조건 오차 목표 1% 미만. LDF(4.6-2)는 그 다음.
-7. 생성 → 메싱 → **기존 GINO/Transolver surrogate 채점** 루프 연결. 이게 벤더들이 파는 제품 형태다.
+7. 생성 → 메싱 → **기존 Transolver surrogate 채점** 루프 연결. 이게 벤더들이 파는 제품 형태다.
 
 **Phase 4 (연구급)**
 

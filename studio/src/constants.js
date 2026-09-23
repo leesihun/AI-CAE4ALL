@@ -32,16 +32,11 @@ export const KEY_CATALOGS = {
   mlp: keys(`activation batch_size checkpoint_interval dataset_dir dropout ema_decay gpu_ids hidden_layers infer_dataset inference_output_dir input_normalization input_var learningr log_file_dir loss max_grad_norm mode model modelpath norm num_workers output_activation output_normalization output_var prefetch_factor split_seed training_epochs use_amp use_compile use_ema val_interval warmup_epochs weight_decay`),
   meshgraphnets: keys(`alpha_recon augment_geometry batch_size beta_aux coarse_cache_per_worker coarse_world_edges coarsening_type cond_var dataset_dir display_testset display_trainset edge_var ema_decay eval_dataset feature_loss_weights fit_latent_gmm free_bits gmm_components gmm_covariance_type gmm_reg_covar gpu_ids grad_accum_steps hierarchy_cache_build_workers hierarchy_cache_dir hierarchy_cache_keep hierarchy_cache_wait_timeout histogram_bins histogram_clip_quantile infer_dataset infer_timesteps inference_output_dir init_modelpath input_var lambda_det lambda_kl lambda_mmd latent_dim learned_interpolation learningr log_file_dir make_histogram message_passing_num mmd_bandwidth mode model modelpath mp_per_level multiscale_levels noise_gamma noise_std_ratio num_vae_samples num_workers num_z output_var parallel_mode pin_memory pipeline_microbatches plot_feature_idx pool_heads pool_type positional_features posterior_min_std prefetch_factor prior_batch_size prior_cov_rank prior_diagnose_interval prior_epochs prior_family prior_fm_steps prior_hidden_dim prior_kl_reg_weight prior_learningr prior_loss_type prior_mc_samples prior_min_std prior_mixture_components prior_mp_layers prior_nll_weight prior_num_workers prior_temperature prior_type prior_val_interval profile_batches recon_loss resume_prior show_histogram split_seed static_cache_per_worker std_noise test_batch_idx test_interval test_max_batches time_integration train_conditional_prior train_eval_subset_size training_epochs unpool_type use_amp use_checkpointing use_compile use_conditional_prior use_ema use_multiscale use_node_types use_parallel_stats use_vae use_world_edges vae_batch_size vae_batch_size_max vae_batch_size_min vae_batch_vram_fraction vae_graph_aware vae_latent_dim vae_mp_layers vae_valid_prior_samples val_interval voronoi_branches voronoi_clusters warmup_epochs weight_decay world_edge_backend world_max_num_neighbors world_radius_multiplier`),
   meshgraphnetsV: keys(`alpha_prior_max alpha_recon augment_geometry batch_size best_by beta_aux bipartite_unpool coarse_world_edges coarsening_type cond_var dataset_dir display_testset display_trainset edge_var ema_decay eval_dataset feature_loss_weights fit_latent_gmm free_bits gmm_components gmm_covariance_type gmm_reg_covar gpu_ids grad_accum_steps hierarchy_cache_build_workers hierarchy_cache_dir hierarchy_cache_keep hierarchy_cache_wait_timeout hierarchy_seed hierarchy_variants histogram_bins histogram_clip_quantile infer_dataset infer_timesteps inference_output_dir input_var lambda_det lambda_kl lambda_mmd latent_dim latent_inflation learningr log_file_dir make_histogram message_passing_num mmd_bandwidth mmd_gather_ranks mode model modelpath mp_per_level multiscale_levels noise_gamma noise_std_ratio num_vae_samples num_workers num_z output_var parallel_mode pin_memory pipeline_microbatches plot_feature_idx positional_encoding positional_features posterior_min_std prefetch_factor prior_cov_rank prior_family prior_fm_solver prior_fm_steps prior_freeze_epoch prior_grad_to_encoder prior_hidden_dim prior_kl_reg_weight prior_min_std prior_mixture_components prior_mp_layers prior_nll_weight prior_temperature prior_type pv_channel recon_loss residual_scale save_rollouts show_histogram split_seed static_cache_per_worker std_noise test_batch_idx test_interval test_max_batches time_integration training_epochs use_amp use_checkpointing use_compile use_conditional_prior use_ema use_multiscale use_node_types use_parallel_stats use_vae use_world_edges val_batch_size vae_batch_size vae_batch_size_max vae_batch_size_min vae_batch_vram_fraction vae_graph_aware vae_latent_dim vae_mp_layers vae_valid_prior_samples val_interval voronoi_clusters warmup_epochs weight_decay world_edge_backend world_max_num_neighbors world_radius_multiplier z_conditioning`),
-  operator: keys(`_ddp_port _pin_memory augment_geometry batch_size checkpoint_interval coarse_cache_per_worker coarse_world_edges coarsening_type cond_var coordinate_normalization dataset_dir deeponet_activation deeponet_basis_dim deeponet_branch_depth deeponet_branch_source deeponet_hidden_channels deeponet_max_branch_params deeponet_multi_output deeponet_sensor_resolution deeponet_trunk_depth dimension_tolerance display_testset display_trainset edge_var ema_decay feature_loss_weights fno_grid_resolution fno_hidden_channels fno_layers fno_modes fno_norm fno_use_channel_mlp fno_variant free_bits gino_cache_neighbors gino_channel_mlp_expansion gino_coord_embed_dim gino_fno_hidden_channels gino_fno_layers gino_fno_modes gino_grid_resolution gino_group_shared_geometry gino_in_radius gino_include_grid_coordinates gino_kernel_hidden gino_kernel_widths gino_lifting_hidden gino_max_empty_input_fraction gino_max_num_neighbors gino_out_radius gino_pos_embedding_type gino_projection_widths gino_query_chunk_size gino_tucker_rank gino_use_torch_cluster gino_variant global_condition_features gpu_ids grad_accum_steps grid_padding infer_dataset infer_query_chunk_size infer_timesteps inference_output_dir input_var integration_weight_source lambda_det lambda_kl lambda_mmd latent_dim learningr log_dir log_file_dir max_grad_norm message_passing_num mode model modelpath mp_per_level multiscale_levels noise_gamma noise_std_ratio num_node_types num_timesteps num_workers operator_dim out_of_bounds_policy output_var parallel_mode pipeline_microbatches plot_feature_idx point_branch_merge point_condition_depth point_feature_dim point_hidden_channels point_output_activation point_refiner_depth point_resample_each_epoch point_sampling point_sensor_count point_siren_omega0 point_trunk_depth point_variant pointnet_activation pointnet_depth pointnet_norm positional_features posterior_min_std prefetch_factor profile_batches sdf_sidecar sdf_source split_seed std_noise test_batch_idx test_interval test_max_batches time_integration train_eval_subset_size train_query_chunk_size training_epochs use_amp use_checkpointing use_compile use_ema use_multiscale use_node_types use_parallel_stats use_vae use_world_edges vae_graph_aware vae_latent_dim vae_mp_layers val_interval voronoi_clusters warmup_epochs weight_decay world_edge_backend world_max_num_neighbors world_radius_multiplier write_preprocessing`),
+  operator: keys(`_ddp_port _pin_memory augment_geometry batch_size checkpoint_interval coarse_cache_per_worker coarse_world_edges coarsening_type cond_var coordinate_normalization dataset_dir deeponet_activation deeponet_basis_dim deeponet_branch_depth deeponet_branch_source deeponet_hidden_channels deeponet_max_branch_params deeponet_multi_output deeponet_sensor_resolution deeponet_trunk_depth dimension_tolerance display_testset display_trainset edge_var ema_decay feature_loss_weights fno_grid_resolution fno_hidden_channels fno_layers fno_modes fno_norm fno_use_channel_mlp fno_variant free_bits global_condition_features gpu_ids grad_accum_steps grid_padding infer_dataset infer_query_chunk_size infer_timesteps inference_output_dir input_var integration_weight_source lambda_det lambda_kl lambda_mmd latent_dim learningr log_dir log_file_dir max_grad_norm message_passing_num mode model modelpath mp_per_level multiscale_levels noise_gamma noise_std_ratio num_node_types num_timesteps num_workers operator_dim out_of_bounds_policy output_var parallel_mode pipeline_microbatches plot_feature_idx point_branch_merge point_condition_depth point_feature_dim point_hidden_channels point_output_activation point_refiner_depth point_resample_each_epoch point_sampling point_sensor_count point_siren_omega0 point_trunk_depth point_variant pointnet_activation pointnet_depth pointnet_norm positional_features posterior_min_std prefetch_factor profile_batches sdf_sidecar sdf_source split_seed std_noise test_batch_idx test_interval test_max_batches time_integration train_eval_subset_size train_query_chunk_size training_epochs use_amp use_checkpointing use_compile use_ema use_multiscale use_node_types use_parallel_stats use_vae use_world_edges vae_graph_aware vae_latent_dim vae_mp_layers val_interval voronoi_clusters warmup_epochs weight_decay world_edge_backend world_max_num_neighbors world_radius_multiplier write_preprocessing`),
   transolver: keys(`amortized_cache_nodes amortized_query_nodes amortized_training attention_kernel augment_geometry batch_size chunk_size coarse_world_edges coarsening_type cond_var coordinate_normalization dataset_dir display_trainset dropout edge_var ema_decay feature_loss_weights gpu_ids grad_accum_steps infer_chunk_size infer_dataset infer_mode infer_timesteps inference_output_dir input_var latent_dim learningr log_file_dir max_grad_norm max_train_batches max_val_batches message_passing_num mlp_ratio mode model modelpath mp_per_level multiscale_levels noise_gamma num_heads num_layers num_workers output_var parallel_mode positional_features prefetch_factor slice_num small_output_init split_seed std_noise temperature_init temperature_max temperature_min test_batch_idx test_interval test_max_batches time_integration training_epochs use_amp use_checkpointing use_compile use_ema use_multiscale use_node_types use_parallel_stats use_world_edges val_interval voronoi_clusters warmup_epochs weight_decay world_edge_backend world_max_num_neighbors world_radius_multiplier write_preprocessing write_test_predictions`),
   sdfflow: keys(`alpha batch_size candidate_multiplier cfg_scale clamp_dist cond_dropout cond_values condition_clip condition_names condition_ood_policy dataset_dir decoder_heads decoder_hidden decoder_layers decoder_type deterministic_warmup_epochs eikonal_weight ema_decay encode_batch_size encoder_blocks encoder_dim encoder_heads encoder_self_attention fm_arch fm_batch_size fm_blocks fm_cond_hidden fm_ema_decay fm_heads fm_hidden fm_learningr fm_log_file_dir fm_mc_resolution_test fm_modelpath fm_num_test_shapes fm_num_workers fm_test_interval fm_time_logit_mean fm_time_logit_std fm_time_sampling fm_training_epochs fm_use_amp fm_use_ema fm_val_interval fm_warmup_epochs fm_weight_decay fourier_bands fsdp_min_params gpu_ids hybrid_grad_points init_vae_modelpath input_mesh kl_warmup_epochs kl_weight latent_clip latent_dim latent_tokens learningr log_file_dir max_condition_z mc_resolution mc_resolution_test min_condition_std mode model normal_weight num_encoder_points num_query_points num_samples num_test_shapes num_workers ode_steps output_dir overfit_all_shapes overfit_num_shapes parallel_mode pipeline_log_file plot_dpi plot_max_faces posterior_noise_max_scale posterior_noise_warmup_epochs sample_index_a sample_index_b seed skip_completed_stages source_num_samples split_seed surface_weight test_interval training_epochs use_amp use_conditions use_ema vae_batch_size vae_ema_decay vae_learningr vae_log_file_dir vae_mc_resolution_test vae_modelpath vae_num_test_shapes vae_num_workers vae_test_interval vae_training_epochs vae_use_amp vae_use_ema vae_val_interval vae_warmup_epochs vae_weight_decay val_interval warmup_epochs weight_decay opt_subspace_dim opt_subspace_seed opt_condition_dims opt_latent_range opt_shell_scale opt_budget opt_popsize opt_sigma0 opt_baseline_size opt_load_cases opt_length_scale opt_stress_percentile opt_mesh_size_max opt_target_faces opt_material_e opt_material_nu opt_material_rho opt_yield_stress opt_stress_margin opt_disp_margin opt_stress_weight opt_disp_weight opt_verify_resolution opt_verify_target_faces opt_verify_mesh_size_max opt_analysis opt_surrogate_checkpoint opt_surrogate_config opt_surrogate_target_nodes`),
   simulgenvae: keys(`alpha batch_size beta_target cond_var dataset_dir ema_decay field_start_row gpu_ids init_beta_divisor init_vae_modelpath kl_warmup_epochs kl_warmup_start_frac latent_dim latent_dim_end lc_batch_size lc_data_type lc_dropout lc_ema_decay lc_filter lc_learningr lc_log_file_dir lc_modelpath lc_num_workers lc_training_epochs lc_use_amp lc_use_ema lc_warmup_epochs lc_weight_decay learningr load_all log_file_dir loss_type mode model network_size node_end node_start num_filter_enc num_var num_workers output_dir parallel_mode param_data_type param_dir pipeline_log_file plot_mode recon_iter skip_completed_stages split_seed timesteps_reduced training_epochs use_amp use_ema use_spatial_attention vae_batch_size vae_ema_decay vae_learningr vae_log_file_dir vae_modelpath vae_num_workers vae_training_epochs vae_use_amp vae_use_ema vae_warmup_epochs vae_weight_decay val_interval warmup_epochs weight_decay`)
 };
-
-// Native-only controls discovered after the original compact catalogs were
-// published. Keep them explicit here so Studio authoring and MethodSpecs stay
-// aligned without hiding them in an unrelated model family's long key line.
-KEY_CATALOGS.operator = [...new Set([...KEY_CATALOGS.operator, "gino_domain_padding"])].sort();
 
 // Periodic training visualization, added to every method that trains. The mesh
 // routes already carried display_testset/plot_feature_idx; these are the routes
@@ -186,15 +181,6 @@ export const MODEL_CATALOG = {
     description: "Fourier Neural Operator with explicit grid and spectral-mode controls.", dataset: "mesh HDF5",
     defaults: { model: "fno", mode: "train", gpu_ids: "0", modelpath: "../../output/fno/studio/fno.pth", coordinate_normalization: "centered_isotropic", fno_grid_resolution: "64,64,64", fno_modes: "16,16,16", fno_hidden_channels: "64", fno_layers: "4", training_epochs: "500", batch_size: "4", learningr: "0.0001" }
   },
-  gino: {
-    label: "GINO", short: "GINO", accent: "#7d5c99", modes: ["train", "inference"], keys: KEY_CATALOGS.operator,
-    description: "Geometry-informed neural operator for irregular domains.", dataset: "mesh HDF5",
-    // gino_fno_hidden_channels / gino_fno_layers / gino_kernel_hidden were
-    // missing -- all three NOVAR-REQ required, so a freshly dropped GINO block
-    // never reached preflight. Values mirror
-    // configs/Neural_Operator/deterministic/ex9/baseline/config_train_gino.txt.
-    defaults: { model: "gino", mode: "train", gpu_ids: "0", modelpath: "../../output/gino/studio/gino.pth", coordinate_normalization: "centered_isotropic", gino_grid_resolution: "64,64,64", gino_fno_modes: "16,16,16", gino_fno_hidden_channels: "64", gino_fno_layers: "4", gino_kernel_hidden: "64", gino_in_radius: "0.05", gino_out_radius: "0.05", training_epochs: "500", batch_size: "2", learningr: "0.0001" }
-  },
   transolver: {
     label: "Transolver3", short: "TR3", accent: "#9a5e55", modes: ["train", "inference"], keys: KEY_CATALOGS.transolver,
     description: "Physics-Attention with slice-space and node-sharded execution controls.", dataset: "mesh HDF5",
@@ -274,10 +260,6 @@ export const REQUIRED = {
     train: keys(`model mode gpu_ids dataset_dir modelpath input_var output_var coordinate_normalization training_epochs batch_size learningr fno_grid_resolution fno_modes fno_hidden_channels fno_layers`),
     inference: keys(`model mode gpu_ids modelpath infer_dataset input_var output_var`)
   },
-  gino: {
-    train: keys(`model mode gpu_ids dataset_dir modelpath input_var output_var coordinate_normalization training_epochs batch_size learningr gino_grid_resolution gino_fno_modes gino_fno_hidden_channels gino_fno_layers gino_in_radius gino_out_radius gino_kernel_hidden`),
-    inference: keys(`model mode gpu_ids modelpath infer_dataset input_var output_var`)
-  },
   transolver: {
     train: keys(`model mode gpu_ids dataset_dir modelpath input_var output_var coordinate_normalization training_epochs batch_size learningr latent_dim num_layers num_heads slice_num attention_kernel`),
     inference: keys(`model mode gpu_ids modelpath infer_dataset input_var output_var`)
@@ -352,8 +334,7 @@ export const CHOICES = {
   fno_variant: ["mesh", "paper_darcy"],
   fno_norm: ["none"],
   out_of_bounds_policy: ["error", "clamp"],
-  sdf_source: ["none", "dataset", "sidecar"],
-  gino_variant: ["mesh_state", "paper_decoder"],
+  sdf_source: ["none", "dataset", "sidecar", "mesh"],
   flow_solver: ["heun", "euler"],
   flow_t_sampling: ["uniform", "logitnormal"],
   flow_loss_weighting: ["uniform", "x0"],
@@ -367,13 +348,12 @@ export const PARALLEL_MODE_CHOICES = Object.freeze({
   sdfflow: ["single", "ddp", "fsdp"],
   transolver: ["ddp", "node_shard"],
   fno: ["ddp", "model_split"],
-  gino: ["ddp", "model_split"],
   meshgraphnets: ["ddp", "model_split"],
   "meshgraphnets-v": ["ddp", "model_split"],
   "chi-mgnflow": ["ddp"]
 });
 
-export const BOOLEAN_KEYS = new Set(keys(`augment_geometry bipartite_unpool coarse_world_edges display_testset display_trainset encoder_self_attention fit_latent_gmm fm_use_amp fm_use_ema gino_cache_neighbors guidance_enabled gino_group_shared_geometry gino_include_grid_coordinates gino_use_torch_cluster load_all make_histogram overfit_all_shapes point_resample_each_epoch resume_prior show_histogram skip_completed_stages small_output_init split_by_parent train_conditional_prior use_amp use_checkpointing use_compile use_conditional_prior use_ema use_multiscale use_node_types use_parallel_stats use_vae use_world_edges vae_graph_aware vae_use_amp vae_use_ema lc_use_amp lc_use_ema write_preprocessing write_test_predictions`));
+export const BOOLEAN_KEYS = new Set(keys(`augment_geometry bipartite_unpool coarse_world_edges display_testset display_trainset encoder_self_attention fit_latent_gmm fm_use_amp fm_use_ema guidance_enabled load_all make_histogram overfit_all_shapes point_resample_each_epoch resume_prior show_histogram skip_completed_stages small_output_init split_by_parent train_conditional_prior use_amp use_checkpointing use_compile use_conditional_prior use_ema use_multiscale use_node_types use_parallel_stats use_vae use_world_edges vae_graph_aware vae_use_amp vae_use_ema lc_use_amp lc_use_ema write_preprocessing write_test_predictions`));
 BOOLEAN_KEYS.delete("load_all");
 export const OPERATOR_REMOVED = new Set(keys(`message_passing_num latent_dim edge_var world_radius_multiplier world_max_num_neighbors world_edge_backend coarse_world_edges multiscale_levels mp_per_level coarsening_type voronoi_clusters coarse_cache_per_worker use_vae vae_latent_dim vae_mp_layers vae_graph_aware free_bits posterior_min_std lambda_mmd lambda_kl lambda_det`));
 export const TRANSOLVER_REJECTED = new Set(keys(`edge_var message_passing_num mp_per_level coarsening_type voronoi_clusters multiscale_levels world_radius_multiplier world_max_num_neighbors world_edge_backend coarse_world_edges`));
@@ -825,22 +805,14 @@ export const TEMPLATES = {
   // Grid/mode axes below are 2 entries, not 3: ex9 is a 2-D forging domain
   // (Geo-FNO plasticity, 987 cases x 20 states x 3131 nodes). A 3-entry
   // "64,64,64"/"16,16,16" grid was shipped here for a while -- it's internally
-  // consistent (same length both sides) so it clears NOVAR-FNO-001/NOVAR-GINO-001
-  // at the spec layer, but it fits a 3rd axis that does not exist in this
+  // consistent (same length both sides) so it clears NOVAR-FNO-001 at the spec
+  // layer, but it fits a 3rd axis that does not exist in this
   // dataset. Values below instead mirror
   // configs/Neural_Operator/deterministic/ex9/baseline/config_train_fno.txt exactly, the
   // benchmarked, actually-run FNO configuration on this data.
   fno: meshPipeline("FNO (ex9 plasticity)", "model.fno", {
     fno_variant: "mesh", fno_grid_resolution: "64, 32", fno_modes: "16, 12", fno_hidden_channels: "64",
     fno_layers: "4", training_epochs: "500", batch_size: "20", learningr: "0.001"
-  }),
-  // Mirrors configs/Neural_Operator/deterministic/ex9/baseline/config_train_gino.txt (same
-  // 2-D dimensionality note as fno above).
-  gino: meshPipeline("GINO (ex9 plasticity)", "model.gino", {
-    gino_variant: "mesh_state", gino_grid_resolution: "64, 32", gino_fno_modes: "16, 12",
-    gino_fno_hidden_channels: "64", gino_fno_layers: "4", gino_kernel_hidden: "64",
-    gino_in_radius: "0.08", gino_out_radius: "0.08",
-    training_epochs: "500", batch_size: "1", learningr: "0.001"
   }),
   // Mirrors configs/Neural_Operator/deterministic/ex9/baseline/config_train_deeponet.txt.
   // deeponet_sensor_resolution and deeponet_basis_dim were previously absent
@@ -855,7 +827,7 @@ export const TEMPLATES = {
   // Mirrors configs/Neural_Operator/deterministic/ex9/baseline/config_train_point_deeponet.txt.
   // point_feature_dim, pointnet_depth, and point_trunk_depth were previously
   // absent -- all three NOVAR-REQ required, same missing-required-field bug as
-  // the other three operator templates above.
+  // the other two operator templates above.
   point_deeponet: meshPipeline("Point-DeepONet (ex9 plasticity)", "model.point_deeponet", {
     point_sensor_count: "2048", point_hidden_channels: "128", point_feature_dim: "128",
     pointnet_depth: "3", point_trunk_depth: "3",
@@ -905,7 +877,7 @@ export const TEMPLATES = {
   // The only other template touching sdfflow ("generative", below) assumes a
   // *pretrained* checkpoint already exists -- its model.sdfflow block is
   // configured in mode "sample", not "train". Before this template, SDFFlow
-  // was the only mode among the suite's 12 live routes with no from-scratch
+  // was the only mode among the suite's live routes with no from-scratch
   // pipeline: training it required hand-typing the merged VAE->FM route onto
   // a bare block. This mirrors configs/SDFFlow/config_train.txt's merged
   // `mode train` pipeline on the real deepjeb.h5 SDF dataset (2138 shapes),
@@ -1224,13 +1196,6 @@ export const HELP = {
   fno_modes: "Retained Fourier modes per axis, same entry count as fno_grid_resolution. Each must be at most grid/2 (last axis grid/2 + 1).",
   fno_hidden_channels: "Channel width of the spectral layers.",
   fno_layers: "Number of spectral convolution layers.",
-  gino_grid_resolution: "Latent grid per axis for the FNO core; the graph-kernel encoder maps mesh points onto it and the decoder maps back. 2 or 3 entries.",
-  gino_fno_modes: "Fourier modes per axis for the latent FNO core; same rules as fno_modes.",
-  gino_fno_hidden_channels: "Channel width of the latent FNO core.",
-  gino_fno_layers: "Spectral layers in the latent FNO core.",
-  gino_kernel_hidden: "Hidden width of the graph-kernel MLPs that move features between mesh points and the grid.",
-  gino_in_radius: "Neighbourhood radius, in normalized coordinates, for the mesh-to-grid kernel integration. Too small leaves grid cells empty (see gino_max_empty_input_fraction).",
-  gino_out_radius: "Neighbourhood radius, in normalized coordinates, for the grid-to-query kernel integration.",
   deeponet_sensor_resolution: "Fixed sensor grid per axis at which the branch net samples the input field (2 or 3 entries).",
   deeponet_hidden_channels: "Width of the branch and trunk MLPs.",
   deeponet_branch_depth: "Branch-net layers.",

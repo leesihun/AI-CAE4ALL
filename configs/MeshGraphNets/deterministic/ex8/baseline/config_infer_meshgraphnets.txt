@@ -11,7 +11,7 @@
 
 model                            meshgraphnets
 mode                             inference
-gpu_ids                          5
+gpu_ids                          4
 parallel_mode                    ddp
 split_seed                       42
 dataset_dir                      ../../dataset/deterministic/ex8_elasticity.h5
@@ -30,7 +30,7 @@ time_integration                 ar_ot
 training_epochs                  500
 batch_size                       16
 learningr                        0.0001
-weight_decay                     0.0001
+weight_decay                     0.0
 warmup_epochs                    5
 num_workers                      2
 prefetch_factor                  2

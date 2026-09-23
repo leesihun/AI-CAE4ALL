@@ -97,7 +97,7 @@ export function inferenceModel(node) {
 // not record (latent_dim_end, lc_filter, num_filter_enc, ...), so their
 // non-training modes still require the model block that owns those values.
 export const STANDALONE_INFERENCE_MODEL_IDS = [
-  "meshgraphnets", "meshgraphnets-v", "chi-mgnflow", "transolver", "fno", "gino", "deeponet", "point_deeponet", "mlp"
+  "meshgraphnets", "meshgraphnets-v", "chi-mgnflow", "transolver", "fno", "deeponet", "point_deeponet", "mlp"
 ];
 const STANDALONE_INFERENCE_MODELS = new Set(STANDALONE_INFERENCE_MODEL_IDS);
 
@@ -116,7 +116,7 @@ const STANDALONE_INFERENCE_MODELS = new Set(STANDALONE_INFERENCE_MODEL_IDS);
  */
 // The operator repo records the data contract separately from the architecture,
 // under DataSpec field names. Mapping them back to config keys is what supplies
-// input_var/output_var for FNO/GINO/DeepONet, which model_config does not hold.
+// input_var/output_var for FNO/DeepONet, which model_config does not hold.
 const DATA_SPEC_KEYS = {
   input_var: "input_var",
   output_var: "output_var",

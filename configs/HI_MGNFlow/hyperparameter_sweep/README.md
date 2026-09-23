@@ -242,7 +242,7 @@ markers refuse to promote or infer from a checkpoint older than its own launch.
 | `batch_size` | `16` | already measured: beat 32 by 0.288 |
 | `learningr` | `0.0001` | the contrast was a 0.083 tie — not worth a card |
 | `flow_time_freqs` | `16` | architecture-defining; a change forces a retrain to compare |
-| `latent_dim`, `voronoi_clusters`, `mp_per_level` | SAOI_run values | changing them changes the compressor, so they belong in Phase A's locked block, not a Phase-B axis |
+| `latent_dim`, `voronoi_clusters`, `mp_per_level` | SAOI_run values | changing them changes the compressor, so they belong in Phase A's locked block, not a Phase-B axis — sweep 2 (below) moves the last two |
 | `flow_steps`, `flow_solver` | `30`, `heun` | sampling-time only — `rollout.py` lets the config win on exactly these two keys, so they can be re-dialled at inference with no retraining |
 
 A full factorial over Phase A × Phase B would be 4 × 4 = 16 models per half and
@@ -333,3 +333,51 @@ other string. Every path in this directory is already lowercase, so nothing
 breaks — but an uppercase directory introduced into that one key would be
 silently folded and then fail to open on Linux. Keep it lowercase, or add the
 key to both `PATH_KEYS` sets first.
+
+## Sweep 2 — the compressor axes sweep 1 holds fixed
+
+Sweep 1 varies only `latent_ch` at a fixed 100-node coarsest level, so it cannot
+tell whether the latent budget `B = coarsest nodes × latent_ch` is better spent
+on **space** or on **channels**, or whether the coarsest stack is deep enough.
+Sweep 2 asks exactly that, with everything else held at sweep 1's c8 recipe:
+
+| Arm | `voronoi_clusters` | `latent_ch` | `mp_per_level` | B | Read against |
+|---|---|---|---|---|---|
+| `n200c4` | `1000, 200` | 4 | `4, 6, 8, 6, 4` | 800 | sweep-1 `c8` (same B) |
+| `n400c4` | `1000, 400` | 4 | `4, 6, 8, 6, 4` | 1600 | sweep-1 `c16` (same B) |
+| `n400c8` | `1000, 400` | 8 | `4, 6, 8, 6, 4` | 3200 | headroom: does recon still improve past c16? |
+| `c8m16` | `1000, 100` | 8 | `4, 6, 16, 6, 4` | 800 | sweep-1 `c8`, depth only |
+
+`mp_per_level[L]` sizes both the encoder's coarsest stack and the decoder's
+post-z stack, and the coarsest level is ~0.05% of the compute, so `c8m16` is
+nearly free. There is **no selection step**: every compressor gets its own
+prior at one fixed recipe (`p8u` — prior_blocks 8, since the n400 graphs are 4×
+larger than sweep 1's and 4 blocks reach a smaller fraction of them) and its own
+Phase C, so every arm is measured end to end: 8 AE + 8 prior + 24 inference jobs.
+
+```bash
+GPUS="4 5 6 7" ./run_sweep2.sh   # recommended: name the free cards
+./run_sweep2.sh                  # else: every card under IDLE_MB (2000 MiB) now
+./run_sweep2.sh A|B|C|report|clean|help
+```
+
+**Running beside sweep 1.** Every config says `gpu_ids 0`; the runner launches
+each job with `CUDA_VISIBLE_DEVICES=<card>` (and `CUDA_DEVICE_ORDER=PCI_BUS_ID`)
+from a pool, one job per pool entry (list a card twice to pack two jobs). The
+isolation is in the configs: all artifacts under `output/chi-mgnflow/saoi_sweep2/`,
+one log directory per arm (the dumps are keyed by `gpu_ids`, which is 0
+everywhere), `write_preprocessing False` (sweep 2 never writes the shared HDF5),
+and `hierarchy_cache_dir` pointing at `saoi_sweep2/mscache/<hierarchy>/`, out of
+reach of the same-stem prune next to the dataset. `all` deletes that cache
+directory at the end (`KEEP_CACHE=1` to keep it).
+
+| File | Purpose |
+|---|---|
+| `config_train_ae2_<half>_<arm>.txt` | Phase A, 8 = 2 halves × 4 arms |
+| `config_train_prior2_<half>_<arm>.txt` | Phase B, 8; `ae_checkpoint` = that arm's own Phase-A file |
+| `config_infer2_<half>_<arm>_<tag>.txt` | Phase C, 24 |
+| `run_sweep2.sh` | the runner and GPU pool |
+| `report_sweep2.py` | one table per half — B, best recon, ceiling, sd/bias per part, score — with sweep 1's compressors beside it; written to `saoi_sweep2/RESULTS.txt` |
+
+The `2` in the names keeps sweep 1's globs (`select_ae.py`,
+`check_eval_inputs.py`, `rank_arms.py`) from ever picking these files up.

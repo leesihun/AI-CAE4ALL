@@ -1,10 +1,10 @@
-"""HDF5-to-PyG loader shared by all four operator models (IMPLEMENTATION_PLAN.md
+"""HDF5-to-PyG loader shared by all three operator models (IMPLEMENTATION_PLAN.md
 section 4). Adapted from MeshGraphNets' general_modules/mesh_dataset.py and
 transolver's variant of the same file: split/target/noise semantics are an
 exact port of the pinned MGN behavior; edge attributes are dropped (no
 operator core here consumes MGN edge features, per section 3); coordinate
 normalization (`pos_normalized`, `position_scale`) and the coordinate-domain
-statistics needed by grid/point/GINO adapters (active axes, grid bounds,
+statistics needed by grid/point adapters (active axes, grid bounds,
 rotation-invariant radius) are new, following transolver's precedent of
 extending the MGN dataset contract for a non-message-passing model.
 """
@@ -28,7 +28,7 @@ from general_modules.time_integration import (
     resolve_rollout_window,
     resolve_time_integration,
 )
-from model.adapters.sdf import sdf_available, load_sdf
+from model.adapters.sdf import sdf_available, load_sdf, mesh_sdf_at_nodes
 
 POSITION_SCALE_EPS = 1e-8
 
@@ -200,6 +200,17 @@ class MeshGraphDataset(Dataset):
     def _validate_sdf_available(self) -> None:
         """Fail fast if sdf_source is set but SDF data is missing for any sample."""
         for sid in self.sample_ids:
+            if self.sdf_source == 'mesh':
+                # let the reconstruction report its own diagnosis (which face
+                # kind, how many non-manifold edges) instead of flattening
+                # every cause into "no SDF data"
+                try:
+                    mesh_sdf_at_nodes(self.h5_file, sid, self.dimension_tolerance)
+                except (ValueError, ImportError) as exc:
+                    raise ValueError(
+                        f"sdf_source='mesh' but sample {sid} cannot be signed: {exc}"
+                    ) from exc
+                continue
             if not sdf_available(self.h5_file, sid, self.sdf_source, self.sdf_sidecar):
                 raise ValueError(
                     f"sdf_source='{self.sdf_source}' but sample {sid} has no SDF data "

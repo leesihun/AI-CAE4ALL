@@ -11,7 +11,7 @@
 
 model                            transolver
 mode                             inference
-gpu_ids                          5
+gpu_ids                          3
 parallel_mode                    ddp
 split_seed                       42
 dataset_dir                      ../../dataset/deterministic/ex3_NASA_CRM_full.h5

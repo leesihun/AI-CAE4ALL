@@ -87,7 +87,7 @@ def audit_specs():
         print(f'{problem}\n  {len(paths)} files; first: {paths[0]}')
     if problems:
         raise SystemExit(f'{len(problems)} distinct warnings/errors')
-    print('172 configs: launcher schemas clean (filesystem/checkpoints/GPU intentionally not claimed).')
+    print('150 configs: launcher schemas clean (filesystem/checkpoints/GPU intentionally not claimed).')
 
 
 if __name__ == '__main__':

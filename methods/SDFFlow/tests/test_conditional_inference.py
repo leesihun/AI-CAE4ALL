@@ -13,7 +13,7 @@
   * `mode sample` with guidance + Newton on that calibration.
 
 No trained checkpoint exists and none is trained here. The VAE and the
-velocity net are RANDOMLY INITIALISED from configs/SDFFlow/config_train.txt
+velocity net are RANDOMLY INITIALISED from the checked-in ex1 training config
 (via general_modules.load_config, shrunk to CPU-test sizes) and saved in the
 real checkpoint payload format; a 12-shape synthetic HDF5 (with a one-column
 FEA `cond_extra` sidecar) is built under pytest's tmp dir. Where a test needs
@@ -69,7 +69,11 @@ except ImportError as exc:  # pragma: no cover - depends on the concurrent modul
 
 torch.set_num_threads(max(1, min(4, os.cpu_count() or 1)))
 
-CONFIG_TRAIN = os.path.join(SUITE, 'configs', 'SDFFlow', 'config_train.txt')
+# The checked-in SDFFlow training recipe. configs/SDFFlow/config_train.txt was
+# reorganised into configs/SDFFlow/geometry_generation/<ex>/baseline/; ex1 is the
+# DeepJEB route and its condition_names (volume, area) are GEOM_NAMES below.
+CONFIG_TRAIN = os.path.join(SUITE, 'configs', 'SDFFlow', 'geometry_generation',
+                            'ex1', 'baseline', 'config_train_sdfflow.txt')
 NUM_SHAPES = 12
 FEA_NAME = 'log_max_ver_stress_mpa'           # one FEA-named sidecar column
 GEOM_NAMES = ('volume', 'area')
@@ -86,7 +90,7 @@ needs_descriptor_tools = pytest.mark.skipif(not HAVE_DESCRIPTOR_TOOLS, reason=DE
 # ---------------------------------------------------------------------------
 
 def _tiny_config(dataset_path):
-    """configs/SDFFlow/config_train.txt through the native parser, shrunk to
+    """The checked-in ex1 training config through the native parser, shrunk to
     CPU-test sizes (architecture keys only; the recipe's semantics are kept)."""
     config = load_config(CONFIG_TRAIN)
     config.update({

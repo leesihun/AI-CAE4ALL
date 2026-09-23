@@ -11,7 +11,7 @@
 
 model                            fno
 mode                             train
-gpu_ids                          4
+gpu_ids                          0
 parallel_mode                    ddp
 split_seed                       42
 dataset_dir                      ../../dataset/deterministic/ex7_airfrans.h5

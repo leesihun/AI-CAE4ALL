@@ -46,7 +46,7 @@ snapshot, as the current count.
 | `meshgraphnets` | `MeshGraphNets/` | `train`, `inference` |
 | `meshgraphnets-v` | `methods/MeshGraphNets_Variational/` | `train`, `inference` |
 | `chi-mgnflow` | `methods/HI_MGNFlow/` | `train`, `inference` |
-| `point_deeponet`, `deeponet`, `fno`, `gino` | `Neural_Operator/` | `train`, `inference` |
+| `point_deeponet`, `deeponet`, `fno` | `Neural_Operator/` | `train`, `inference` |
 | `transolver` | `Transolver/` | `train`, `inference` |
 | `sdfflow` | `methods/SDFFlow/` | `train`, `train_vae`, `train_fm`, `sample`, `reconstruct`, `interpolate`, `optimize`, `evaluate` |
 | `simulgenvae` | `SimulGenVAE/` | `train`, `train_vae`, `train_lc`, `reconstruct` |

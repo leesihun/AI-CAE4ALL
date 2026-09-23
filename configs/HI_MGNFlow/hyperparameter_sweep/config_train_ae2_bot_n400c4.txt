@@ -1,0 +1,102 @@
+%   ============================================================
+%
+%   SAOI warpage, cHI-MGNflow SWEEP 2, PHASE A -- stage 1 only (the compressor).
+%
+%   Sweep 1 varies latent_ch at a FIXED 100-node coarsest level. Sweep 2 asks
+%   the two questions it cannot: is the latent budget better spent on more
+%   coarse nodes than on more channels per node, and is the coarsest stack
+%   deep enough. Everything else is sweep 1's c8 recipe byte for byte, so
+%   each arm reads directly against a sweep-1 arm of the same budget.
+%
+%   Same length as sweep 1 (2000 epochs) for the same reason: cosine_T0 =
+%   training_epochs - warmup_epochs, every run looks converged at its own
+%   end, so arms only compare at equal length.
+%
+%   Arm n400c4 on board half bot.
+%   400 coarsest nodes x latent_ch 4 = 1600 per part: the SAME
+%   budget as sweep 1's c16 (100 x 16), spent on space.
+%
+%   gpu_ids 0 is LOGICAL: run_sweep2.sh sets CUDA_VISIBLE_DEVICES to the
+%   physical card it picked, so the same file runs on any free GPU.
+%
+%   ============================================================
+model	chi-mgnflow
+mode	train_ae  # stage 1 alone; the prior is built but never trained or loaded from here
+gpu_ids	0
+parallel_mode	ddp
+log_file_dir	../../output/chi-mgnflow/saoi_sweep2/ae/bot_n400c4/ae.log  # own dir per arm: dumps land in <log_dir>/test/0/<epoch>/
+modelpath	../../output/chi-mgnflow/saoi_sweep2/bot.ae_n400c4.pth
+
+%   Dataset
+dataset_dir	../../dataset/SAOI/saoi_train_bot.h5
+split_seed	42
+augment_geometry	True
+
+%   Channel layout. The SAOI columns are x y z dx dy dz thickness "Part No.",
+%   so rows 0:3 are the reference coordinates (never predicted), 3:6 the
+%   displacement state and 6:9 the input-only conditions the model reads every
+%   step but never predicts.
+input_var	3  # x/y/z displacement -- the state block
+output_var	3  # what the model generates
+cond_var	3  # input-only rows: thickness and part id
+edge_var	8  # deformed dx/dy/dz/dist + reference dx/dy/dz/dist
+positional_features	4  # rotation-invariant node features
+
+use_node_types	False
+use_world_edges	False
+feature_loss_weights	0.1, 0.1, 1  # z_disp is the quantity of interest
+
+%   Hierarchy -- one of the two swept axes. voronoi_clusters sets the coarsest
+%   level, which is where the latent lives; level 1 stays at 1000 so only the
+%   coarsest resolution moves. Phase B and C of this arm repeat it exactly.
+use_multiscale	True
+coarsening_type	voronoi_seedmean
+voronoi_clusters	1000, 400
+multiscale_levels	2
+mp_per_level	4, 6, 8, 6, 4  # V-cycle depth: pre / coarsest / post
+hierarchy_variants	4  # rotated across epochs so the model is invariant to the partition
+hierarchy_seed	1234
+hierarchy_cache_keep	True  # Phase B of this arm reuses it; run_sweep2.sh deletes the dir at the end
+
+%   Isolation from sweep 1, which may be running on the same box right now.
+%   write_preprocessing False: sweep 2 never opens the shared training HDF5
+%   for writing (normalization travels in the checkpoint, not the file).
+%   hierarchy_cache_dir: this hierarchy's cache lives under saoi_sweep2, so
+%   the same-stem prune in multiscale_cache.py can never delete sweep 1's
+%   cache next to the dataset, nor this sweep's other hierarchies.
+write_preprocessing	False
+hierarchy_cache_dir	../../output/chi-mgnflow/saoi_sweep2/mscache/v1000_400
+hierarchy_cache_build_workers	8  # leave CPU for sweep 1's data loaders
+
+%   Latent. latent_ch is the per-coarse-node budget; the budget per part is
+%   (coarsest nodes) x latent_ch. ae_kl_weight is sweep 1's 1e-6.
+latent_dim	128  # trunk width, identical across every arm of both sweeps
+latent_ch	4
+ae_kl_weight	1e-6
+
+training_epochs	2000
+
+%   Optimization
+batch_size	16  # measured b16 < b32 by 0.288 on this data
+learningr	0.0001
+grad_accum_steps	1
+num_workers	4
+
+%   Memory / performance
+use_checkpointing	True
+use_amp	True
+use_ema	True
+ema_decay	0.99
+
+%   Validation. Stage 1 selects on reconstruction.
+val_interval	25
+best_by	recon
+
+%   Periodic visualization: the ENCODE/DECODE reconstruction in physical
+%   units, which report_sweep2.py reads for the ceiling ratio.
+test_interval	200
+test_batch_idx	0, 1, 2, 3, 4, 5, 6, 7, 8, 9
+plot_feature_idx	2  # z_disp
+
+%   Time integration
+time_integration	ar_ot  # T=1 static data: there is no rollout to train through

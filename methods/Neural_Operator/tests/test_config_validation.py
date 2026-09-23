@@ -44,14 +44,6 @@ def test_parallel_stats_and_train_eval_subset_are_authorable():
     ))
 
 
-def test_paper_decoder_domain_padding_is_authorable():
-    validate_common_config(_minimal_cfg(
-        model='gino',
-        gino_variant='paper_decoder',
-        gino_domain_padding=0.25,
-    ))
-
-
 def test_point_deeponet_closed_choices_fail_before_model_construction():
     for key, value in (
         ('point_variant', 'paper'),
@@ -91,18 +83,6 @@ def test_fno_mode_corners_cannot_overlap():
         validate_common_config(_minimal_cfg(
             model='fno', operator_dim=2,
             fno_grid_resolution=[8, 8], fno_modes=[5, 4],
-        ))
-
-
-def test_paper_decoder_uses_centered_total_mode_convention():
-    validate_common_config(_minimal_cfg(
-        model='gino', gino_variant='paper_decoder',
-        gino_grid_resolution=[8, 8, 8], gino_fno_modes=[8, 8, 8],
-    ))
-    with pytest.raises(ValueError, match=r'gino_fno_modes\[0\]'):
-        validate_common_config(_minimal_cfg(
-            model='gino', gino_variant='paper_decoder',
-            gino_grid_resolution=[8, 8, 8], gino_fno_modes=[9, 8, 8],
         ))
 
 

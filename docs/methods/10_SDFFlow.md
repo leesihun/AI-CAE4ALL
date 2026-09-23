@@ -234,24 +234,22 @@ its missing checkpoints.
 
 ## Configuration reference
 
-Canonical examples:
-[`configs/SDFFlow/config_train_v3.txt`](../../configs/SDFFlow/config_train_v3.txt)
-(recommended; its header explains each setting),
-[`config_train.txt`](../../configs/SDFFlow/config_train.txt) (Tier-1 control),
-[`config_evaluate.txt`](../../configs/SDFFlow/config_evaluate.txt),
-[`config_sample.txt`](../../configs/SDFFlow/config_sample.txt),
-[`config_sample_extrapolation.txt`](../../configs/SDFFlow/config_sample_extrapolation.txt),
-[`config_interpolate.txt`](../../configs/SDFFlow/config_interpolate.txt), and the
-[`arms/`](../../configs/SDFFlow/arms/README.md) VAE ablation sweep (`A0`..`A9`;
-mostly single-axis, with `A1` an omnibus ex1-architecture control and `A9` a
-seed repeat of `A0` that measures the sweep's run-to-run noise floor). The
-FEA-conditioned `ex5` track (untrained; design in
-[`CONDITIONAL_GENERATION_DESIGN_2026-09.md`](../research/sdfflow/CONDITIONAL_GENERATION_DESIGN_2026-09.md)):
-[`config_train_v3_fea.txt`](../../configs/SDFFlow/config_train_v3_fea.txt),
-[`config_calibrate_descriptors.txt`](../../configs/SDFFlow/config_calibrate_descriptors.txt),
-[`config_sample_conditional.txt`](../../configs/SDFFlow/config_sample_conditional.txt),
-[`config_cond_sweep.txt`](../../configs/SDFFlow/config_cond_sweep.txt),
-[`config_evaluate_conditional.txt`](../../configs/SDFFlow/config_evaluate_conditional.txt).
+`configs/SDFFlow/` follows the suite-wide
+`configs/<Method>/<category>/<slot>/baseline/` layout; the flat `config_*.txt` files
+and the `arms/` ablation sweep that earlier revisions of this doc linked are gone.
+What ships now (`configs/SDFFlow/geometry_generation/`):
+
+| Slot | Configs |
+| --- | --- |
+| `ex1/baseline/` | `config_train_sdfflow.txt`, `config_infer_sdfflow.txt`, `config_evaluate_sdfflow.txt`, `config_interpolate_sdfflow.txt`, `config_optimize_sdfflow.txt` |
+| `ex2/baseline/`, `ex3/baseline/`, `ex4/baseline/` | `config_train_sdfflow.txt`, `config_infer_sdfflow.txt`, `config_evaluate_sdfflow.txt` |
+
+Canonical example:
+[`configs/SDFFlow/geometry_generation/ex1/baseline/config_train_sdfflow.txt`](../../configs/SDFFlow/geometry_generation/ex1/baseline/config_train_sdfflow.txt);
+`ex1` is the only slot with the `interpolate` and `optimize` (closed design-loop)
+configs. The FEA-conditioned track is design-only — see
+[`CONDITIONAL_GENERATION_DESIGN_2026-09.md`](../research/sdfflow/CONDITIONAL_GENERATION_DESIGN_2026-09.md);
+no `ex5` configs are checked in.
 
 ### Pipeline / dataset
 
@@ -381,19 +379,25 @@ root (optional, appended by add_fea_conditions.py; read as extra cond columns):
 ### SDFFlow training config sketch
 
 ```text
-model            SDFFlow
+model            sdfflow
 mode             train
-dataset_dir      ../dataset/geometry_generation/ex1_deepjeb.h5
-latent_tokens    1
-latent_dim       256
-decoder_type     mlp
-decoder_hidden   512
-decoder_layers   8
-kl_weight        0.00001
+dataset_dir      ../../dataset/geometry_generation/ex1_deepjeb.h5
+latent_tokens    32
+latent_dim       32
+decoder_type     attention
+decoder_hidden   256
+decoder_layers   4
+kl_weight        0.0001
 use_conditions   True
-condition_names  bbox_x,bbox_z,volume,area
-cond_dropout     0.1
+condition_names  volume, area
+cond_dropout     0.2
+cond_dropout_mode all
 fm_hidden        256
-fm_blocks        4
+fm_blocks        8
 ode_steps        50
 ```
+
+> Taken from
+> [`configs/SDFFlow/geometry_generation/ex1/baseline/config_train_sdfflow.txt`](../../configs/SDFFlow/geometry_generation/ex1/baseline/config_train_sdfflow.txt).
+> `latent_tokens > 1` must be paired with `decoder_type attention` (the launcher warns
+> otherwise), and `query_type fps` requires it outright.

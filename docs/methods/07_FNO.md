@@ -52,8 +52,7 @@ FNO exactly for benchmarking.
 ## Weaknesses
 
 - **Grid projection is lossy for irregular geometry**: splatting a thin/curved mesh
-  onto a coarse grid blurs boundaries — the main accuracy limiter here, and why
-  [GINO](08_GINO.md) exists (kernel integral instead of splat).
+  onto a coarse grid blurs boundaries — the main accuracy limiter here.
 - **Grid resolution × modes cost**: memory/params grow with `∏resolution` and
   `∏modes`; high resolution is expensive.
 - **Mode truncation caps detail**: features above `fno_modes` are simply not
@@ -115,24 +114,24 @@ Linear). For temporal runs the projection's last layer starts scaled by `0.01`.
 
 ## Shared Neural-Operator config keys
 
-**These keys are common to all four backends** (`deeponet`, `point_deeponet`, `fno`,
-`gino`) and are referenced from the other operator docs.
+**These keys are common to all three backends** (`deeponet`, `point_deeponet`,
+`fno`) and are referenced from the other operator docs.
 
 ### Execution, dataset, common shape
 
 | Key | Meaning |
 | --- | --- |
 | `model` / `mode` / `gpu_ids` | Backend selector, `train`/`inference`, device id(s) |
-| `parallel_mode` | `ddp` or `model_split` (fno/gino only, ≥2 GPUs, `augment_geometry False`) |
+| `parallel_mode` | `ddp` or `model_split` (fno only, ≥2 GPUs, `augment_geometry False`) |
 | `log_file_dir` / `modelpath` | Log path / checkpoint path |
 | `dataset_dir` / `infer_dataset` / `inference_output_dir` / `infer_timesteps` | Data + rollout I/O |
-| `split_seed` | Deterministic 80/10/10 split seed (default 42) |
-| `input_var` / `output_var` / `feature_loss_weights` | Channel counts + per-channel weights |
+| `split_seed` / `split_group_attr` | Deterministic 80/10/10 split seed (default 42; `training_profiles/setup.py:41`); optional HDF5 attribute to group samples by so a group never straddles the split |
+| `input_var` / `output_var` / `cond_var` / `feature_loss_weights` | Predicted-channel counts, trailing **input-only** conditioner rows, per-channel weights |
 | `positional_features` / `use_node_types` | Extra node features / one-hot node types |
 | `operator_dim` | `auto`/`2`/`3` spatial dimensionality |
 | `coordinate_normalization` | Must be `centered_isotropic` |
 | `dimension_tolerance` / `grid_padding` / `out_of_bounds_policy` | Domain fitting + OOB policy |
-| `sdf_source` / `sdf_sidecar` / `global_condition_features` / `integration_weight_source` | Optional geometric signals (mostly `none` here) |
+| `sdf_source` / `sdf_sidecar` / `global_condition_features` / `integration_weight_source` | `sdf_source` is `none`/`dataset`/`sidecar`/`mesh`; the other two **must** be `none` (no shipped dataset supplies conditions or quadrature weights) |
 
 ### Optimization & runtime
 
@@ -140,10 +139,11 @@ Linear). For temporal runs the projection's last layer starts scaled by `0.01`.
 | --- | --- |
 | `training_epochs` / `batch_size` / `learningr` / `weight_decay` / `warmup_epochs` | AdamW + schedule |
 | `num_workers` / `prefetch_factor` / `grad_accum_steps` / `max_grad_norm` | Loader + step controls |
-| `std_noise` / `noise_gamma` / `augment_geometry` | Noise injection + augmentation |
+| `use_parallel_stats` / `train_eval_subset_size` / `profile_batches` / `pipeline_microbatches` | Distributed normalizer reduction, train-set eval subsample, profiling, model-split microbatching |
+| `std_noise` / `noise_gamma` / `noise_std_ratio` / `augment_geometry` | Noise injection + geometry augmentation |
 | `use_amp` / `use_checkpointing` / `use_ema` / `ema_decay` / `use_compile` | Precision, memory, EMA, compile |
 | `train_query_chunk_size` / `infer_query_chunk_size` | Query-decode chunking (exact) |
-| `val_interval` / `test_interval` / `test_max_batches` / `test_batch_idx` / `plot_feature_idx` / `display_*` / `checkpoint_interval` | Evaluation & visualization |
+| `val_interval` / `test_interval` / `test_max_batches` / `test_batch_idx` / `plot_feature_idx` / `display_*` / `write_test_predictions` / `checkpoint_interval` | Evaluation & visualization |
 | `write_preprocessing` / `use_world_edges` / `use_multiscale` | Must stay `False` (operators ignore MGN edges/hierarchy) |
 | `time_integration` | `ar_ot` (default) or `ar_rt` |
 
@@ -164,26 +164,24 @@ Linear). For temporal runs the projection's last layer starts scaled by `0.01`.
 ```text
 model               fno
 mode                train
-dataset_dir         ../dataset/deterministic/ex1_static_thermoelastic.h5
+dataset_dir         ../../dataset/deterministic/ex1_static_thermoelastic.h5
 input_var           4
 output_var          4
+cond_var            0
 positional_features 4
 use_node_types      True
-fno_grid_resolution 64, 64
-fno_modes           16, 16
+operator_dim        2
+fno_variant         mesh
+fno_grid_resolution 128, 32
+fno_modes           16, 12
 fno_hidden_channels 64
 fno_layers          4
 fno_use_channel_mlp True
+fno_norm            none
 ```
 
----
-
-## FNO vs GINO
-
-| | FNO (this doc) | [GINO](08_GINO.md) |
-| --- | --- | --- |
-| Mesh → grid | **splat** (weighted-mean projection) | **input GNO** (learned kernel integral) |
-| Grid → mesh | `grid_sample` interpolation | **output GNO** (learned kernel integral) |
-| Geometry fidelity | lossy at boundaries | radius-kernel, discretization-aware |
-| Cost driver | grid size × modes | + radius-neighbor search per graph |
-| Batching | batched grid | **per-graph loop** (different geometry each scene) |
+> Paths are **cwd-relative to `methods/Neural_Operator/`**, hence `../../dataset/...`
+> and `../../output/...`. The excerpt is the canonical ex1 config verbatim: the grid
+> is **anisotropic** (`128, 32`), fitted to the domain's aspect ratio, not the square
+> grid a sketch invites. `fno_modes[i]` is capped at `resolution[i]//2` (`//2 + 1` on
+> the last axis) by `general_modules/config_validation.py`.

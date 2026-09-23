@@ -1,0 +1,55 @@
+% geometry_generation/ex3 - sdfflow on MCB (5-class nut subset); DESCRIPTOR CALIBRATION of the
+%   soft volume/area proxy for the checkpoints trained by the paired config_train_sdfflow.txt.
+%   Measurement config, not a generator: it writes the DescriptorCalibration that method e2 of
+%   config_evaluate_conditional_sdfflow.txt (and C2 guidance / E2 Newton in mode sample) needs.
+% Run order: config_train_sdfflow.txt -> this -> config_evaluate_conditional_sdfflow.txt.
+% What it does: calibration_num_shapes val shapes x calibration_samples_per_shape samples are
+%   generated under each shape's TRUE stored conditions (the 5 checkpoint names); each sample is
+%   measured once through the differentiable soft proxy (sigmoid occupancy on a
+%   soft_descriptor_resolution^3 grid at temperature soft_descriptor_tau) and once through the
+%   export path (decode -> Marching Cubes at mc_resolution -> mesh volume/area), and
+%   proxy = a * true + b is fitted per descriptor. Only volume and area have a soft proxy
+%   (SUPPORTED_SOFT_NAMES in methods/SDFFlow/general_modules/descriptor_proxy.py), so
+%   bbox_x/y/z are neither calibrated nor ever optimised by E2.
+% dataset_dir is the TRAIN file ex3_mcb.h5 under the training split (split_seed 42,
+%   split_by_parent False) with eval_split val (130 shapes): calibrate on val, score on
+%   ex3_mcb_infer.h5, never fit a and b on the targets the benchmark scores. The artifact pins
+%   the VAE/FM SHA-256s, soft_descriptor_resolution, soft_descriptor_tau, the measurement grid
+%   and the names -- not the dataset or split -- so the infer-file benchmark accepts a
+%   val-fitted artifact, and any retrain (or switching fm_best.pth to fm.pth) makes it stale.
+% newton_measure_resolution is deliberately absent: it follows mc_resolution, and this fit is
+%   measured at mc_resolution, so leaving it unset keeps the grids equal. Setting it here or in
+%   the conditional config alone makes that run refuse the artifact.
+% max_condition_z 5 + condition_ood_policy error: under the train-split statistics the
+%   checkpoint stores, the val targets reach max|z| 3.57, so no val shape trips it; one that
+%   did would fail loudly instead of being sampled at a clamped condition.
+% calibration_min_r2 0.5 refuses to save a fit weaker than that per descriptor: a and b ARE
+%   the correction mechanism, so an ill-determined slope makes E2 worse, not merely weaker.
+% Writes descriptor_calibration_path (.pth) + eval_descriptor_calibration.json under output_dir.
+% Reference: https://doi.org/10.1007/978-3-030-58523-5_11 ; https://arxiv.org/abs/2301.11445 ; https://arxiv.org/abs/2210.02747
+% No source HDF5 writes. Checkpoints are created by the paired training config.
+
+model                            sdfflow
+mode                             evaluate
+gpu_ids                          1
+parallel_mode                    single
+dataset_dir                      ../../dataset/geometry_generation/ex3_mcb.h5
+split_seed                       42
+split_by_parent                  False
+eval_task                        descriptor_calibration
+eval_split                       val
+eval_seed                        0
+calibration_num_shapes           64
+calibration_samples_per_shape    4
+calibration_min_r2               0.5
+soft_descriptor_resolution       48
+soft_descriptor_tau              0.032
+max_condition_z                  5
+condition_ood_policy             error
+cfg_scale                        1
+ode_steps                        50
+mc_resolution                    128
+vae_modelpath                    ../../output/geometry_generation/ex3_mcb/sdfflow/vae.pth
+fm_modelpath                     ../../output/geometry_generation/ex3_mcb/sdfflow/fm_best.pth
+output_dir                       ../../output/geometry_generation/ex3_mcb/sdfflow/eval
+descriptor_calibration_path      ../../output/geometry_generation/ex3_mcb/sdfflow/eval/descriptor_calibration.pth

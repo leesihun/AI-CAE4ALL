@@ -11,7 +11,7 @@
 
 model                            meshgraphnets
 mode                             inference
-gpu_ids                          7
+gpu_ids                          4
 parallel_mode                    ddp
 split_seed                       42
 dataset_dir                      ../../dataset/derived/config_matrix/ex3_NASA_CRM_mid_canonical.h5
@@ -30,7 +30,7 @@ time_integration                 ar_ot
 training_epochs                  500
 batch_size                       1
 learningr                        0.0001
-weight_decay                     0.0001
+weight_decay                     0.0
 warmup_epochs                    5
 num_workers                      2
 prefetch_factor                  2

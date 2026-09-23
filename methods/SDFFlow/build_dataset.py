@@ -26,6 +26,7 @@ os.environ['HDF5_USE_FILE_LOCKING'] = 'FALSE'
 
 import argparse
 import glob
+import multiprocessing as mp
 from concurrent.futures import ProcessPoolExecutor
 
 import h5py
@@ -42,6 +43,39 @@ from general_modules.sdf_sampling import (
 )
 
 MESH_EXTENSIONS = ('*.stl', '*.obj', '*.ply', '*.off')
+
+MESHFIX_TIMEOUT_S = 45
+
+
+def _meshfix_worker_target(vertices, faces, queue):
+    import pymeshfix
+
+    meshfix = pymeshfix.MeshFix(vertices, faces)
+    meshfix.repair(joincomp=True, remove_smallest_components=False)
+    queue.put((meshfix.points, meshfix.faces))
+
+
+def _meshfix_repair_with_timeout(vertices, faces, timeout_s=MESHFIX_TIMEOUT_S):
+    """Run pymeshfix's repair() in its own subprocess with a hard kill on timeout.
+
+    pymeshfix wraps a C++ library that can loop forever on certain degenerate,
+    non-manifold input (observed hanging a whole 16-worker MCB build on one
+    pathological nut mesh); it isn't interruptible from Python once inside the
+    C call, so the only way to reclaim a wedged repair is to kill the process
+    running it. Returns (points, faces) or None if it timed out or errored.
+    """
+    ctx = mp.get_context('spawn')
+    queue = ctx.Queue()
+    proc = ctx.Process(target=_meshfix_worker_target, args=(vertices, faces, queue))
+    proc.start()
+    proc.join(timeout_s)
+    if proc.is_alive():
+        proc.terminate()
+        proc.join()
+        return None
+    if proc.exitcode != 0 or queue.empty():
+        return None
+    return queue.get()
 DEFAULT_NEAR_SIGMAS = '0.01,0.05'
 
 
@@ -213,7 +247,17 @@ def main():
                     written += _consume_mesh_result(shapes_grp, written, result)
 
             if args.workers > 1:
-                with ProcessPoolExecutor(max_workers=args.workers) as executor:
+                # 'spawn', not the platform default 'fork': sdf_sampling imports
+                # open3d at module scope (for the banner below) before any pool
+                # exists, which initializes open3d's native TBB thread pool in
+                # this process. Forking after that leaves every worker with a
+                # half-inherited thread pool (fork only preserves the calling
+                # thread; TBB's worker threads and their internal locks do not
+                # survive it), so workers deadlock in futex waits the first time
+                # they touch open3d. 'spawn' gives each worker a clean interpreter
+                # that imports open3d fresh, with no pre-fork thread-pool state.
+                with ProcessPoolExecutor(max_workers=args.workers,
+                                          mp_context=mp.get_context('spawn')) as executor:
                     for result in tqdm(executor.map(_process_mesh, tasks, chunksize=1),
                                         total=len(tasks), desc='Meshes'):
                         consume(result)
@@ -264,13 +308,11 @@ def _process_mesh(task):
 
         if repair and not mesh.is_watertight:
             try:
-                import pymeshfix
-
-                meshfix = pymeshfix.MeshFix(mesh.vertices, mesh.faces)
-                meshfix.repair(joincomp=True, remove_smallest_components=False)
-                mesh = trimesh.Trimesh(
-                    vertices=meshfix.points, faces=meshfix.faces, process=True)
-                trimesh.repair.fix_normals(mesh, multibody=True)
+                fixed = _meshfix_repair_with_timeout(mesh.vertices, mesh.faces)
+                if fixed is not None:
+                    points, faces = fixed
+                    mesh = trimesh.Trimesh(vertices=points, faces=faces, process=True)
+                    trimesh.repair.fix_normals(mesh, multibody=True)
             except (ImportError, RuntimeError, ValueError):
                 pass
 

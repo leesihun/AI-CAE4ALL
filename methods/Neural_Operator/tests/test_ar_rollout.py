@@ -1,7 +1,7 @@
-"""AR-OT / AR-RT time integration across all four operator architectures.
+"""AR-OT / AR-RT time integration across all three operator architectures.
 
 The rollout drives `OperatorWrapper`, so a single unroll has to work for
-`deeponet`, `point_deeponet`, `fno` and `gino` without branching. These tests
+`deeponet`, `point_deeponet` and `fno` without branching. These tests
 pin that, plus the two invariants the scheme rests on: a one-step rollout must
 reproduce AR-OT exactly, and AR-OT must remain the untouched default.
 """
@@ -26,9 +26,6 @@ MODEL_EXTRAS = {
     'point_deeponet': {'point_sensor_count': 16},
     'fno': {'fno_grid_resolution': [6, 6, 6], 'fno_modes': [2, 2, 3],
             'fno_hidden_channels': 12, 'fno_layers': 2},
-    'gino': {'gino_grid_resolution': [5, 5, 5], 'gino_fno_modes': [2, 2, 2],
-             'gino_fno_hidden_channels': 12, 'gino_fno_layers': 2,
-             'gino_in_radius': 0.35, 'gino_out_radius': 0.35},
 }
 
 
@@ -82,7 +79,7 @@ def test_ar_rt_window_and_payload(tiny_temporal_3d_h5):
     assert item.state0.shape == (num_nodes, config['input_var'])
 
 
-@pytest.mark.parametrize("model_name", ["deeponet", "point_deeponet", "fno", "gino"])
+@pytest.mark.parametrize("model_name", ["deeponet", "point_deeponet", "fno"])
 def test_rollout_trains_every_architecture(tiny_temporal_3d_h5, model_name):
     config = _temporal_config(
         tiny_temporal_3d_h5, model=model_name, time_integration='ar_rt',

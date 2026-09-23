@@ -1,0 +1,56 @@
+% geometry_generation/ex1 - sdfflow; the suite's only CLOSED-LOOP mode. It trains nothing:
+%   it chains generate -> gmsh tet mesh -> linear-static structural solve -> CMA-ES over the
+%   trained DeepJEB generator, so every candidate is NEW geometry from the flow-matching model,
+%   scored by an actual FEA run rather than by a distance to the dataset.
+% This route is DeepJEB-specific. The load cases, the bracket bounding-box length scale, and the
+%   Ti-6Al-4V constants below describe the ex1 brackets; do not copy them to ex2/ex3/ex4.
+% CMA-ES searches the FM NOISE (opt_subspace_dim leading dimensions), not the VAE latent, so
+%   every point it visits is on-manifold for the generator. opt_condition_dims must be a subset
+%   of the FM checkpoint's condition names -- volume, area here, matching condition_names in
+%   config_train_sdfflow.txt.
+% opt_latent_range is deliberately absent: it defaults to opt_shell_scale, which puts the box
+%   corner exactly on the sampling shell. Setting only one of the two de-tunes the search.
+% Units are SI throughout: opt_length_scale 0.10556 m is the DeepJEB bracket bounding-box
+%   length, opt_material_e 113.8 GPa and opt_yield_stress 903 MPa are Ti-6Al-4V. A generated
+%   shape lives in the unit cube; without the length scale the stresses are meaningless.
+% opt_budget 120 CMA-ES evaluations at popsize 8 = 15 generations, plus opt_baseline_size 12
+%   unoptimized samples to calibrate the allowables against the population.
+% Requires gmsh, pyamg and cma in the SDFFlow venv (mode optimize only).
+% Writes .stl per candidate plus the optimization history under output_dir.
+% Reference: https://arxiv.org/abs/2410.23130 ; https://arxiv.org/abs/2301.11445 ; https://arxiv.org/abs/2210.02747
+% No source HDF5 writes. Checkpoints are created by the paired training config.
+
+model                            sdfflow
+mode                             optimize
+gpu_ids                          7
+parallel_mode                    single
+seed                             42
+vae_modelpath                    ../../output/dataset_matrix/geometry_generation/ex1/sdfflow/vae.pth
+fm_modelpath                     ../../output/dataset_matrix/geometry_generation/ex1/sdfflow/fm_best.pth
+output_dir                       ../../output/dataset_matrix/geometry_generation/ex1/sdfflow/optimize
+ode_steps                        50
+mc_resolution                    128
+opt_analysis                     fea
+opt_subspace_dim                 12
+opt_condition_dims               volume, area
+opt_shell_scale                  1.25
+opt_budget                       120
+opt_popsize                      8
+opt_sigma0                       1
+opt_baseline_size                12
+opt_load_cases                   vertical, diagonal
+opt_length_scale                 0.10556
+opt_mesh_size_max                0.05
+opt_target_faces                 12000
+opt_material_e                   113.8e9
+opt_material_nu                  0.342
+opt_material_rho                 4430
+opt_yield_stress                 903e6
+opt_stress_percentile            99.5
+opt_stress_margin                1
+opt_disp_margin                  1
+opt_stress_weight                6
+opt_disp_weight                  3
+opt_verify_resolution            160
+opt_verify_target_faces          30000
+opt_verify_mesh_size_max         0.035

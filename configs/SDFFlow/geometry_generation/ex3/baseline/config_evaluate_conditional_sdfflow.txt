@@ -1,0 +1,66 @@
+% geometry_generation/ex3 - sdfflow on MCB (5-class nut subset); held-out CONDITIONAL benchmark
+%   of the FM trained by the paired config_train_sdfflow.txt: can the generator realise the
+%   condition vector of a part it never saw? Measurement config, not a generator (no mesh
+%   export). For each scored shape the target is that shape's TRUE stored condition vector (the
+%   checkpoint's 5 names: bbox_x, bbox_y, bbox_z, volume, area), and every method starts from
+%   the SAME base noise (paired z0 seeded by eval_seed and the shape index), so method
+%   differences are not noise differences:
+%     plain      -- one conditional sample per shape (ode_steps NFE)
+%     rejection  -- best of candidate_multiplier samples by geometric condition error
+%     e2         -- plain + newton_rounds of proxy-Jacobian Newton correction on the Marching
+%                   Cubes volume/area (needs descriptor_calibration_path)
+%   Per method and name it reports the relative error |actual - target| / |target| (median,
+%   p95), valid / watertight rates, latent RMS drift from plain, NFE and wall time.
+% Run order: config_train_sdfflow.txt -> config_calibrate_sdfflow.txt -> this. The calibration
+%   is fitted on the TRAIN file's val split and bound to this exact vae.pth / fm_best.pth pair.
+% dataset_dir is ex3_mcb_infer.h5 (329 held-out parts). overfit_all_shapes True makes the whole
+%   file the test split -- a split selector here, as in config_evaluate_sdfflow.txt; nothing
+%   trains. eval_num_shapes 64 is a seeded random subset; 0 scores all 329 at ~5x the cost.
+% SCOPE: e2 optimises volume and area only (the only names with a soft proxy); bbox_x/y/z are
+%   scored but never optimised, and a latent step taken for volume/area can move them as a
+%   side effect. Compare methods on the printed PAIRED block (the shapes every method could be
+%   measured on): an unpaired median is taken over a method-selected subset.
+% The class_* one-hots in the cond_extra sidecar are not checkpoint names (the training
+%   config's condition_names selects the 5 geometric ones), so class fidelity is not measured.
+% max_condition_z 5 + condition_ood_policy error: under the train-split statistics the
+%   checkpoint stores, the infer targets reach max|z| 4.29 (bbox_y); 11 shapes exceed 3,
+%   2 exceed 4, none exceed 5. With condition_clip 5 in training nothing is clamped, and a
+%   target that would be fails loudly instead of being scored against a value it was never
+%   asked for.
+% newton_measure_resolution is absent on purpose: it follows mc_resolution (128), the grid the
+%   calibration was fitted on; check_compatible refuses the artifact on a mismatch.
+% condition_audit geometric: all 5 names are geometric, so every one is measured on the decoded
+%   mesh -- no FEA backend is involved.
+% Writes eval_conditional.json + eval_conditional.csv under output_dir.
+% Reference: https://doi.org/10.1007/978-3-030-58523-5_11 ; https://arxiv.org/abs/2301.11445 ; https://arxiv.org/abs/2210.02747
+% No source HDF5 writes. Checkpoints are created by the paired training config.
+
+model                            sdfflow
+mode                             evaluate
+gpu_ids                          1
+parallel_mode                    single
+dataset_dir                      ../../dataset/geometry_generation/ex3_mcb_infer.h5
+split_seed                       42
+split_by_parent                  False
+overfit_all_shapes               True
+eval_task                        conditional
+eval_split                       test
+eval_num_shapes                  64
+eval_seed                        0
+eval_methods                     plain,rejection,e2
+candidate_multiplier             4
+cfg_scale                        1
+ode_steps                        50
+mc_resolution                    128
+max_condition_z                  5
+condition_ood_policy             error
+descriptor_calibration_path      ../../output/geometry_generation/ex3_mcb/sdfflow/eval/descriptor_calibration.pth
+soft_descriptor_resolution       48
+soft_descriptor_tau              0.032
+newton_rounds                    3
+newton_step_cap_rms              0.12
+newton_line_search_tries         3
+condition_audit                  geometric
+vae_modelpath                    ../../output/geometry_generation/ex3_mcb/sdfflow/vae.pth
+fm_modelpath                     ../../output/geometry_generation/ex3_mcb/sdfflow/fm_best.pth
+output_dir                       ../../output/geometry_generation/ex3_mcb/sdfflow/eval

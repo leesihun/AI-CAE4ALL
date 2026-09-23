@@ -126,10 +126,15 @@ use_multiscale     True
 coarsening_type    bfs        # BFS bi-stride (Cao et al. ICML 2023)
 voronoi_clusters   0          # unused for bfs
 multiscale_levels  2
-mp_per_level       4, 6, 8, 6, 4
-Latent_dim         128
+mp_per_level       2, 3, 5, 3, 2
+latent_dim         128
 time_integration   ar_ot
 ```
+
+> **No checked-in config selects `bfs`** — every shipped multiscale config uses
+> `coarsening_type voronoi_seedmean`. This sketch is a starting point, not a
+> transcription of a shipped profile; validate it with
+> `python AI_CAE4ALL_main.py --config <file> --check` before running.
 
 > **Per-level mixing** is allowed: `coarsening_type` accepts a comma list, so a
 > hierarchy can use `bfs` at one level and a Voronoi mode at another. All modes emit

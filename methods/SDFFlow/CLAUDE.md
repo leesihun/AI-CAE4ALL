@@ -9,51 +9,55 @@ authoritative implementation.
 From the `AI-CAE4ALL` root:
 
 ```bash
-python AI_CAE4ALL_main.py --config configs/SDFFlow/config_train_v3.txt --check
-python AI_CAE4ALL_main.py --config configs/SDFFlow/config_train_v3.txt
-python AI_CAE4ALL_main.py --config configs/SDFFlow/config_evaluate.txt
-python AI_CAE4ALL_main.py --config configs/SDFFlow/config_sample.txt
-python AI_CAE4ALL_main.py --config configs/SDFFlow/config_sample_extrapolation.txt
-python AI_CAE4ALL_main.py --config configs/SDFFlow/config_interpolate.txt
-python AI_CAE4ALL_main.py --config configs/SDFFlow/config_optimize.txt
-# FEA-conditioned track (ex5): sidecar first (see "Data and condition invariants"), then
-python AI_CAE4ALL_main.py --config configs/SDFFlow/config_train_v3_fea.txt
-python AI_CAE4ALL_main.py --config configs/SDFFlow/config_calibrate_descriptors.txt
-python AI_CAE4ALL_main.py --config configs/SDFFlow/config_sample_conditional.txt
-python AI_CAE4ALL_main.py --config configs/SDFFlow/config_cond_sweep.txt
-python AI_CAE4ALL_main.py --config configs/SDFFlow/config_evaluate_conditional.txt
+python AI_CAE4ALL_main.py --config configs/SDFFlow/geometry_generation/ex1/baseline/config_train_sdfflow.txt --check
+python AI_CAE4ALL_main.py --config configs/SDFFlow/geometry_generation/ex1/baseline/config_train_sdfflow.txt
+python AI_CAE4ALL_main.py --config configs/SDFFlow/geometry_generation/ex1/baseline/config_infer_sdfflow.txt
+python AI_CAE4ALL_main.py --config configs/SDFFlow/geometry_generation/ex1/baseline/config_evaluate_sdfflow.txt
+python AI_CAE4ALL_main.py --config configs/SDFFlow/geometry_generation/ex1/baseline/config_interpolate_sdfflow.txt
+python AI_CAE4ALL_main.py --config configs/SDFFlow/geometry_generation/ex1/baseline/config_optimize_sdfflow.txt
 ```
 
-The checked-in config roster under `configs/SDFFlow/`:
+The checked-in config roster lives under `configs/SDFFlow/geometry_generation/<ex>/baseline/`.
+All 14 files pass `--audit-configs` with errors=0, warnings=0; on a fresh checkout the
+non-`train` ones additionally report `PATH-INPUT-001` on the checkpoints their paired
+training config has not produced yet.
 
-| Config | Mode | Output | Role |
+| Route | Data | Configs | Output root |
 | --- | --- | --- | --- |
-| `config_train.txt` | train | `ex1/` | Tier-1 control: one 256-d token, MLP decoder, four conditions |
-| `config_train_v2.txt` | train | `ex2/` | "v2 control": 32 x 64 VecSet + DiT + hybrid loss; architecture frozen, KL corrected to ex1 parity |
-| `config_train_v3.txt` | train | `ex4/` | **Recommended single-GPU recipe** (see "v3 recipe" below) |
-| `config_train_b300.txt` | train | `ex3/` | 8-GPU DDP twin of v3 (batch/LR/epoch arithmetic in its header) |
-| `config_train_v3_fea.txt` | train | `ex5/` | v3 conditioned on `volume,area` + four DeepJEB FEA labels with `cond_dropout_mode per_dim`; needs the `cond_extra` sidecar (see "Data and condition invariants") |
-| `config_evaluate.txt` | evaluate | `ex4/eval/` | Held-out VAE reconstruction metrics for the ex4 VAE (`eval_task reconstruction`) |
-| `config_calibrate_descriptors.txt` | evaluate | `ex5/eval/descriptor_calibration.pth` | `eval_task descriptor_calibration`: fits the soft-proxy affine calibration on the ex5 val split |
-| `config_evaluate_conditional.txt` | evaluate | `ex5/eval_conditional/` | `eval_task conditional`: paired-noise condition-accuracy benchmark (plain / rejection / e2) on the ex5 test split |
-| `config_sample.txt`, `config_sample_extrapolation.txt` | sample | `ex1/samples*/` | Unconditional / guarded conditional generation |
-| `config_sample_conditional.txt` | sample | `ex5/samples_conditional/` | Partial request (two `nan` entries) + candidate ranking + E2 Newton correction on the ex5 pair |
-| `config_interpolate.txt` | interpolate | `ex1/interpolation/` | Noise-space slerp between two reproduced samples |
-| `config_cond_sweep.txt` | interpolate | `ex5/cond_sweep/` | `interpolation_space cond_sweep`: one noise row under a five-step condition morph |
-| `config_optimize.txt`, `config_optimize_surrogate.txt` | optimize | `ex1/optimization*/` | Closed-loop design search (FEA / HI-MGN backend) |
-| `arms/A0.txt` .. `arms/A9.txt` | train_vae | `arms/<label>/` | VAE ablations of v3 (A1 is an omnibus control, A9 the seed-repeat noise floor); see `arms/README.md` |
+| `ex1` | DeepJEB brackets (`ex1_deepjeb.h5`, 2138 shapes / 263 parents), conditioned on `volume, area`, `split_by_parent True` | `config_train_sdfflow.txt`, `config_infer_sdfflow.txt`, `config_evaluate_sdfflow.txt`, `config_interpolate_sdfflow.txt`, `config_optimize_sdfflow.txt` | `../../output/dataset_matrix/geometry_generation/ex1/sdfflow/` |
+| `ex2` | DrivAerML (`ex2_drivaerml.h5` 387 / `ex2_drivaerml_infer.h5` 97), 21 conditions | `config_train_sdfflow.txt`, `config_infer_sdfflow.txt`, `config_evaluate_sdfflow.txt` | `../../output/geometry_generation/ex2_drivaerml/sdfflow/` |
+| `ex3` | MCB nut subset (`ex3_mcb.h5` 1305 / `ex3_mcb_infer.h5` 329), five geometric descriptors | `config_train_sdfflow.txt`, `config_infer_sdfflow.txt`, `config_evaluate_sdfflow.txt` | `../../output/geometry_generation/ex3_mcb/sdfflow/` |
+| `ex4` | Thingi10K (`ex4_thingi10k.h5` 7234 / `ex4_thingi10k_infer.h5` 1807), **unconditional** (`use_conditions False`) | `config_train_sdfflow.txt`, `config_infer_sdfflow.txt`, `config_evaluate_sdfflow.txt` | `../../output/geometry_generation/ex4_thingi10k/sdfflow/` |
 
-The ex5 track is a design that has not been trained yet: every ex5 config
-preflights with `PATH-INPUT-001` on the missing checkpoints, and everything
-its mechanisms claim beyond the ex1 pilot measurements is listed as unverified in
-`docs/research/sdfflow/CONDITIONAL_GENERATION_DESIGN_2026-09.md`.
+By mode: `train`, `sample` and `evaluate` on all four routes; `interpolate` and
+`optimize` on `ex1` only (`optimize`'s load cases, length scale and Ti-6Al-4V
+constants describe the DeepJEB brackets specifically). Three valid modes
+deliberately ship **no** config:
+
+- `train_vae` / `train_fm` - `mode train` runs both stages in one process precisely
+  so the FM cannot be paired with a stale VAE; see "Do not restore separate
+  production configs" below.
+- `reconstruct` - it needs an `input_mesh` STL, and no STL is checked into the
+  repository; point it at a surface mesh you have locally.
+
+**`ex1`'s `config_train_sdfflow.txt` and `config_infer_sdfflow.txt` are generated**
+by `configs/campaigns/dataset_matrix/generate.py`, whose `--check` asserts they are
+byte-identical to what it renders. Edit the generator, not those two files. The other
+twelve are hand-maintained.
+
+> Historical note: this file was written against an older flat roster
+> (`config_train_v3.txt`, `config_evaluate.txt`, `config_sample.txt`, `arms/A0.txt` ...)
+> that no longer exists on disk. Where the prose below names one of those files it is
+> naming a *recipe* - the keys and the reasoning still apply - not a path you can run.
+> The FEA-conditioned "ex5" track and the `arms/` VAE sweep have no checked-in configs
+> at all; their mechanisms survive only in the code and in `tests/`.
 
 From `methods/SDFFlow`:
 
 ```bash
 python build_dataset.py --output ../../dataset/synthetic256.h5 --synthetic 256
-python SDFFlow_main.py --config ../../configs/SDFFlow/config_train_v3.txt
-python SDFFlow_main.py --config ../../configs/SDFFlow/config_sample.txt
+python SDFFlow_main.py --config ../../configs/SDFFlow/geometry_generation/ex1/baseline/config_train_sdfflow.txt
+python SDFFlow_main.py --config ../../configs/SDFFlow/geometry_generation/ex1/baseline/config_infer_sdfflow.txt
 ```
 
 The config parser accepts flat `key value` text, lowercases keys and string
@@ -1079,11 +1083,12 @@ VTK, because this has to run with no GL context.
 At minimum, run from the suite root:
 
 ```bash
-python AI_CAE4ALL_main.py --config configs/SDFFlow/config_train.txt --check
-python AI_CAE4ALL_main.py --config configs/SDFFlow/config_train_v3.txt --check
-python AI_CAE4ALL_main.py --config configs/SDFFlow/config_evaluate.txt --check
-python AI_CAE4ALL_main.py --config configs/SDFFlow/config_sample.txt --check
-python AI_CAE4ALL_main.py --config configs/SDFFlow/config_interpolate.txt --check
+python AI_CAE4ALL_main.py --audit-configs          # all 14 SDFFlow configs, errors=0
+python AI_CAE4ALL_main.py --config configs/SDFFlow/geometry_generation/ex1/baseline/config_train_sdfflow.txt --check
+python AI_CAE4ALL_main.py --config configs/SDFFlow/geometry_generation/ex1/baseline/config_evaluate_sdfflow.txt --check
+python AI_CAE4ALL_main.py --config configs/SDFFlow/geometry_generation/ex1/baseline/config_infer_sdfflow.txt --check
+python AI_CAE4ALL_main.py --config configs/SDFFlow/geometry_generation/ex1/baseline/config_interpolate_sdfflow.txt --check
+python AI_CAE4ALL_main.py --config configs/SDFFlow/geometry_generation/ex1/baseline/config_optimize_sdfflow.txt --check
 python AI_CAE4ALL_main.py --config configs/SDFFlow/config_optimize.txt --check
 python AI_CAE4ALL_main.py --config configs/SDFFlow/config_train_v3_fea.txt --check
 python AI_CAE4ALL_main.py --config configs/SDFFlow/config_calibrate_descriptors.txt --check

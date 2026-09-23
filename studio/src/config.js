@@ -96,9 +96,9 @@ export function keyDisposition(modelId, key, config = null) {
   if (modelId === "meshgraphnets-v" && VARIATIONAL_REMOVED.has(key)) return "removed";
   if (modelId === "chi-mgnflow" && CHI_FLOW_REMOVED.has(key)) return "removed";
   if (modelId === "simulgenvae" && SIMULGEN_REMOVED_NOOPS.has(key)) return "removed";
-  if (["point_deeponet", "deeponet", "fno", "gino"].includes(modelId)) {
+  if (["point_deeponet", "deeponet", "fno"].includes(modelId)) {
     if (OPERATOR_REMOVED.has(key)) return "removed";
-    const owner = key.startsWith("point") ? "point_deeponet" : key.startsWith("deeponet_") ? "deeponet" : key.startsWith("fno_") ? "fno" : key.startsWith("gino_") ? "gino" : "";
+    const owner = key.startsWith("point") ? "point_deeponet" : key.startsWith("deeponet_") ? "deeponet" : key.startsWith("fno_") ? "fno" : "";
     if (owner && owner !== modelId) return "inactive";
   }
   if (key.startsWith("_") || ["num_timesteps", "num_node_types", "log_dir"].includes(key)) return "runtime";
@@ -152,7 +152,7 @@ export function sectionFor(modelId, key, required, config = null) {
   if (required.has(key)) return "Required";
   if (key.startsWith("opt_")) return "Optimization";
   if (/dataset|modelpath|output_dir|log_file|pipeline_log|param_dir|input_mesh|sidecar|split_seed/.test(key)) return "Data & output";
-  if (/^(point_|pointnet_|deeponet_|fno_|gino_|encoder_|decoder_|fm_arch|fm_blocks|fm_hidden|fm_cond_hidden|flow_time_freqs|latent_|latent_dim|message_passing|slice_num|num_layers|num_heads|attention_kernel|mlp_ratio|coarsening|multiscale|mp_per_level|positional|fourier|operator_dim|global_condition|num_filter|lc_filter|network_size)/.test(key)) return "Architecture";
+  if (/^(point_|pointnet_|deeponet_|fno_|encoder_|decoder_|fm_arch|fm_blocks|fm_hidden|fm_cond_hidden|flow_time_freqs|latent_|latent_dim|message_passing|slice_num|num_layers|num_heads|attention_kernel|mlp_ratio|coarsening|multiscale|mp_per_level|positional|fourier|operator_dim|global_condition|num_filter|lc_filter|network_size)/.test(key)) return "Architecture";
   // Network-shape keys the prefix-anchored test above misses. Without these,
   // MLP showed an "Architecture / 0" tab while hidden_layers, activation,
   // output_activation, and norm sat in "Advanced", and every mesh route filed
@@ -173,7 +173,7 @@ export function choicesFor(modelId, key) {
     // Mirrors each spec's own validator exactly: sdfflow/simulgenvae take
     // single|ddp|fsdp ("single" being the right pick on a one-GPU box);
     // Transolver takes ddp|node_shard (TRANS-PARALLEL-001 rejects model_split);
-    // model_split is fno/gino-only among the operators (NOVAR-PARALLEL-002),
+    // model_split is fno-only among the operators (NOVAR-PARALLEL-002),
     // so deeponet/point_deeponet/cHI-MGNflow are ddp-only. cHI's historical
     // model_split directory is a non-executable variational-MGN copy.
     return PARALLEL_MODE_CHOICES[modelId] || ["ddp"];

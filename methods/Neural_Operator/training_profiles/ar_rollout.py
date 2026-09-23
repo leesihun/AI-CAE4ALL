@@ -1,4 +1,4 @@
-"""Autoregressive rollout training (AR-RT) for the four operator architectures.
+"""Autoregressive rollout training (AR-RT) for the three operator architectures.
 
 Implements the scheme from NVIDIA/GM's crash-dynamics study
 (arXiv:2510.15201) as its reference implementation does
@@ -27,14 +27,13 @@ Two deliberate differences from the reference:
     transferable.
 
 Like every other training-time module here, this one never branches on which
-of `point_deeponet` / `deeponet` / `fno` / `gino` is selected: it drives
+of `point_deeponet` / `deeponet` / `fno` is selected: it drives
 `OperatorWrapper`, which already owns the noise contract and batch synthesis.
 
 Unlike MeshGraphNets, no geometry has to be rebuilt between steps: these models
 consume reference positions (`pos_normalized`) and node features only, and
 reference geometry is trajectory-invariant. Only the physical channels of
-`graph.x` are re-normalized per step -- which also means GINO's per-sample
-neighbor cache stays valid for the whole rollout.
+`graph.x` are re-normalized per step.
 """
 
 import torch

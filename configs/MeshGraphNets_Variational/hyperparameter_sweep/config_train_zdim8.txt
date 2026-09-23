@@ -21,7 +21,7 @@
 %   measured under; moving it would make these arms incomparable to the
 %   evidence that picked the recipe.
 %   ============================================================
-model	MeshGraphNets-V  # MeshGraphNets, MeshGraphNets-V, point_deeponet, deeponet, fno, gino, transolver, sdfflow
+model	MeshGraphNets-V  # MeshGraphNets, MeshGraphNets-V, point_deeponet, deeponet, fno, transolver, sdfflow
 mode	train  # Train / Inference
 %   run_sweep.sh assigns the physical card with CUDA_VISIBLE_DEVICES, so every
 %   arm asks for local device 0 and the scheduler decides which one that is.

@@ -36,10 +36,10 @@
       "epochs": 2000,
       "batch": 2,
       "loss_weights": [
-        1,
-        1,
-        0,
-        1
+        1.0,
+        1.0,
+        0.001,
+        1.0
       ]
     },
     {
@@ -424,6 +424,11 @@
         1.0078740157480315,
         0.0,
         0.0
+      ],
+      "spread": [
+        0,
+        "density",
+        "range"
       ]
     },
     {
@@ -456,7 +461,12 @@
         -1
       ],
       "epochs": 500,
-      "batch": 2
+      "batch": 2,
+      "spread": [
+        0,
+        "damage",
+        "mean"
+      ]
     }
   ],
   "pairs": [
@@ -480,13 +490,6 @@
       "method": "fno",
       "train": "configs/Neural_Operator/deterministic/ex1/baseline/config_train_fno.txt",
       "infer": "configs/Neural_Operator/deterministic/ex1/baseline/config_infer_fno.txt"
-    },
-    {
-      "category": "deterministic",
-      "example": "ex1",
-      "method": "gino",
-      "train": "configs/Neural_Operator/deterministic/ex1/baseline/config_train_gino.txt",
-      "infer": "configs/Neural_Operator/deterministic/ex1/baseline/config_infer_gino.txt"
     },
     {
       "category": "deterministic",
@@ -533,13 +536,6 @@
     {
       "category": "deterministic",
       "example": "ex2",
-      "method": "gino",
-      "train": "configs/Neural_Operator/deterministic/ex2/baseline/config_train_gino.txt",
-      "infer": "configs/Neural_Operator/deterministic/ex2/baseline/config_infer_gino.txt"
-    },
-    {
-      "category": "deterministic",
-      "example": "ex2",
       "method": "transolver3",
       "train": "configs/Transolver/deterministic/ex2/baseline/config_train_transolver3.txt",
       "infer": "configs/Transolver/deterministic/ex2/baseline/config_infer_transolver3.txt"
@@ -578,13 +574,6 @@
       "method": "fno",
       "train": "configs/Neural_Operator/deterministic/ex3_full/baseline/config_train_fno.txt",
       "infer": "configs/Neural_Operator/deterministic/ex3_full/baseline/config_infer_fno.txt"
-    },
-    {
-      "category": "deterministic",
-      "example": "ex3_full",
-      "method": "gino",
-      "train": "configs/Neural_Operator/deterministic/ex3_full/baseline/config_train_gino.txt",
-      "infer": "configs/Neural_Operator/deterministic/ex3_full/baseline/config_infer_gino.txt"
     },
     {
       "category": "deterministic",
@@ -638,13 +627,6 @@
     {
       "category": "deterministic",
       "example": "ex3_mid",
-      "method": "gino",
-      "train": "configs/Neural_Operator/deterministic/ex3_mid/baseline/config_train_gino.txt",
-      "infer": "configs/Neural_Operator/deterministic/ex3_mid/baseline/config_infer_gino.txt"
-    },
-    {
-      "category": "deterministic",
-      "example": "ex3_mid",
       "method": "transolver3",
       "train": "configs/Transolver/deterministic/ex3_mid/baseline/config_train_transolver3.txt",
       "infer": "configs/Transolver/deterministic/ex3_mid/baseline/config_infer_transolver3.txt"
@@ -694,13 +676,6 @@
     {
       "category": "deterministic",
       "example": "ex4",
-      "method": "gino",
-      "train": "configs/Neural_Operator/deterministic/ex4/baseline/config_train_gino.txt",
-      "infer": "configs/Neural_Operator/deterministic/ex4/baseline/config_infer_gino.txt"
-    },
-    {
-      "category": "deterministic",
-      "example": "ex4",
       "method": "transolver3",
       "train": "configs/Transolver/deterministic/ex4/baseline/config_train_transolver3.txt",
       "infer": "configs/Transolver/deterministic/ex4/baseline/config_infer_transolver3.txt"
@@ -743,13 +718,6 @@
     {
       "category": "deterministic",
       "example": "ex5",
-      "method": "gino",
-      "train": "configs/Neural_Operator/deterministic/ex5/baseline/config_train_gino.txt",
-      "infer": "configs/Neural_Operator/deterministic/ex5/baseline/config_infer_gino.txt"
-    },
-    {
-      "category": "deterministic",
-      "example": "ex5",
       "method": "transolver3",
       "train": "configs/Transolver/deterministic/ex5/baseline/config_train_transolver3.txt",
       "infer": "configs/Transolver/deterministic/ex5/baseline/config_infer_transolver3.txt"
@@ -788,13 +756,6 @@
       "method": "fno",
       "train": "configs/Neural_Operator/deterministic/ex6/baseline/config_train_fno.txt",
       "infer": "configs/Neural_Operator/deterministic/ex6/baseline/config_infer_fno.txt"
-    },
-    {
-      "category": "deterministic",
-      "example": "ex6",
-      "method": "gino",
-      "train": "configs/Neural_Operator/deterministic/ex6/baseline/config_train_gino.txt",
-      "infer": "configs/Neural_Operator/deterministic/ex6/baseline/config_infer_gino.txt"
     },
     {
       "category": "deterministic",
@@ -848,13 +809,6 @@
     {
       "category": "deterministic",
       "example": "ex7",
-      "method": "gino",
-      "train": "configs/Neural_Operator/deterministic/ex7/baseline/config_train_gino.txt",
-      "infer": "configs/Neural_Operator/deterministic/ex7/baseline/config_infer_gino.txt"
-    },
-    {
-      "category": "deterministic",
-      "example": "ex7",
       "method": "transolver3",
       "train": "configs/Transolver/deterministic/ex7/baseline/config_train_transolver3.txt",
       "infer": "configs/Transolver/deterministic/ex7/baseline/config_infer_transolver3.txt"
@@ -897,13 +851,6 @@
     {
       "category": "deterministic",
       "example": "ex8",
-      "method": "gino",
-      "train": "configs/Neural_Operator/deterministic/ex8/baseline/config_train_gino.txt",
-      "infer": "configs/Neural_Operator/deterministic/ex8/baseline/config_infer_gino.txt"
-    },
-    {
-      "category": "deterministic",
-      "example": "ex8",
       "method": "transolver3",
       "train": "configs/Transolver/deterministic/ex8/baseline/config_train_transolver3.txt",
       "infer": "configs/Transolver/deterministic/ex8/baseline/config_infer_transolver3.txt"
@@ -942,13 +889,6 @@
       "method": "fno",
       "train": "configs/Neural_Operator/deterministic/ex9/baseline/config_train_fno.txt",
       "infer": "configs/Neural_Operator/deterministic/ex9/baseline/config_infer_fno.txt"
-    },
-    {
-      "category": "deterministic",
-      "example": "ex9",
-      "method": "gino",
-      "train": "configs/Neural_Operator/deterministic/ex9/baseline/config_train_gino.txt",
-      "infer": "configs/Neural_Operator/deterministic/ex9/baseline/config_infer_gino.txt"
     },
     {
       "category": "deterministic",
@@ -998,13 +938,6 @@
       "method": "fno",
       "train": "configs/Neural_Operator/deterministic/ex10/baseline/config_train_fno.txt",
       "infer": "configs/Neural_Operator/deterministic/ex10/baseline/config_infer_fno.txt"
-    },
-    {
-      "category": "deterministic",
-      "example": "ex10",
-      "method": "gino",
-      "train": "configs/Neural_Operator/deterministic/ex10/baseline/config_train_gino.txt",
-      "infer": "configs/Neural_Operator/deterministic/ex10/baseline/config_infer_gino.txt"
     },
     {
       "category": "deterministic",

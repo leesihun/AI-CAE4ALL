@@ -7,7 +7,7 @@ Run before long training. Reports:
   - temporal states with conflicting next deltas;
   - SDF/condition/quadrature availability;
   - active-axis and grid-bound resolution;
-  - graph/grid coverage statistics for candidate FNO/GINO resolutions.
+  - grid coverage statistics for candidate FNO resolutions.
 
 Usage:
     python misc/audit_input_identifiability.py --config ex1/config_train_deeponet.txt
@@ -25,7 +25,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from general_modules.load_config import load_config
 from general_modules.mesh_dataset import MeshGraphDataset
-from model.adapters.radius_neighbors import radius_neighbors_scipy, neighbor_stats, min_reachable_radius
+from model.adapters.radius_neighbors import min_reachable_radius
 
 
 def _round_key(arr: np.ndarray, decimals: int = 4) -> bytes:
@@ -87,7 +87,7 @@ def audit_temporal_conflicts(h5_file: str, sample_ids, input_var: int, output_va
 
 
 def report_grid_coverage(train_dataset, resolutions: dict) -> None:
-    """Print occupancy/density diagnostics for candidate FNO/GINO resolutions."""
+    """Print occupancy/density diagnostics for candidate FNO resolutions."""
     from model.adapters.coordinate_domain import CoordinateDomain
     from model.adapters.grid import splat
     import torch
@@ -156,8 +156,6 @@ def main():
     candidates = {
         'fno': tuple(config.get('fno_grid_resolution', [32] * d)) if 'fno_grid_resolution' in config
                else tuple([32] * d),
-        'gino': tuple(config.get('gino_grid_resolution', [32] * d)) if 'gino_grid_resolution' in config
-                else tuple([32] * d),
     }
     report_grid_coverage(train, candidates)
 

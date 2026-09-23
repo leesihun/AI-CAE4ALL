@@ -16,7 +16,7 @@
 %   under that SAME condition, so the target width ratio is exactly 1. This is
 %   a calibration measurement, not an accuracy measurement.
 %   ============================================================
-model	MeshGraphNets-V  # MeshGraphNets, MeshGraphNets-V, point_deeponet, deeponet, fno, gino, transolver, sdfflow
+model	MeshGraphNets-V  # MeshGraphNets, MeshGraphNets-V, point_deeponet, deeponet, fno, transolver, sdfflow
 mode	inference  # Train / Inference
 gpu_ids	0  # run_sweep.sh picks the physical card with CUDA_VISIBLE_DEVICES
 log_file_dir	../../output/meshgraphnets-v/saoi_sweep_top/seed.infer_s26fe_sec.log

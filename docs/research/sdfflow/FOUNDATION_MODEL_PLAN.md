@@ -2,7 +2,7 @@
 
 **Status:** design plan (companion to `SOTA_CONDITIONAL_GEOMETRY_SURVEY_2026-07.md` and `GEOMETRY_GENERATION_RESEARCH.md`)
 **Date:** 2026-07-23
-**Premise:** grow SDFFlow from a single-family (DeepJEB bracket) generator into a *reusable geometry foundation model* — a pretrained shape encoder + latent generative prior + physics heads that transfers across part families and CAE tasks, in the spirit of PhysicsX LGM-Aero and PhysGen, but trainable in-house and coupled to the surrogates already in this repo (GINO, Transolver, MeshGraphNets, Neural Operators).
+**Premise:** grow SDFFlow from a single-family (DeepJEB bracket) generator into a *reusable geometry foundation model* — a pretrained shape encoder + latent generative prior + physics heads that transfers across part families and CAE tasks, in the spirit of PhysicsX LGM-Aero and PhysGen, but trainable in-house and coupled to the surrogates already in this repo (Transolver, MeshGraphNets, Neural Operators).
 
 ---
 
@@ -45,8 +45,8 @@ SDFFlow-v2 (just built: VecSet VAE + DiT + hybrid loss + logit-normal FM) is exa
                        │ over the token set │       │  • field heads (pressure/  │
                        │  (CFG + guidance)  │       │    stress) on z or surface │
                        └───────────────────┘       │  • OR route surface mesh to│
-                                  │                 │    existing GINO/Transolver│
-                                  ▼                 │    /MeshGraphNet surrogate │
+                                  │                 │    existing Transolver/    │
+                                  ▼                 │    MeshGraphNet surrogate  │
                           sampled latents ──────────┴───────────────────────────┘
                                   │                         │
                                   ▼                         ▼
@@ -70,7 +70,7 @@ Concretely, three components:
 
 **C. Physics coupling (reuse this repo).** Two options, use both:
 - *Shared-latent heads* (PhysGen pattern): lightweight scalar/field decoders off the frozen `z` for in-loop generation guidance.
-- *External surrogate* (this repo's strength): decode candidate → surface mesh → score with the existing **GINO / Transolver / MeshGraphNet** models. These are already built, benchmarked, and STL/point/SDF-aware. This is the pragmatic, higher-accuracy path and is exactly the "generator + separate surrogate" pattern every vendor uses.
+- *External surrogate* (this repo's strength): decode candidate → surface mesh → score with the existing **Neural-Operator / Transolver / MeshGraphNet** models. These are already built, benchmarked, and STL/point/SDF-aware. This is the pragmatic, higher-accuracy path and is exactly the "generator + separate surrogate" pattern every vendor uses.
 
 ---
 
@@ -117,7 +117,7 @@ Geometry foundation quality is data-bound, not architecture-bound. Plan the corp
 1. **Geometry VAE pretrain (Tier G).** Train the core on *all* shapes with hybrid loss + salient sampling. Gate: Dora-bench-style reconstruction (surface + sharp-feature error) and watertight-STL/meshability pass rate on held-out subfamilies.
 2. **Unconditional latent flow pretrain (Tier G).** Freeze VAE; train the rectified-flow DiT unconditionally to learn the shape manifold. Gate: prior-sampled (not reconstructed) shapes are valid and diverse.
 3. **Conditional fine-tune (per domain, Tier G + descriptors).** Add descriptor/physics-target conditioning + CFG. Gate: condition accuracy on decoded meshes.
-4. **Physics heads / surrogate coupling (Tier P).** Train shared-latent scalar/field heads *and* wire the existing GINO/Transolver/MeshGraphNet surrogates for candidate scoring. Gate: surrogate error vs true solver on held-out.
+4. **Physics heads / surrogate coupling (Tier P).** Train shared-latent scalar/field heads *and* wire the existing Transolver/MeshGraphNet surrogates for candidate scoring. Gate: surrogate error vs true solver on held-out.
 5. **Guided generation + active learning (Tier P + A).** Physics-guided sampling (surrogate gradient / PhysGen-style refinement / differentiable FlexiCubes), then true-CAE verification of uncertain/high-value/near-constraint candidates; append and retrain. Gate: validated design objective beats DOE + direct optimization at fixed solver budget.
 
 The staging matters: **good reconstruction ≠ good prior sampling ≠ good conditional accuracy**, and each must be measured on its own held-out split. This is the discipline the vendors' "latent + surrogate loop" hides.
@@ -171,7 +171,7 @@ Store failures (non-watertight, non-converged) with their class — they train f
 - **M0 (done):** SDFFlow-v2 recipe — VecSet + DiT + hybrid loss + logit-normal + salient sampling. Validate on DeepJEB (ex2).
 - **M1:** FPS-query encoder + multi-resolution token training (unlocks scaling); Dora-bench reconstruction harness.
 - **M2 (T1):** pretrain encoder on 3–5 in-house families + DeepJEB/DrivAerNet++; per-domain conditional priors; freeze encoder.
-- **M3:** physics heads + wire existing GINO/Transolver/MeshGraphNet surrogates; guided sampling + validity gate.
+- **M3:** physics heads + wire existing Transolver/MeshGraphNet surrogates; guided sampling + validity gate.
 - **M4:** Tier-A 2D-augmentation/3D-lifting data expansion; active-learning loop with true CAE.
 - **M5 (T2):** scale to multi-domain foundation encoder; multimodal (sketch/image) conditioning.
 - **STEP branch (parallel, off critical path):** faceted STEP via BR-DF, or CAD-program/HoLa for editable B-rep — only when a clean-STEP deliverable is firm.
@@ -191,6 +191,6 @@ Store failures (non-watertight, non-converged) with their class — they train f
 1. Train `config_train_v2.txt` on DeepJEB → confirm the v2 recipe reconstructs and generates at least as well as ex1 (A/B on held-out).
 2. Rebuild the dataset with `build_dataset.py --sharp_edge_fraction 0.3` → measure sharp-feature reconstruction delta.
 3. Land the **FPS-query encoder** (replace the learned-query `nn.Parameter` with farthest-point-sampled query tokens) — the enabling change for multi-resolution and scale (M1).
-4. Add a **scalar physics head** off the frozen latent and wire one existing surrogate (Transolver or GINO) for candidate scoring (M3 seed).
+4. Add a **scalar physics head** off the frozen latent and wire one existing surrogate (Transolver) for candidate scoring (M3 seed).
 
 See `SOTA_CONDITIONAL_GEOMETRY_SURVEY_2026-07.md` §4b for the per-change evidence and `GEOMETRY_GENERATION_RESEARCH.md` §5–§14 for the full technique taxonomy and named-model audit.

@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""Grid/GNO coverage statistics across a train split (IMPLEMENTATION_PLAN.md
-sections 8.3/8.4/9). More thorough than the single-sample check inside
+"""Grid coverage statistics across a train split (IMPLEMENTATION_PLAN.md
+sections 8.3/9). More thorough than the single-sample check inside
 misc/audit_input_identifiability.py: scans every training sample and reports
-min/median/max occupancy (FNO/DeepONet grid) or neighbor counts (GINO).
+min/median/max occupancy of the FNO/DeepONet grid.
 
 Usage:
-    python misc/inspect_adapter_coverage.py --config ex1/config_train_gino.txt
     python misc/inspect_adapter_coverage.py --config ex1/config_train_fno.txt
 """
 
@@ -23,7 +22,6 @@ from general_modules.load_config import load_config
 from general_modules.mesh_dataset import MeshGraphDataset
 from model.adapters.coordinate_domain import CoordinateDomain
 from model.adapters.grid import splat
-from model.adapters.radius_neighbors import radius_neighbors_scipy, neighbor_stats, min_reachable_radius
 from model.utils import parse_int_tuple
 
 
@@ -43,37 +41,6 @@ def inspect_grid(train_dataset, resolution, max_samples: int):
     occupancies = np.array(occupancies)
     print(f"  Occupancy over {len(occupancies)} samples: "
           f"min={occupancies.min():.3f} median={np.median(occupancies):.3f} max={occupancies.max():.3f}")
-
-
-def inspect_gino(train_dataset, resolution, in_radius, out_radius, max_samples: int):
-    domain = CoordinateDomain.from_dataset(train_dataset, out_of_bounds_policy='clamp')
-    d = len(resolution)
-    axes = [torch.linspace(0, 1, r) for r in resolution]
-    grids = torch.meshgrid(*axes, indexing='ij')
-    latent_points = torch.stack(grids, dim=0).reshape(d, -1).T.numpy()
-
-    loader = DataLoader(train_dataset, batch_size=1, shuffle=False)
-    in_empty_fracs, out_empty_fracs = [], []
-    for i, batch in enumerate(loader):
-        if i >= max_samples:
-            break
-        c01, _ = domain.to_unit_box(batch.pos_normalized)
-        coords = c01.numpy()
-
-        ei_in = radius_neighbors_scipy(latent_points, coords, in_radius)
-        in_stats = neighbor_stats(ei_in, latent_points.shape[0])
-        in_empty_fracs.append(in_stats['empty_fraction'])
-
-        ei_out = radius_neighbors_scipy(coords, latent_points, out_radius)
-        out_stats = neighbor_stats(ei_out, coords.shape[0])
-        out_empty_fracs.append(out_stats['empty_fraction'])
-
-    print(f"  Input-GNO empty fraction over {len(in_empty_fracs)} samples: "
-          f"min={min(in_empty_fracs):.3f} median={np.median(in_empty_fracs):.3f} max={max(in_empty_fracs):.3f}")
-    print(f"  Output-GNO empty fraction over {len(out_empty_fracs)} samples: "
-          f"min={min(out_empty_fracs):.3f} median={np.median(out_empty_fracs):.3f} max={max(out_empty_fracs):.3f}")
-    print(f"  min_reachable_radius for this resolution: {min_reachable_radius(resolution, d):.4f} "
-          f"(configured in_radius={in_radius}, out_radius={out_radius})")
 
 
 def main():
@@ -96,13 +63,6 @@ def main():
             resolution = parse_int_tuple(config[res_key], d, res_key)
             print(f"\n-- {res_key}={resolution} --")
             inspect_grid(train, resolution, args.max_samples)
-
-    if model_name == 'gino' or 'gino_grid_resolution' in config:
-        resolution = parse_int_tuple(config['gino_grid_resolution'], d, 'gino_grid_resolution')
-        in_radius = float(config.get('gino_in_radius', 0.08))
-        out_radius = float(config.get('gino_out_radius', 0.08))
-        print(f"\n-- gino_grid_resolution={resolution}, in_radius={in_radius}, out_radius={out_radius} --")
-        inspect_gino(train, resolution, in_radius, out_radius, args.max_samples)
 
 
 if __name__ == '__main__':

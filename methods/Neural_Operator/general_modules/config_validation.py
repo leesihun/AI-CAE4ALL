@@ -6,7 +6,7 @@ opened. Unlike MGN, this repository additionally validates per-model
 architecture keys (section 11.4) and only after the active `model` is known.
 """
 
-MODEL_NAMES = {"point_deeponet", "deeponet", "fno", "gino"}
+MODEL_NAMES = {"point_deeponet", "deeponet", "fno"}
 
 # Keys recognized regardless of which model is selected (section 11.2).
 COMMON_KEYS = {
@@ -62,24 +62,10 @@ FNO_KEYS = {
     "fno_use_channel_mlp", "fno_norm", "fno_variant",
 }
 
-GINO_KEYS = {
-    "gino_variant", "gino_grid_resolution", "gino_fno_modes",
-    "gino_fno_hidden_channels", "gino_fno_layers", "gino_in_radius",
-    "gino_out_radius", "gino_kernel_hidden", "gino_max_empty_input_fraction",
-    "gino_query_chunk_size", "gino_use_torch_cluster",
-    "gino_group_shared_geometry", "gino_cache_neighbors",
-    # Opt-in ShapeNet Car paper decoder. These keys are inert for mesh_state.
-    "gino_tucker_rank", "gino_channel_mlp_expansion", "gino_lifting_hidden",
-    "gino_kernel_widths", "gino_projection_widths", "gino_max_num_neighbors",
-    "gino_pos_embedding_type", "gino_coord_embed_dim",
-    "gino_include_grid_coordinates", "gino_domain_padding",
-}
-
 ALL_MODEL_KEYS = {
     "point_deeponet": POINT_DEEPONET_KEYS,
     "deeponet": DEEPONET_KEYS,
     "fno": FNO_KEYS,
-    "gino": GINO_KEYS,
 }
 
 ALL_KNOWN_KEYS = set(COMMON_KEYS)
@@ -89,7 +75,7 @@ for _keys in ALL_MODEL_KEYS.values():
 # Legacy/removed keys from the MGN checkout (message-passing GNN, VAE branch,
 # world edges, multiscale) that must never silently do nothing here.
 # parallel_mode=model_split IS supported (parallelism/, MGN-style pipeline
-# split, fno/gino only) -- it is a parallel_mode value, not a key.
+# split, fno only) -- it is a parallel_mode value, not a key.
 REMOVED_KEYS = {
     "message_passing_num", "latent_dim", "edge_var",
     "world_radius_multiplier", "world_max_num_neighbors", "world_edge_backend",
@@ -101,7 +87,7 @@ REMOVED_KEYS = {
 
 # Models with a sequential latent stack that pipeline model-split can cut.
 # DeepONet/Point-DeepONet are parallel branch/trunk pairs -- nothing to cut.
-SPLIT_CAPABLE_MODELS = {"fno", "gino"}
+SPLIT_CAPABLE_MODELS = {"fno"}
 
 
 def _format_list(values):
@@ -223,63 +209,6 @@ def _validate_static_model_options(config, model_name, source):
         _require_int_entries(config, "fno_hidden_channels", 1, source)
         _require_int_entries(config, "fno_layers", 1, source)
 
-    elif model_name == "gino":
-        variant = _require_choice(
-            config, "gino_variant", "mesh_state", {"mesh_state", "paper_decoder"}, source
-        )
-        lengths = {1, 3} if variant == "paper_decoder" else {2, 3}
-        resolution = _require_int_entries(config, "gino_grid_resolution", 2, source, lengths=lengths)
-        modes = _require_int_entries(config, "gino_fno_modes", 1, source, lengths=lengths)
-        if variant == "paper_decoder":
-            if len(resolution) == 1:
-                resolution *= 3
-            if len(modes) == 1:
-                modes *= 3
-            if resolution and modes and len(resolution) == len(modes):
-                for index, (size, mode) in enumerate(zip(resolution, modes)):
-                    if mode > size:
-                        raise ValueError(
-                            f"{source}: gino_fno_modes[{index}]={mode} exceeds "
-                            f"gino_grid_resolution[{index}]={size}."
-                        )
-            _require_choice(
-                config, "gino_pos_embedding_type", "nerf", {"nerf", "paper_2023"}, source
-            )
-            if config.get("gino_include_grid_coordinates", True) is not True:
-                raise ValueError(
-                    f"{source}: gino_include_grid_coordinates must be True for paper_decoder."
-                )
-            for name in ("gino_coord_embed_dim", "gino_lifting_hidden"):
-                _require_int_entries(config, name, 1, source)
-            for name in ("gino_channel_mlp_expansion",):
-                _require_positive_number(config, name, source)
-            if "gino_tucker_rank" in config:
-                rank = float(config["gino_tucker_rank"])
-                if not 0 < rank <= 1:
-                    raise ValueError(f"{source}: gino_tucker_rank must be in (0, 1].")
-            for name in ("gino_kernel_widths", "gino_projection_widths"):
-                _require_int_entries(config, name, 1, source)
-        else:
-            if resolution and modes and len(resolution) != len(modes):
-                raise ValueError(
-                    f"{source}: gino_grid_resolution and gino_fno_modes must have the same length."
-                )
-            if resolution and modes and len(resolution) == len(modes):
-                for index, (size, mode) in enumerate(zip(resolution, modes)):
-                    limit = size // 2 + 1 if index == len(resolution) - 1 else size // 2
-                    if mode > limit:
-                        raise ValueError(
-                            f"{source}: gino_fno_modes[{index}]={mode} exceeds limit {limit} "
-                            f"for gino_grid_resolution[{index}]={size}."
-                        )
-        for name in (
-            "gino_fno_hidden_channels", "gino_fno_layers", "gino_kernel_hidden",
-        ):
-            _require_int_entries(config, name, 1, source)
-        _require_int_entries(config, "gino_max_num_neighbors", 0, source)
-        for name in ("gino_in_radius", "gino_out_radius"):
-            _require_positive_number(config, name, source)
-
 
 def validate_common_config(config, source="configuration"):
     """Fail fast on removed keys, unrecognized keys, and bad common values.
@@ -347,12 +276,6 @@ def validate_common_config(config, source="configuration"):
                 "own copy of every sample, and the unseeded per-item rotation "
                 "would rotate the input and the target differently."
             )
-        if (model_name == "gino" and
-                str(config.get("gino_variant", "mesh_state")).lower() == "paper_decoder"):
-            raise ValueError(
-                f"{source}: gino_variant=paper_decoder does not implement the "
-                "pipeline model-split protocol. Use parallel_mode ddp."
-            )
 
     if config.get("use_world_edges", False):
         raise ValueError(f"{source}: use_world_edges must be False (section 3).")
@@ -419,8 +342,10 @@ def validate_common_config(config, source="configuration"):
         raise ValueError(f"{source}: out_of_bounds_policy must be 'error' or 'clamp', got '{oob}'.")
 
     sdf_source = str(config.get("sdf_source", "none")).lower()
-    if sdf_source not in ("none", "dataset", "sidecar"):
-        raise ValueError(f"{source}: sdf_source must be none/dataset/sidecar, got '{sdf_source}'.")
+    if sdf_source not in ("none", "dataset", "sidecar", "mesh"):
+        raise ValueError(
+            f"{source}: sdf_source must be none/dataset/sidecar/mesh, got '{sdf_source}'."
+        )
 
     integration_weights = str(config.get("integration_weight_source", "none")).lower()
     if integration_weights != "none":

@@ -4,7 +4,7 @@ Stand-alone, CPU-only inference for AI-CAE4ALL checkpoints. This folder has
 **no dependency on the rest of the AI-CAE4ALL repository** — copy it
 anywhere, install `requirements.txt`, and run.
 
-Supported checkpoints: `point_deeponet`, `deeponet`, `fno`, `gino`
+Supported checkpoints: `point_deeponet`, `deeponet`, `fno`
 (Neural_Operator), `transolver`, `meshgraphnets`, `meshgraphnets-v`, and the
 geometry generator `sdfflow`. You don't need to say which one — the
 checkpoint file tells the tool.
@@ -44,7 +44,7 @@ picks the right forward pass. No filename convention, no `--model` flag:
 
 | Checkpoint shape | Family | Architectures |
 | --- | --- | --- |
-| `schema_version == 'deeponet_repo_v1'` | `neural_operator` | point_deeponet, deeponet, fno, gino (`checkpoint['selected_model']` picks which) |
+| `schema_version == 'deeponet_repo_v1'` | `neural_operator` | point_deeponet, deeponet, fno (`checkpoint['selected_model']` picks which) |
 | `schema_version == 'sdfflow_infer_v1'`, or an SDFFlow-identified legacy `stage in {'vae','fm'}` checkpoint | `geometry` | SDFFlow (VAE + flow-matching) |
 | `checkpoint_version` present | `transolver` | Transolver |
 | `model_config` has `use_vae` | `meshgraphnets_v` | MeshGraphNets (variational) |
@@ -89,8 +89,8 @@ infer(checkpoint="model.pth", input="scene.h5", output="out/")
 
 The bundle never ships CUDA wheels or `torch_cluster`. Device is always
 `torch.device('cpu')`. This removes the biggest packaging risk for a
-one-folder, zero-setup deliverable; GINO's neighbor search runs its scipy
-`cKDTree` path instead of the (CUDA-only-relevant) `torch_cluster`
+one-folder, zero-setup deliverable; the MeshGraphNets world-edge search runs
+its scipy `cKDTree` path instead of the (CUDA-only-relevant) `torch_cluster`
 accelerator.
 
 ## Folder structure
@@ -104,7 +104,7 @@ inference/
     registry.py               family -> driver dispatch, one-family-per-process
     common/                   device.py, hdf5_io.py -- shared across rollout families
     families/
-      neural_operator/        point_deeponet, deeponet, fno, gino (one shared driver)
+      neural_operator/        point_deeponet, deeponet, fno (one shared driver)
       transolver/
       meshgraphnets/
       meshgraphnets_v/
@@ -169,7 +169,7 @@ device (CPU). Results:
 
 | Family | Checkpoint used | Result |
 | --- | --- | --- |
-| neural_operator (point_deeponet, deeponet, fno, gino) | `output/benchmarks/elasticity/smoke/smoke_20260719/<model>/model.pth` | bit-exact (incl. chunked `--query-chunk-size` decode) |
+| neural_operator (point_deeponet, deeponet, fno) | `output/benchmarks/elasticity/smoke/smoke_20260719/<model>/model.pth` | bit-exact (incl. chunked `--query-chunk-size` decode) |
 | transolver | `output/benchmarks/elasticity/smoke/smoke_20260719/transolver/model.pth` | matches to ~5e-6 relative error (see below) |
 | meshgraphnets | `output/benchmarks/plasticity/meshgraphnets/model.pth`, 100 rollout scenes x 19 steps | bit-exact |
 | meshgraphnets_v | synthetic checkpoint (VAE enabled, N(0,I) prior), matched RNG seed | bit-exact |
@@ -202,8 +202,9 @@ device (CPU). Results:
   `infer(checkpoint, ..., coarse_world_edges=True)` if a checkpoint needs it
   — if you get the wrong value, `load_state_dict(strict=True)` will fail
   loudly with a shape mismatch rather than silently misloading.
-- **GINO's neighbor search always uses the scipy `cKDTree` backend** (this
-  bundle never ships `torch_cluster`). If a checkpoint was trained with the
+- **The MeshGraphNets world-edge search always uses the scipy `cKDTree`
+  backend** (this bundle never ships `torch_cluster`). If a checkpoint was
+  trained with `use_world_edges True` and the
   `torch_cluster` radius backend, re-validate parity before trusting it — the
   two backends are not guaranteed bit-identical (`INFERENCE_BUNDLE_PLAN.md`
   section 9, landmine 1).

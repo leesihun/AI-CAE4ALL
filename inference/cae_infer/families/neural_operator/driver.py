@@ -1,10 +1,9 @@
 """Explicit-args refactor of Neural_Operator/inference_profiles/rollout.py's
-`run_rollout`. Covers all four registered cores (point_deeponet, deeponet,
-fno, gino) through one checkpoint-led path -- the checkpoint alone decides
+`run_rollout`. Covers all three registered cores (point_deeponet, deeponet,
+fno) through one checkpoint-led path -- the checkpoint alone decides
 which architecture gets rebuilt (model/factory.py::build_model_from_checkpoint).
 
-CPU-only: no gpu_ids branch, no torch_cluster (radius_neighbors.py falls back
-to its scipy cKDTree path automatically when torch_cluster is absent).
+CPU-only: no gpu_ids branch, and no core needs torch_cluster.
 """
 
 import os

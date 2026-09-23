@@ -1,6 +1,7 @@
 # Dataset별 baseline config matrix
 
-2026-09-22 작업본. `manifest.json`이 86개 train/infer 쌍(172개 config)의 전체 경로를 담는다.
+2026-09-22 작업본. `manifest.json`이 75개 train/infer 쌍(150개 config)의 전체 경로를 담는다.
+2026-09-23에 GINO가 suite에서 삭제되어 GINO 11쌍(22개 config)을 matrix에서 뺐다. GPU lane 2는 재배정하지 않았다.
 기존 config는 교체하지 않고 각 사례의 `baseline/`에 추가했다. Shell buckling은 제외했다.
 **현재 검토 사항: Flag 일반 모델의 1-frame 입력을 2-frame 입력으로 확장할지 사용자 확인 중이다.**
 따라서 이 문서는 모든 설정의 물리적 타당성이나 학습 완료를 인증하는 문서가 아니다.
@@ -34,7 +35,10 @@ input은 좌표 `x,y,z` 세 행이다. `output`은 예측할 물리장 순서이
 | probabilistic/ex2 crack | 0:3 xyz | 3:6 damage, ux, uy | 없음 | 없음 | 3/3/0 |
 | geometry_generation/ex1 DeepJEB | surface_points, surface_normals, query_xyz (이름 있는 배열) | signed_distance | volume, area | 없음 | mesh 행 설정을 사용하지 않음 |
 
-CRM 각도 조건의 단위는 degree이다. Plasticity의 오래된 root 속성보다 실제 row 배치를 우선한다.
+CRM 각도 조건의 단위는 degree이다. Plasticity(ex9)의 root `builder_*` 속성은 2026-08-19 재빌드
+이전의 4/4/0을 그대로 들고 있었는데, 2026-09-23에 파일 안의 `metadata/feature_names`
+(`[x,y,z | ux,uy | uz, die_profil]`)와 실측(987개 샘플 전체에서 `uz`는 정확히 0, `die_profil`은
+시간에 대해 상수)에 맞춰 2/2/2로 제자리 수정했다. 배열은 건드리지 않았다.
 SDF generation 시 입력은 latent noise와 query 좌표이며, surface point cloud는 VAE 학습 입력이다.
 SDF 추론 기본값은 unconditional branch이다. 조건 생성은 `cond_values volume, area`의 **수치값**을
 같은 순서로 추가한다. 학습 세트의 조건 통계와 OOD 검사를 사용한다.
@@ -43,7 +47,7 @@ SDF 추론 기본값은 unconditional branch이다. 조건 생성은 `cond_value
 
 | 대상 | 적용 기법 | 쌍 수 |
 |---|---|---:|
-| deterministic 11사례 (CRM full/mid 각각) | DeepONet, Point-DeepONet, FNO, GINO, Transolver **3**, MeshGraphNets, HI-MGN | 77 |
+| deterministic 11사례 (CRM full/mid 각각) | DeepONet, Point-DeepONet, FNO, Transolver **3**, MeshGraphNets, HI-MGN | 66 |
 | CRM full/mid, Flag, Plasticity | LSH-VAE + latent conditioner (코드 경로 `SimulGenVAE`) | 4 |
 | probabilistic 2사례 | HI-MGN-V, cHI-MGNflow | 4 |
 | geometry_generation DeepJEB | SDFFlow | 1 |
@@ -58,11 +62,57 @@ LSH-VAE 입력/예측은 일반 stepwise 모델과 다르다:
 - LC 학습: 알려진 조건 → VAE latent (주 latent와 계층 latent)를 학습한다.
 - 추론: LC 조건 → latent → 전체 output trajectory. 정답 field를 encoder에 넣는 reconstruction 평가가 아니다.
 - CRM 조건: canonical 행 7:13의 여섯 global parameter만 사용한다. 고정 mesh의 normal/area는 LC에서 중복 입력하지 않는다.
-- Flag 조건: `[frame 0, frame 1] → [ux, uy, uz] → node` 순서로 평탄화한다. 예측 평가는 조건으로 관측한 두 프레임을 제외한 `t>=2`를 별도로 보고해야 한다.
-- Plasticity 조건: `[reference x, reference y, initial ux, initial uy, die_profil] → node` 순서이다.
+- Flag 조건: `[frame 0, frame 1] → [ux, uy, uz] → node` 순서로 평탄화한다 (`prepare.py::make_conditions`, `arr[3:6, :2, :]`).
+- Plasticity 조건: `[reference x, reference y, initial ux, initial uy, die_profil] → node` 순서이다
+  (`prepare.py::make_conditions`, `arr[:, 0, :][[0,1,3,4,6]]` — 즉 **frame 0 한 장**을 관측한다).
 - CSV 행은 정수 sample_id 오름차순이며 동봉된 `*_conditions.json`에 source와 ID 순서가 있다.
 - VAE/LC 모두 같은 train/val/test ID를 사용하고 모든 scaler는 train에서만 fit한다.
   이전 split provenance가 없는 checkpoint의 재사용은 명시적으로 거부한다.
+
+## 채점 프레임 규칙 (scoring frame)
+
+**규칙은 하나다: 모델이 입력으로 *본* 프레임은 채점하지 않는다.** 본 프레임을 포함하면
+그 프레임의 오차는 0에 가깝고, 짧은 trajectory일수록 평균이 크게 낙관적으로 나온다
+(ex9는 20프레임 중 1장 = 5%, ex6는 401프레임 중 2장 = 0.5%).
+본 프레임 수는 dataset이 아니라 **route(방법)** 가 정하므로, 같은 exN에서도 AR 계열과
+LSH-VAE의 채점 구간이 달라질 수 있다. ex6이 바로 그 경우다.
+
+- **AR mesh/operator 계열** (MGN, HI-MGN, Transolver 3, DeepONet, Point-DeepONet, FNO,
+  HI-MGN-V, cHI-MGNflow): frame 0을 초기조건으로 받아 `infer_timesteps = T-1` 스텝을 굴린다
+  (`generate.py`의 `case(..., steps=...)`). 채점 구간은 `t = 1 .. T-1`이고 **frame 0은 절대
+  채점하지 않는다** — 입력을 그대로 되돌려 쓴 값이라 어떤 모델이든 오차 0이다.
+- **LSH-VAE (`dense=True` 4사례)**: 조건 → latent → 전체 trajectory이므로 "스텝"이 없다.
+  본 프레임은 LC 조건에 들어간 프레임뿐이고, 그 수는 `prepare.py::make_conditions`가 정한다.
+- **T=1 정적 사례**: rollout이 없다. `infer_timesteps 1`이고 그 한 장이 전부 예측이므로
+  전 구간을 채점한다. 여기서 "frame 0을 빼라"를 기계적으로 적용하면 채점할 것이 남지 않는다.
+
+| 사례 | 파일 T | 구조 | AR 계열 관측/채점 | LSH-VAE 관측/채점 |
+|---|---:|---|---|---|
+| deterministic/ex1 thermoelastic | 1 | static | — / 그 1장 | 해당 없음 |
+| deterministic/ex2 contact | 50 | trajectory | t=0 / `t=1..49` | 해당 없음 |
+| deterministic/ex3 full, mid CRM | 1 | static | — / 그 1장 | 프레임 관측 없음 (global param 6개) / 그 1장 |
+| deterministic/ex4 cylinder | 600 | trajectory | t=0 / `t=1..599` | 해당 없음 |
+| deterministic/ex5 plate | 400 | trajectory | t=0 / `t=1..399` | 해당 없음 |
+| deterministic/ex6 flag | 401 | trajectory | t=0 / `t=1..400` | **t=0,1** / **`t=2..400`** |
+| deterministic/ex7 AirfRANS | 1 | static | — / 그 1장 | 해당 없음 |
+| deterministic/ex8 elasticity | 1 | static | — / 그 1장 | 해당 없음 |
+| deterministic/ex9 plasticity | 20 | trajectory | t=0 / `t=1..19` | t=0 / `t=1..19` (AR과 동일) |
+| deterministic/ex10 DeepJEB | 1 | static | — / 그 1장 | 해당 없음 |
+| probabilistic/ex1 turbulent | 101 | trajectory | t=0 / `t=1..100` | 해당 없음 |
+| probabilistic/ex2 crack | 20 | trajectory | t=0 / `t=1..19` | 해당 없음 |
+
+**ex6만 route 간 채점 구간이 다르다.** LSH-VAE는 frame 0,1을 조건으로 받으므로 AR 계열과
+같은 `t=1..400`으로 채점하면 t=1 한 장을 공짜로 얻는다. ex6에서 두 계열을 비교할 때는
+**양쪽 모두 `t=2..400`** 으로 맞춰 보고한다. ex9는 양쪽 다 frame 0 한 장만 관측하므로
+`t=1..19`로 그대로 비교 가능하다.
+
+위 T 값은 `dataset/`의 실제 HDF5에서 읽은 값이며 `audit.py --data`의
+`max(T-1, 1) == c['steps']` 단언이 매 실행마다 이를 다시 확인한다. 정적 사례의 `max(...,1)`이
+바로 "T=1은 frame 0을 빼지 않는다"를 코드로 적어 둔 부분이다.
+
+> `methods/HI_MGNFlow/misc/score_rollouts.py`는 AR 규칙(step 0 제외, `t=1..`)을 이미 구현한다.
+> 다만 **T=1 파일에는 쓸 수 없다** — `m[1]`에서 IndexError가 난다. 정적 사례는 rollout 채점
+> 대상이 아니므로 그 스크립트를 겨누지 않는다.
 
 ## 필요한 데이터 준비와 실행
 
@@ -113,7 +163,6 @@ python AI_CAE4ALL_main.py --config configs/Transolver/deterministic/ex4/baseline
 | DeepONet | [DeepONet](https://doi.org/10.1038/s42256-021-00302-5) | fixed sensor branch + coordinate trunk, vector output split_both. Irregular mesh의 sensor interpolation은 이 저장소 adapter이다. |
 | Point-DeepONet | [Point-DeepONet](https://arxiv.org/abs/2412.18362) | PointNet branch + SIREN trunk, mesh_state variant. 원문의 특수 geometry/SDF 실험을 동일하게 재현한다고 주장하지 않는다. |
 | FNO | [Fourier Neural Operator](https://arxiv.org/abs/2010.08895) | 4 layers, width 64, mesh→grid→mesh adapter. 원본의 structured-grid 직접 입력과 구분한다. FFT 안정성을 위해 AMP를 끈다. |
-| GINO | [GINO](https://arxiv.org/abs/2309.00583) | input/output radius GNO + latent FNO. mesh_state, unweighted reductions이며 모든 데이터에서 SDF/quadrature가 갖춰진 논문 버전은 아니다. Sparse surface를 감싸는 volume grid의 빈 input cell을 허용하되 query coverage는 별도 검사 대상이다. |
 | LSH-VAE | [LSH-VAE](https://doi.org/10.1007/s00366-023-01916-6) | 7 hierarchy levels, main latent 32, hierarchical latent 8. 작은 width와 native AdamW를 사용하며 원문의 Adamax/107-layer 상세 recipe와 다르다. LC는 저장소 확장이다. T=1, batch=1에서도 GroupNorm이 유효하도록 각 block에 적어도 16 channels를 둔다. |
 | HI-MGN-V | [InfoVAE](https://arxiv.org/abs/1706.02262), [Flow Matching](https://arxiv.org/abs/2210.02747) | 저장소의 conditional-prior variational hierarchy. Global latent 32, MMD, auxiliary reconstruction, conditional FM; posterior reconstruction과 prior sampling 성능을 구분해야 한다. 단일 논문의 동일 명칭 recipe로 오인하지 않는다. |
 | cHI-MGNflow | [Latent Diffusion Graph Networks](https://arxiv.org/abs/2504.02843) | coarse-node AE latent 4 channels, KL 1e-6, AE 500 epochs 후 latent flow 500 epochs. 저장소 HI hierarchy/flow adaptation이며 원문의 모든 architecture와 동일하지 않다. |
@@ -139,7 +188,7 @@ python AI_CAE4ALL_main.py --config configs/Transolver/deterministic/ex4/baseline
 
 ## 검증 범위와 남은 항목
 
-완료한 검사:
+완료한 검사 (수치는 2026-09-22 기준이며 이후 삭제된 GINO 22개 config를 포함한다):
 
 - 172개 config의 generated-source 일치, launcher schema: 오류/경고 없음.
 - 13개 mesh 사례의 train/infer 전체 sample shape, field 수, T 검사; 유한값은 결정론적 node subset만 검사.
@@ -151,6 +200,6 @@ python AI_CAE4ALL_main.py --config configs/Transolver/deterministic/ex4/baseline
 남은 항목:
 
 - Flag 일반 모델 2-frame history 여부 결정 및 해당 경로 검증.
-- 전체 NO coordinate-domain/GINO coverage 확인, 대표 config의 실제 model forward 검증 추가.
+- 전체 NO coordinate-domain coverage 확인, 대표 config의 실제 model forward 검증 추가.
 - 80GB GPU 실측, 장기 학습 안정성, 실제 checkpoint inference, held-out 성능/확률 calibration.
   마지막 항목들은 아직 실행하지 않았으며 config 생성/단위 테스트로 대신 인증할 수 없다.

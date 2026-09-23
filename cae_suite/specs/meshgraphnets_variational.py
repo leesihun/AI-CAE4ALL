@@ -59,6 +59,17 @@ VAR_KEYS = frozenset(
         # distribution study affordable on disk.
         "save_rollouts",
         "histogram_bins", "histogram_clip_quantile",
+        # Which output channel the spread statistic is taken over, and its name
+        # on the plot. The ground-truth row is 3 + spread_channel, so one key
+        # points both sides at the same field; it used to be hardcoded to the
+        # displacement layout's z_disp row.
+        # ...and `spread_stat` is how that channel is reduced to one number per
+        # realization: 'range' (max - min, the original), 'mean' or 'std'. It is
+        # a key because max - min is degenerate on a saturating or
+        # displacement-driven field, where it reports the boundary condition
+        # rather than the solution and every calibration score built on it is
+        # noise.
+        "spread_channel", "spread_label", "spread_stat",
         # VAE / conditional-prior branch
         "use_vae", "vae_latent_dim", "vae_mp_layers", "vae_graph_aware",
         # How z reaches the processor: 'concat' (legacy Linear([x, z]) fuser) or
@@ -75,6 +86,10 @@ VAR_KEYS = frozenset(
         "use_conditional_prior", "prior_family", "prior_nll_weight",
         "prior_fm_steps", "prior_fm_solver", "prior_mp_layers", "prior_hidden_dim",
         "prior_temperature", "prior_kl_reg_weight", "prior_cov_rank",
+        # FM velocity-MLP width (defaults to prior_hidden_dim) and the
+        # condition-dependent mean/scale head of the FM base; both persist in
+        # the checkpoint model_config.
+        "prior_velocity_hidden_dim", "prior_fm_moments",
         # Weight on the flow-matching gradient that reaches the ENCODER
         # (0 = legacy detached one-way coupling, 1 = full CVAE rate term).
         "prior_grad_to_encoder",
@@ -268,6 +283,55 @@ def validate_variational(ctx: SpecValidationContext) -> None:
                 Severity.NOTICE,
                 "The checkpoint model_config may override use_conditional_prior and related inference fields.",
                 field_name="use_conditional_prior",
+            )
+
+    validate_spread_keys(ctx)
+
+
+def validate_spread_keys(ctx: SpecValidationContext) -> None:
+    """Shared checks for the spread-histogram keys.
+
+    Called by both this spec and chi_mgnflow: the two routes run the same
+    `inference_profiles/rollout.py` comparison and read the same four keys, so
+    a check that lived in only one of them would pass a broken config on the
+    other. Not gated on use_vae -- chi-mgnflow sets that in the runtime rather
+    than the config.
+    """
+    values = ctx.values
+    if ctx.mode == "inference":
+        stat = values.get("spread_stat")
+        if stat is not None and str(stat).lower() not in {"range", "mean", "std"}:
+            ctx.add(
+                "MGNV-SPREAD-STAT",
+                Severity.ERROR,
+                "spread_stat must be 'range' (max - min), 'mean' or 'std'.",
+                field_name="spread_stat",
+            )
+        channel = integer(values.get("spread_channel")) if "spread_channel" in values else None
+        out_var = integer(values.get("output_var"))
+        if channel is not None and channel < 0:
+            ctx.add("MGNV-SPREAD-CHANNEL", Severity.ERROR,
+                    "spread_channel is an index into the output block and cannot be negative.",
+                    field_name="spread_channel")
+        elif channel is not None and out_var is not None and channel >= out_var:
+            # Silently out of range means the histogram block is skipped after
+            # the whole rollout has run; catching it here costs nothing.
+            ctx.add(
+                "MGNV-SPREAD-CHANNEL",
+                Severity.ERROR,
+                f"spread_channel {channel} is outside the output block "
+                f"(output_var={out_var}); no spread histogram would be produced.",
+                field_name="spread_channel",
+            )
+        if values.get("eval_dataset") is None and (
+                "spread_channel" in values or "spread_stat" in values
+                or values.get("make_histogram") is True):
+            ctx.add(
+                "MGNV-SPREAD-EVAL",
+                Severity.WARNING,
+                "The spread keys are set but eval_dataset is not, so there is no "
+                "ground truth to compare against and no histogram or score is written.",
+                field_name="eval_dataset",
             )
 
 

@@ -156,23 +156,34 @@ and `time_integration` keys. It does **not** use `use_world_edges` / `use_multis
 ```text
 model              transolver
 mode               train
-dataset_dir        ../dataset/deterministic/ex2_dynamic_contact.h5
+dataset_dir        ../../dataset/deterministic/ex2_dynamic_contact.h5
+modelpath          ../../output/dataset_matrix/deterministic/ex2/transolver3/model.pth
 input_var          4
 output_var         4
+cond_var           0
 positional_features 4
 use_node_types     True
 latent_dim         256      # divisible by num_heads
 num_layers         8
 num_heads          8
-slice_num          128
-attention_kernel   naive    # slice_space for chunking / node_shard
-chunk_size         0
+slice_num          64
 mlp_ratio          4
+attention_kernel   slice_space
+chunk_size         4096
 use_checkpointing  True
 time_integration   ar_ot
 ```
 
-> **VRAM tip**: for large `num_layers`/`slice_num`/mesh sizes, switch
-> `attention_kernel slice_space`, set a positive `chunk_size`, and enable
-> `use_checkpointing` (or `node_shard` across GPUs). `latent_dim` has far less memory
-> impact than `slice_num` × `num_layers`.
+> Native paths are **cwd-relative to the method repository**, because the launcher
+> runs the native entrypoint with its cwd set to `methods/<Name>/`. That is why
+> every checked-in config spells datasets `../../dataset/...` and artifacts
+> `../../output/...`.
+
+> **`slice_space` is the default, not the escape hatch.** `attention_kernel` defaults
+> to `slice_space` in the live spec (`cae_suite/specs/transolver.py:215`) and all 22
+> checked-in Transolver configs run `slice_space` with `slice_num 64` and
+> `chunk_size 4096`. `naive` is the accepted alternative, not the baseline.
+>
+> **VRAM**: attention memory scales with `slice_num` × `num_layers`, not `latent_dim`.
+> `chunk_size > 0` is what actually streams it, and it requires `slice_space`
+> (`TRANS-CHUNK-001`). `amortized_training` also requires `slice_space`.

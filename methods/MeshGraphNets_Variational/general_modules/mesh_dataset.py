@@ -70,7 +70,8 @@ class MeshGraphDataset(Dataset):
         self.world_radius_multiplier = config.get('world_radius_multiplier', 1.5)
         self.world_max_num_neighbors = config.get('world_max_num_neighbors', 64)
         self.world_edge_radius = None  # Computed from mesh statistics
-        self.min_edge_length = None    # Computed from first sample
+        self.min_edge_length = None    # Computed from mesh statistics
+        self.median_edge_length = None  # Characteristic length behind world_edge_radius
 
         # Determine which world edge backend to use
         requested_backend = config.get('world_edge_backend', 'scipy_kdtree').lower()
@@ -365,6 +366,7 @@ class MeshGraphDataset(Dataset):
         )
         self.world_edge_radius = source_dataset.world_edge_radius
         self.min_edge_length = source_dataset.min_edge_length
+        self.median_edge_length = source_dataset.median_edge_length
         self.coarse_edge_means = [m.copy() for m in source_dataset.coarse_edge_means]
         self.coarse_edge_stds = [s.copy() for s in source_dataset.coarse_edge_stds]
 
@@ -453,6 +455,7 @@ class MeshGraphDataset(Dataset):
         subset.world_edge_backend = self.world_edge_backend
         subset.world_edge_radius = None
         subset.min_edge_length = None
+        subset.median_edge_length = None
         subset.delta_mean = None
         subset.delta_std = None
         subset.node_mean = None
@@ -679,20 +682,34 @@ class MeshGraphDataset(Dataset):
             print(f'  Node type mapping: {self.node_type_to_idx}')
 
     def _compute_world_edge_radius(self) -> None:
+        """Derive the world-edge radius from a characteristic mesh length.
+
+        The radius used to be `world_radius_multiplier * min(min(edge_length))`
+        over the first ten samples -- a multiple of the single shortest edge in
+        the whole scan, which is a sliver length rather than a characteristic
+        one. On ex5 (DeformingPlate) that put the radius at 6.6% of a typical
+        edge and yielded 22 world edges for 1398 nodes, so the contact graph
+        was effectively absent; on ex2 it yielded ~0 edges per node. The median
+        edge length is robust to slivers and makes the multiplier mean the same
+        thing from one dataset to the next, so a value around 2-3 reaches
+        neighbours a couple of cells away as the MeshGraphNets paper intends.
+        """
         print('Computing world edge radius...')
         num_samples = min(10, len(self.sample_ids))
-        min_lengths = []
+        lengths = []
         with h5py.File(self.h5_file, 'r') as f:
             for i in range(num_samples):
                 sid = self.sample_ids[i]
                 nd = f[f'data/{sid}/nodal_data'][:]
                 me = f[f'data/{sid}/mesh_edge'][:]
                 pos = nd[:3, 0, :].T
-                lens = np.linalg.norm(pos[me[1]] - pos[me[0]], axis=1)
-                min_lengths.append(np.min(lens))
-        self.min_edge_length = np.min(min_lengths)
-        self.world_edge_radius = self.world_radius_multiplier * self.min_edge_length
-        print(f'  min_edge_length: {self.min_edge_length:.6f}')
+                lengths.append(np.linalg.norm(pos[me[1]] - pos[me[0]], axis=1))
+        all_lengths = np.concatenate(lengths)
+        self.min_edge_length = float(np.min(all_lengths))
+        self.median_edge_length = float(np.median(all_lengths))
+        self.world_edge_radius = self.world_radius_multiplier * self.median_edge_length
+        print(f'  median_edge_length: {self.median_edge_length:.6f} '
+              f'(shortest edge {self.min_edge_length:.6f})')
         print(f'  world_edge_radius: {self.world_edge_radius:.6f}')
 
     def __len__(self) -> int:

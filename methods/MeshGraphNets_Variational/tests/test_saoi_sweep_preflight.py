@@ -7,7 +7,7 @@ import h5py
 import numpy as np
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-CHECKER = REPO_ROOT / 'configs/MeshGraphNets_Variational/SAOI_sweep/check_eval_inputs.py'
+CHECKER = REPO_ROOT / 'configs/MeshGraphNets_Variational/SAOI_run/check_eval_inputs.py'
 spec = spec_from_file_location('saoi_check_eval_inputs', CHECKER)
 checker = module_from_spec(spec)
 spec.loader.exec_module(checker)

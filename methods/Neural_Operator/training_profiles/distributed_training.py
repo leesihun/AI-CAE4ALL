@@ -1,7 +1,7 @@
 """DDP training worker (IMPLEMENTATION_PLAN.md section 5.2 item 14), ported
 from MeshGraphNets' training_profiles/distributed_training.py. Pipeline
 model parallelism lives in parallelism/launcher.py (`parallel_mode
-model_split`, fno/gino only); this file is standard data-parallel DDP.
+model_split`, fno only); this file is standard data-parallel DDP.
 """
 
 import os

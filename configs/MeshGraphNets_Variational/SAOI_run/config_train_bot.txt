@@ -18,7 +18,7 @@
 %   Architecture is the b8_all winner cell scaled DOWN for the larger SAOI
 %   meshes: Latent_dim 128, voronoi 1000/100, mp_per_level 4,6,8,6,4.
 %   ============================================================
-model	MeshGraphNets-V  # MeshGraphNets, MeshGraphNets-V, point_deeponet, deeponet, fno, gino, transolver, sdfflow
+model	MeshGraphNets-V  # MeshGraphNets, MeshGraphNets-V, point_deeponet, deeponet, fno, transolver, sdfflow
 mode	train  # Train / Inference
 gpu_ids	0  # one card per half; the top half takes the other
 parallel_mode	ddp  # world_size 1 on a single card; the two halves are separate processes, not ranks

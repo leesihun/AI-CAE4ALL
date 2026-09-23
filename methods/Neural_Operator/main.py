@@ -1,4 +1,4 @@
-# Point-DeepONet / GINO / FNO / DeepONet -- deterministic operator-learning runtime
+# Point-DeepONet / FNO / DeepONet -- deterministic operator-learning runtime
 import os
 
 # Must be set before h5py is imported transitively by data loading modules.
@@ -16,14 +16,14 @@ from training_profiles.single_training import single_worker
 
 
 def main():
-    parser = argparse.ArgumentParser(description='DeepONet/GINO/FNO/Point-DeepONet deterministic runtime')
+    parser = argparse.ArgumentParser(description='DeepONet/FNO/Point-DeepONet deterministic runtime')
     parser.add_argument('--config', type=str, default='config.txt',
                         help='Path to config file (default: config.txt)')
     args = parser.parse_args()
 
     print('\n' * 3)
     print("""
-    Point-DeepONet / GINO / FNO / DeepONet
+    Point-DeepONet / FNO / DeepONet
     Deterministic operator-learning runtime
     """)
     print(" " * 64 + "Version 1.0.0")

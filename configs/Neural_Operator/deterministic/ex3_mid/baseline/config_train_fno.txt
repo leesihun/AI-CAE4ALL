@@ -11,7 +11,7 @@
 
 model                            fno
 mode                             train
-gpu_ids                          2
+gpu_ids                          0
 parallel_mode                    ddp
 split_seed                       42
 dataset_dir                      ../../dataset/derived/config_matrix/ex3_NASA_CRM_mid_canonical.h5

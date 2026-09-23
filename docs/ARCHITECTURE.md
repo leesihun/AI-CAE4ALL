@@ -82,7 +82,7 @@ File and line totals drift with every implementation pass, so this guide does
 not preserve an old snapshot. Use `git ls-files '*.py'` for tracked Python
 files, `git ls-files 'configs/**/config*.txt'` for checked-in templates, and
 `python AI_CAE4ALL_main.py --audit-configs --no-color` for the authoritative
-live config audit. The route registry currently exposes 12 model IDs across
+live config audit. The route registry currently exposes 11 model IDs across
 eight ML repositories plus `geometry_ingest`.
 
 ---
@@ -122,7 +122,7 @@ AI-CAE4ALL/
 │   ├── MeshGraphNets/            #   model = meshgraphnets
 │   ├── MeshGraphNets_Variational/#   model = meshgraphnets-v
 │   ├── HI_MGNFlow/               #   model = chi-mgnflow      (entrypoint CHiMGNFlow_main.py)
-│   ├── Neural_Operator/          #   model = point_deeponet | deeponet | fno | gino
+│   ├── Neural_Operator/          #   model = point_deeponet | deeponet | fno
 │   ├── Transolver/               #   model = transolver
 │   ├── SDFFlow/                  #   model = sdfflow          (generative + `optimize` loop)
 │   ├── SimulGenVAE/              #   model = simulgenvae
@@ -213,7 +213,7 @@ breakdown.
 | --- | --- |
 | [cli.py](../cae_suite/cli.py) | Arg parsing; the standalone subcommands (`--list-models`, `--describe`, `--audit-configs`); rendering the route + report; and the diagnostic-prefix → exit-code mapping. |
 | [config_parser.py](../cae_suite/config_parser.py) | Parses flat `key value` text into a `ParsedConfig` (values, raw values, per-key `SourceLocation`, duplicate list). **Deliberately mirrors the native parsers' quirks** (§4) while adding stricter diagnostics (duplicate keys, BOM, malformed lines). |
-| [registry.py](../cae_suite/registry.py) | `MethodRegistry` builds a `model_id → MethodSpec` map from the registered `build_*_spec()` functions. Aliased IDs (the four neural-operator names) share one spec. `resolve()` emits `ROUTE-*` errors for missing/unknown models and missing repos/entrypoints, with `difflib` "did you mean" hints. |
+| [registry.py](../cae_suite/registry.py) | `MethodRegistry` builds a `model_id → MethodSpec` map from the registered `build_*_spec()` functions. Aliased IDs (the three neural-operator names) share one spec. `resolve()` emits `ROUTE-*` errors for missing/unknown models and missing repos/entrypoints, with `difflib` "did you mean" hints. |
 | [specs/base.py](../cae_suite/specs/base.py) | Defines `MethodSpec` (the per-method validation contract), `PathRule`/`PathKind`, `SpecValidationContext`, and shared value validators (`validate_common_values` — gpu_ids rules, positive-int/number checks, `feature_loss_weights` length). |
 | [specs/*.py](../cae_suite/specs) | One spec per method: `known_keys`, required/recommended/default fields (per mode and per model), `PathRule`s, `import_modules`, `dataset_kind`, and custom `validators`. **This is the single source of truth for config validation.** |
 | [preflight.py](../cae_suite/preflight.py) | `run_preflight` — the layered pipeline above — plus the four probe helpers and the dataset/config cross-checks. Builds the final `command`. |
@@ -547,18 +547,18 @@ trajectories, not a single deterministic one.
 
 ---
 
-## 8. Method 3 — Neural Operator (four architectures)
+## 8. Method 3 — Neural Operator (three architectures)
 
-`model point_deeponet | deeponet | fno | gino` → `Neural_Operator/main.py`.
+`model point_deeponet | deeponet | fno` → `Neural_Operator/main.py`.
 Modes: `train`, `inference`. This is the most self-documented method (it has its
 own [CLAUDE.md](../methods/Neural_Operator/CLAUDE.md), `docs/`, and the largest test suite).
 
-**One repo, four selectable operator architectures**, all reading the shared
+**One repo, three selectable operator architectures**, all reading the shared
 mesh HDF5 with no conversion and sharing one
 split/target/normalization/noise/optimizer/scheduler/checkpoint/rollout
 convention. Switching `model` must never require touching dataset, training-loop,
-loss, checkpoint, or inference code. The repo is fully self-contained: **FNO and
-GINO are implemented natively** (`model/spectral.py`, `model/gno.py`) — no
+loss, checkpoint, or inference code. The repo is fully self-contained: **FNO is
+implemented natively** (`model/spectral.py`) — no
 `neuraloperator` dependency, no network access.
 
 | Architecture | File(s) | Idea |
@@ -566,7 +566,6 @@ GINO are implemented natively** (`model/spectral.py`, `model/gno.py`) — no
 | **Point-DeepONet** (primary) | `model/point_deeponet.py`, `pointnet.py`, `siren.py` | PointNet branch (encodes the geometry as sensor points) + SIREN trunk (query coordinates) with early fusion. |
 | **DeepONet** (canonical) | `model/deeponet.py` | Fixed regular sensor grid → branch MLP; trunk MLP over query coords; modal dot-product. |
 | **FNO** | `model/fno.py` + `model/spectral.py` | Mesh splatted onto a regular grid; native spectral (Fourier) convolutions; sampled back to query points. |
-| **GINO** | `model/gino.py` + `model/gno.py` | GNO kernel-integral in ↔ latent FNO ↔ GNO out; mesh→grid→query via radius neighborhoods. |
 
 Design pillars from the repo's own notes:
 
@@ -584,7 +583,7 @@ Design pillars from the repo's own notes:
   spot; its docstring must be read before touching splat/sample code.
 - EMA copies BatchNorm running stats after every update (PointNet needs this);
   spectral weights are stored real (fused AdamW rejects complex params).
-- **`parallel_mode model_split`** (FNO/GINO only) partitions the sequential
+- **`parallel_mode model_split`** (FNO only) partitions the sequential
   latent stack into a 1F1B pipeline; DeepONets and `augment_geometry True` are
   rejected there.
 - `ex1_static_thermoelastic.h5` is planar (`operator_dim` resolves to 2); `ex2_dynamic_contact.h5` is genuinely 3D —
@@ -619,8 +618,14 @@ softly assigns mesh nodes to a small learned set of "physics slices"
   that matrix and **streams** it: each tile is dropped once folded into the
   aggregates and rebuilt in backward, so the N-scaled attention term leaves
   retained memory (measured 1049 MB → 64 MB) and peak becomes near-independent
-  of `slice_num`. This needs no block checkpointing — `use_checkpointing` is
-  orthogonal. Measured in `methods/Transolver/misc/verify_v3.py` L5 and CONFIGURATION.md 8.4.
+  of `slice_num`. Tiling covers the attention only; the FFN's activations are
+  brought under a checkpoint by `use_checkpointing` (block-level,
+  `model/checkpointing.py`), which is why every shipped config sets both. The
+  official Transolver-3 implementation wraps the two in one per-chunk
+  checkpoint (its `chunk_compute` contains the deslice *and* the FFN), so
+  `chunk_size` + `use_checkpointing True` is what reproduces its default;
+  `chunk_size` alone recomputes strictly less. Measured in
+  `methods/Transolver/misc/verify_v3.py` L5 and CONFIGURATION.md 8.4.
 - **Amortized training** (`amortized_training`): builds each layer's physics
   tokens from a subsampled *cache* node stream and computes the loss on a
   smaller decoded *query* stream, cutting activations to
@@ -726,7 +731,7 @@ dataset/campaign. Counts drift; use
 | `configs/MeshGraphNets/deterministic/ex1` … `ex9` | Deterministic and Hi-MGN train/inference profiles, including the ex1 ablation (§11.1) |
 | `configs/MeshGraphNets_Variational/` | B8 and SAOI variational training/inference campaigns |
 | `configs/HI_MGNFlow/` | DeepJEB, ex9, SAOI, and wave0 flow campaigns |
-| `configs/Neural_Operator/deterministic/ex1` … `ex9` | Point-DeepONet, DeepONet, FNO, and GINO profiles |
+| `configs/Neural_Operator/deterministic/ex1` … `ex9` | Point-DeepONet, DeepONet, and FNO profiles |
 | `configs/Transolver/deterministic/ex1` … `ex9` | Transolver training/inference profiles |
 | `configs/SDFFlow/` | SDFFlow train (ex1 / v2 / v3 / 8-GPU b300 / FEA-conditioned ex5), evaluate (reconstruction, descriptor calibration, conditional benchmark), sample (unconditional, extrapolation, partial conditional), interpolate (slerp, condition sweep), and optimize profiles, plus the `arms/` VAE ablation sweep (`A0`..`A9`, mostly single-axis) |
 | `configs/SimulGenVAE/`, `configs/MLP/`, `configs/GeometryIngest/` | Fixed-geometry latent, tabular, and ingestion workflows |
@@ -780,18 +785,20 @@ for SDFFlow) and under `dataset/` for the mesh methods.
 
 ## 13. Testing
 
-The root `tests/` suite covers launcher and `MethodSpec` contracts. Each method
-also has native tests that should run from that method's directory:
+The root `tests/` suite that covered launcher and `MethodSpec` contracts was
+**deleted in commit `9884fb1` (2026-09-21)** and not replaced; the launcher layer
+is now checked with `--audit-configs`/`--check`. Each method still has native
+tests, run from that method's directory in that method's venv:
 
 ```bash
-python -m pytest -q
-python -m pytest -q studio/studio_backend
-cd Neural_Operator && pytest tests/
-cd methods/SDFFlow && python -m pytest -q tests/
+python AI_CAE4ALL_main.py --audit-configs          # launcher/spec layer
+python -m pytest -q studio/studio_backend          # 10 modules, 43 tests
+cd methods/Neural_Operator && python -m pytest -q tests/
+cd methods/SDFFlow        && python -m pytest -q tests/
 ```
 
 `Neural_Operator/` has by far the deepest coverage (config validation, coordinate
-domain, grid adapter, spectral/FNO/GINO/GNO, DeepONet, point sampling, ragged
+domain, grid adapter, spectral/FNO, DeepONet, point sampling, ragged
 batching, radius neighbors, checkpoint roundtrip, EMA buffers, model split,
 AR-rollout, and paper-profile contract tests). MeshGraphNets and its variational sibling
 ship AR-rollout and multiscale-stats tests.
@@ -836,7 +843,7 @@ in sync:
 | --- | --- | --- | --- |
 | `meshgraphnets` | `MeshGraphNets/` | `MeshGraphNets_main.py` | train, inference |
 | `meshgraphnets-v` | `methods/MeshGraphNets_Variational/` | `MeshGraphNets_main.py` | train, inference |
-| `point_deeponet`, `deeponet`, `fno`, `gino` | `Neural_Operator/` | `main.py` | train, inference |
+| `point_deeponet`, `deeponet`, `fno` | `Neural_Operator/` | `main.py` | train, inference |
 | `transolver` | `Transolver/` | `Transolver_main.py` | train, inference |
 | `sdfflow` | `methods/SDFFlow/` | `SDFFlow_main.py` | train, train_vae, train_fm, sample, reconstruct, interpolate, optimize, evaluate |
 | `mlp` | `MLP/` | `MLP_main.py` | train, inference |
@@ -846,7 +853,7 @@ in sync:
 
 ## Appendix A — Cross-cutting feature: AR-OT vs AR-RT time integration
 
-Active in both MeshGraphNets variants, Transolver, and all four Neural Operator
+Active in both MeshGraphNets variants, Transolver, and all three Neural Operator
 models; meaningful only for temporal datasets (`num_timesteps > 1`). Selected by
 a single config key: `time_integration ar_ot` (default) or `ar_rt`.
 
@@ -873,7 +880,7 @@ a single config key: `time_integration ar_ot` (default) or `ar_rt`.
 | Mode | Methods | Meaning |
 | --- | --- | --- |
 | `ddp` (default) | all | Data-parallel; one full model per GPU. |
-| `model_split` | MGN, MGN-v, Neural_Operator (FNO/GINO only) | 1F1B pipeline across ≥2 GPUs; the model is cut into pipeline blocks; merged checkpoints load like single-GPU ones. Rejected for DeepONets and with `augment_geometry True`. |
+| `model_split` | MGN, MGN-v, Neural_Operator (FNO only) | 1F1B pipeline across ≥2 GPUs; the model is cut into pipeline blocks; merged checkpoints load like single-GPU ones. Rejected for DeepONets and with `augment_geometry True`. |
 | `node_shard` (Transolver; `model_split` is an alias) | Transolver | One mesh's nodes are sharded across ≥2 GPUs; slice aggregates are autograd-aware all-reduced. Requires `attention_kernel slice_space`. |
 
 Model-split effective batch size is `batch_size × pipeline_microbatches`

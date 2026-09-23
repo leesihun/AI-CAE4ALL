@@ -56,7 +56,7 @@ projection) and **refiner MLPs**, following the verified published architecture
 
 - **Global max-pool branch bottleneck**: PointNet compresses geometry to one vector per
   graph — like all DeepONet-family models, capacity for very fine global structure is
-  limited (no message passing between points; contrast [GINO](08_GINO.md)/MGN).
+  limited (no message passing between points; contrast MGN).
 - **SIREN is initialization-sensitive**: the sine layers need their own bounds and must
   **not** receive the repo's generic Kaiming init (handled in code, but fragile if
   extended).
@@ -153,7 +153,7 @@ Shared Neural-Operator keys are in
 ```text
 model                  point_deeponet
 mode                   train
-dataset_dir            ../dataset/deterministic/ex1_static_thermoelastic.h5
+dataset_dir            ../../dataset/deterministic/ex1_static_thermoelastic.h5
 input_var              4
 output_var             4
 positional_features    4
@@ -167,11 +167,16 @@ point_siren_omega0     30.0
 point_output_activation identity
 ```
 
+> Native paths are **cwd-relative to the method repository**, because the launcher
+> runs the native entrypoint with its cwd set to `methods/<Name>/`. That is why
+> every checked-in config spells datasets `../../dataset/...` and artifacts
+> `../../output/...`.
+
 ---
 
 ## Query-chunking guarantee
 
-From `docs/MODEL_CAPABILITIES.md`: `encode_operator` returns the branch context
+From [docs/research/neural_operator/MODEL_CAPABILITIES.md](../research/neural_operator/MODEL_CAPABILITIES.md): `encode_operator` returns the branch context
 `[num_graphs, H]` once; `decode_queries` runs trunk + fusion + refiners over a node
 range **exactly** (fp32 tolerances tested). The PointNet branch is **not** chunkable
 (it runs once over the whole sampled set) — this is by design, not a bug.

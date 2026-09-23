@@ -11,6 +11,7 @@ import torch.nn as nn
 from torch_geometric.data import Data
 
 from general_modules.edge_features import EDGE_FEATURE_DIM
+from general_modules.input_noise import InputNoise
 from model.checkpointing import (
     checkpoint_gn_block,
     process_with_checkpointing,
@@ -553,6 +554,7 @@ class ModelSplitStage(nn.Module):
             and self.use_multiscale
         )
         self.use_checkpointing = bool(config.get('use_checkpointing', False))
+        self._input_noise = None
 
         my_blocks = sorted(assignment[stage_idx])
         self.my_block_indices = my_blocks
@@ -644,21 +646,13 @@ class ModelSplitStage(nn.Module):
         )
 
     def apply_input_noise(self, graph) -> None:
-        noise_std = self.config.get('std_noise', 0.0)
-        if noise_std <= 0:
-            return
-        output_var = int(self.config['output_var'])
-        noise = torch.randn(graph.x.shape[0], output_var,
-                            device=graph.x.device, dtype=graph.x.dtype) * noise_std
-        noise_padded = torch.zeros_like(graph.x)
-        noise_padded[:, :output_var] = noise
-        graph.x = graph.x + noise_padded
-        noise_gamma = self.config.get('noise_gamma', 0.1)
-        noise_std_ratio = self.config.get('noise_std_ratio', None)
-        if noise_std_ratio is not None:
-            ratio = torch.tensor(noise_std_ratio, device=graph.x.device, dtype=graph.x.dtype)
-            graph.y = graph.y - noise_gamma * noise * ratio
-        graph.edge_attr = graph.edge_attr + torch.randn_like(graph.edge_attr) * noise_std
+        """Same injection as `MeshGraphNets.forward`, shared so the two paths
+        cannot drift (this copy used to default `noise_gamma` to 0.1 while the
+        DDP path defaulted to 1.0, i.e. the pipeline trained against a target
+        corrected for a tenth of the noise it was given)."""
+        if self._input_noise is None:
+            self._input_noise = InputNoise(self.config)
+        self._input_noise(graph)
 
     def _ckpt_enabled(self) -> bool:
         """Gradient checkpointing is active only while training with the flag on."""

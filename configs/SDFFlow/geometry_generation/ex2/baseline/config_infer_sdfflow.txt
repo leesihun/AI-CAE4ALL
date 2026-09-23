@@ -1,0 +1,25 @@
+% geometry_generation/ex2 - sdfflow on DrivAerML; sampling from the checkpoints trained by the
+%   paired config_train_sdfflow.txt.
+% Logical order: input -> output -> conditioner -> partNo (named HDF5 arrays, not nodal rows).
+% Generation input: latent noise and query_xyz. Output: signed_distance (zero level set is the surface).
+% Conditioner order: the 21 names selected at training (16 DrivAerML geometry parameters + cd, cl,
+%   clf, clr, cs). The geometric descriptors are deliberately absent -- see the training config.
+% This config samples the UNCONDITIONAL branch; add cond_values (21 entries in checkpoint order,
+%   nan for an unspecified entry) and raise cfg_scale for conditional generation.
+% Reference: https://arxiv.org/abs/2408.11969 ; https://arxiv.org/abs/2301.11445 ; https://arxiv.org/abs/2210.02747
+% No source HDF5 writes. Checkpoints are created by the paired training config.
+
+model                            sdfflow
+mode                             sample
+gpu_ids                          0
+parallel_mode                    single
+seed                             42
+vae_modelpath                    ../../output/geometry_generation/ex2_drivaerml/sdfflow/vae.pth
+fm_modelpath                     ../../output/geometry_generation/ex2_drivaerml/sdfflow/fm_best.pth
+output_dir                       ../../output/geometry_generation/ex2_drivaerml/sdfflow/samples
+num_samples                      16
+mc_resolution                    128
+ode_steps                        50
+cfg_scale                        1
+condition_ood_policy             error
+max_condition_z                  3

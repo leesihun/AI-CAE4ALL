@@ -164,7 +164,6 @@ STANDALONE_INFERENCE_MODELS = (
     "chi-mgnflow",
     "transolver",
     "fno",
-    "gino",
     "deeponet",
     "point_deeponet",
     "mlp",
@@ -187,7 +186,6 @@ _REPOSITORY_MODEL_HINTS = {
     "transolver": "transolver",
     "mlp": "mlp",
     "fno": "fno",
-    "gino": "gino",
     "deeponet": "deeponet",
     "point_deeponet": "point_deeponet",
 }
@@ -215,8 +213,6 @@ def _model_from_architecture(model_config: dict[str, Any]) -> str:
         return "transolver"
     if {"fno_modes", "fno_hidden_channels"} & keys:
         return "fno"
-    if {"gino_in_radius", "gino_out_radius", "gino_fno_modes"} & keys:
-        return "gino"
     if {"point_sensor_count", "point_feature_dim"} & keys:
         return "point_deeponet"
     if {"deeponet_basis_dim", "deeponet_sensor_resolution"} & keys:

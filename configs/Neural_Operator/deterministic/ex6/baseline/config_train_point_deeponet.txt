@@ -11,7 +11,7 @@
 
 model                            point_deeponet
 mode                             train
-gpu_ids                          2
+gpu_ids                          1
 parallel_mode                    ddp
 split_seed                       42
 dataset_dir                      ../../dataset/deterministic/ex6_flag_simple.h5

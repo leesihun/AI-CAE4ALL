@@ -6,16 +6,22 @@ with its own dependencies.
 
 ## 1. Launcher and MethodSpec contracts
 
-Runs in the launcher's own interpreter; needs no ML dependencies.
+**There is no root `tests/` directory any more.** The thirteen modules that used
+to live there — config discovery, key contracts, documentation links, native
+config-consumption parity, native runtime defaults, the SDFFlow spec, Studio/spec
+key parity, the buckling dataset contract, the reflow schedule, and
+`tests/campaign/`'s scheduler and layout anchors — were deleted wholesale in
+commit `9884fb1` (2026-09-21). They were not moved anywhere; nothing replaced
+them. Any instruction to run `python -m pytest -q tests/` from the repo root is
+stale, and the command fails with `file or directory not found`.
+
+Until they are restored, the launcher layer is covered by §2 (`--audit-configs`
+plus per-config `--check`) and, indirectly, by the Studio backend suite in §3.
+The old modules are still recoverable from git:
 
 ```bash
-python -m pytest -q tests/
+git show 9884fb1^:tests/test_config_key_contracts.py   # and the other twelve
 ```
-
-Nine modules covering config discovery, key contracts, documentation links,
-native config-consumption parity, native runtime defaults, the SDFFlow spec,
-Studio/spec key parity, and — under `tests/campaign/` — the campaign scheduler
-and the `methods/` layout anchors.
 
 ## 2. Config validation across the whole tree
 
@@ -26,7 +32,10 @@ python AI_CAE4ALL_main.py --audit-configs        # structural lint of every chec
 python AI_CAE4ALL_main.py --config <path> --check # full layered preflight for one config
 ```
 
-`--audit-configs` parses and route-checks all 269 checked-in configs. A single
+`--audit-configs` parses and route-checks all 315 checked-in configs (measured
+2026-09-23: `errors=0, warnings=30`, every warning a `FLOW-COST` advisory on the
+deliberately expensive `configs/HI_MGNFlow/{SAOI_run,hyperparameter_sweep}/`
+inference arms). A single
 `--check` goes further: it also runs the filesystem, environment, dataset, and
 native-probe layers, the last three inside the *target method's* interpreter.
 
@@ -36,8 +45,10 @@ native-probe layers, the last three inside the *target method's* interpreter.
 python -m pytest -q studio/studio_backend
 ```
 
-Eight modules covering the analysis backends, evaluation contract, training
-metrics, checkpoint support, and the pipeline launch gate.
+Ten modules / 43 tests covering the analysis backends, evaluation contract,
+training metrics, checkpoint support, the benchmark roster, HDF5 summaries,
+geometry preview, LLM configure, the static allowlist, and the pipeline launch
+gate.
 
 ## 4. Method repositories
 

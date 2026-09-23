@@ -10,7 +10,7 @@
 
 model                            sdfflow
 mode                             sample
-gpu_ids                          6
+gpu_ids                          7
 parallel_mode                    single
 seed                             42
 vae_modelpath                    ../../output/dataset_matrix/geometry_generation/ex1/sdfflow/vae.pth

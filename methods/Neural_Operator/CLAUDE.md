@@ -6,16 +6,16 @@ assumptions carried over from MeshGraphNets or the published papers.
 
 ## Project Objective
 
-One repository, four selectable operator architectures
-(`point_deeponet`, `deeponet`, `fno`, `gino`), all reading the existing
+One repository, three selectable operator architectures
+(`point_deeponet`, `deeponet`, `fno`), all reading the existing
 MeshGraphNets HDF5 files with no conversion step, all sharing the same
 split/target/normalization/noise/optimizer/scheduler/checkpoint/rollout
 conventions. Switching `model` in the config must never require touching
 dataset, training-loop, loss, checkpoint, or inference code.
 
 The repository is fully self-contained at runtime: no network access, no
-`neuraloperator` dependency. FNO and GINO are implemented natively
-(`model/spectral.py`, `model/gno.py`).
+`neuraloperator` dependency. FNO is implemented natively
+(`model/spectral.py`).
 
 ## Run Commands
 
@@ -38,17 +38,16 @@ selects which file to read.
 | [model/deeponet.py](model/deeponet.py) | Fixed-sensor DeepONet (splat branch + trunk dot product). |
 | [model/point_deeponet.py](model/point_deeponet.py) | Primary model: PointNet branch + SIREN trunk + early fusion. |
 | [model/fno.py](model/fno.py) + [model/spectral.py](model/spectral.py) | Mesh-adapted FNO; native spectral convolution. |
-| [model/gino.py](model/gino.py) + [model/gno.py](model/gno.py) | GINO; native GNO kernel integral, per-graph loop. |
 | [model/adapters/grid.py](model/adapters/grid.py) | Deterministic splat/sample; the axis-order convention is documented at the top of the file. |
 | [model/adapters/coordinate_domain.py](model/adapters/coordinate_domain.py) | Active axes, `[0,1]^d` mapping, out-of-bounds policy. |
 | [model/adapters/point_sampling.py](model/adapters/point_sampling.py) | Deterministic fixed-size sensor sampling. |
-| [model/adapters/radius_neighbors.py](model/adapters/radius_neighbors.py) | scipy KDTree baseline + optional torch_cluster for GINO. |
+| [model/adapters/radius_neighbors.py](model/adapters/radius_neighbors.py) | scipy KDTree baseline + optional torch_cluster; no core builds radius graphs, `min_reachable_radius` feeds `misc/audit_input_identifiability.py`. |
 | [general_modules/mesh_dataset.py](general_modules/mesh_dataset.py) | HDF5 loading, split, normalization, `pos_normalized`, augmentation. |
 | [general_modules/dataset_stats.py](general_modules/dataset_stats.py) | Moments, `position_scale`, active axes, grid bounds, rotation-safe radius. |
 | [general_modules/config_validation.py](general_modules/config_validation.py) | Full key registry; unknown/legacy keys fail fast. |
 | [training_profiles/setup.py](training_profiles/setup.py) | Dataset/model/EMA/optimizer/checkpoint helpers. |
 | [training_profiles/training_loop.py](training_profiles/training_loop.py) | Train/validate/test; node-weighted loss; EMA (incl. BatchNorm buffer copy). |
-| [parallelism/launcher.py](parallelism/launcher.py) | `parallel_mode model_split`: 1F1B pipeline split (fno/gino only), ported from MGN; merged checkpoints load like single-GPU ones. |
+| [parallelism/launcher.py](parallelism/launcher.py) | `parallel_mode model_split`: 1F1B pipeline split (fno only), ported from MGN; merged checkpoints load like single-GPU ones. |
 | [parallelism/stages.py](parallelism/stages.py) | Stage = seeded full core pruned to its block range; deterministic cross-stage noise. |
 | [inference_profiles/rollout.py](inference_profiles/rollout.py) | Checkpoint-led static inference and autoregressive rollout. |
 
@@ -76,9 +75,9 @@ selects which file to read.
 - Spectral conv weights are stored as real tensors with a trailing size-2
   dim, viewed as complex only inside `forward` — this is required for fused
   AdamW, which rejects complex parameters.
-- `parallel_mode model_split` (fno/gino only) cuts the core into pipeline
-  blocks: entry (splat / input GNO + lifting) → latent FNO blocks → exit
-  (projection / output GNO). Stages are seeded full cores pruned to their
+- `parallel_mode model_split` (fno only) cuts the core into pipeline
+  blocks: entry (splat + lifting) → latent FNO blocks → exit
+  (projection + sample). Stages are seeded full cores pruned to their
   block range, so state-dict keys never change and merged checkpoints load
   through the normal inference path. The DeepONets and `augment_geometry
   True` are rejected at config validation.
@@ -142,7 +141,6 @@ The authoritative docs are:
 - [docs/CONFIGURATION.md](../../docs/CONFIGURATION.md)
 - [dataset/DATASET_FORMAT.md](../../docs/reference/DATASET_FORMAT.md)
 - [docs/POINT_DEEPONET_PARITY.md](../../docs/research/neural_operator/POINT_DEEPONET_PARITY.md)
-- [docs/GINO_PARITY.md](../../docs/research/neural_operator/GINO_PARITY.md)
 - [docs/MODEL_CAPABILITIES.md](../../docs/research/neural_operator/MODEL_CAPABILITIES.md)
 
 The research notes under `docs/research/neural_operator/` record design

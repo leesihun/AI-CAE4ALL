@@ -69,6 +69,14 @@ WHAT = {
     "g2e":    "prior_grad_to_encoder 0.0 -> 1.0",
     "mmd10":  "lambda_mmd 1 -> 10",
     "arecon": "alpha_recon 1000 -> 100",
+    # sweep2 (run_sweep2.sh) -- read against sweep1's base/seed
+    "aux0":   "beta_aux 10 -> 0",
+    "aux3":   "beta_aux 10 -> 3",
+    "aux30":  "beta_aux 10 -> 30",
+    "aux100": "beta_aux 10 -> 100",
+    "mmd100": "lambda_mmd 1 -> 100",
+    "vel512": "prior_velocity_hidden_dim 256 -> 512",
+    "fmmom":  "prior_fm_moments False -> True",
 }
 
 

@@ -1,0 +1,23 @@
+% geometry_generation/ex4 - sdfflow on Thingi10K; sampling from the checkpoints trained by the
+%   paired config_train_sdfflow.txt.
+% Logical order: input -> output -> conditioner -> partNo (named HDF5 arrays, not nodal rows).
+% Generation input: latent noise and query_xyz. Output: signed_distance (zero level set is the surface).
+% Conditioner: ABSENT -- the paired training config is unconditional (use_conditions False), so the
+%   checkpoint has cond_dim 0 and cond_values / cfg_scale do not apply here.
+% Reference: https://arxiv.org/abs/1605.04797 ; https://arxiv.org/abs/2301.11445 ; https://arxiv.org/abs/2210.02747
+% No source HDF5 writes. Checkpoints are created by the paired training config.
+
+model                            sdfflow
+mode                             sample
+gpu_ids                          2
+parallel_mode                    single
+seed                             42
+vae_modelpath                    ../../output/geometry_generation/ex4_thingi10k/sdfflow/vae.pth
+fm_modelpath                     ../../output/geometry_generation/ex4_thingi10k/sdfflow/fm_best.pth
+output_dir                       ../../output/geometry_generation/ex4_thingi10k/sdfflow/samples
+num_samples                      16
+mc_resolution                    128
+ode_steps                        50
+% cfg_scale 1 == no classifier-free guidance, the only meaningful value against a
+% cond_dim 0 checkpoint; stated explicitly rather than left to the native default.
+cfg_scale                        1

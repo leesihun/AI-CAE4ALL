@@ -1,0 +1,111 @@
+%   ============================================================
+%
+%   SAOI warpage, cHI-MGNflow SWEEP 2, PHASE B -- stage 2 only (the flow prior).
+%
+%   Trains ONE fixed prior recipe (prior_blocks 8, uniform) against
+%   compressor arm n400c8 on board half bot. Sweep 2 has no selection step:
+%   every compressor gets its own prior and its own Phase C, so each arm is
+%   measured end to end and nothing has to be promoted or patched.
+%
+%   Why prior_blocks 8 and not 4. The prior is message passing over the
+%   coarsest graph, and the n400 arms have four times as many coarse nodes as
+%   sweep 1: 4 blocks reach a much smaller fraction of the part there. 8 is
+%   sweep 1's own p8u, so every row here has a like-for-like sweep-1 row.
+%
+%   LOCKED TO ae_checkpoint: latent_ch, latent_dim, the hierarchy block and the
+%   channel block reproduce the compressor this file loads. They were written
+%   together, so there is no promote step to get them out of step.
+%
+%   ============================================================
+model	chi-mgnflow
+mode	train_prior  # stage 2 alone, against the frozen compressor below
+gpu_ids	0  # logical; run_sweep2.sh maps it to a physical card
+parallel_mode	ddp
+log_file_dir	../../output/chi-mgnflow/saoi_sweep2/prior/bot_n400c8/prior.log
+modelpath	../../output/chi-mgnflow/saoi_sweep2/bot.prior_n400c8.pth
+
+%   The frozen compressor: this arm's own Phase-A checkpoint. The saved
+%   checkpoint of THIS run contains it too, so it is complete at inference.
+ae_checkpoint	../../output/chi-mgnflow/saoi_sweep2/bot.ae_n400c8.pth
+
+%   Dataset
+dataset_dir	../../dataset/SAOI/saoi_train_bot.h5
+split_seed	42
+augment_geometry	True
+
+%   Channel layout. The SAOI columns are x y z dx dy dz thickness "Part No.",
+%   so rows 0:3 are the reference coordinates (never predicted), 3:6 the
+%   displacement state and 6:9 the input-only conditions the model reads every
+%   step but never predicts.
+input_var	3  # x/y/z displacement -- the state block
+output_var	3  # what the model generates
+cond_var	3  # input-only rows: thickness and part id
+edge_var	8  # deformed dx/dy/dz/dist + reference dx/dy/dz/dist
+positional_features	4  # rotation-invariant node features
+
+use_node_types	False
+use_world_edges	False
+
+%   Hierarchy -- identical to config_train_ae2_bot_n400c8.txt.
+use_multiscale	True
+coarsening_type	voronoi_seedmean
+voronoi_clusters	1000, 400
+multiscale_levels	2
+mp_per_level	4, 6, 8, 6, 4  # V-cycle depth: pre / coarsest / post
+hierarchy_variants	4
+hierarchy_seed	1234
+hierarchy_cache_keep	False  # last phase that reads it; the flock-guarded release deletes it
+
+%   Isolation from sweep 1, which may be running on the same box right now.
+%   write_preprocessing False: sweep 2 never opens the shared training HDF5
+%   for writing (normalization travels in the checkpoint, not the file).
+%   hierarchy_cache_dir: this hierarchy's cache lives under saoi_sweep2, so
+%   the same-stem prune in multiscale_cache.py can never delete sweep 1's
+%   cache next to the dataset, nor this sweep's other hierarchies.
+write_preprocessing	False
+hierarchy_cache_dir	../../output/chi-mgnflow/saoi_sweep2/mscache/v1000_400
+hierarchy_cache_build_workers	8  # leave CPU for sweep 1's data loaders
+
+%   LOCKED TO ae_checkpoint. ae_kl_weight is inert in stage 2 but recorded
+%   into model_config, so it is carried to keep the checkpoint honest.
+latent_dim	128
+latent_ch	8
+ae_kl_weight	1e-6
+
+%   The fixed prior recipe (sweep 1's p8u).
+prior_blocks	8
+flow_loss_weighting	uniform
+flow_t_sampling	uniform
+flow_time_freqs	16  # sets the AdaLN input width; a checkpoint only loads under it
+
+training_epochs	2000  # cosine_T0 = epochs - warmup, so this is a COMPLETE run; there is no resume
+
+%   Optimization
+batch_size	16
+learningr	0.0001
+grad_accum_steps	1
+num_workers	4
+
+%   Memory / performance
+use_checkpointing	True
+use_amp	True
+use_ema	True
+ema_decay	0.99
+
+%   Validation and checkpoint selection on the sampling metric.
+val_interval	25
+val_flow_steps	20  # close to the K=30 used at inference
+val_num_samples	8
+best_by	crps
+
+%   Sampling defaults recorded with the checkpoint.
+flow_steps	30
+flow_solver	heun  # 2nd-order trapezoid: 2 forwards per step
+
+%   Periodic visualization
+test_interval	400
+test_batch_idx	0, 1, 2, 3, 4, 5, 6, 7, 8, 9
+plot_feature_idx	2  # z_disp
+
+%   Time integration
+time_integration	ar_ot

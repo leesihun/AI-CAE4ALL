@@ -2,7 +2,7 @@
 config + train-fit dataset (IMPLEMENTATION_PLAN.md section 6.3).
 
 MODEL_REGISTRY/VALIDATORS are populated as each architecture module is
-implemented (deeponet first, then point_deeponet, fno, gino) -- see the
+implemented (deeponet first, then point_deeponet, fno) -- see the
 bottom of this file for the registration calls.
 """
 
@@ -18,15 +18,6 @@ VALIDATORS = {}
 def register_model(name, core_cls, validate_fn):
     MODEL_REGISTRY[name] = core_cls
     VALIDATORS[name] = validate_fn
-
-
-def _resolve_core_class(model_name, config):
-    """Select an opt-in architecture variant without changing registry defaults."""
-    if (model_name == "gino" and
-            str(config.get("gino_variant", "mesh_state")).lower() == "paper_decoder"):
-        from model.gino_carcfd import CarCFDGINODecoder
-        return CarCFDGINODecoder
-    return MODEL_REGISTRY[model_name]
 
 
 def build_model(config, train_dataset):
@@ -47,8 +38,7 @@ def build_model(config, train_dataset):
         train_dataset, out_of_bounds_policy=str(config.get('out_of_bounds_policy', 'error')).lower(),
     )
 
-    core_cls = _resolve_core_class(model_name, config)
-    core = core_cls(config, data_spec, coordinate_domain)
+    core = MODEL_REGISTRY[model_name](config, data_spec, coordinate_domain)
 
     core_params = sum(p.numel() for p in core.parameters())
     print(f"[factory] Built '{model_name}' core with {core_params:,} parameters.")
@@ -86,8 +76,7 @@ def build_model_from_checkpoint(config, checkpoint):
     config['input_var'] = data_spec.input_var
     config['output_var'] = data_spec.output_var
 
-    core_cls = _resolve_core_class(model_name, config)
-    core = core_cls(config, data_spec, coordinate_domain)
+    core = MODEL_REGISTRY[model_name](config, data_spec, coordinate_domain)
     wrapper = OperatorWrapper(core, config)
 
     if 'ema_state_dict' in checkpoint:
@@ -110,15 +99,3 @@ register_model("point_deeponet", PointDeepONet, _validate_point_deeponet)
 
 from model.fno import MeshFNO, validate_config as _validate_fno  # noqa: E402
 register_model("fno", MeshFNO, _validate_fno)
-
-from model.gino import MeshGINO, validate_config as _validate_gino  # noqa: E402
-
-
-def _validate_gino_variant(config, data_spec):
-    if str(config.get("gino_variant", "mesh_state")).lower() == "paper_decoder":
-        from model.gino_carcfd import validate_carcfd_config
-        return validate_carcfd_config(config, data_spec)
-    return _validate_gino(config, data_spec)
-
-
-register_model("gino", MeshGINO, _validate_gino_variant)

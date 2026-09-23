@@ -11,7 +11,7 @@
 
 model                            deeponet
 mode                             train
-gpu_ids                          2
+gpu_ids                          0
 parallel_mode                    ddp
 split_seed                       42
 dataset_dir                      ../../dataset/deterministic/ex5_deforming_plate.h5

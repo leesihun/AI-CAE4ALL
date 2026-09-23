@@ -3,7 +3,8 @@ from __future__ import annotations
 from ..diagnostics import Severity
 from .base import MethodSpec, PathKind, PathRule, SpecValidationContext, integer, numeric
 from .meshgraphnets import validate_meshgraphnets
-from .meshgraphnets_variational import VAR_KEYS, VAR_REMOVED_KEYS
+from .meshgraphnets_variational import (VAR_KEYS, VAR_REMOVED_KEYS,
+                                        validate_spread_keys)
 
 
 # The backbone is the HI-MGN V-cycle, so the whole mesh/multiscale key surface
@@ -137,6 +138,7 @@ _BASE_TRAIN_REQUIRED = frozenset({
 def validate_chi_mgnflow(ctx: SpecValidationContext) -> None:
     validate_meshgraphnets(ctx)
     values = ctx.values
+    validate_spread_keys(ctx)
 
     for name in sorted(REMOVED_LATENT_KEYS.intersection(values)):
         ctx.add(

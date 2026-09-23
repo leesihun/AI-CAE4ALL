@@ -6,24 +6,29 @@ This script does not launch training or overwrite existing configs.
 from pathlib import Path
 import argparse
 import json
-import random
 
 ROOT = Path(__file__).resolve().parents[3]
 DET = 'deterministic'
 PROB = 'probabilistic'
 DERIVED = 'derived/config_matrix'
-METHODS = ['deeponet', 'point_deeponet', 'fno', 'gino', 'transolver3', 'meshgraphnets', 'himgn']
-REPOSITORIES = {**{m: 'Neural_Operator' for m in METHODS[:4]},
+METHODS = ['deeponet', 'point_deeponet', 'fno', 'transolver3', 'meshgraphnets', 'himgn']
+REPOSITORIES = {**{m: 'Neural_Operator' for m in METHODS[:3]},
                 'transolver3': 'Transolver', 'meshgraphnets': 'MeshGraphNets',
                 'himgn': 'MeshGraphNets', 'himgn_v': 'MeshGraphNets_Variational',
                 'chi_mgnflow': 'HI_MGNFlow', 'lsh_vae': 'SimulGenVAE', 'sdfflow': 'SDFFlow'}
+# Lane assignment: one GPU per method group on an 8-card box, cheap routes
+# sharing a lane and the few-example generative routes bundled two per lane.
+# configs/run_all_135.sh and configs/run_all_136.sh drive these lanes. Lane 2
+# has no home arms; its worker goes straight to stealing (run_matrix.sh).
+LANE_GPU = {'deeponet': 0, 'fno': 0, 'point_deeponet': 1, 'transolver3': 3,
+            'meshgraphnets': 4, 'himgn': 5, 'himgn_v': 6, 'lsh_vae': 6,
+            'chi_mgnflow': 7, 'sdfflow': 7}
 PAPERS = {
     'meshgraphnets': 'https://arxiv.org/abs/2010.03409',
     'himgn': 'https://arxiv.org/abs/2608.13827',
     'deeponet': 'https://doi.org/10.1038/s42256-021-00302-5',
     'point_deeponet': 'https://arxiv.org/abs/2412.18362',
     'fno': 'https://arxiv.org/abs/2010.08895',
-    'gino': 'https://arxiv.org/abs/2309.00583',
     'transolver3': 'https://arxiv.org/abs/2602.04940',
     'himgn_v': 'https://arxiv.org/abs/1706.02262',
     'chi_mgnflow': 'https://arxiv.org/abs/2504.02843',
@@ -43,10 +48,8 @@ def case(key, file, fields, conditions=(), part=False, steps=1, dim=2,
 
 
 CASES = [
-    # ex1 is a planar problem stored in a 3-D row layout: z_coord and z_disp are identically
-    # zero over every node of every sample, so uz is masked out of the loss (see README).
-    case('ex1', 'ex1_static_thermoelastic', ['ux', 'uy', 'uz', 'stress'], part=True, epochs=2000,
-         batch=2, loss_weights=[1, 1, 0, 1]),
+    case('ex1', 'ex1_static_thermoelastic', ['ux', 'uy', 'uz', 'stress'], part=True, epochs=2000, batch=2,
+         loss_weights=[1.0, 1.0, 0.001, 1.0]),  # uz is identically zero here; keep the channel, drop its pull.
     case('ex2', 'ex2_dynamic_contact', ['ux', 'uy', 'uz', 'stress'], part=True,
          steps=49, dim=3, clusters=(5000, 250), geometry='displacement', indices=[0, 1, 2], batch=1),
     case('ex3_full', 'unused', ['cp', 'cf_x', 'cf_y', 'cf_z'],
@@ -72,11 +75,26 @@ CASES = [
     case('ex10', 'ex10_deepjeb_mgn', ['stress', 'displacement_magnitude'],
          ['lc_ver', 'lc_hor', 'lc_dia', 'lc_tor'], dim=3, clusters=(512, 64), batch=4,
          split_group_attr='bracket'),
+    # spread=(output channel, plot label, statistic) drives the generated-vs-GT
+    # distribution comparison the two probabilistic routes write at the end of
+    # inference. Both were chosen by measuring the GT statistic over the eval
+    # file, because a statistic that barely moves between scenes makes every
+    # calibration score noise:
+    #   ex1 density  max - min  cv=0.080 over 18 scenes (96 -> 130): the cold/hot
+    #       contrast of the mixing layer. pressure varies more (cv=0.862) but is
+    #       not the diagnostic this benchmark is about.
+    #   ex2 damage   MEAN, not max - min. Damage saturates at 1, so max - min is
+    #       1.000 with cv=0.000 on all 250 eval scenes -- it measures the
+    #       saturation, not the crack. uy is the prescribed 0.02 load (cv=0.000)
+    #       and ux cv=0.018. On a 0/1 field the mean is the damaged-node
+    #       fraction, cv=0.047, which is what the stochastic crack path moves.
     case('ex1', 'ex1_turbulent_radiative_layer', ['density', 'pressure', 'velocity_x', 'velocity_y'],
          ['tcool'], steps=100, clusters=(4096, 256), category=PROB,
-         periodic_box=[128.0 / 127.0, 0.0, 0.0], epochs=500),
+         periodic_box=[128.0 / 127.0, 0.0, 0.0], epochs=500,
+         spread=(0, 'density', 'range')),
     case('ex2', 'ex2_crack_path', ['damage', 'ux', 'uy'], steps=19,
-         clusters=(4096, 256), geometry='displacement', indices=[1, 2, -1], category=PROB, epochs=500),
+         clusters=(4096, 256), geometry='displacement', indices=[1, 2, -1], category=PROB, epochs=500,
+         spread=(0, 'damage', 'mean')),
 ]
 for _c in CASES:
     if _c['key'] == 'ex3_full':
@@ -91,7 +109,7 @@ def mesh_config(c, method):
     run = f"../../output/dataset_matrix/{c['category']}/{c['key']}/{method}"
     cfg = dict(model={'himgn': 'meshgraphnets', 'transolver3': 'transolver',
                       'himgn_v': 'meshgraphnets-v', 'chi_mgnflow': 'chi-mgnflow'}.get(method, method),
-               mode='train', gpu_ids=0, parallel_mode='ddp', split_seed=42,
+               mode='train', gpu_ids=LANE_GPU[method], parallel_mode='ddp', split_seed=42,
                dataset_dir='../../dataset/' + c['train'], infer_dataset='../../dataset/' + c['infer'],
                modelpath=run + '/model.pth', log_file_dir=run + '/train.log',
                inference_output_dir=run + '/infer', infer_timesteps=c['steps'],
@@ -114,7 +132,11 @@ def mesh_config(c, method):
         if c['indices'] is not None:
             cfg['displacement_state_indices'] = c['indices']
         if c['category'] == DET and c['key'] in ('ex2', 'ex5'):
-            cfg.update(use_world_edges=True, world_radius_multiplier=1.5,
+            # Radius = multiplier x the MEDIAN mesh-edge length (see
+            # _compute_world_edge_radius). 2x reaches a couple of cells out:
+            # ex5 26 -> 42 world edges/node, ex2 ~26/node. The MeshGraphNets
+            # DeformingPlate r_W = 0.03 is 1.58x this dataset's median.
+            cfg.update(use_world_edges=True, world_radius_multiplier=2.0,
                        world_max_num_neighbors=64, world_edge_backend='scipy_kdtree')
         if method != 'meshgraphnets':
             cfg.update(use_multiscale=True, coarsening_type='voronoi_seedmean',
@@ -125,11 +147,17 @@ def mesh_config(c, method):
         if c['category'] == PROB:
             cfg.update(positional_features=0, hierarchy_variants=2, hierarchy_seed=42,
                        training_seed=42, best_by='crps', val_interval=10, num_vae_samples=16,
-                       vae_batch_size=2, batch_size=2, std_noise=0.0)
+                       vae_batch_size=16, batch_size=16, std_noise=0.0)
             if c.get('periodic_box'):
                 cfg['periodic_box'] = c['periodic_box']
         if method == 'himgn_v':
-            cfg.update(use_vae=True, vae_latent_dim=32, vae_mp_layers=3, vae_graph_aware=True,
+            # latent 16 matches SAOI_run and hyperparameter_sweep, the only MGN-V
+            # settings that have actually been trained; batch 16 comes from the same
+            # runs and is set for the whole probabilistic category above. The MMD term
+            # is a biased V-statistic over the batch dimension: at batch 2 / D=32 it
+            # reads 2.42 even for a perfect posterior and separates a 3x-too-wide one
+            # by only 1.6 sd, so it stops regularising the aggregate posterior at all.
+            cfg.update(use_vae=True, vae_latent_dim=16, vae_mp_layers=3, vae_graph_aware=True,
                        recon_loss='mse', alpha_recon=1000.0, lambda_mmd=1.0,
                        mmd_bandwidth='median', posterior_min_std=0.05, beta_aux=10.0,
                        z_conditioning='adaln', use_conditional_prior=True, prior_type='gnn_e2e',
@@ -184,20 +212,13 @@ def mesh_config(c, method):
                        fno_modes=[16, 12] if dim == 2 else [12, 12, 6],
                        fno_hidden_channels=64, fno_layers=4, fno_use_channel_mlp=True,
                        fno_norm='none', use_amp=False)
-        elif method == 'gino':
-            cfg.update(gino_variant='mesh_state', gino_grid_resolution=[32, 32] if dim == 2 else [24, 24, 16],
-                       gino_fno_modes=[12, 12] if dim == 2 else [8, 8, 6],
-                       gino_fno_hidden_channels=64, gino_fno_layers=4, gino_kernel_hidden=64,
-                       gino_in_radius=0.12, gino_out_radius=0.12, gino_query_chunk_size=2048,
-                       gino_max_empty_input_fraction=1.0, gino_use_torch_cluster=False,
-                       gino_cache_neighbors=True, gino_group_shared_geometry=False, use_amp=False)
     return cfg
 
 
 def dense_config(c):
     run = f"../../output/dataset_matrix/deterministic/{c['key']}/lsh_vae"
     crm = c['key'].startswith('ex3_')
-    cfg = dict(model='simulgenvae', mode='train', gpu_ids=0, parallel_mode='single', split_seed=42,
+    cfg = dict(model='simulgenvae', mode='train', gpu_ids=LANE_GPU['lsh_vae'], parallel_mode='single', split_seed=42,
                dataset_dir='../../dataset/' + c['train'], num_var=len(c['output']), field_start_row=3,
                cond_var=6 if crm else len(c['conditioner']), node_start=0, node_end=0, timesteps_reduced=0,
                latent_dim=8, latent_dim_end=32, num_filter_enc=[64, 64, 48, 48, 32, 24, 16],
@@ -220,7 +241,7 @@ def dense_config(c):
 
 def sdf_config():
     run = '../../output/dataset_matrix/geometry_generation/ex1/sdfflow'
-    return dict(model='sdfflow', mode='train', gpu_ids=0, parallel_mode='single', seed=42, split_seed=42,
+    return dict(model='sdfflow', mode='train', gpu_ids=LANE_GPU['sdfflow'], parallel_mode='single', seed=42, split_seed=42,
                 dataset_dir='../../dataset/geometry_generation/ex1_deepjeb.h5', split_by_parent=True,
                 num_encoder_points=6144, num_query_points=8192, latent_tokens=32, latent_dim=32,
                 encoder_query_type='fps', encoder_dim=256, encoder_heads=8, encoder_blocks=4,
@@ -258,9 +279,6 @@ def render(c, method, config):
                 'Reference: ' + PAPERS[method],
                 'See configs/campaigns/dataset_matrix/README.md for deviations and verification boundaries.',
                 'No source HDF5 writes. Checkpoints are created by the paired training config.']
-    if c.get('loss_weights') and not all(c['loss_weights']):
-        masked = [c['output'][i] for i, w in enumerate(c['loss_weights']) if not w]
-        comments.insert(6, 'Masked from the loss (identically zero in this dataset): ' + ', '.join(masked) + '.')
     if method == 'sdfflow':
         comments[1:7] = [
             'Logical order: input -> output -> conditioner -> partNo (named HDF5 arrays, not nodal rows).',
@@ -284,33 +302,6 @@ def render(c, method, config):
     return '\n'.join('% ' + s for s in comments) + '\n\n' + ''.join(f'{k:<32} {value(v)}\n' for k, v in config.items())
 
 
-NUM_GPUS = 8
-GPU_ASSIGN_SEED = 20260922
-
-
-def _pair_keys():
-    """Pair identities in build() order; one GPU is assigned per train/infer pair."""
-    keys = []
-    for c in CASES:
-        methods = METHODS if c['category'] == DET else ['himgn_v', 'chi_mgnflow']
-        if c.get('dense'):
-            methods = methods + ['lsh_vae']
-        keys.extend((c['category'], c['key'], m) for m in methods)
-    keys.append(('geometry_generation', 'ex1', 'sdfflow'))
-    return keys
-
-
-def _gpu_assignment():
-    """Balanced random GPU ids over 0..NUM_GPUS-1, deterministic for a fixed roster."""
-    keys = _pair_keys()
-    pool = [i % NUM_GPUS for i in range(len(keys))]
-    random.Random(GPU_ASSIGN_SEED).shuffle(pool)
-    return dict(zip(keys, pool))
-
-
-GPUS = _gpu_assignment()
-
-
 def build():
     files, pairs = {}, []
     for c in CASES:
@@ -319,9 +310,24 @@ def build():
             methods = methods + ['lsh_vae']
         for method in methods:
             train = dense_config(c) if method == 'lsh_vae' else mesh_config(c, method)
-            train['gpu_ids'] = GPUS[(c['category'], c['key'], method)]
             infer = dict(train)
             infer['mode'] = 'reconstruct' if method == 'lsh_vae' else 'inference'
+            if c.get('spread') and method in ('himgn_v', 'chi_mgnflow'):
+                # Ground truth for the distribution comparison is the same
+                # held-out file the rollout runs on, so each generated ensemble
+                # is scored against the one simulation that scene actually
+                # produced -- pooling the draws instead measures the marginal,
+                # in which a model that ignores the geometry scores perfectly.
+                channel, label, stat = c['spread']
+                infer.update(eval_dataset='../../dataset/' + c['infer'],
+                             spread_channel=channel, spread_label=label,
+                             spread_stat=stat, make_histogram=True,
+                             show_histogram=False, histogram_bins=30,
+                             save_rollouts=False)
+                # save_rollouts False: one HDF5 per (scene, draw) is
+                # 18 x 16 x 79 MB = 23 GB on ex1 and 250 x 16 x 16 MB = 63 GB on
+                # ex2, per route. spread_values.npz plus spread_metrics.json are
+                # the surviving record, which is what this study is measuring.
             if method == 'lsh_vae':
                 infer['dataset_dir'] = '../../dataset/' + c['infer']
                 infer['batch_size'] = 2
@@ -333,11 +339,10 @@ def build():
                 files[path] = render(c, method, cfg)
             pairs.append(dict(category=c['category'], example=c['key'], method=method, train=paths[0], infer=paths[1]))
     sdf = sdf_config()
-    sdf['gpu_ids'] = GPUS[('geometry_generation', 'ex1', 'sdfflow')]
     c = dict(category='geometry_generation', key='ex1', input=['surface_points', 'surface_normals', 'query_xyz'],
              output=['signed_distance'], conditioner=['volume', 'area'], partNo=[])
     base = 'configs/SDFFlow/geometry_generation/ex1/baseline'
-    infer = dict(model='sdfflow', mode='sample', gpu_ids=sdf['gpu_ids'], parallel_mode='single', seed=42,
+    infer = dict(model='sdfflow', mode='sample', gpu_ids=LANE_GPU['sdfflow'], parallel_mode='single', seed=42,
                  vae_modelpath=sdf['vae_modelpath'], fm_modelpath=sdf['fm_best_modelpath'],
                  output_dir=sdf['output_dir'], num_samples=16, mc_resolution=128, ode_steps=50,
                  cfg_scale=1.0, condition_ood_policy='error', max_condition_z=3.0)
@@ -345,7 +350,7 @@ def build():
     for path, cfg in zip(paths, (sdf, infer)):
         files[path] = render(c, 'sdfflow', cfg)
     pairs.append(dict(category=c['category'], example=c['key'], method='sdfflow', train=paths[0], infer=paths[1]))
-    assert len(pairs) == 86 and len(files) == 172
+    assert len(pairs) == 75 and len(files) == 150
     manifest = dict(version=1, excluded=['shell_buckling', 'grainpaint'], cases=CASES, pairs=pairs)
     files['configs/campaigns/dataset_matrix/manifest.json'] = json.dumps(manifest, indent=2) + '\n'
     return files
@@ -365,7 +370,7 @@ def main():
                      if not (ROOT / p).exists() or (ROOT / p).read_text(encoding='utf-8') != content]
         if different:
             raise SystemExit('Missing or different generated files:\n' + '\n'.join(different))
-        print('86 train/infer pairs: generated files match source of truth.')
+        print('75 train/infer pairs: generated files match source of truth.')
 
 
 if __name__ == '__main__':

@@ -22,7 +22,6 @@ docs describe the implementation.
 | 5 | [05_DeepONet.md](05_DeepONet.md) | `deeponet` | `methods/Neural_Operator/` | Neural operator |
 | 6 | [06_Point-DeepONet.md](06_Point-DeepONet.md) | `point_deeponet` | `methods/Neural_Operator/` | Neural operator |
 | 7 | [07_FNO.md](07_FNO.md) | `fno` | `methods/Neural_Operator/` | Neural operator |
-| 8 | [08_GINO.md](08_GINO.md) | `gino` | `methods/Neural_Operator/` | Neural operator |
 | 9 | [09_Transolver.md](09_Transolver.md) | `transolver` | `methods/Transolver/` | Transformer operator |
 | 10 | [10_SDFFlow.md](10_SDFFlow.md) | `sdfflow` | `methods/SDFFlow/` | Generative geometry |
 | 11 | [11_Geometry_Ingest.md](11_Geometry_Ingest.md) | `geometry_ingest` | `methods/GeometryIngest/` | Data-prep utility (not an ML method) |
@@ -63,10 +62,9 @@ python AI_CAE4ALL_main.py --describe <model>                        # per-mode r
 | Simulate transient physics on a fixed mesh (deformation, stress, crash) | **MGN** | Native mesh message passing; best for local, mesh-resolved fields |
 | Same, but on very large meshes with long-range coupling | **HI-MGN / BSMS-GNN** | Multiscale V-cycle propagates information across the mesh in fewer layers |
 | Model *manufacturing spread* — many plausible outputs per identical mesh | **MGN-Variational** | cVAE latent + learned conditional prior generate distinct valid variants |
-| Learn a solution operator that generalizes across geometries/parameters | **DeepONet / Point-DeepONet / FNO / GINO** | Operator learning; query the field at arbitrary points |
+| Learn a solution operator that generalizes across geometries/parameters | **DeepONet / Point-DeepONet / FNO** | Operator learning; query the field at arbitrary points |
 | Best mesh-native operator baseline in this suite | **Point-DeepONet** | PointNet branch + SIREN trunk, no grid projection loss |
 | Structured/near-grid domains, spectral efficiency | **FNO** | Global Fourier layers; cheap once splatted to a grid |
-| Irregular geometry with a discretization-convergent operator story | **GINO** | Kernel-integral GNO in/out of a latent FNO grid |
 | Attention-based operator, one architecture, huge meshes | **Transolver** | Physics-Attention with linear-in-N slice tokens |
 | *Generate new 3D shapes* (not simulate a field) | **SDFFlow** | SDF-VAE + latent flow matching, conditioned on shape descriptors |
 | Predict a few **scalar** quantities from **scalar** design parameters (no mesh/field) | **MLP** | Plain N→M fully-connected regressor over a tabular DOE / parameter sweep |

@@ -15,12 +15,10 @@ MODEL_EXTRAS = {
     'deeponet': {'deeponet_sensor_resolution': [8, 8]},
     'point_deeponet': {'point_sensor_count': 16},
     'fno': {'fno_grid_resolution': [8, 8], 'fno_modes': [3, 4], 'fno_hidden_channels': 16, 'fno_layers': 2},
-    'gino': {'gino_grid_resolution': [6, 6], 'gino_fno_modes': [2, 3], 'gino_fno_hidden_channels': 12,
-            'gino_fno_layers': 2, 'gino_in_radius': 0.35, 'gino_out_radius': 0.35},
 }
 
 
-@pytest.mark.parametrize('model_name', ['deeponet', 'point_deeponet', 'fno', 'gino'])
+@pytest.mark.parametrize('model_name', ['deeponet', 'point_deeponet', 'fno'])
 def test_checkpoint_roundtrip_reproduces_predictions(tiny_static_2d_h5, tmp_path, model_name):
     modelpath = str(tmp_path / f"{model_name}.pth")
     cfg = base_config_2d(tiny_static_2d_h5, model=model_name, modelpath=modelpath,

@@ -2,7 +2,7 @@
 
 Wraps the train-derived active axes and global grid bounds (computed once in
 general_modules/dataset_stats.py / mesh_dataset.py) into the runtime
-`[0,1]^d` mapping used by every grid/point/GINO adapter. Deterministic,
+`[0,1]^d` mapping used by every grid/point adapter. Deterministic,
 checkpointed, and never recomputed from a single sample: per-sample geometry
 uses `pos_normalized` (from the dataset), this module owns only the shared
 *domain* those coordinates are mapped into.

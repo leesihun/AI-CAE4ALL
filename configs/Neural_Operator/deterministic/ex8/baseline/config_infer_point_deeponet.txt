@@ -11,7 +11,7 @@
 
 model                            point_deeponet
 mode                             inference
-gpu_ids                          6
+gpu_ids                          1
 parallel_mode                    ddp
 split_seed                       42
 dataset_dir                      ../../dataset/deterministic/ex8_elasticity.h5
