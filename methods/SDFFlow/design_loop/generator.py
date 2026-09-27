@@ -1,9 +1,11 @@
 """Design vector -> SDFFlow latent -> SDF grid -> marching-cubes surface mesh.
 
-The design vector parameterizes the flow-matching *noise* (t=0 state of the ODE),
-restricted to a low-dimensional orthonormal subspace, plus optional shape-descriptor
-conditions. Every point of the design space therefore maps to an on-manifold
-DeepJEB-like bracket, which is what makes a black-box optimizer usable here.
+The design vector parameterizes the flow-matching *noise* (t=0 state of the ODE)
+through a low-dimensional chart, plus optional shape-descriptor conditions. Every
+point of the design space maps to a noise the FM prior could have drawn, and so
+to an on-manifold DeepJEB-like bracket, which is what makes a black-box
+optimizer usable here. `NoiseChart` below holds the two charts and why the
+first one was replaced.
 """
 
 import os
@@ -30,13 +32,83 @@ def _model_state(ckpt):
     return state
 
 
+NOISE_PARAMS = ('gnomonic_v2', 'subspace_v1')
+NOISE_PARAM_DEFAULT = 'gnomonic_v2'
+
+
+class NoiseChart:
+    """K design coordinates -> one D-dimensional FM start noise.
+
+    ``subspace_v1`` (the original) replaced the in-subspace component of a base
+    draw ``z0`` with the design vector: ``z = z0_perp + x @ Q`` for an
+    orthonormal ``Q`` [K, D], with ``x`` clipped to a ball of radius
+    ``shell_scale * sqrt(K)``. That only reads as a search over the Gaussian
+    shell when K is a sizeable fraction of D. At D = 512 x 32 = 16384 (the
+    DeepJEB latent) ``|z0_perp| ~= sqrt(D) = 128`` while the design part is
+    capped at ``1.25 * sqrt(12) = 4.33``: the search moved about 3% of the norm
+    (0.1% of the variance), so almost every design decoded to nearly the same
+    shape and the conditions did the real work.
+
+    ``gnomonic_v2`` spans the design directions with the base draw itself:
+    ``z(x) = (eps_0 + sum_k x_k eps_k) / sqrt(1 + |x|^2)`` with every ``eps``
+    i.i.d. N(0, I_D). The coefficient vector ``(1, x) / sqrt(1 + |x|^2)`` has
+    unit norm, so ``z(x)`` is exactly N(0, I_D) for every ``x`` -- nothing is
+    clipped, the norm stays ~sqrt(D) at any D, and ``|x|`` measures how far the
+    design has turned away from ``eps_0`` (``|x| = 1`` is 45 degrees; the map is
+    the gnomonic chart of the hemisphere around it). ``x = 0`` is the same noise
+    ``eps_0`` that v1 started from.
+
+    ``eps_0`` is the draw v1 called ``z0`` (``torch.Generator('cpu')`` seeded
+    with ``base_seed``); the ``eps_k`` come from ``subspace_seed``. The kind is
+    recorded in ``summary['design_space']['noise_param']``; a summary without it
+    was written by v1.
+    """
+
+    def __init__(self, latent_flat_dim, subspace_dim, subspace_seed=0, base_seed=0,
+                 shell_scale=1.25, kind=NOISE_PARAM_DEFAULT, device='cpu'):
+        if kind not in NOISE_PARAMS:
+            raise ValueError(f'noise_param must be one of {NOISE_PARAMS}, got {kind!r}')
+        self.kind = kind
+        self.latent_flat_dim = int(latent_flat_dim)
+        self.subspace_dim = int(subspace_dim)
+        self.shell_scale = float(shell_scale)
+        self.device = torch.device(device)
+
+        rng = np.random.default_rng(subspace_seed)
+        g = torch.Generator(device='cpu').manual_seed(int(base_seed))
+        z0 = torch.randn(self.latent_flat_dim, generator=g).to(self.device)
+        if kind == 'subspace_v1':
+            basis, _ = np.linalg.qr(rng.standard_normal((self.latent_flat_dim,
+                                                         self.subspace_dim)))
+            self.basis = torch.tensor(basis.T.copy(), dtype=torch.float32, device=self.device)
+            # Base noise draw; the search replaces only its in-subspace component.
+            self.z0_perp = z0 - (z0 @ self.basis.T) @ self.basis
+        else:
+            self.eps0 = z0
+            self.directions = torch.tensor(
+                rng.standard_normal((self.subspace_dim, self.latent_flat_dim)),
+                dtype=torch.float32, device=self.device)
+
+    def __call__(self, x_latent):
+        """[K] design coordinates -> [1, D] ODE start state."""
+        v = torch.tensor(np.asarray(x_latent, dtype=np.float32), device=self.device)
+        if self.kind == 'subspace_v1':
+            radius = float(np.sqrt(self.subspace_dim)) * self.shell_scale
+            norm = torch.linalg.norm(v)
+            if norm > radius:
+                v = v * (radius / norm)
+            return (self.z0_perp + v @ self.basis).unsqueeze(0)
+        z = (self.eps0 + v @ self.directions) / torch.sqrt(1.0 + v @ v)
+        return z.unsqueeze(0)
+
+
 class SDFFlowGenerator:
     """Wraps a trained VAE + FM pair as a differentiable-free shape parameterization."""
 
     def __init__(self, vae_path, fm_path, device='cuda', subspace_dim=12,
                  subspace_seed=0, base_seed=0, ode_steps=50, mc_resolution=128,
                  cond_dims=('volume', 'area'), shell_scale=1.25, latent_range=None,
-                 cond_range=1.5):
+                 cond_range=1.5, noise_param=NOISE_PARAM_DEFAULT):
         self.device = torch.device(device if torch.cuda.is_available() or device == 'cpu'
                                    else 'cpu')
         self.fm_ckpt = load_checkpoint(fm_path, self.device)
@@ -57,55 +129,52 @@ class SDFFlowGenerator:
         self.ode_steps = int(ode_steps)
         self.mc_resolution = int(mc_resolution)
         self.shell_scale = float(shell_scale)
-
-        # Orthonormal search subspace of the 256-d FM noise space.
-        rng = np.random.default_rng(subspace_seed)
-        basis, _ = np.linalg.qr(rng.standard_normal((self.latent_flat_dim, subspace_dim)))
-        self.basis = torch.tensor(basis.T.copy(), dtype=torch.float32, device=self.device)
         self.subspace_dim = int(subspace_dim)
-
-        # Base noise draw; the search replaces only its in-subspace component.
-        g = torch.Generator(device='cpu').manual_seed(int(base_seed))
-        z0 = torch.randn(self.latent_flat_dim, generator=g).to(self.device)
-        self.z0_perp = z0 - (z0 @ self.basis.T) @ self.basis
+        self.noise = NoiseChart(self.latent_flat_dim, self.subspace_dim,
+                                subspace_seed=subspace_seed, base_seed=base_seed,
+                                shell_scale=self.shell_scale, kind=noise_param,
+                                device=self.device)
+        self.noise_param = self.noise.kind
 
         # Condition axes actually searched over (normalized units, i.e. train-split sigmas).
         self.cond_dims = [c for c in cond_dims if c in self.cond_names]
         self.cond_index = [self.cond_names.index(c) for c in self.cond_dims]
         self.n_design = self.subspace_dim + len(self.cond_dims)
-        # Per-coordinate bound. The default puts the box *corner* on the shell:
-        # corner norm = latent_range * sqrt(d), shell radius = shell_scale * sqrt(d).
-        self.latent_range = float(latent_range) if latent_range is not None             else self.shell_scale
+        # Per-coordinate bound, shell_scale by default. Under subspace_v1 that
+        # puts the box *corner* on the clipping shell (corner norm
+        # latent_range * sqrt(d) = shell radius shell_scale * sqrt(d)); under
+        # gnomonic_v2 nothing is clipped and the box is the whole search space --
+        # the default corner, |x| = 4.33 at d = 12, turns 77 degrees from eps_0.
+        self.latent_range = (float(latent_range) if latent_range is not None
+                             else self.shell_scale)
         self.cond_range = float(cond_range)
 
     # ------------------------------------------------------------------ #
 
     def bounds(self):
-        """Box bounds for the search, inscribed in the Gaussian shell by default.
+        """Box bounds for the search.
 
         Pure function of construction-time state: `bounds()` is called from
         several places (baseline sampling, the CMA-ES setup) and must return the
         same box every time, so the range is fixed in `__init__` rather than
         defaulted here.
 
-        With `latent_range == shell_scale` the box corner sits exactly on the
-        shell. A wider box is mostly *degenerate*, not merely generous: `_noise`
-        rescales anything outside the shell back onto it, keeping direction and
-        discarding magnitude, so every point on a ray beyond the radius decodes
-        to the identical shape.
+        Under subspace_v1, with `latent_range == shell_scale` the box corner
+        sits exactly on the clipping shell, and a wider box is mostly
+        *degenerate*: `NoiseChart` rescales anything outside the shell back onto
+        it, keeping direction and discarding magnitude, so every point on a ray
+        beyond the radius decodes to the identical shape. gnomonic_v2 clips
+        nothing, so every point of a wider box is a distinct noise.
         """
-        lo = [-self.latent_range] * self.subspace_dim             + [-self.cond_range] * len(self.cond_dims)
-        hi = [self.latent_range] * self.subspace_dim             + [self.cond_range] * len(self.cond_dims)
+        lo = ([-self.latent_range] * self.subspace_dim
+              + [-self.cond_range] * len(self.cond_dims))
+        hi = ([self.latent_range] * self.subspace_dim
+              + [self.cond_range] * len(self.cond_dims))
         return np.asarray(lo), np.asarray(hi)
 
     def _noise(self, x_latent):
-        """Compose the full 256-d ODE start state, kept near the Gaussian shell."""
-        v = torch.tensor(np.asarray(x_latent, dtype=np.float32), device=self.device)
-        radius = float(np.sqrt(self.subspace_dim)) * self.shell_scale
-        norm = torch.linalg.norm(v)
-        if norm > radius:
-            v = v * (radius / norm)
-        return (self.z0_perp + v @ self.basis).unsqueeze(0)
+        """Compose the full latent_flat_dim ODE start state (see `NoiseChart`)."""
+        return self.noise(x_latent)
 
     def _conditions(self, x_cond):
         if self.cond_dim == 0:

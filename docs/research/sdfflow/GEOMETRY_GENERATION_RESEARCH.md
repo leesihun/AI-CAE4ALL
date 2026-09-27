@@ -251,8 +251,7 @@ Suitable choices for `p(z|c)` are a cVAE prior, conditional normalizing flow, di
 - continuous resolution and arbitrary topology;
 - normals from `∇f` and surface distance for geometry-aware AI-CAE;
 - smooth latent interpolation;
-- compact global shape code for moderate shape families;
-- direct compatibility with GINO-like SDF geometry inputs.
+- compact global shape code for moderate shape families.
 
 **Weaknesses**
 
@@ -544,7 +543,6 @@ Good reconstruction is not evidence that prior-sampled geometry is diverse, vali
 |---|---|---|
 | Fixed node correspondence/connectivity | Mesh morphing plus MLP/GNN/MeshGraphNet | Simplest labels and batching |
 | Variable-size irregular surface/volume meshes | MeshGraphNet or Transolver | Operates directly on mesh/point nodes; preserve per-graph segmentation |
-| SDF plus point-cloud surface queries | GINO | Explicitly designed for varying 3D geometry with SDF/point representations |
 | Geometry mapped to regular latent domain | Geo-FNO | Fast spectral operator after learned deformation |
 | Small scalar outputs only | Point/GNN/transformer encoder plus MLP | Cheaper than full field prediction |
 
@@ -920,7 +918,7 @@ PhysGen's limits are equally important:
 
 - It proves the concept mostly on automotive aerodynamics, with an additional structural-optimization demonstration; it is not yet a universal industrial geometry model.
 - It outputs an SDF-derived mesh, not clean CAD features or analytic STEP.
-- Its shared physics decoders are ideal for generation guidance, but a dedicated high-resolution Transolver, GINO, DoMINO, or MeshGraphNet should still be benchmarked for production CAE prediction.
+- Its shared physics decoders are ideal for generation guidance, but a dedicated high-resolution Transolver, DoMINO, or MeshGraphNet should still be benchmarked for production CAE prediction.
 - Its published image condition should be replaced or extended with the conditions engineering actually uses: dimensions, packaging constraints, material, boundary conditions, loads, inlet state, target quantities, and design-family label.
 
 ### 14.5 “Best” depends on the required artifact
@@ -943,7 +941,6 @@ There is no honest universal winner, but there are clear winners for individual 
 | **Structural topology/material layout** | **TopoDiff** | Conditional diffusion with surrogate performance/manufacturability guidance | Published primary case is 2D density topology, not production 3D CAD |
 | **AI-CFD directly from STL** | **DoMINO** | Explicitly accepts STL and predicts surface/volume aerodynamics with local multiscale geometry encoding | Predictor, not generator; currently domain-specific |
 | **General irregular-geometry AI-CAE baseline** | **Transolver** | Strong general-geometry PDE transformer with linear-complexity physics attention | Must be trained and validated for the target solver/data |
-| **Small-data varying-geometry neural operator** | **GINO** | Uses point clouds and SDF; published vehicle-pressure result trained with 500 samples | Regular latent grid and operator setup add implementation complexity |
 | **Dynamic mesh simulation** | **MeshGraphNets** | Seminal, widely reused mesh-based learned simulator | Message passing can be costly on very large meshes |
 
 ### 14.6 The most famous and influential academic models
@@ -961,7 +958,7 @@ There is no honest universal winner, but there are clear winners for individual 
 7. **GET3D (NeurIPS 2022)** — a landmark direct textured-mesh generator; famous for visual asset generation, less appropriate for CAE geometry.
 8. **3DShape2VecSet (SIGGRAPH 2023)** — an influential set-structured neural-field latent designed for transformer diffusion and multiple conditioning modalities.
 9. **MeshGraphNets (ICLR 2021 Outstanding Paper)** — the must-know learned mesh simulator on the AI-CAE side.
-10. **GINO (NeurIPS 2023) and Transolver (ICML 2024)** — major varying-geometry neural-operator/transformer baselines for modern AI-CAE.
+10. **Transolver (ICML 2024)** — a major varying-geometry transformer baseline for modern AI-CAE.
 
 #### Recent SOTA-oriented models to study
 
@@ -999,7 +996,7 @@ z + operating condition
   -> lightweight scalar/field physics heads for generation guidance
 
 extracted surface + operating condition
-  -> Transolver/GINO/DoMINO/MeshGraphNet production surrogate
+  -> Transolver/DoMINO/MeshGraphNet production surrogate
   -> uncertainty gate -> true CFD/FEA -> active-learning update
 
 z or extracted surface
@@ -1098,26 +1095,25 @@ This hybrid is more trainable than LGM-Aero, more complete than MeshSDF, more en
 
 54. Pfaff et al., [Learning Mesh-Based Simulation with Graph Networks](https://arxiv.org/abs/2010.03409), ICLR 2021.
 55. Li et al., [Fourier Neural Operator with Learned Deformations for PDEs on General Geometries (Geo-FNO)](https://arxiv.org/abs/2207.05209), JMLR 2023.
-56. Li et al., [Geometry-Informed Neural Operator for Large-Scale 3D PDEs (GINO)](https://proceedings.neurips.cc/paper_files/paper/2023/hash/70518ea42831f02afc3a2828993935ad-Abstract-Conference.html), NeurIPS 2023.
-57. Wu et al., [Transolver](https://icml.cc/virtual/2024/poster/33751), ICML 2024.
+56. Wu et al., [Transolver](https://icml.cc/virtual/2024/poster/33751), ICML 2024.
 
 ### Datasets and engineering tooling
 
-58. Koch et al., [ABC: A Big CAD Model Dataset](https://openaccess.thecvf.com/content_CVPR_2019/html/Koch_ABC_A_Big_CAD_Model_Dataset_for_Geometric_Deep_Learning_CVPR_2019_paper.html), CVPR 2019.
-59. Willis et al., [Fusion 360 Gallery](https://www.research.autodesk.com/publications/fusion-360-gallery/), SIGGRAPH 2021.
-60. Elrefaie et al., [DrivAerNet++](https://papers.nips.cc/paper_files/paper/2024/hash/013cf29a9e68e4411d0593040a8a1eb3-Abstract-Datasets_and_Benchmarks_Track.html), NeurIPS 2024.
-61. Bonnet et al., [AirfRANS](https://airfrans.readthedocs.io/en/latest/index.html), NeurIPS 2022.
-62. [CadQuery documentation](https://cadquery.readthedocs.io/en/stable/) for parametric Python CAD and STEP/STL export.
-63. [OpenCASCADE STEPControl_Writer](https://dev.opencascade.org/doc/refman/html/class_s_t_e_p_control___writer.html) for STEP export.
-64. [Gmsh documentation](https://gmsh.info/doc/texinfo/) for CAD import, surface/volume meshing, and physical boundary groups.
-65. [NIST STEP File Analyzer and Viewer](https://www.nist.gov/services-resources/software/step-file-analyzer-and-viewer) for the ISO 10303/STEP exchange context and file inspection.
+57. Koch et al., [ABC: A Big CAD Model Dataset](https://openaccess.thecvf.com/content_CVPR_2019/html/Koch_ABC_A_Big_CAD_Model_Dataset_for_Geometric_Deep_Learning_CVPR_2019_paper.html), CVPR 2019.
+58. Willis et al., [Fusion 360 Gallery](https://www.research.autodesk.com/publications/fusion-360-gallery/), SIGGRAPH 2021.
+59. Elrefaie et al., [DrivAerNet++](https://papers.nips.cc/paper_files/paper/2024/hash/013cf29a9e68e4411d0593040a8a1eb3-Abstract-Datasets_and_Benchmarks_Track.html), NeurIPS 2024.
+60. Bonnet et al., [AirfRANS](https://airfrans.readthedocs.io/en/latest/index.html), NeurIPS 2022.
+61. [CadQuery documentation](https://cadquery.readthedocs.io/en/stable/) for parametric Python CAD and STEP/STL export.
+62. [OpenCASCADE STEPControl_Writer](https://dev.opencascade.org/doc/refman/html/class_s_t_e_p_control___writer.html) for STEP export.
+63. [Gmsh documentation](https://gmsh.info/doc/texinfo/) for CAD import, surface/volume meshing, and physical boundary groups.
+64. [NIST STEP File Analyzer and Viewer](https://www.nist.gov/services-resources/software/step-file-analyzer-and-viewer) for the ISO 10303/STEP exchange context and file inspection.
 
 ### Additional sources for the named-model audit
 
-66. PhysicsX, [Building Beyond Human Imagination with Foundation Models for Geometry and Physics](https://www.physicsx.ai/newsroom/building-beyond-human-imagination-with-foundation-models-for-geometry-and-physics), 2024. Public LGM-Aero architecture, preprocessing, scale, compute, and loss description; it is a company technical post, not a peer-reviewed benchmark.
-67. You et al., [PhysGen supplementary material](https://openaccess.thecvf.com/content/CVPR2026/supplemental/You_PhysGen_Physically_Grounded_CVPR_2026_supplemental.pdf), CVPR 2026. Dataset split, training compute, SDF decoder, Marching Cubes, rectified-flow, and OpenFOAM verification details.
-68. Gao et al., [GET3D: A Generative Model of High Quality 3D Textured Shapes Learned from Images](https://proceedings.neurips.cc/paper_files/paper/2022/hash/cebbd24f1e50bcb63d015611fe0fe767-Abstract-Conference.html), NeurIPS 2022.
-69. Zhan et al., [PhysiOpt: Physics-Driven Shape Optimization for 3D Generative Models](https://research.ibm.com/publications/physiopt-physics-driven-shape-optimization-for-3d-generative-models), SIGGRAPH Asia 2025.
-70. Berzins et al., [Geometry-Informed Neural Networks](https://arxiv.org/abs/2402.14009), 2024; [peer-reviewed OpenReview version](https://openreview.net/pdf?id=o4KpjiCdrk).
-71. Khan et al., [Text2CAD: Generating Sequential CAD Designs from Beginner-to-Expert Level Text Prompts](https://proceedings.neurips.cc/paper_files/paper/2024/file/0e5b96f97c1813bb75f6c28532c2ecc7-Paper-Conference.pdf), NeurIPS 2024; [official code](https://github.com/SadilKhan/Text2CAD).
-72. Shen et al., [Flexible Isosurface Extraction for Gradient-Based Mesh Optimization](https://research.nvidia.com/labs/toronto-ai/flexicubes/), ACM TOG/SIGGRAPH 2023.
+65. PhysicsX, [Building Beyond Human Imagination with Foundation Models for Geometry and Physics](https://www.physicsx.ai/newsroom/building-beyond-human-imagination-with-foundation-models-for-geometry-and-physics), 2024. Public LGM-Aero architecture, preprocessing, scale, compute, and loss description; it is a company technical post, not a peer-reviewed benchmark.
+66. You et al., [PhysGen supplementary material](https://openaccess.thecvf.com/content/CVPR2026/supplemental/You_PhysGen_Physically_Grounded_CVPR_2026_supplemental.pdf), CVPR 2026. Dataset split, training compute, SDF decoder, Marching Cubes, rectified-flow, and OpenFOAM verification details.
+67. Gao et al., [GET3D: A Generative Model of High Quality 3D Textured Shapes Learned from Images](https://proceedings.neurips.cc/paper_files/paper/2022/hash/cebbd24f1e50bcb63d015611fe0fe767-Abstract-Conference.html), NeurIPS 2022.
+68. Zhan et al., [PhysiOpt: Physics-Driven Shape Optimization for 3D Generative Models](https://research.ibm.com/publications/physiopt-physics-driven-shape-optimization-for-3d-generative-models), SIGGRAPH Asia 2025.
+69. Berzins et al., [Geometry-Informed Neural Networks](https://arxiv.org/abs/2402.14009), 2024; [peer-reviewed OpenReview version](https://openreview.net/pdf?id=o4KpjiCdrk).
+70. Khan et al., [Text2CAD: Generating Sequential CAD Designs from Beginner-to-Expert Level Text Prompts](https://proceedings.neurips.cc/paper_files/paper/2024/file/0e5b96f97c1813bb75f6c28532c2ecc7-Paper-Conference.pdf), NeurIPS 2024; [official code](https://github.com/SadilKhan/Text2CAD).
+71. Shen et al., [Flexible Isosurface Extraction for Gradient-Based Mesh Optimization](https://research.nvidia.com/labs/toronto-ai/flexicubes/), ACM TOG/SIGGRAPH 2023.

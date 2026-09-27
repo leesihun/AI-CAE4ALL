@@ -263,7 +263,7 @@ def build_neural_operator_spec() -> MethodSpec:
         },
         recommended_by_mode={"train": frozenset({"feature_loss_weights", "split_seed", "parallel_mode", "write_preprocessing"})},
         defaults={"parallel_mode": "ddp", "write_preprocessing": False, "use_world_edges": False, "use_multiscale": False, "use_parallel_stats": True, "train_eval_subset_size": 128, "train_query_chunk_size": 0, "infer_query_chunk_size": 0},
-        defaults_by_mode={"inference": {"inference_output_dir": "outputs/rollout"}},
+        defaults_by_mode={"inference": {"inference_output_dir": "../../output/neural_operator/rollout"}},
         path_rules=(
             PathRule("dataset_dir", PathKind.INPUT_FILE, frozenset({"train"})),
             PathRule("modelpath", PathKind.OUTPUT_FILE, frozenset({"train"})),

@@ -69,11 +69,23 @@ export async function connectRuntime(onConnected) {
     onConnected?.();
     // Rejoin every job still in flight, not just the first — several pipelines
     // can be running when the page is (re)opened.
-    const activeJobs = jobs.items.filter(job => ["queued", "running"].includes(job.status));
-    if (activeJobs.length) {
-      const { beginCommandJob } = await import("./run.js");
-      activeJobs.forEach((job, index) => beginCommandJob(job, { focus: index === activeJobs.length - 1 }));
+    const activeJobs = jobs.items.filter(job => ["queued", "running"].includes(job.status)
+      && !state.api.finishedJobs.has(job.id));
+    const { beginCommandJob, reconcileFinishedJobs } = await import("./run.js");
+    activeJobs.forEach((job, index) => beginCommandJob(job, { focus: index === activeJobs.length - 1 }));
+    // A legacy canvas may claim an untagged pipeline run by node ids only
+    // while one is still running; once none is, it is an ordinary canvas. A
+    // command job (Generate, a single config) has no node ids and can never be
+    // claimed, so it must not keep the flag alive.
+    if (state.legacyCanvas && !activeJobs.some(job => !job.canvas_id
+      && (job.steps || []).some(step => step.node_id))) {
+      state.legacyCanvas = false;
+      const { schedulePipelineSave } = await import("./persistence.js");
+      schedulePipelineSave();
     }
+    // Runs that finished while the page was closed were never painted. A
+    // painting fault is a bug to see, not a reason to report the runtime down.
+    reconcileFinishedJobs(jobs.items).catch(error => console.error("Could not repaint finished runs", error));
     return true;
   } catch (error) {
     state.api.connected = false;

@@ -103,6 +103,9 @@ REMOVED_LATENT_KEYS = frozenset(
         "prior_min_std", "prior_mixture_components", "prior_grad_to_encoder",
         "vae_valid_prior_samples",
         "gamma_es", "es_samples", "es_steps", "es_noise_source", "es_start_epoch",
+        # Freezes the variational learned prior mid-run; nothing under
+        # methods/HI_MGNFlow reads it, so it was accepted and then ignored.
+        "prior_freeze_epoch",
     }
 ) | VAR_REMOVED_KEYS
 
@@ -360,7 +363,7 @@ def build_chi_mgnflow_spec() -> MethodSpec:
             "val_num_samples": 8,
             "best_by": "crps",
         },
-        defaults_by_mode={"inference": {"inference_output_dir": "outputs/rollout"}},
+        defaults_by_mode={"inference": {"inference_output_dir": "../../output/chi-mgnflow/rollout"}},
         path_rules=(
             PathRule("dataset_dir", PathKind.INPUT_FILE, frozenset({"train", "train_ae", "train_prior"})),
             PathRule("modelpath", PathKind.OUTPUT_FILE, frozenset({"train", "train_ae", "train_prior"})),

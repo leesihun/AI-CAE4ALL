@@ -4,9 +4,11 @@
 % interpolation_space slerp_noise: the two endpoints are FM noise rows, spherically
 %   interpolated and then integrated through the ODE, so every intermediate is a real sample of
 %   the generator rather than a latent-space blend the decoder was never trained on.
-% seed 42 + source_num_samples 16 reproduce the SAME noise batch as config_infer_sdfflow.txt
-%   (seed 42, num_samples 16), so endpoints 0 and 1 here are exactly sample_42_000.stl and
-%   sample_42_001.stl from that run -- the interpolation is auditable against them.
+% seed 42 matches config_infer_sdfflow.txt (seed 42, num_samples 209); endpoints 0 and 1 here
+%   are rows 0 and 1 of a 16-row seed-42 noise draw. The code guarantees bit-identity only for
+%   an equal row count; for 16 vs 209 rows the first rows were measured equal (torch 2.11, CPU
+%   and an RTX 2080 SUPER), so they should be sample_42_000.stl and sample_42_001.stl from that
+%   run. Not verified on the B300s; source_num_samples 209 would make the match guaranteed.
 % alpha 0.5 writes the midpoint; the run also writes both endpoints and a comparison figure.
 % Writes .stl per shape under output_dir.
 % Reference: https://arxiv.org/abs/2301.11445 ; https://arxiv.org/abs/2210.02747

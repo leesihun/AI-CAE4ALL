@@ -26,19 +26,36 @@ import tempfile
 import numpy as np
 
 from design_loop.deepjeb_bridge import (
-    DEEPJEB_CENTRE, DEEPJEB_MAX_SIDE, LOAD_CASES, SDF_TARGET_EXTENT,
-    mesh_to_records, write_inference_contract,
+    DEEPJEB_CENTRE, DEEPJEB_MAX_SIDE, LABEL_SURFACE_FACES, LOAD_CASES, SDF_TARGET_EXTENT,
+    mesh_to_records, serving_surface, write_inference_contract,
 )
+from design_loop.loop import rank_failures_last, select_best
+from design_loop.problem import find_interfaces, vertical_displacement
 
 # <suite>/methods/SDFFlow/design_loop/surrogate.py -> <suite>
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _SUITE = os.path.dirname(os.path.dirname(_REPO))
 
 STRESS_PERCENTILE = 99.5
+NO_PREDICTION = 'SurrogateError: surrogate could not bridge or predict this shape'
 
 
 class SurrogateError(RuntimeError):
     pass
+
+
+def gpu_id_from_config(config):
+    """The GPU the calling SDFFlow run was given, for the nested surrogate call.
+
+    First entry of `gpu_ids` (the one `resolve_device` uses); None for a CPU
+    run or no setting, which leaves the surrogate config's own value in force.
+    """
+    value = config.get('gpu_ids')
+    if isinstance(value, (list, tuple)):
+        value = value[0] if value else None
+    if value is None or str(value).strip().lower() == 'cpu':
+        return None
+    return int(value)
 
 
 class HIMGNSurrogate:
@@ -46,8 +63,23 @@ class HIMGNSurrogate:
 
     def __init__(self, config_path, checkpoint, python=None, load_cases=('ver', 'dia'),
                  target_nodes=5000, density=4430.0, workdir=None,
-                 stress_percentile=STRESS_PERCENTILE):
+                 stress_percentile=STRESS_PERCENTILE, length_scale=None, gpu_id=None,
+                 surface_faces=LABEL_SURFACE_FACES):
         self.config_path = os.path.abspath(config_path)
+        # Face budget of the surface a candidate is bridged from; the labels'
+        # own (see deepjeb_bridge.serving_surface). 0 bridges the raw MC mesh.
+        self.surface_faces = int(surface_faces or 0)
+        # Metres per normalized SDF unit, for mass only. The FEA backend's
+        # Bracket uses opt_length_scale (0.19/1.8 by default); without it the
+        # mass fell back to the DeepJEB frame (184.18 mm across), 8.9% below the
+        # FEA mass of the very same shape. None keeps that frame for callers
+        # that compare against DeepJEB's own labels. The predicted fields are
+        # not rescaled -- they are whatever scale the checkpoint was labelled at.
+        self.length_scale = float(length_scale) if length_scale else None
+        # The nested launcher call otherwise takes gpu_ids from the surrogate
+        # config file, a second hidden device setting that need not exist on
+        # this host (the checked-in ex10 config says 5; aarl has 0-3).
+        self.gpu_id = None if gpu_id is None else int(gpu_id)
         self.checkpoint = os.path.abspath(checkpoint)
         self.python = python or sys.executable
         self.load_cases = tuple(load_cases)
@@ -67,11 +99,19 @@ class HIMGNSurrogate:
         os.makedirs(self.workdir, exist_ok=True)
         self.calls = 0
         self.predicted = 0
+        # Why each None of the last analyze_batch call is None, by batch index.
+        self.last_errors = {}
 
     # ------------------------------------------------------------------ #
 
     def mass_of(self, mesh):
-        """Exact mass in kg from the generated geometry, in the DeepJEB frame."""
+        """Exact mass in kg from the generated geometry.
+
+        At `length_scale` when one was given (the FEA backend's frame), else in
+        the DeepJEB frame.
+        """
+        if self.length_scale is not None:
+            return abs(float(mesh.volume)) * self.length_scale ** 3 * self.density
         scale = DEEPJEB_MAX_SIDE / SDF_TARGET_EXTENT       # normalized -> mm
         volume_mm3 = abs(float(mesh.volume)) * scale ** 3
         return volume_mm3 * 1e-9 * self.density            # mm^3 -> m^3 -> kg
@@ -80,15 +120,25 @@ class HIMGNSurrogate:
         """Predict fields for a list of generated meshes.
 
         Returns one result dict per mesh, in the order given; an entry is None
-        where that candidate could not be bridged.
+        where that candidate could not be bridged or predicted, and
+        `self.last_errors[index]` then says why.
+
+        A candidate is refused before prediction on the rule the FEA backend
+        refuses it on (`problem.find_interfaces`, applied to the same surface
+        gmsh would be handed): a shape with no loaded lug or only one mounting
+        pad is not a bracket, and a surrogate will still predict a field for it.
         """
         names = names or [f'cand{i:03d}' for i in range(len(meshes))]
+        self.last_errors = {}
         records, owner = [], []
         for index, (mesh, name) in enumerate(zip(meshes, names)):
             try:
-                recs = mesh_to_records(mesh, load_cases=self.load_cases,
+                surface = serving_surface(mesh, self.surface_faces)
+                find_interfaces(np.asarray(surface.vertices), np.asarray(surface.faces))
+                recs = mesh_to_records(surface, load_cases=self.load_cases,
                                        target_nodes=self.target_nodes, name=name)
-            except Exception:
+            except Exception as exc:
+                self.last_errors[index] = f'{type(exc).__name__}: {exc}'
                 continue
             records += recs
             owner += [index] * len(recs)
@@ -123,23 +173,31 @@ class HIMGNSurrogate:
             # off by the /1e6 and *1e3 the FEA-side print statements apply.
             # Convert once here so nothing downstream has to special-case units.
             stress_mpa, disp_mm = pred[3, :], pred[4, :]
-            entry['cases'][rec['case']] = {
+            case = {
                 'peak_von_mises': float(np.percentile(np.abs(stress_mpa),
                                                       self.stress_percentile) * 1e6),
                 'max_von_mises': float(np.abs(stress_mpa).max() * 1e6),
                 'max_displacement': float(np.abs(disp_mm).max() * 1e-3),
             }
+            # Row 5 is u_z (FEATURE_NAMES in build_deepjeb_fea); a checkpoint
+            # trained without it simply has no vertical-deflection prediction.
+            if pred.shape[0] > 5:
+                case['max_vertical_displacement'] = float(np.abs(pred[5, :]).max() * 1e-3)
+            entry['cases'][rec['case']] = case
             results[index] = entry
 
         for index, entry in enumerate(results):
             if entry is None or not entry['cases']:
                 results[index] = None
+                self.last_errors.setdefault(index, 'SurrogateError: no prediction returned '
+                                                   'for this candidate')
                 continue
             cases = entry['cases']
             entry.update(
                 peak_von_mises=max(c['peak_von_mises'] for c in cases.values()),
                 max_von_mises=max(c['max_von_mises'] for c in cases.values()),
                 max_displacement=max(c['max_displacement'] for c in cases.values()),
+                vertical_displacement=vertical_displacement(cases),
                 volume=entry['mass'] / self.density,
             )
         return results
@@ -155,6 +213,8 @@ class HIMGNSurrogate:
             'modelpath': self.checkpoint,
             'inference_output_dir': rollout_dir,
         }
+        if self.gpu_id is not None:
+            overrides['gpu_ids'] = str(self.gpu_id)
         config_path = self._materialise_config(overrides, rollout_dir)
         cmd = [self.python, os.path.join(_SUITE, 'AI_CAE4ALL_main.py'),
                '--config', config_path]
@@ -207,7 +267,9 @@ class HIMGNSurrogate:
 
     def stats(self):
         return {'native_calls': self.calls, 'graphs_predicted': self.predicted,
-                'load_cases': list(self.load_cases), 'workdir': self.workdir}
+                'load_cases': list(self.load_cases), 'workdir': self.workdir,
+                'mass_length_scale': self.length_scale, 'gpu_id': self.gpu_id,
+                'surface_faces': self.surface_faces}
 
 
 class SurrogateEvaluator:
@@ -247,7 +309,14 @@ class SurrogateEvaluator:
             result = self.surrogate.analyze_batch([mesh])[0]
             record['timings']['surrogate'] = time.time() - t
             if result is None:
-                raise SurrogateError('surrogate could not bridge or predict this shape')
+                # The bridge's own reason (e.g. the interface rule), recorded
+                # as the FEA path records it, not wrapped in a generic one.
+                reason = (getattr(self.surrogate, 'last_errors', None) or {}).get(0)
+                record['ok'] = False
+                record['error'] = reason or NO_PREDICTION
+                kind = record['error'].split(':', 1)[0]
+                self.failures[kind] = self.failures.get(kind, 0) + 1
+                return record
 
             record['fea'] = {
                 'mass': result['mass'], 'volume': result['volume'],
@@ -257,6 +326,7 @@ class SurrogateEvaluator:
                 'peak_von_mises': result['peak_von_mises'],
                 'max_von_mises': result['max_von_mises'],
                 'max_displacement': result['max_displacement'],
+                'vertical_displacement': result.get('vertical_displacement'),
             }
             record['mesh'] = {'num_nodes': result['num_nodes'], 'surrogate': True}
             record['ok'] = True
@@ -282,7 +352,7 @@ class SurrogateEvaluator:
         return record['score']
 
 
-def _result_record(x, mesh, gen_info, result):
+def _result_record(x, mesh, gen_info, result, reason=None):
     """Build the FEA-shaped record dict for one candidate's surrogate result."""
     record = {'x': np.asarray(x, dtype=float).tolist(), 'generation': gen_info}
     if mesh is None:
@@ -291,7 +361,7 @@ def _result_record(x, mesh, gen_info, result):
         return record
     if result is None:
         record['ok'] = False
-        record['error'] = 'SurrogateError: surrogate could not bridge or predict this shape'
+        record['error'] = reason or NO_PREDICTION
         return record
     record['ok'] = True
     record['mesh_object'] = mesh
@@ -304,50 +374,99 @@ def _result_record(x, mesh, gen_info, result):
         'peak_von_mises': result['peak_von_mises'],
         'max_von_mises': result['max_von_mises'],
         'max_displacement': result['max_displacement'],
+        'vertical_displacement': result.get('vertical_displacement'),
     }
     record['mesh'] = {'num_nodes': result['num_nodes'], 'surrogate': True}
     return record
 
 
-def surrogate_baseline_population(generator, surrogate, size=12, seed=0, verbose=True):
-    """Batch equivalent of `loop.baseline_population`: one native call for the
-    whole population instead of `size` separate ones.
+def _analyze_valid(surrogate, meshes):
+    """One batch call over the meshes that exist: (results, {index: reason})."""
+    valid_idx = [i for i, m in enumerate(meshes) if m is not None]
+    results, reasons = [None] * len(meshes), {}
+    if valid_idx:
+        batch_results = surrogate.analyze_batch([meshes[i] for i in valid_idx])
+        errors = getattr(surrogate, 'last_errors', None) or {}
+        for local_i, global_i in enumerate(valid_idx):
+            results[global_i] = batch_results[local_i]
+            if local_i in errors:
+                reasons[global_i] = errors[local_i]
+    return results, reasons
+
+
+def surrogate_baseline_population(generator, surrogate, size=12, seed=0, verbose=True,
+                                  batch_size=None, on_chunk=None):
+    """Batch equivalent of `loop.baseline_population`: one native call per chunk
+    of `batch_size` designs instead of `size` separate ones.
 
     Mesh generation stays per-candidate (a few seconds each on GPU, cheap); only
     the surrogate's subprocess call -- which pays for loading the model and
     building its coarsening hierarchy regardless of batch size, ~1-2 minutes
-    fixed cost -- is amortised across the population. Serial calls here would
-    turn a `size`-candidate baseline into `size` full model reloads.
+    fixed cost -- is amortised across the chunk. Serial calls here would turn a
+    `size`-candidate baseline into `size` full model reloads.
+
+    Streaming screening: with `batch_size` below `size` the population is
+    generated and predicted chunk by chunk, so a thousand-design screen holds
+    one chunk of meshes at a time and reports results as it goes instead of
+    only at the end. `on_chunk(records_so_far, size)` runs after every chunk.
+    `batch_size` None or 0 keeps the whole population in one call. The designs
+    are drawn up front, so the population does not depend on the chunking.
     """
     rng = np.random.default_rng(seed)
     lo, hi = generator.bounds()
     designs = [rng.uniform(lo, hi) for _ in range(size)]
-    meshes, gen_infos = [], []
-    for x in designs:
-        mesh, info = generator.generate(x)
-        meshes.append(mesh)
-        gen_infos.append(info)
-
-    valid_idx = [i for i, m in enumerate(meshes) if m is not None]
-    results = [None] * size
-    if valid_idx:
-        batch_results = surrogate.analyze_batch([meshes[i] for i in valid_idx])
-        for local_i, global_i in enumerate(valid_idx):
-            results[global_i] = batch_results[local_i]
+    chunk = int(batch_size) if batch_size and int(batch_size) > 0 else max(size, 1)
+    width = max(2, len(str(max(size - 1, 0))))
 
     records = []
-    for i, (x, mesh, info, result) in enumerate(zip(designs, meshes, gen_infos, results)):
-        record = _result_record(x, mesh, info, result)
-        record['index'] = i
-        if verbose:
-            status = 'ok' if record['ok'] else record['error']
-            if record['ok']:
-                f = record['fea']
-                status = (f"mass={f['mass']:.3f}kg  peak_vm={f['peak_von_mises'] / 1e6:.1f}MPa  "
-                          f"disp={f['max_displacement'] * 1e3:.3f}mm  nodes={f['num_nodes']}")
-            print(f'  baseline {i:02d}/{size}: {status}', flush=True)
-        record.pop('mesh_object', None)
-        records.append(record)
+    for start in range(0, size, chunk):
+        chunk_designs = designs[start:start + chunk]
+        meshes, gen_infos, gen_errors = [], [], {}
+        for local_i, x in enumerate(chunk_designs):
+            # One design that crashes the decoder must not end a long screen.
+            try:
+                mesh, info = generator.generate(x)
+            except Exception as exc:
+                mesh, info = None, {}
+                gen_errors[local_i] = f'{type(exc).__name__}: {exc}'
+            meshes.append(mesh)
+            gen_infos.append(info)
+
+        try:
+            results, reasons = _analyze_valid(surrogate, meshes)
+        except Exception as exc:
+            # Before any chunk has predicted, a failed call means the surrogate
+            # itself is broken: stop. Later, it costs this chunk only.
+            if not any(r['ok'] for r in records):
+                raise
+            error = f'{type(exc).__name__}: {exc}'
+            print(f'  chunk {start}-{start + len(meshes) - 1} failed: '
+                  f'{error.splitlines()[0]}', flush=True)
+            results, reasons = [None] * len(meshes), dict.fromkeys(range(len(meshes)), error)
+
+        for local_i, (x, mesh, info, result) in enumerate(
+                zip(chunk_designs, meshes, gen_infos, results)):
+            i = start + local_i
+            if local_i in gen_errors:
+                record = {'x': np.asarray(x, dtype=float).tolist(), 'generation': info,
+                          'ok': False, 'error': gen_errors[local_i]}
+            else:
+                record = _result_record(x, mesh, info, result, reasons.get(local_i))
+            record['index'] = i
+            if verbose:
+                status = 'ok' if record['ok'] else record['error']
+                if record['ok']:
+                    f = record['fea']
+                    uz = f.get('vertical_displacement')
+                    status = (f"mass={f['mass']:.3f}kg  peak_vm={f['peak_von_mises'] / 1e6:.1f}MPa  "
+                              f"disp={f['max_displacement'] * 1e3:.3f}mm  "
+                              + (f"u_z={uz * 1e3:.4f}mm  " if uz is not None else '')
+                              + f"nodes={f['num_nodes']}")
+                print(f'  baseline {i:0{width}d}/{size}: {status}', flush=True)
+            record.pop('mesh_object', None)
+            records.append(record)
+        if on_chunk is not None:
+            on_chunk(records, size)
     return records
 
 
@@ -376,16 +495,11 @@ def surrogate_search(generator, surrogate, objective, x0, sigma0=1.0, budget=24,
             meshes.append(mesh)
             gen_infos.append(info)
 
-        valid_idx = [i for i, m in enumerate(meshes) if m is not None]
-        results = [None] * len(solutions)
-        if valid_idx:
-            batch_results = surrogate.analyze_batch([meshes[i] for i in valid_idx])
-            for local_i, global_i in enumerate(valid_idx):
-                results[global_i] = batch_results[local_i]
+        results, reasons = _analyze_valid(surrogate, meshes)
 
-        scores = []
-        for x, mesh, info, result in zip(solutions, meshes, gen_infos, results):
-            record = _result_record(x, mesh, info, result)
+        generation_records = []
+        for i, (x, mesh, info, result) in enumerate(zip(solutions, meshes, gen_infos, results)):
+            record = _result_record(x, mesh, info, result, reasons.get(i))
             record.pop('mesh_object', None)
             if record['ok']:
                 score, penalty = objective(record['fea'])
@@ -395,11 +509,12 @@ def surrogate_search(generator, surrogate, objective, x0, sigma0=1.0, budget=24,
             record['score'], record['penalty'] = score, penalty
             record['index'] = len(history)
             history.append(record)
-            scores.append(score)
+            generation_records.append(record)
+        scores = rank_failures_last(generation_records, objective.failure_score)
         es.tell(solutions, scores)
         generation += 1
 
-        best = min(history, key=lambda r: r['score'])
+        best = select_best(history)
         feasible = [r for r in history if r['ok'] and r['penalty'].get('feasible')]
         entry = {
             'generation': generation, 'evaluations': len(history),
@@ -415,5 +530,5 @@ def surrogate_search(generator, surrogate, objective, x0, sigma0=1.0, budget=24,
                   f"gen-median {entry['generation_median']:.4f} | "
                   f"best {entry['best_score']:.4f} | feasible {len(feasible)}", flush=True)
 
-    best = min(history, key=lambda r: r['score'])
+    best = select_best(history)
     return np.asarray(best['x']), best['score'], log, history

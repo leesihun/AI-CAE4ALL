@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from threading import Lock
 from typing import Any
@@ -18,6 +19,10 @@ GEOMETRY_SUFFIXES = {
 MESHIO_SUFFIXES = {".vtk", ".vtu", ".vtp", ".msh"}
 CAD_SUFFIXES = {".step", ".stp", ".iges", ".igs", ".brep"}
 CAD_PREVIEW_LOCK = Lock()
+# Directory entries a directory preview may visit. The catalog used to rglob
+# the whole selection before applying `limit`, so previewing the repo root (a
+# valid selection) walked every venv and dataset while the request hung.
+GEOMETRY_SCAN_LIMIT = 50_000
 
 
 def _imports():
@@ -28,27 +33,33 @@ def _imports():
     return np
 
 
-def _geometry_paths(path: Path) -> list[Path]:
+def _geometry_paths(path: Path, scan_limit: int = GEOMETRY_SCAN_LIMIT) -> tuple[list[Path], bool]:
+    """Geometry files under `path`, plus whether the scan stopped early."""
     if path.is_file():
         if path.suffix.lower() not in GEOMETRY_SUFFIXES:
             raise ValueError(f"{path.name} is not a supported geometry file.")
-        return [path]
+        return [path], False
     if not path.is_dir():
         raise FileNotFoundError(f"Geometry path does not exist: {relative(path)}")
-    return sorted(
-        (
-            item
-            for item in path.rglob("*")
-            if item.is_file()
-            and item.suffix.lower() in GEOMETRY_SUFFIXES
-            and not item.name.startswith("._")
-        ),
-        key=lambda item: item.relative_to(path).as_posix().lower(),
-    )
+    found: list[Path] = []
+    visited = 0
+    scan_truncated = False
+    for directory, dirnames, filenames in os.walk(path):
+        # Sorted, top-down: a capped scan then always covers the same prefix.
+        dirnames.sort(key=str.lower)
+        visited += len(dirnames) + len(filenames)
+        for name in filenames:
+            if Path(name).suffix.lower() in GEOMETRY_SUFFIXES and not name.startswith("._"):
+                found.append(Path(directory) / name)
+        if visited >= scan_limit:
+            scan_truncated = True
+            break
+    found.sort(key=lambda item: item.relative_to(path).as_posix().lower())
+    return found, scan_truncated
 
 
 def geometry_samples(path: Path, limit: int = 100) -> dict[str, Any]:
-    files = _geometry_paths(path)
+    files, scan_truncated = _geometry_paths(path)
     samples = []
     for item in files[:limit]:
         sample_id = item.name if path.is_file() else item.relative_to(path).as_posix()
@@ -72,7 +83,10 @@ def geometry_samples(path: Path, limit: int = 100) -> dict[str, Any]:
         "contract": "surface_geometry",
         "default_mode": "mesh",
         "samples": samples,
-        "truncated": len(files) > limit,
+        "truncated": len(files) > limit or scan_truncated,
+        # With scan_truncated, total_samples is a lower bound: the walk stopped
+        # after GEOMETRY_SCAN_LIMIT entries. Select a narrower directory.
+        "scan_truncated": scan_truncated,
         "total_samples": len(files),
     }
 
@@ -99,7 +113,7 @@ def _load_trimesh(path: Path) -> tuple[Any, Any, dict[str, Any]]:
         raise RuntimeError("trimesh is required to preview STL, PLY, OBJ, and OFF files.") from exc
     try:
         loaded = trimesh.load(path, force="mesh", process=False)
-    except BaseException as exc:
+    except Exception as exc:  # not BaseException: never swallow Ctrl-C / SystemExit
         if path.suffix.lower() in CAD_SUFFIXES:
             raise RuntimeError(
                 "STEP/IGES preview needs the gmsh/OpenCASCADE reader. "
@@ -110,15 +124,38 @@ def _load_trimesh(path: Path) -> tuple[Any, Any, dict[str, Any]]:
     faces = np.asarray(getattr(loaded, "faces", []), dtype=np.int64)
     if vertices.ndim != 2 or vertices.shape[1] < 3 or not vertices.size:
         raise ValueError(f"{path.name} contains no 3D vertices.")
+    vertices = vertices[:, :3]
     if faces.size and (faces.ndim != 2 or faces.shape[1] < 3):
         faces = np.empty((0, 3), dtype=np.int64)
     elif faces.size:
         faces = faces[:, :3]
-    metadata = {
-        "watertight": bool(getattr(loaded, "is_watertight", False)) if faces.size else None,
-        "file_size": path.stat().st_size,
-    }
-    return vertices[:, :3], faces, metadata
+    metadata: dict[str, Any] = {"watertight": None, "file_size": path.stat().st_size}
+    if faces.size:
+        welded, faces = _weld(vertices, faces)
+        if welded.shape[0] != vertices.shape[0]:
+            metadata["file_vertices"] = int(vertices.shape[0])
+        vertices = welded
+        # Asked of the welded surface: on the triangle soup no edge is ever
+        # shared, so every STL used to read as not watertight.
+        metadata["watertight"] = bool(trimesh.Trimesh(vertices=vertices, faces=faces, process=False).is_watertight)
+    return vertices, faces, metadata
+
+
+def _weld(vertices: Any, faces: Any) -> tuple[Any, Any]:
+    """Merge exactly coincident vertices so neighbouring faces share them.
+
+    STL stores every triangle's three corners separately, and `process=False`
+    keeps it that way, so a marching-cubes surface arrived as a triangle soup:
+    no two faces shared a vertex, the simplifier could only drop whole
+    triangles, and the preview showed disconnected fragments of the part.
+    """
+    np = _imports()
+    valid = np.all((faces >= 0) & (faces < vertices.shape[0]), axis=1)
+    faces = faces[valid]
+    unique, inverse = np.unique(vertices, axis=0, return_inverse=True)
+    if unique.shape[0] == vertices.shape[0]:
+        return vertices, faces
+    return unique, inverse.reshape(-1)[faces]
 
 
 def _load_cad(path: Path) -> tuple[Any, Any, dict[str, Any]]:

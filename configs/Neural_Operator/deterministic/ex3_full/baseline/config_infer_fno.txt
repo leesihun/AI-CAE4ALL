@@ -7,6 +7,8 @@
 % Static state input is zero; temporal input is current state and target is next-state delta.
 % Reference: https://arxiv.org/abs/2010.08895
 % See configs/campaigns/dataset_matrix/README.md for deviations and verification boundaries.
+% training_epochs 1250 is the HI-MGN NASA-CRM budget in updates: its 1000 epochs
+%   x 105 train samples = 105k; our seed-42 split trains 84, and 1250 x 84 = 105k.
 % No source HDF5 writes. Checkpoints are created by the paired training config.
 
 model                            fno
@@ -27,9 +29,9 @@ feature_loss_weights             1, 1, 1, 1
 use_node_types                   False
 positional_features              4
 time_integration                 ar_ot
-training_epochs                  500
+training_epochs                  1250
 batch_size                       1
-learningr                        0.0005
+learningr                        0.001
 weight_decay                     0.0001
 warmup_epochs                    5
 num_workers                      2
@@ -63,9 +65,9 @@ write_test_predictions           True
 max_grad_norm                    1
 checkpoint_interval              50
 fno_variant                      mesh
-fno_grid_resolution              32, 32, 16
-fno_modes                        12, 12, 6
-fno_hidden_channels              64
+fno_grid_resolution              48, 44, 8
+fno_modes                        8, 8, 3
+fno_hidden_channels              20
 fno_layers                       4
-fno_use_channel_mlp              True
+fno_use_channel_mlp              False
 fno_norm                         none

@@ -344,10 +344,12 @@ def _train_worker_inner(rank, world_size, config, gpu_ids, config_filename):
             break
 
         # Step scheduler on all ranks (valid_loss is identical after all_reduce)
+        # Read before step(): afterwards it is the next epoch's LR, and after the
+        # last epoch a warm restart reports the peak LR for an epoch that never runs.
+        current_lr = optimizer.param_groups[0]['lr']
         scheduler.step()
 
         # Per epoch, node-weighted optimization and evaluation losses.
-        current_lr = optimizer.param_groups[0]['lr']
         # Rank 0 only: it is the rank that also runs validation and the periodic
         # test, so its footprint is the one that OOMs first. A peak that keeps
         # climbing means reshuffling is still drawing heavier batches; a reserved

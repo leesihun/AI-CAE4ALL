@@ -63,9 +63,9 @@ write_test_predictions           True
 max_grad_norm                    1
 checkpoint_interval              50
 fno_variant                      mesh
-fno_grid_resolution              32, 32, 16
-fno_modes                        12, 12, 6
-fno_hidden_channels              64
+fno_grid_resolution              26, 26, 26
+fno_modes                        8, 8, 8
+fno_hidden_channels              20
 fno_layers                       4
-fno_use_channel_mlp              True
+fno_use_channel_mlp              False
 fno_norm                         none

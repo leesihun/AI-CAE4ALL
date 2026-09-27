@@ -14,7 +14,7 @@ import traceback
 
 import numpy as np
 
-from .mesher import tet_mesh_from_surface
+from .mesher import tet_mesh_with_retries
 from .problem import Bracket, MassObjective
 
 
@@ -46,7 +46,9 @@ class Evaluator:
             record['generation'] = gen_info
 
             t = time.time()
-            nodes, tets, mesh_info = tet_mesh_from_surface(
+            # The labels' face-budget retry ladder: a shape the relabelling
+            # would have meshed must not read as a meshing failure here.
+            nodes, tets, mesh_info = tet_mesh_with_retries(
                 mesh,
                 mesh_size_max=mesh_size_max or self.mesh_size_max,
                 target_faces=target_faces or self.target_faces)
@@ -110,7 +112,15 @@ def baseline_population(evaluator, size=12, seed=0, spread=1.0):
 
 
 def calibrate(records, stress_margin=1.0, disp_margin=1.0):
-    """Median-of-population allowables. Raises if too few designs survived."""
+    """Median-of-population allowables. Raises if too few designs survived.
+
+    `stress_margin` 0 switches the stress constraint off: `stress_allow` is
+    None (the objective then ignores stress) and only the population's stress
+    range is kept for reporting.
+    """
+    if stress_margin is None or stress_margin < 0:
+        raise ValueError(f'stress_margin must be >= 0 (0 = no stress constraint), '
+                         f'got {stress_margin}')
     ok = [r for r in records if r['ok']]
     if len(ok) < 3:
         raise RuntimeError(f'only {len(ok)} baseline designs analyzed successfully')
@@ -121,11 +131,47 @@ def calibrate(records, stress_margin=1.0, disp_margin=1.0):
         'population': len(ok),
         'mass_ref': float(np.median(mass)),
         'mass_range': [float(mass.min()), float(mass.max())],
-        'stress_allow': float(np.median(stress) * stress_margin),
+        'stress_allow': (float(np.median(stress) * stress_margin)
+                         if stress_margin > 0 else None),
+        'stress_constraint': bool(stress_margin > 0),
         'stress_range': [float(stress.min()), float(stress.max())],
         'disp_allow': float(np.median(disp) * disp_margin),
         'disp_range': [float(disp.min()), float(disp.max())],
     }
+
+
+def rank_failures_last(records, failure_score):
+    """Scores for one generation with every failed candidate ranked below every solved one.
+
+    A fixed failure score is not enough on its own: the exterior penalty is
+    unbounded, so a solved design far past a limit (score 12 for a 2x
+    displacement overshoot) outranked a shape that did not mesh at all (10),
+    and CMA-ES -- rank-based -- was pulled toward the region that fails. The
+    failures here are lifted to max(failure_score, worst solved + 1), written
+    back onto the records so the history shows what the search was told.
+    """
+    solved = [r['score'] for r in records if r.get('ok')]
+    floor = float(max([failure_score] + [s + 1.0 for s in solved]))
+    for r in records:
+        if not r.get('ok'):
+            r['score'] = floor
+    return [r['score'] for r in records]
+
+
+def select_best(history):
+    """The design a search reports: the best *feasible* record, else the best score.
+
+    The penalty is a quadratic exterior penalty, so its unconstrained minimum
+    sits past the constraint boundary -- a design that violates the limit by a
+    few percent can outscore every design that meets it (mass saved outweighs a
+    squared small violation). Ranking by score alone therefore tends to report
+    an infeasible winner even when the search found feasible designs. Score still
+    orders the feasible pool; with no feasible record the best *solved* one is
+    reported, and a failed record (nothing to verify) only when nothing solved.
+    """
+    feasible = [r for r in history if r.get('ok') and r.get('penalty', {}).get('feasible')]
+    solved = [r for r in history if r.get('ok')]
+    return min(feasible or solved or history, key=lambda r: r['score'])
 
 
 def run(evaluator, x0=None, sigma0=1.0, budget=120, popsize=8, seed=0, verbose=True):
@@ -148,12 +194,13 @@ def run(evaluator, x0=None, sigma0=1.0, budget=120, popsize=8, seed=0, verbose=T
     generation = 0
     while not es.stop() and len(evaluator.history) < budget:
         solutions = es.ask()
-        scores = []
         for x in solutions:
-            scores.append(evaluator(x))
+            evaluator(x)
+        scores = rank_failures_last(evaluator.history[-len(solutions):],
+                                    evaluator.objective.failure_score)
         es.tell(solutions, scores)
         generation += 1
-        best = min(evaluator.history, key=lambda r: r['score'])
+        best = select_best(evaluator.history)
         feasible = [r for r in evaluator.history
                     if r['ok'] and r['penalty'].get('feasible')]
         entry = {
@@ -172,7 +219,7 @@ def run(evaluator, x0=None, sigma0=1.0, budget=120, popsize=8, seed=0, verbose=T
                   f"gen-median {entry['generation_median']:.4f} | "
                   f"best {entry['best_score']:.4f} | feasible {len(feasible)}", flush=True)
 
-    best = min(evaluator.history, key=lambda r: r['score'])
+    best = select_best(evaluator.history)
     return np.asarray(best['x']), best['score'], log
 
 

@@ -16,6 +16,7 @@ arrays under <log_dir>/dumps/, while this writer's HDF5 + PNG pair lands under
 """
 
 import os
+import sys
 import h5py
 import numpy as np
 import torch
@@ -478,6 +479,41 @@ def save_inference_results_fast(output_path, graph,
     return None
 
 
+_OFFSCREEN_OK = None
+
+
+def offscreen_rendering_available():
+    """Whether VTK can render off-screen in this process, probed once in a child.
+
+    A VTK built with only an X backend (the PyPI ``vtk<9.4`` wheels) calls
+    ``abort()`` when there is no DISPLAY. That SIGABRT is not an exception, so
+    no try/except around the plot can catch it: it killed a whole training run
+    at its first ``test_interval``. On POSIX without a display the first render
+    is therefore tried in a throwaway subprocess; if that child dies, every
+    picture is skipped with one note and the run carries on (the mesh HDF5
+    dumps are still written).
+    """
+    global _OFFSCREEN_OK
+    if _OFFSCREEN_OK is None:
+        if (os.name == 'nt' or sys.platform == 'darwin'
+                or os.environ.get('DISPLAY') or os.environ.get('WAYLAND_DISPLAY')):
+            _OFFSCREEN_OK = True
+        else:
+            import subprocess
+            probe = ('import pyvista as pv; p = pv.Plotter(off_screen=True, window_size=(64, 64)); '
+                     'p.add_mesh(pv.Sphere()); p.screenshot(); p.close()')
+            try:
+                done = subprocess.run([sys.executable, '-c', probe], capture_output=True, timeout=180)
+                _OFFSCREEN_OK = done.returncode == 0
+            except (OSError, subprocess.TimeoutExpired):
+                _OFFSCREEN_OK = False
+            if not _OFFSCREEN_OK:
+                print('Note: VTK cannot render off-screen here (no DISPLAY and no EGL/OSMesa '
+                      'backend) -- PNG previews are skipped, mesh HDF5 files are still written. '
+                      'Use a VTK with EGL/OSMesa (vtk>=9.4 falls back on its own) or run under xvfb.')
+    return _OFFSCREEN_OK
+
+
 def plot_mesh_comparison(pos, faces, pred_values_norm, target_values_norm,
                          pred_values_denorm, target_values_denorm, output_path,
                          feature_idx=-1, sample_id=None, time_idx=None, face_part_ids=None):
@@ -516,6 +552,9 @@ def plot_mesh_comparison(pos, faces, pred_values_norm, target_values_norm,
     if actual_feature_idx < 0 or actual_feature_idx >= num_features:
         print(f"Error: feature_idx={feature_idx} (actual={actual_feature_idx}) out of bounds "
               f"for {num_features} features (sample_id={sample_id}, time_idx={time_idx})")
+        return False
+
+    if not offscreen_rendering_available():
         return False
 
     # Extract the selected feature for all four plots

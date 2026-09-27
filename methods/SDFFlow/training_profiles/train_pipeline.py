@@ -178,7 +178,12 @@ def train_pipeline(config, config_filename='config.txt'):
     check_condition_names(fm_config)
 
     skip_completed = bool(config.get('skip_completed_stages', True))
-    pipeline_log = config.get('pipeline_log_file', 'ex1/train.log')
+    # The default used to be a bare 'ex1/train.log', i.e. methods/SDFFlow/ex1/
+    # under the native cwd -- inside the method directory, which no artifact may
+    # touch. A config that omits the key (every Studio-built one) now keeps its
+    # stage banners beside the run's other outputs.
+    pipeline_log = config.get('pipeline_log_file') or os.path.join(
+        config.get('output_dir') or '../../output/geometry_generation', 'pipeline.log')
     started = time.time()
     rank0 = D.is_main_process()
     banner = f'==== Pipeline {time.strftime("%Y-%m-%d %H:%M:%S")} config={config_filename} ===='

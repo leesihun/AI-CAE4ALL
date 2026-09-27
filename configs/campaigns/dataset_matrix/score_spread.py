@@ -36,12 +36,14 @@ DEFAULT_OUT = ROOT / 'output' / 'dataset_matrix' / 'probabilistic'
 MANIFEST = Path(__file__).resolve().parent / 'manifest.json'
 
 # (key, target, how to read it). The first four are the calibration scores; the
-# last three describe the marginal, which is what the histogram draws.
+# last three describe the marginal, which is what the histogram draws. A None
+# target is what a calibrated model scores with this arm's ensemble sizes,
+# printed beside the score (see calibrated_targets).
 SCORES = (
     ('crps_norm', 0.0, 'per-scene CRPS / sd(gt); lower is better'),
-    ('spread_skill', 1.0, 'ensemble sd / RMSE of the ensemble mean; <1 too narrow'),
-    ('pit_ks', 0.0, 'KS distance of the truth ranks from uniform'),
-    ('pit_tails', 0.04, 'share of truths in the outer 2%'),
+    ('spread_skill', None, 'ensemble sd / RMSE of the ensemble mean; below skill_target too narrow'),
+    ('pit_ks', None, 'KS distance of the truth ranks from uniform; target = ks_target'),
+    ('pit_tails', None, 'share of truths in the outer 2%; target = tails_target'),
     ('sd_ratio', 1.0, 'pooled sd(gen) / sd(gt)'),
     ('dmean_norm', 0.0, 'pooled mean shift / sd(gt)'),
     ('w1_norm', 0.0, 'pooled 1-Wasserstein / sd(gt)'),
@@ -57,6 +59,82 @@ def expected_arms():
                    if p['category'] == 'probabilistic'})
 
 
+# Score -> the column printing its calibrated target.
+TARGET_COLUMNS = {'spread_skill': 'skill_target', 'pit_ks': 'ks_target',
+                  'pit_tails': 'tails_target'}
+
+
+def _tail_share(k: int) -> float:
+    """Expected pit_tails of a calibrated k-draw ensemble.
+
+    The rollout ranks a truth as below/k, so a calibrated truth lands on each
+    of the k+1 grid points j/k with probability 1/(k+1). Only the grid points
+    outside [0.02, 0.98] count as tails -- 10/251 = 0.0398 at k=250, but
+    2/19 = 0.105 at k=18, where 1/k already exceeds 2%.
+    """
+    import numpy as np
+    grid = np.arange(k + 1, dtype=np.float64) / k  # same float ops as rollout
+    return float(((grid < 0.02) | (grid > 0.98)).mean())
+
+
+def _ensemble_sizes(row):
+    """Draws per scored scene, from spread_values.npz, else n_gen / n_scenes."""
+    npz = Path(row['dir']) / 'spread_values.npz'
+    if npz.exists():
+        try:
+            import numpy as np
+            data = np.load(npz, allow_pickle=True)
+            truth = set(str(v) for v in data['gt_scene'])
+            scenes, counts = np.unique([str(v) for v in data['gen_scene']],
+                                       return_counts=True)
+            sizes = [int(c) for s, c in zip(scenes, counts) if s in truth]
+            if sizes:
+                return sizes
+        except (ImportError, KeyError, OSError, ValueError):
+            pass
+    n_gen, n_scenes = row.get('n_gen'), row.get('n_scenes')
+    if (isinstance(n_gen, int) and isinstance(n_scenes, int) and n_scenes > 0
+            and n_gen % n_scenes == 0):
+        return [n_gen // n_scenes] * n_scenes
+    return None
+
+
+def calibrated_targets(row, reps=2000, seed=0):
+    """What a calibrated model scores with this arm's scenes and ensemble sizes.
+
+    With few draws and few scenes the ideal is not the textbook one. At k=18
+    the ranks sit on 19 grid points, so pit_tails is 0.105 and pit_ks cannot
+    reach 0 -- over only 18 scenes a calibrated pit_ks averages ~0.18. The
+    ensemble mean carries its own sampling error (spread_skill ~0.95 at k=18
+    over many scenes), which a small scene count happens to offset. pit_tails
+    is exact; pit_ks is simulated with the rollout's own rank and KS formulas;
+    spread_skill is simulated for Gaussian truth and draws.
+    """
+    try:
+        import numpy as np
+    except ImportError:  # the table still prints; the target columns read '-'
+        return {}
+    sizes = _ensemble_sizes(row)
+    if not sizes:
+        return {}
+    k = np.asarray(sizes, dtype=np.int64)
+    n = k.size
+    rng = np.random.default_rng(seed)
+    # A calibrated truth has below ~ uniform on {0..k}.
+    below = np.floor(rng.random((reps, n)) * (k + 1))
+    ranks = np.sort(below / k, axis=1)
+    ks = np.abs(np.arange(1, n + 1) / n - ranks).max(axis=1)
+    # Truth and draws iid N(0,1): the ensemble mean misses by N(0, 1 + 1/k),
+    # and the ddof=1 draw sd is sqrt(chi2(k-1) / (k-1)).
+    err = rng.standard_normal((reps, n)) * np.sqrt(1.0 + 1.0 / k)
+    dof = np.maximum(k - 1, 1)
+    sd = np.where(k > 1, np.sqrt(rng.chisquare(dof, (reps, n)) / dof), 0.0)
+    skill = sd.mean(axis=1) / np.sqrt(np.square(err).mean(axis=1))
+    return {'pit_tails_target': float(np.mean([_tail_share(int(v)) for v in k])),
+            'pit_ks_target': float(ks.mean()),
+            'spread_skill_target': float(skill.mean())}
+
+
 def load_arm(out_root: Path, example: str, method: str):
     d = out_root / example / method / 'infer'
     metrics = d / 'spread_metrics.json'
@@ -64,6 +142,7 @@ def load_arm(out_root: Path, example: str, method: str):
         return None
     row = json.loads(metrics.read_text(encoding='utf-8'))
     row['example'], row['method'], row['dir'] = example, method, str(d)
+    row.update(calibrated_targets(row))
     return row
 
 
@@ -71,7 +150,8 @@ def print_table(rows):
     if not rows:
         return
     head = ['example', 'method', 'field', 'stat', 'scenes']
-    head += [k for k, _, _ in SCORES]
+    for k, _, _ in SCORES:
+        head += [k, TARGET_COLUMNS[k]] if k in TARGET_COLUMNS else [k]
     widths = [max(len(head[i]), *(len(_cell(r, head[i])) for r in rows))
               for i in range(len(head))]
     print('  '.join(h.ljust(w) for h, w in zip(head, widths)))
@@ -79,7 +159,8 @@ def print_table(rows):
     for r in rows:
         print('  '.join(_cell(r, h).ljust(w) for h, w in zip(head, widths)))
     print()
-    print('targets: ' + '  '.join(f'{k}->{t:g}' for k, t, _ in SCORES))
+    print('targets: ' + '  '.join(f'{k}->{"per arm" if t is None else f"{t:g}"}'
+                                  for k, t, _ in SCORES))
     for k, _, why in SCORES:
         print(f'  {k:<14} {why}')
 
@@ -91,6 +172,9 @@ def _cell(row, key):
         return str(row.get('stat', 'range'))
     if key == 'scenes':
         return str(row.get('n_scenes', '?'))
+    for score, column in TARGET_COLUMNS.items():
+        if key == column:
+            key = f'{score}_target'
     value = row.get(key)
     if isinstance(value, (int, float)):
         return f'{value:.4f}'
@@ -183,7 +267,9 @@ def main():
 
     if args.csv:
         fields = (['example', 'method', 'label', 'stat', 'n_scenes']
-                  + [k for k, _, _ in SCORES] + ['n_gt', 'n_gen', 'eval_dataset'])
+                  + [k for k, _, _ in SCORES]
+                  + [f'{k}_target' for k in TARGET_COLUMNS]
+                  + ['n_gt', 'n_gen', 'eval_dataset'])
         path = Path(args.csv)
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open('w', newline='', encoding='utf-8') as fh:

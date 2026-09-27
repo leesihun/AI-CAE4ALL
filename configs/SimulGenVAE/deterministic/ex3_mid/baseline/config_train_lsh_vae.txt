@@ -32,7 +32,9 @@ init_beta_divisor                4
 lc_data_type                     hdf5
 lc_filter                        128, 128, 128
 lc_dropout                       0.1
-vae_training_epochs              2000
+kl_warmup_start_frac             0.3
+kl_warmup_epochs                 3500
+vae_training_epochs              5000
 vae_batch_size                   2
 vae_learningr                    0.001
 vae_weight_decay                 0.0
@@ -40,7 +42,7 @@ vae_warmup_epochs                20
 vae_use_amp                      False
 vae_use_ema                      False
 vae_num_workers                  0
-lc_training_epochs               2000
+lc_training_epochs               5000
 lc_batch_size                    16
 lc_learningr                     0.001
 lc_weight_decay                  0.00001

@@ -203,8 +203,8 @@ the dependencies, paths, data, and native probe for a concrete configuration.
 ### Geometry generation and CAD ingest
 
 ```bash
-python AI_CAE4ALL_main.py --config configs/SDFFlow/config_train.txt     # VAE → flow matching, one config
-python AI_CAE4ALL_main.py --config configs/SDFFlow/config_sample.txt
+python AI_CAE4ALL_main.py --config configs/SDFFlow/geometry_generation/ex1/baseline/config_train_sdfflow.txt  # VAE → flow matching, one config
+python AI_CAE4ALL_main.py --config configs/SDFFlow/geometry_generation/ex1/baseline/config_infer_sdfflow.txt  # mode sample
 python AI_CAE4ALL_main.py --config configs/GeometryIngest/config_ingest_volume.txt --check
 ```
 

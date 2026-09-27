@@ -128,8 +128,10 @@ def single_worker(config, config_filename='config.txt'):
             )
 
             train_loss = train_metrics['mean']
-            scheduler.step()
+            # Read before step(): afterwards it is the next epoch's LR, and after the
+            # last epoch a warm restart reports the peak LR for an epoch that never runs.
             current_lr = optimizer.param_groups[0]['lr']
+            scheduler.step()
 
             do_val = (epoch % val_interval == 0) or (epoch == total_epochs - 1)
 

@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
-"""Safely inspect basic PyTorch checkpoint metadata with weights_only=True."""
+"""Safely inspect basic PyTorch checkpoint metadata with weights_only=True.
+
+Where torch's weights_only loader cannot open a checkpoint that holds numpy
+arrays (torch < 2.5), a restricted metadata-only unpickler reads it instead;
+neither path ever unpickles with weights_only=False.
+"""
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
+import pickle
 import sys
 
 
@@ -96,12 +102,165 @@ def _export(mapping) -> dict:
     return exported
 
 
+class _TensorStub:
+    """Stands in for a tensor or storage whose bytes the probe never reads."""
+
+    __slots__ = ()
+
+    def __setstate__(self, _state):
+        pass
+
+    def __repr__(self):
+        return "<tensor>"
+
+
+_TENSOR = _TensorStub()
+
+
+def _tensor_stub(*_args, **_kwargs):
+    return _TENSOR
+
+
+class _VersionString(str):
+    """TorchVersion's stand-in: a str subclass with a __dict__, like the
+    original, so the BUILD step a pickled instance may carry still applies."""
+
+
+def _device_string(kind, index=None):
+    return str(kind) if index is None else f"{kind}:{index}"
+
+
+_TORCH_DTYPES = frozenset((
+    "float16", "bfloat16", "float32", "float64", "complex64", "complex128",
+    "uint8", "int8", "int16", "int32", "int64", "bool",
+))
+
+
+def _metadata_globals() -> dict:
+    """What `_MetadataUnpickler` may resolve, spelled as the pickle spells it:
+    plain-data constructors (the numpy array path `_inert_safe_globals` hands
+    torch, plus the builtins torch's own weights_only table allows) and stubs
+    for torch's tensor rebuilders, so no torch code runs and no tensor bytes
+    are read."""
+    import collections
+    import _codecs
+
+    table = {
+        "collections.OrderedDict": collections.OrderedDict,
+        "builtins.set": set,
+        "builtins.frozenset": frozenset,
+        "builtins.bytearray": bytearray,
+        "builtins.complex": complex,
+        "_codecs.encode": _codecs.encode,
+        "torch.torch_version.TorchVersion": _VersionString,
+        "torch.Size": tuple,
+        "torch.device": _device_string,
+        "torch._utils._rebuild_tensor_v2": _tensor_stub,
+        "torch._utils._rebuild_tensor": _tensor_stub,
+        "torch._utils._rebuild_parameter": _tensor_stub,
+        "torch._utils._rebuild_parameter_with_state": _tensor_stub,
+        "torch._tensor._rebuild_from_type_v2": _tensor_stub,
+    }
+    try:
+        import numpy as np
+    except Exception:
+        return table
+    # NumPy 2 pickles the array path under numpy._core, NumPy 1 under
+    # numpy.core; whichever this interpreter has answers for both, so a
+    # checkpoint written under one still reads under the other.
+    reconstruct = {}
+    for module_name in ("numpy._core.multiarray", "numpy.core.multiarray"):
+        try:
+            module = __import__(module_name, fromlist=["_"])
+        except Exception:
+            continue
+        for attribute in ("_reconstruct", "scalar"):
+            symbol = getattr(module, attribute, None)
+            if symbol is not None:
+                reconstruct.setdefault(attribute, symbol)
+    for module_name in ("numpy._core.multiarray", "numpy.core.multiarray"):
+        for attribute, symbol in reconstruct.items():
+            table[f"{module_name}.{attribute}"] = symbol
+    table["numpy.ndarray"] = np.ndarray
+    table["numpy.dtype"] = np.dtype
+    for name in dir(getattr(np, "dtypes", object)):
+        if name.endswith("DType"):
+            symbol = getattr(np.dtypes, name, None)
+            if isinstance(symbol, type):
+                table[f"numpy.dtypes.{name}"] = symbol
+    return table
+
+
+class _MetadataUnpickler(pickle.Unpickler):
+    """Restricted unpickler for checkpoints that torch < 2.5 cannot open safely.
+
+    torch 2.4's weights_only unpickler refuses the BUILD step that rebuilds a
+    numpy array or dtype, and its allowlist cannot change that, so every
+    checkpoint this suite writes (normalization statistics are numpy arrays)
+    failed inspection there. This reader follows the Python docs' "restricting
+    globals" pattern: `find_class` resolves only the table above and refuses
+    everything else, tensor rebuilders are stubs, and storages come back from
+    `persistent_load` as the same stub, so the tensor data is never read.
+    """
+
+    def __init__(self, handle):
+        # torch.load's own default, which matters only for Python 2 pickles.
+        super().__init__(handle, encoding="utf-8")
+        self._allowed = _metadata_globals()
+
+    def find_class(self, module, name):
+        key = f"{module}.{name}"
+        if key in self._allowed:
+            return self._allowed[key]
+        if module == "torch" and name.endswith("Storage"):
+            return _TensorStub
+        if module == "torch" and name in _TORCH_DTYPES:
+            return key
+        raise pickle.UnpicklingError(f"metadata reader refuses global {key}")
+
+    def persistent_load(self, pid):
+        return _TENSOR
+
+
+def _load_metadata_only(path: Path):
+    import zipfile
+
+    try:
+        archive = zipfile.ZipFile(path)
+    except zipfile.BadZipFile as exc:
+        raise pickle.UnpicklingError(
+            "metadata reader handles only zip-format checkpoints (torch >= 1.6)"
+        ) from exc
+    with archive:
+        names = [name for name in archive.namelist() if name.endswith("/data.pkl")]
+        if not names:
+            raise pickle.UnpicklingError("zip checkpoint has no data.pkl")
+        with archive.open(min(names, key=lambda name: name.count("/"))) as handle:
+            return _MetadataUnpickler(handle).load()
+
+
 def _load(torch, path: Path):
     allowed = _inert_safe_globals()
-    if not allowed:
+    serialization = torch.serialization
+    if hasattr(serialization, "safe_globals"):
+        if not allowed:
+            return torch.load(path, map_location="cpu", weights_only=True)
+        with serialization.safe_globals(allowed):
+            return torch.load(path, map_location="cpu", weights_only=True)
+    # torch < 2.5: no scoped allowlist, and no allowlist at all lets its
+    # weights_only unpickler rebuild a numpy array. Its own loader still goes
+    # first (it opens a pure-tensor checkpoint); the restricted metadata reader
+    # takes over only when it refuses.
+    try:
         return torch.load(path, map_location="cpu", weights_only=True)
-    with torch.serialization.safe_globals(allowed):
-        return torch.load(path, map_location="cpu", weights_only=True)
+    except pickle.UnpicklingError as refused:
+        try:
+            return _load_metadata_only(path)
+        except Exception as exc:
+            raise pickle.UnpicklingError(
+                f"torch {getattr(torch, '__version__', '?')} weights_only refused the checkpoint "
+                f"and the metadata reader failed too: {exc}"
+            ) from refused
 
 
 def main(argv=None):

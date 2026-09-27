@@ -28,18 +28,18 @@
       "steps": 1,
       "dim": 2,
       "clusters": [
-        1000,
+        5000,
         100
       ],
       "geometry": "fixed",
       "indices": null,
-      "epochs": 2000,
-      "batch": 2,
+      "epochs": 5000,
+      "batch": 1,
       "loss_weights": [
         1.0,
         1.0,
         0.001,
-        1.0
+        9.33
       ]
     },
     {
@@ -66,7 +66,7 @@
       "dim": 3,
       "clusters": [
         5000,
-        250
+        100
       ],
       "geometry": "displacement",
       "indices": [
@@ -75,7 +75,8 @@
         2
       ],
       "epochs": 500,
-      "batch": 1
+      "batch": 1,
+      "std_noise": 0.01
     },
     {
       "key": "ex3_full",
@@ -110,11 +111,11 @@
       "dim": 3,
       "clusters": [
         5000,
-        250
+        100
       ],
       "geometry": "fixed",
       "indices": null,
-      "epochs": 500,
+      "epochs": 1250,
       "batch": 1,
       "dense": true
     },
@@ -150,12 +151,12 @@
       "steps": 1,
       "dim": 3,
       "clusters": [
-        4096,
-        256
+        5000,
+        100
       ],
       "geometry": "fixed",
       "indices": null,
-      "epochs": 500,
+      "epochs": 1250,
       "batch": 1,
       "dense": true
     },
@@ -187,7 +188,8 @@
       "geometry": "fixed",
       "indices": null,
       "epochs": 420,
-      "batch": 2
+      "batch": 2,
+      "std_noise": 0.0416
     },
     {
       "key": "ex5",
@@ -221,8 +223,9 @@
         1,
         2
       ],
-      "epochs": 500,
-      "batch": 2
+      "epochs": 627,
+      "batch": 2,
+      "std_noise": 0.126
     },
     {
       "key": "ex6",
@@ -255,8 +258,10 @@
         1,
         2
       ],
-      "epochs": 500,
-      "batch": 2,
+      "epochs": 313,
+      "batch": 1,
+      "transolver_epochs": 500,
+      "std_noise": 0.00134,
       "dense": true
     },
     {
@@ -319,8 +324,8 @@
       ],
       "geometry": "fixed",
       "indices": null,
-      "epochs": 500,
-      "batch": 16
+      "epochs": 625,
+      "batch": 1
     },
     {
       "key": "ex9",
@@ -355,6 +360,7 @@
       ],
       "epochs": 500,
       "batch": 8,
+      "std_noise": 0.01,
       "dense": true
     },
     {
@@ -369,7 +375,8 @@
       ],
       "output": [
         "stress",
-        "displacement_magnitude"
+        "displacement_magnitude",
+        "z_disp"
       ],
       "conditioner": [
         "lc_ver",
@@ -387,7 +394,7 @@
       "geometry": "fixed",
       "indices": null,
       "epochs": 500,
-      "batch": 4,
+      "batch": 1,
       "split_group_attr": "bracket"
     },
     {
@@ -475,518 +482,598 @@
       "example": "ex1",
       "method": "deeponet",
       "train": "configs/Neural_Operator/deterministic/ex1/baseline/config_train_deeponet.txt",
-      "infer": "configs/Neural_Operator/deterministic/ex1/baseline/config_infer_deeponet.txt"
+      "infer": "configs/Neural_Operator/deterministic/ex1/baseline/config_infer_deeponet.txt",
+      "updates": 400000
     },
     {
       "category": "deterministic",
       "example": "ex1",
       "method": "point_deeponet",
       "train": "configs/Neural_Operator/deterministic/ex1/baseline/config_train_point_deeponet.txt",
-      "infer": "configs/Neural_Operator/deterministic/ex1/baseline/config_infer_point_deeponet.txt"
+      "infer": "configs/Neural_Operator/deterministic/ex1/baseline/config_infer_point_deeponet.txt",
+      "updates": 400000
     },
     {
       "category": "deterministic",
       "example": "ex1",
       "method": "fno",
       "train": "configs/Neural_Operator/deterministic/ex1/baseline/config_train_fno.txt",
-      "infer": "configs/Neural_Operator/deterministic/ex1/baseline/config_infer_fno.txt"
+      "infer": "configs/Neural_Operator/deterministic/ex1/baseline/config_infer_fno.txt",
+      "updates": 400000
     },
     {
       "category": "deterministic",
       "example": "ex1",
       "method": "transolver3",
       "train": "configs/Transolver/deterministic/ex1/baseline/config_train_transolver3.txt",
-      "infer": "configs/Transolver/deterministic/ex1/baseline/config_infer_transolver3.txt"
+      "infer": "configs/Transolver/deterministic/ex1/baseline/config_infer_transolver3.txt",
+      "updates": 400000
     },
     {
       "category": "deterministic",
       "example": "ex1",
       "method": "meshgraphnets",
       "train": "configs/MeshGraphNets/deterministic/ex1/baseline/config_train_meshgraphnets.txt",
-      "infer": "configs/MeshGraphNets/deterministic/ex1/baseline/config_infer_meshgraphnets.txt"
+      "infer": "configs/MeshGraphNets/deterministic/ex1/baseline/config_infer_meshgraphnets.txt",
+      "updates": 400000
     },
     {
       "category": "deterministic",
       "example": "ex1",
       "method": "himgn",
       "train": "configs/MeshGraphNets/deterministic/ex1/baseline/config_train_himgn.txt",
-      "infer": "configs/MeshGraphNets/deterministic/ex1/baseline/config_infer_himgn.txt"
+      "infer": "configs/MeshGraphNets/deterministic/ex1/baseline/config_infer_himgn.txt",
+      "updates": 400000
     },
     {
       "category": "deterministic",
       "example": "ex2",
       "method": "deeponet",
       "train": "configs/Neural_Operator/deterministic/ex2/baseline/config_train_deeponet.txt",
-      "infer": "configs/Neural_Operator/deterministic/ex2/baseline/config_infer_deeponet.txt"
+      "infer": "configs/Neural_Operator/deterministic/ex2/baseline/config_infer_deeponet.txt",
+      "updates": 980000
     },
     {
       "category": "deterministic",
       "example": "ex2",
       "method": "point_deeponet",
       "train": "configs/Neural_Operator/deterministic/ex2/baseline/config_train_point_deeponet.txt",
-      "infer": "configs/Neural_Operator/deterministic/ex2/baseline/config_infer_point_deeponet.txt"
+      "infer": "configs/Neural_Operator/deterministic/ex2/baseline/config_infer_point_deeponet.txt",
+      "updates": 980000
     },
     {
       "category": "deterministic",
       "example": "ex2",
       "method": "fno",
       "train": "configs/Neural_Operator/deterministic/ex2/baseline/config_train_fno.txt",
-      "infer": "configs/Neural_Operator/deterministic/ex2/baseline/config_infer_fno.txt"
+      "infer": "configs/Neural_Operator/deterministic/ex2/baseline/config_infer_fno.txt",
+      "updates": 980000
     },
     {
       "category": "deterministic",
       "example": "ex2",
       "method": "transolver3",
       "train": "configs/Transolver/deterministic/ex2/baseline/config_train_transolver3.txt",
-      "infer": "configs/Transolver/deterministic/ex2/baseline/config_infer_transolver3.txt"
+      "infer": "configs/Transolver/deterministic/ex2/baseline/config_infer_transolver3.txt",
+      "updates": 980000
     },
     {
       "category": "deterministic",
       "example": "ex2",
       "method": "meshgraphnets",
       "train": "configs/MeshGraphNets/deterministic/ex2/baseline/config_train_meshgraphnets.txt",
-      "infer": "configs/MeshGraphNets/deterministic/ex2/baseline/config_infer_meshgraphnets.txt"
+      "infer": "configs/MeshGraphNets/deterministic/ex2/baseline/config_infer_meshgraphnets.txt",
+      "updates": 196000
     },
     {
       "category": "deterministic",
       "example": "ex2",
       "method": "himgn",
       "train": "configs/MeshGraphNets/deterministic/ex2/baseline/config_train_himgn.txt",
-      "infer": "configs/MeshGraphNets/deterministic/ex2/baseline/config_infer_himgn.txt"
+      "infer": "configs/MeshGraphNets/deterministic/ex2/baseline/config_infer_himgn.txt",
+      "updates": 196000
     },
     {
       "category": "deterministic",
       "example": "ex3_full",
       "method": "deeponet",
       "train": "configs/Neural_Operator/deterministic/ex3_full/baseline/config_train_deeponet.txt",
-      "infer": "configs/Neural_Operator/deterministic/ex3_full/baseline/config_infer_deeponet.txt"
+      "infer": "configs/Neural_Operator/deterministic/ex3_full/baseline/config_infer_deeponet.txt",
+      "updates": 105000
     },
     {
       "category": "deterministic",
       "example": "ex3_full",
       "method": "point_deeponet",
       "train": "configs/Neural_Operator/deterministic/ex3_full/baseline/config_train_point_deeponet.txt",
-      "infer": "configs/Neural_Operator/deterministic/ex3_full/baseline/config_infer_point_deeponet.txt"
+      "infer": "configs/Neural_Operator/deterministic/ex3_full/baseline/config_infer_point_deeponet.txt",
+      "updates": 105000
     },
     {
       "category": "deterministic",
       "example": "ex3_full",
       "method": "fno",
       "train": "configs/Neural_Operator/deterministic/ex3_full/baseline/config_train_fno.txt",
-      "infer": "configs/Neural_Operator/deterministic/ex3_full/baseline/config_infer_fno.txt"
+      "infer": "configs/Neural_Operator/deterministic/ex3_full/baseline/config_infer_fno.txt",
+      "updates": 105000
     },
     {
       "category": "deterministic",
       "example": "ex3_full",
       "method": "transolver3",
       "train": "configs/Transolver/deterministic/ex3_full/baseline/config_train_transolver3.txt",
-      "infer": "configs/Transolver/deterministic/ex3_full/baseline/config_infer_transolver3.txt"
+      "infer": "configs/Transolver/deterministic/ex3_full/baseline/config_infer_transolver3.txt",
+      "updates": 105000
     },
     {
       "category": "deterministic",
       "example": "ex3_full",
       "method": "meshgraphnets",
       "train": "configs/MeshGraphNets/deterministic/ex3_full/baseline/config_train_meshgraphnets.txt",
-      "infer": "configs/MeshGraphNets/deterministic/ex3_full/baseline/config_infer_meshgraphnets.txt"
+      "infer": "configs/MeshGraphNets/deterministic/ex3_full/baseline/config_infer_meshgraphnets.txt",
+      "updates": 105000
     },
     {
       "category": "deterministic",
       "example": "ex3_full",
       "method": "himgn",
       "train": "configs/MeshGraphNets/deterministic/ex3_full/baseline/config_train_himgn.txt",
-      "infer": "configs/MeshGraphNets/deterministic/ex3_full/baseline/config_infer_himgn.txt"
+      "infer": "configs/MeshGraphNets/deterministic/ex3_full/baseline/config_infer_himgn.txt",
+      "updates": 105000
     },
     {
       "category": "deterministic",
       "example": "ex3_full",
       "method": "lsh_vae",
       "train": "configs/SimulGenVAE/deterministic/ex3_full/baseline/config_train_lsh_vae.txt",
-      "infer": "configs/SimulGenVAE/deterministic/ex3_full/baseline/config_infer_lsh_vae.txt"
+      "infer": "configs/SimulGenVAE/deterministic/ex3_full/baseline/config_infer_lsh_vae.txt",
+      "updates": 235000,
+      "updates_note": "VAE 210k + LC 25k"
     },
     {
       "category": "deterministic",
       "example": "ex3_mid",
       "method": "deeponet",
       "train": "configs/Neural_Operator/deterministic/ex3_mid/baseline/config_train_deeponet.txt",
-      "infer": "configs/Neural_Operator/deterministic/ex3_mid/baseline/config_infer_deeponet.txt"
+      "infer": "configs/Neural_Operator/deterministic/ex3_mid/baseline/config_infer_deeponet.txt",
+      "updates": 105000
     },
     {
       "category": "deterministic",
       "example": "ex3_mid",
       "method": "point_deeponet",
       "train": "configs/Neural_Operator/deterministic/ex3_mid/baseline/config_train_point_deeponet.txt",
-      "infer": "configs/Neural_Operator/deterministic/ex3_mid/baseline/config_infer_point_deeponet.txt"
+      "infer": "configs/Neural_Operator/deterministic/ex3_mid/baseline/config_infer_point_deeponet.txt",
+      "updates": 105000
     },
     {
       "category": "deterministic",
       "example": "ex3_mid",
       "method": "fno",
       "train": "configs/Neural_Operator/deterministic/ex3_mid/baseline/config_train_fno.txt",
-      "infer": "configs/Neural_Operator/deterministic/ex3_mid/baseline/config_infer_fno.txt"
+      "infer": "configs/Neural_Operator/deterministic/ex3_mid/baseline/config_infer_fno.txt",
+      "updates": 105000
     },
     {
       "category": "deterministic",
       "example": "ex3_mid",
       "method": "transolver3",
       "train": "configs/Transolver/deterministic/ex3_mid/baseline/config_train_transolver3.txt",
-      "infer": "configs/Transolver/deterministic/ex3_mid/baseline/config_infer_transolver3.txt"
+      "infer": "configs/Transolver/deterministic/ex3_mid/baseline/config_infer_transolver3.txt",
+      "updates": 105000
     },
     {
       "category": "deterministic",
       "example": "ex3_mid",
       "method": "meshgraphnets",
       "train": "configs/MeshGraphNets/deterministic/ex3_mid/baseline/config_train_meshgraphnets.txt",
-      "infer": "configs/MeshGraphNets/deterministic/ex3_mid/baseline/config_infer_meshgraphnets.txt"
+      "infer": "configs/MeshGraphNets/deterministic/ex3_mid/baseline/config_infer_meshgraphnets.txt",
+      "updates": 105000
     },
     {
       "category": "deterministic",
       "example": "ex3_mid",
       "method": "himgn",
       "train": "configs/MeshGraphNets/deterministic/ex3_mid/baseline/config_train_himgn.txt",
-      "infer": "configs/MeshGraphNets/deterministic/ex3_mid/baseline/config_infer_himgn.txt"
+      "infer": "configs/MeshGraphNets/deterministic/ex3_mid/baseline/config_infer_himgn.txt",
+      "updates": 105000
     },
     {
       "category": "deterministic",
       "example": "ex3_mid",
       "method": "lsh_vae",
       "train": "configs/SimulGenVAE/deterministic/ex3_mid/baseline/config_train_lsh_vae.txt",
-      "infer": "configs/SimulGenVAE/deterministic/ex3_mid/baseline/config_infer_lsh_vae.txt"
+      "infer": "configs/SimulGenVAE/deterministic/ex3_mid/baseline/config_infer_lsh_vae.txt",
+      "updates": 235000,
+      "updates_note": "VAE 210k + LC 25k"
     },
     {
       "category": "deterministic",
       "example": "ex4",
       "method": "deeponet",
       "train": "configs/Neural_Operator/deterministic/ex4/baseline/config_train_deeponet.txt",
-      "infer": "configs/Neural_Operator/deterministic/ex4/baseline/config_infer_deeponet.txt"
+      "infer": "configs/Neural_Operator/deterministic/ex4/baseline/config_infer_deeponet.txt",
+      "updates": 10063200
     },
     {
       "category": "deterministic",
       "example": "ex4",
       "method": "point_deeponet",
       "train": "configs/Neural_Operator/deterministic/ex4/baseline/config_train_point_deeponet.txt",
-      "infer": "configs/Neural_Operator/deterministic/ex4/baseline/config_infer_point_deeponet.txt"
+      "infer": "configs/Neural_Operator/deterministic/ex4/baseline/config_infer_point_deeponet.txt",
+      "updates": 10063200
     },
     {
       "category": "deterministic",
       "example": "ex4",
       "method": "fno",
       "train": "configs/Neural_Operator/deterministic/ex4/baseline/config_train_fno.txt",
-      "infer": "configs/Neural_Operator/deterministic/ex4/baseline/config_infer_fno.txt"
+      "infer": "configs/Neural_Operator/deterministic/ex4/baseline/config_infer_fno.txt",
+      "updates": 10063200
     },
     {
       "category": "deterministic",
       "example": "ex4",
       "method": "transolver3",
       "train": "configs/Transolver/deterministic/ex4/baseline/config_train_transolver3.txt",
-      "infer": "configs/Transolver/deterministic/ex4/baseline/config_infer_transolver3.txt"
+      "infer": "configs/Transolver/deterministic/ex4/baseline/config_infer_transolver3.txt",
+      "updates": 20126400
     },
     {
       "category": "deterministic",
       "example": "ex4",
       "method": "meshgraphnets",
       "train": "configs/MeshGraphNets/deterministic/ex4/baseline/config_train_meshgraphnets.txt",
-      "infer": "configs/MeshGraphNets/deterministic/ex4/baseline/config_infer_meshgraphnets.txt"
+      "infer": "configs/MeshGraphNets/deterministic/ex4/baseline/config_infer_meshgraphnets.txt",
+      "updates": 10063200
     },
     {
       "category": "deterministic",
       "example": "ex4",
       "method": "himgn",
       "train": "configs/MeshGraphNets/deterministic/ex4/baseline/config_train_himgn.txt",
-      "infer": "configs/MeshGraphNets/deterministic/ex4/baseline/config_infer_himgn.txt"
+      "infer": "configs/MeshGraphNets/deterministic/ex4/baseline/config_infer_himgn.txt",
+      "updates": 10063200
     },
     {
       "category": "deterministic",
       "example": "ex5",
       "method": "deeponet",
       "train": "configs/Neural_Operator/deterministic/ex5/baseline/config_train_deeponet.txt",
-      "infer": "configs/Neural_Operator/deterministic/ex5/baseline/config_infer_deeponet.txt"
+      "infer": "configs/Neural_Operator/deterministic/ex5/baseline/config_infer_deeponet.txt",
+      "updates": 10006920
     },
     {
       "category": "deterministic",
       "example": "ex5",
       "method": "point_deeponet",
       "train": "configs/Neural_Operator/deterministic/ex5/baseline/config_train_point_deeponet.txt",
-      "infer": "configs/Neural_Operator/deterministic/ex5/baseline/config_infer_point_deeponet.txt"
+      "infer": "configs/Neural_Operator/deterministic/ex5/baseline/config_infer_point_deeponet.txt",
+      "updates": 10006920
     },
     {
       "category": "deterministic",
       "example": "ex5",
       "method": "fno",
       "train": "configs/Neural_Operator/deterministic/ex5/baseline/config_train_fno.txt",
-      "infer": "configs/Neural_Operator/deterministic/ex5/baseline/config_infer_fno.txt"
+      "infer": "configs/Neural_Operator/deterministic/ex5/baseline/config_infer_fno.txt",
+      "updates": 10006920
     },
     {
       "category": "deterministic",
       "example": "ex5",
       "method": "transolver3",
       "train": "configs/Transolver/deterministic/ex5/baseline/config_train_transolver3.txt",
-      "infer": "configs/Transolver/deterministic/ex5/baseline/config_infer_transolver3.txt"
+      "infer": "configs/Transolver/deterministic/ex5/baseline/config_infer_transolver3.txt",
+      "updates": 20013840
     },
     {
       "category": "deterministic",
       "example": "ex5",
       "method": "meshgraphnets",
       "train": "configs/MeshGraphNets/deterministic/ex5/baseline/config_train_meshgraphnets.txt",
-      "infer": "configs/MeshGraphNets/deterministic/ex5/baseline/config_infer_meshgraphnets.txt"
+      "infer": "configs/MeshGraphNets/deterministic/ex5/baseline/config_infer_meshgraphnets.txt",
+      "updates": 10006920
     },
     {
       "category": "deterministic",
       "example": "ex5",
       "method": "himgn",
       "train": "configs/MeshGraphNets/deterministic/ex5/baseline/config_train_himgn.txt",
-      "infer": "configs/MeshGraphNets/deterministic/ex5/baseline/config_infer_himgn.txt"
+      "infer": "configs/MeshGraphNets/deterministic/ex5/baseline/config_infer_himgn.txt",
+      "updates": 10006920
     },
     {
       "category": "deterministic",
       "example": "ex6",
       "method": "deeponet",
       "train": "configs/Neural_Operator/deterministic/ex6/baseline/config_train_deeponet.txt",
-      "infer": "configs/Neural_Operator/deterministic/ex6/baseline/config_infer_deeponet.txt"
+      "infer": "configs/Neural_Operator/deterministic/ex6/baseline/config_infer_deeponet.txt",
+      "updates": 10016000
     },
     {
       "category": "deterministic",
       "example": "ex6",
       "method": "point_deeponet",
       "train": "configs/Neural_Operator/deterministic/ex6/baseline/config_train_point_deeponet.txt",
-      "infer": "configs/Neural_Operator/deterministic/ex6/baseline/config_infer_point_deeponet.txt"
+      "infer": "configs/Neural_Operator/deterministic/ex6/baseline/config_infer_point_deeponet.txt",
+      "updates": 10016000
     },
     {
       "category": "deterministic",
       "example": "ex6",
       "method": "fno",
       "train": "configs/Neural_Operator/deterministic/ex6/baseline/config_train_fno.txt",
-      "infer": "configs/Neural_Operator/deterministic/ex6/baseline/config_infer_fno.txt"
+      "infer": "configs/Neural_Operator/deterministic/ex6/baseline/config_infer_fno.txt",
+      "updates": 10016000
     },
     {
       "category": "deterministic",
       "example": "ex6",
       "method": "transolver3",
       "train": "configs/Transolver/deterministic/ex6/baseline/config_train_transolver3.txt",
-      "infer": "configs/Transolver/deterministic/ex6/baseline/config_infer_transolver3.txt"
+      "infer": "configs/Transolver/deterministic/ex6/baseline/config_infer_transolver3.txt",
+      "updates": 16000000
     },
     {
       "category": "deterministic",
       "example": "ex6",
       "method": "meshgraphnets",
       "train": "configs/MeshGraphNets/deterministic/ex6/baseline/config_train_meshgraphnets.txt",
-      "infer": "configs/MeshGraphNets/deterministic/ex6/baseline/config_infer_meshgraphnets.txt"
+      "infer": "configs/MeshGraphNets/deterministic/ex6/baseline/config_infer_meshgraphnets.txt",
+      "updates": 10016000
     },
     {
       "category": "deterministic",
       "example": "ex6",
       "method": "himgn",
       "train": "configs/MeshGraphNets/deterministic/ex6/baseline/config_train_himgn.txt",
-      "infer": "configs/MeshGraphNets/deterministic/ex6/baseline/config_infer_himgn.txt"
+      "infer": "configs/MeshGraphNets/deterministic/ex6/baseline/config_infer_himgn.txt",
+      "updates": 10016000
     },
     {
       "category": "deterministic",
       "example": "ex6",
       "method": "lsh_vae",
       "train": "configs/SimulGenVAE/deterministic/ex6/baseline/config_train_lsh_vae.txt",
-      "infer": "configs/SimulGenVAE/deterministic/ex6/baseline/config_infer_lsh_vae.txt"
+      "infer": "configs/SimulGenVAE/deterministic/ex6/baseline/config_infer_lsh_vae.txt",
+      "updates": 75000,
+      "updates_note": "VAE 50k + LC 25k"
     },
     {
       "category": "deterministic",
       "example": "ex7",
       "method": "deeponet",
       "train": "configs/Neural_Operator/deterministic/ex7/baseline/config_train_deeponet.txt",
-      "infer": "configs/Neural_Operator/deterministic/ex7/baseline/config_infer_deeponet.txt"
+      "infer": "configs/Neural_Operator/deterministic/ex7/baseline/config_infer_deeponet.txt",
+      "updates": 321500
     },
     {
       "category": "deterministic",
       "example": "ex7",
       "method": "point_deeponet",
       "train": "configs/Neural_Operator/deterministic/ex7/baseline/config_train_point_deeponet.txt",
-      "infer": "configs/Neural_Operator/deterministic/ex7/baseline/config_infer_point_deeponet.txt"
+      "infer": "configs/Neural_Operator/deterministic/ex7/baseline/config_infer_point_deeponet.txt",
+      "updates": 321500
     },
     {
       "category": "deterministic",
       "example": "ex7",
       "method": "fno",
       "train": "configs/Neural_Operator/deterministic/ex7/baseline/config_train_fno.txt",
-      "infer": "configs/Neural_Operator/deterministic/ex7/baseline/config_infer_fno.txt"
+      "infer": "configs/Neural_Operator/deterministic/ex7/baseline/config_infer_fno.txt",
+      "updates": 321500
     },
     {
       "category": "deterministic",
       "example": "ex7",
       "method": "transolver3",
       "train": "configs/Transolver/deterministic/ex7/baseline/config_train_transolver3.txt",
-      "infer": "configs/Transolver/deterministic/ex7/baseline/config_infer_transolver3.txt"
+      "infer": "configs/Transolver/deterministic/ex7/baseline/config_infer_transolver3.txt",
+      "updates": 321500
     },
     {
       "category": "deterministic",
       "example": "ex7",
       "method": "meshgraphnets",
       "train": "configs/MeshGraphNets/deterministic/ex7/baseline/config_train_meshgraphnets.txt",
-      "infer": "configs/MeshGraphNets/deterministic/ex7/baseline/config_infer_meshgraphnets.txt"
+      "infer": "configs/MeshGraphNets/deterministic/ex7/baseline/config_infer_meshgraphnets.txt",
+      "updates": 321500
     },
     {
       "category": "deterministic",
       "example": "ex7",
       "method": "himgn",
       "train": "configs/MeshGraphNets/deterministic/ex7/baseline/config_train_himgn.txt",
-      "infer": "configs/MeshGraphNets/deterministic/ex7/baseline/config_infer_himgn.txt"
+      "infer": "configs/MeshGraphNets/deterministic/ex7/baseline/config_infer_himgn.txt",
+      "updates": 321500
     },
     {
       "category": "deterministic",
       "example": "ex8",
       "method": "deeponet",
       "train": "configs/Neural_Operator/deterministic/ex8/baseline/config_train_deeponet.txt",
-      "infer": "configs/Neural_Operator/deterministic/ex8/baseline/config_infer_deeponet.txt"
+      "infer": "configs/Neural_Operator/deterministic/ex8/baseline/config_infer_deeponet.txt",
+      "updates": 500000
     },
     {
       "category": "deterministic",
       "example": "ex8",
       "method": "point_deeponet",
       "train": "configs/Neural_Operator/deterministic/ex8/baseline/config_train_point_deeponet.txt",
-      "infer": "configs/Neural_Operator/deterministic/ex8/baseline/config_infer_point_deeponet.txt"
+      "infer": "configs/Neural_Operator/deterministic/ex8/baseline/config_infer_point_deeponet.txt",
+      "updates": 500000
     },
     {
       "category": "deterministic",
       "example": "ex8",
       "method": "fno",
       "train": "configs/Neural_Operator/deterministic/ex8/baseline/config_train_fno.txt",
-      "infer": "configs/Neural_Operator/deterministic/ex8/baseline/config_infer_fno.txt"
+      "infer": "configs/Neural_Operator/deterministic/ex8/baseline/config_infer_fno.txt",
+      "updates": 500000
     },
     {
       "category": "deterministic",
       "example": "ex8",
       "method": "transolver3",
       "train": "configs/Transolver/deterministic/ex8/baseline/config_train_transolver3.txt",
-      "infer": "configs/Transolver/deterministic/ex8/baseline/config_infer_transolver3.txt"
+      "infer": "configs/Transolver/deterministic/ex8/baseline/config_infer_transolver3.txt",
+      "updates": 500000
     },
     {
       "category": "deterministic",
       "example": "ex8",
       "method": "meshgraphnets",
       "train": "configs/MeshGraphNets/deterministic/ex8/baseline/config_train_meshgraphnets.txt",
-      "infer": "configs/MeshGraphNets/deterministic/ex8/baseline/config_infer_meshgraphnets.txt"
+      "infer": "configs/MeshGraphNets/deterministic/ex8/baseline/config_infer_meshgraphnets.txt",
+      "updates": 500000
     },
     {
       "category": "deterministic",
       "example": "ex8",
       "method": "himgn",
       "train": "configs/MeshGraphNets/deterministic/ex8/baseline/config_train_himgn.txt",
-      "infer": "configs/MeshGraphNets/deterministic/ex8/baseline/config_infer_himgn.txt"
+      "infer": "configs/MeshGraphNets/deterministic/ex8/baseline/config_infer_himgn.txt",
+      "updates": 500000
     },
     {
       "category": "deterministic",
       "example": "ex9",
       "method": "deeponet",
       "train": "configs/Neural_Operator/deterministic/ex9/baseline/config_train_deeponet.txt",
-      "infer": "configs/Neural_Operator/deterministic/ex9/baseline/config_infer_deeponet.txt"
+      "infer": "configs/Neural_Operator/deterministic/ex9/baseline/config_infer_deeponet.txt",
+      "updates": 855000
     },
     {
       "category": "deterministic",
       "example": "ex9",
       "method": "point_deeponet",
       "train": "configs/Neural_Operator/deterministic/ex9/baseline/config_train_point_deeponet.txt",
-      "infer": "configs/Neural_Operator/deterministic/ex9/baseline/config_infer_point_deeponet.txt"
+      "infer": "configs/Neural_Operator/deterministic/ex9/baseline/config_infer_point_deeponet.txt",
+      "updates": 855000
     },
     {
       "category": "deterministic",
       "example": "ex9",
       "method": "fno",
       "train": "configs/Neural_Operator/deterministic/ex9/baseline/config_train_fno.txt",
-      "infer": "configs/Neural_Operator/deterministic/ex9/baseline/config_infer_fno.txt"
+      "infer": "configs/Neural_Operator/deterministic/ex9/baseline/config_infer_fno.txt",
+      "updates": 855000
     },
     {
       "category": "deterministic",
       "example": "ex9",
       "method": "transolver3",
       "train": "configs/Transolver/deterministic/ex9/baseline/config_train_transolver3.txt",
-      "infer": "configs/Transolver/deterministic/ex9/baseline/config_infer_transolver3.txt"
+      "infer": "configs/Transolver/deterministic/ex9/baseline/config_infer_transolver3.txt",
+      "updates": 6840000
     },
     {
       "category": "deterministic",
       "example": "ex9",
       "method": "meshgraphnets",
       "train": "configs/MeshGraphNets/deterministic/ex9/baseline/config_train_meshgraphnets.txt",
-      "infer": "configs/MeshGraphNets/deterministic/ex9/baseline/config_infer_meshgraphnets.txt"
+      "infer": "configs/MeshGraphNets/deterministic/ex9/baseline/config_infer_meshgraphnets.txt",
+      "updates": 855000
     },
     {
       "category": "deterministic",
       "example": "ex9",
       "method": "himgn",
       "train": "configs/MeshGraphNets/deterministic/ex9/baseline/config_train_himgn.txt",
-      "infer": "configs/MeshGraphNets/deterministic/ex9/baseline/config_infer_himgn.txt"
+      "infer": "configs/MeshGraphNets/deterministic/ex9/baseline/config_infer_himgn.txt",
+      "updates": 855000
     },
     {
       "category": "deterministic",
       "example": "ex9",
       "method": "lsh_vae",
       "train": "configs/SimulGenVAE/deterministic/ex9/baseline/config_train_lsh_vae.txt",
-      "infer": "configs/SimulGenVAE/deterministic/ex9/baseline/config_infer_lsh_vae.txt"
+      "infer": "configs/SimulGenVAE/deterministic/ex9/baseline/config_infer_lsh_vae.txt",
+      "updates": 675000,
+      "updates_note": "VAE 450k + LC 225k"
     },
     {
       "category": "deterministic",
       "example": "ex10",
       "method": "deeponet",
       "train": "configs/Neural_Operator/deterministic/ex10/baseline/config_train_deeponet.txt",
-      "infer": "configs/Neural_Operator/deterministic/ex10/baseline/config_infer_deeponet.txt"
+      "infer": "configs/Neural_Operator/deterministic/ex10/baseline/config_infer_deeponet.txt",
+      "updates": 476000
     },
     {
       "category": "deterministic",
       "example": "ex10",
       "method": "point_deeponet",
       "train": "configs/Neural_Operator/deterministic/ex10/baseline/config_train_point_deeponet.txt",
-      "infer": "configs/Neural_Operator/deterministic/ex10/baseline/config_infer_point_deeponet.txt"
+      "infer": "configs/Neural_Operator/deterministic/ex10/baseline/config_infer_point_deeponet.txt",
+      "updates": 476000
     },
     {
       "category": "deterministic",
       "example": "ex10",
       "method": "fno",
       "train": "configs/Neural_Operator/deterministic/ex10/baseline/config_train_fno.txt",
-      "infer": "configs/Neural_Operator/deterministic/ex10/baseline/config_infer_fno.txt"
+      "infer": "configs/Neural_Operator/deterministic/ex10/baseline/config_infer_fno.txt",
+      "updates": 476000
     },
     {
       "category": "deterministic",
       "example": "ex10",
       "method": "transolver3",
       "train": "configs/Transolver/deterministic/ex10/baseline/config_train_transolver3.txt",
-      "infer": "configs/Transolver/deterministic/ex10/baseline/config_infer_transolver3.txt"
+      "infer": "configs/Transolver/deterministic/ex10/baseline/config_infer_transolver3.txt",
+      "updates": 476000
     },
     {
       "category": "deterministic",
       "example": "ex10",
       "method": "meshgraphnets",
       "train": "configs/MeshGraphNets/deterministic/ex10/baseline/config_train_meshgraphnets.txt",
-      "infer": "configs/MeshGraphNets/deterministic/ex10/baseline/config_infer_meshgraphnets.txt"
+      "infer": "configs/MeshGraphNets/deterministic/ex10/baseline/config_infer_meshgraphnets.txt",
+      "updates": 476000
     },
     {
       "category": "deterministic",
       "example": "ex10",
       "method": "himgn",
       "train": "configs/MeshGraphNets/deterministic/ex10/baseline/config_train_himgn.txt",
-      "infer": "configs/MeshGraphNets/deterministic/ex10/baseline/config_infer_himgn.txt"
+      "infer": "configs/MeshGraphNets/deterministic/ex10/baseline/config_infer_himgn.txt",
+      "updates": 476000
     },
     {
       "category": "probabilistic",
       "example": "ex1",
       "method": "himgn_v",
       "train": "configs/MeshGraphNets_Variational/probabilistic/ex1/baseline/config_train_himgn_v.txt",
-      "infer": "configs/MeshGraphNets_Variational/probabilistic/ex1/baseline/config_infer_himgn_v.txt"
+      "infer": "configs/MeshGraphNets_Variational/probabilistic/ex1/baseline/config_infer_himgn_v.txt",
+      "updates": 357000
     },
     {
       "category": "probabilistic",
       "example": "ex1",
       "method": "chi_mgnflow",
       "train": "configs/HI_MGNFlow/probabilistic/ex1/baseline/config_train_chi_mgnflow.txt",
-      "infer": "configs/HI_MGNFlow/probabilistic/ex1/baseline/config_infer_chi_mgnflow.txt"
+      "infer": "configs/HI_MGNFlow/probabilistic/ex1/baseline/config_infer_chi_mgnflow.txt",
+      "updates": 357000,
+      "updates_note": "AE 178.5k + flow 178.5k"
     },
     {
       "category": "probabilistic",
       "example": "ex2",
       "method": "himgn_v",
       "train": "configs/MeshGraphNets_Variational/probabilistic/ex2/baseline/config_train_himgn_v.txt",
-      "infer": "configs/MeshGraphNets_Variational/probabilistic/ex2/baseline/config_infer_himgn_v.txt"
+      "infer": "configs/MeshGraphNets_Variational/probabilistic/ex2/baseline/config_infer_himgn_v.txt",
+      "updates": 1663000
     },
     {
       "category": "probabilistic",
       "example": "ex2",
       "method": "chi_mgnflow",
       "train": "configs/HI_MGNFlow/probabilistic/ex2/baseline/config_train_chi_mgnflow.txt",
-      "infer": "configs/HI_MGNFlow/probabilistic/ex2/baseline/config_infer_chi_mgnflow.txt"
+      "infer": "configs/HI_MGNFlow/probabilistic/ex2/baseline/config_infer_chi_mgnflow.txt",
+      "updates": 1663000,
+      "updates_note": "AE 831.5k + flow 831.5k"
     },
     {
       "category": "geometry_generation",
@@ -994,6 +1081,30 @@
       "method": "sdfflow",
       "train": "configs/SDFFlow/geometry_generation/ex1/baseline/config_train_sdfflow.txt",
       "infer": "configs/SDFFlow/geometry_generation/ex1/baseline/config_infer_sdfflow.txt"
+    },
+    {
+      "category": "geometry_generation",
+      "example": "ex2",
+      "method": "sdfflow",
+      "train": "configs/SDFFlow/geometry_generation/ex2/baseline/config_train_sdfflow.txt",
+      "infer": "configs/SDFFlow/geometry_generation/ex2/baseline/config_infer_sdfflow.txt",
+      "generated": false
+    },
+    {
+      "category": "geometry_generation",
+      "example": "ex3",
+      "method": "sdfflow",
+      "train": "configs/SDFFlow/geometry_generation/ex3/baseline/config_train_sdfflow.txt",
+      "infer": "configs/SDFFlow/geometry_generation/ex3/baseline/config_infer_sdfflow.txt",
+      "generated": false
+    },
+    {
+      "category": "geometry_generation",
+      "example": "ex4",
+      "method": "sdfflow",
+      "train": "configs/SDFFlow/geometry_generation/ex4/baseline/config_train_sdfflow.txt",
+      "infer": "configs/SDFFlow/geometry_generation/ex4/baseline/config_infer_sdfflow.txt",
+      "generated": false
     }
   ]
 }

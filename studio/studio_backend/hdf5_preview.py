@@ -539,6 +539,39 @@ def _mesh_state_sample(
     )
 
 
+def reduce_like_sample(
+    path: Path,
+    sample_id: str,
+    values_full: Any,
+    point_limit: int = 16000,
+    edge_limit: int = 60000,
+    face_limit: int = 40000,
+) -> Any:
+    """Reduce a full per-node vector exactly as hdf5_sample reduced `sample_id`.
+
+    A large mesh is previewed on a vertex-clustered subset, so a comparison
+    vector (ground truth, error) has to go through the same reduction before
+    it can be laid over the returned nodes. Comparing it at full length with
+    the reduced prediction always failed as "node count differs".
+    """
+    h5py, np = _imports()
+    with h5py.File(path, "r") as handle:
+        group = handle["data"][sample_id]
+        dataset_name = "nodal_data" if "nodal_data" in group else "nodal_field" if "nodal_field" in group else None
+        if dataset_name is None:
+            raise ValueError(f"Sample {sample_id} has neither nodal_data nor nodal_field.")
+        data = group[dataset_name]
+        node_count = int(data.shape[2])
+        flat = np.asarray(values_full, dtype=np.float64).reshape(-1)
+        if flat.size != node_count:
+            raise ValueError(f"node count differs: prediction {node_count} vs comparison {flat.size}")
+        if dataset_name != "nodal_data" or data.shape[0] < 3:
+            return flat[_sample_indices(node_count, point_limit)]
+        coordinates = np.stack([np.asarray(data[axis, 0, :], dtype=np.float64) for axis in range(3)], axis=1)
+        topology = _cached_topology(path, group, sample_id, coordinates, point_limit, edge_limit, face_limit)
+    return aggregate_values(topology["inverse"], topology["node_count"], flat)
+
+
 def _sdf_shape_sample(
     path: Path,
     handle: Any,
@@ -699,6 +732,15 @@ def hdf5_sample(
             )
         if "shapes" in handle and isinstance(handle["shapes"], h5py.Group) and sample_id in handle["shapes"]:
             return _sdf_shape_sample(path, handle, handle["shapes"][sample_id], sample_id, 4000)
+        for container_name in ("data", "shapes"):
+            # A per-sample-group file that lacks the requested id used to fall
+            # through to _table_sample and fail with an unrelated message (or
+            # a KeyError, which the HTTP layer reports as "job not found").
+            container = handle.get(container_name)
+            if isinstance(container, h5py.Group) and any(
+                isinstance(container.get(key), h5py.Group) for key in container.keys()
+            ):
+                raise ValueError(f"Sample {sample_id!r} was not found under {container_name}/ in {path.name}.")
         if (
             "arrays" in handle
             and isinstance(handle["arrays"], h5py.Group)
@@ -708,3 +750,109 @@ def hdf5_sample(
         ):
             return _operator_grid_sample(path, handle, sample_id, feature, point_limit)
         return _table_sample(path, handle, sample_id, feature, point_limit)
+
+
+def _int_attr(attrs: Any, key: str) -> int | None:
+    try:
+        return int(attrs[key]) if key in attrs else None
+    except (TypeError, ValueError):
+        return None
+
+
+_FACTS_CACHE: dict[tuple[str, float, int], dict[str, Any]] = {}
+
+
+def hdf5_facts(path: Path, probe: int = 32) -> dict[str, Any]:
+    """Cached by (path, mtime, size): every card on the canvas asks on render."""
+    stat = path.stat()
+    key = (str(path), stat.st_mtime, stat.st_size)
+    if key not in _FACTS_CACHE:
+        if len(_FACTS_CACHE) > 64:
+            _FACTS_CACHE.clear()
+        _FACTS_CACHE[key] = _hdf5_facts(path, probe)
+    return dict(_FACTS_CACHE[key])
+
+
+def _hdf5_facts(path: Path, probe: int = 32) -> dict[str, Any]:
+    """The handful of numbers a block card needs, read from attributes only.
+
+    A card shows what the dataset *is* (contract, sample count, mesh size,
+    channels, timesteps, the declared input/output/condition split); nothing
+    here reads a numeric array, so it stays cheap on multi-gigabyte files.
+    Node counts come from up to `probe` samples' metadata attributes.
+    """
+    h5py, _ = _imports()
+    facts: dict[str, Any] = {"path": relative(path), "size": path.stat().st_size, "contract": "unsupported"}
+    with h5py.File(path, "r") as handle:
+        attrs = handle.attrs
+        role = attrs.get("split_role")
+        if role is not None:
+            facts["split_role"] = _decode(role)
+        source = attrs.get("builder_source")
+        if source is not None:
+            facts["source"] = _decode(source)
+
+        if "data" in handle and isinstance(handle["data"], h5py.Group):
+            data = handle["data"]
+            ids = sorted(data.keys(), key=_sort_key)
+            features = _int_attr(attrs, "num_features")
+            nodes: list[int] = []
+            timesteps = _int_attr(attrs, "num_timesteps")
+            for sample_id in ids[: max(1, probe)]:
+                item = data[sample_id]
+                meta = item.get("metadata") if hasattr(item, "get") else None
+                count = _int_attr(meta.attrs, "num_nodes") if meta is not None else None
+                nodal = item.get("nodal_data") if hasattr(item, "get") else None
+                if count is None and nodal is not None and nodal.ndim == 3:
+                    count = int(nodal.shape[2])
+                if nodal is not None and nodal.ndim == 3:
+                    features = features or int(nodal.shape[0])
+                    timesteps = timesteps or int(nodal.shape[1])
+                if count is not None:
+                    nodes.append(count)
+            facts.update(
+                contract="mesh_state",
+                num_samples=_int_attr(attrs, "num_samples") or len(ids),
+                num_features=features,
+                feature_names=_mesh_feature_names(handle, features) if features else [],
+                num_timesteps=timesteps,
+                nodes_min=min(nodes) if nodes else None,
+                nodes_max=max(nodes) if nodes else None,
+                input_var=_int_attr(attrs, "builder_input_var"),
+                output_var=_int_attr(attrs, "builder_output_var"),
+                cond_var=_int_attr(attrs, "builder_cond_var"),
+            )
+            return facts
+
+        if "shapes" in handle and isinstance(handle["shapes"], h5py.Group):
+            names = _text_list(handle, "cond_names")
+            extra = _text_list(handle, "cond_extra_names")
+            facts.update(
+                contract="sdf_shapes",
+                num_samples=_int_attr(attrs, "num_shapes") or len(handle["shapes"]),
+                condition_names=names + extra,
+                surface_points=_int_attr(attrs, "num_surface"),
+                sdf_points=sum(v for v in (_int_attr(attrs, "num_near"), _int_attr(attrs, "num_uniform")) if v) or None,
+            )
+            return facts
+
+        if "arrays" in handle and "targets" in handle.get("arrays", {}):
+            targets = handle["arrays/targets"]
+            facts.update(
+                contract="operator_grid",
+                num_samples=int(targets.shape[0]) if targets.ndim else 1,
+                grid_points=int(handle["common/query_xy"].shape[0]) if "common/query_xy" in handle else None,
+                num_features=int(targets.shape[1]) if targets.ndim >= 3 else 1,
+            )
+            return facts
+
+        if "X" in handle and "Y" in handle:
+            inputs = _text_list(handle, "input_names")
+            outputs = _text_list(handle, "output_names")
+            facts.update(
+                contract="table",
+                num_samples=int(handle["X"].shape[0]),
+                input_names=_named_features(inputs, int(handle["X"].shape[1]) if handle["X"].ndim > 1 else 1, "x"),
+                output_names=_named_features(outputs, int(handle["Y"].shape[1]) if handle["Y"].ndim > 1 else 1, "y"),
+            )
+    return facts

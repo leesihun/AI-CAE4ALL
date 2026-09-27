@@ -268,9 +268,11 @@ def _train_worker_inner(rank, world_size, config, gpu_ids, config_filename):
                 print("\nTraining interrupted by user (after validate_epoch).")
             break
 
+        # Read before step(): afterwards it is the next epoch's LR, and after the
+        # last epoch a warm restart reports the peak LR for an epoch that never runs.
+        current_lr = optimizer.param_groups[0]['lr']
         scheduler.step()
 
-        current_lr = optimizer.param_groups[0]['lr']
         if rank == 0:
             print(
                 f"Epoch {epoch}/{config['training_epochs']} "

@@ -208,8 +208,10 @@ def single_worker(config, config_filename='config.txt'):
                 )
 
             train_loss = train_metrics['mean']
-            scheduler.step()
+            # Read before step(): afterwards it is the next epoch's LR, and after the
+            # last epoch a warm restart reports the peak LR for an epoch that never runs.
             current_lr = optimizer.param_groups[0]['lr']
+            scheduler.step()
             # A peak that keeps climbing across epochs means reshuffling is still
             # drawing heavier batches; a reserved far above peak is allocator
             # fragmentation. Neither is visible from memory_allocated().

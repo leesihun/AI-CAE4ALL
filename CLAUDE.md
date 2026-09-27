@@ -72,8 +72,8 @@ choice:
 
 1. **`configs/<Name>/` mirrors `methods/<Name>/`.** Adding a method means adding
    both directories under the same name. `configs/campaigns/` is the one
-   exception: it holds multi-arm runners (`ex1`, `ex2`, `ex3`,
-   `benchmarks_all`), not per-method configs.
+   exception: it holds the cross-method campaign (`dataset_matrix/`, whose
+   `manifest.json` lists every train/infer config pair), not per-method configs.
 2. **`output/` at the repo root is the only artifact destination.** Nothing is
    written inside a method directory. Because the native process runs with its
    cwd set to `methods/<Name>/`, every artifact path in a config is spelled
@@ -85,7 +85,7 @@ AI-CAE4ALL/
 ├── methods/             configs/        # nine runtimes, mirrored config dirs
 ├── dataset/             output/         # inputs (git-ignored), single artifact root
 ├── studio/              inference/      # browser Studio, portable CPU bundle
-├── docs/                tests/          # all documentation, launcher contract tests
+├── docs/                               # all documentation
 ```
 
 > The `output/` **subdirectory** names are historical and deliberately left
@@ -121,11 +121,12 @@ also provides the `ai-cae4all` command.
 
 ### Tests
 
-The root suite covers launcher and MethodSpec contracts and runs in the
-launcher's own interpreter:
+There is no root `tests/` directory any more (deleted in `9884fb1`); the
+launcher layer is covered by `--audit-configs` plus per-config `--check`, and
+the Studio backend suite runs in the launcher's own interpreter:
 
 ```bash
-python -m pytest -q tests/
+python AI_CAE4ALL_main.py --audit-configs
 python -m pytest -q studio/studio_backend
 ```
 
@@ -238,8 +239,11 @@ Two rules hold across all of them. **The renderer needs triangles** --
 a quad/hex mesh (zero 3-cycles) `quads_to_triangles` splits 4-cycles instead;
 with no surface at all the scalars are drawn per node. And **every plotting
 backend is imported lazily**: a missing matplotlib or pyvista prints a note and
-the run continues. PyVista renders off-screen with no DISPLAY (VTK warns about
-the X server, then writes a correct PNG).
+the run continues. With no DISPLAY, an EGL/OSMesa VTK (vtk>=9.4 falls back on
+its own) still writes a correct PNG after warning about the X server; an X-only
+VTK (PyPI vtk<9.4) calls `abort()` instead, so `mesh_utils_fast.
+offscreen_rendering_available()` probes one render in a child process first and
+skips the PNGs when that child dies.
 
 ### Config value parsing (shared with the native repos)
 
@@ -304,7 +308,7 @@ reimplements no model. **When the GUI and the launcher disagree, the launcher is
 right and the GUI has a bug** — see [docs/GUI.md](docs/GUI.md) for the manual.
 
 ```bash
-cd studio && python start_studio.py        # http://127.0.0.1:8123/index.html
+cd studio && python start_studio.py        # http://127.0.0.1:8080/index.html
 python -m pytest -q studio/studio_backend  # backend tests
 ```
 

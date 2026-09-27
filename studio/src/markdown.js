@@ -14,9 +14,10 @@ import { escapeHtml } from "./dom.js";
  *
  * Link handling is what makes the docs navigable:
  *  - an absolute http(s) link opens in a new tab;
- *  - a repository-relative link resolves against the current document's own
- *    directory and is tagged `data-doc-link`, which the Docs workspace opens in
- *    the same pane;
+ *  - a repository-relative link to a .md resolves against the current
+ *    document's own directory and is tagged `data-doc-link`, which the Docs
+ *    workspace opens in the same pane; any other relative target (source file,
+ *    config, directory) stays plain text with its path as a tooltip;
  *  - a bare `#anchor` becomes plain text rather than a link that goes nowhere.
  */
 export function renderMarkdown(text, path = "") {
@@ -39,13 +40,20 @@ export function renderMarkdown(text, path = "") {
     out = out.replace(/`([^`]+)`/g, (match, code) => `<code>${code}</code>`);
     out = out.replace(/\*\*([^*]+)\*\*/g, (match, bold) => `<strong>${bold}</strong>`);
     out = out.replace(/(^|[^*])\*([^*\n]+)\*/g, (match, before, italic) => `${before}<em>${italic}</em>`);
+    // `href` and `label` come out of the already-escaped line, so they are
+    // interpolated as-is: escaping again turned "?a=1&b=2" into "&amp;amp;b".
     out = out.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (match, label, href) => {
       if (/^(https?:)?\/\//.test(href)) {
-        return `<a href="${escapeHtml(href)}" target="_blank" rel="noreferrer noopener">${label}</a>`;
+        return `<a href="${href}" target="_blank" rel="noreferrer noopener">${label}</a>`;
       }
       if (href.startsWith("#")) return label;
       const target = resolve(href);
-      return target ? `<a href="#" data-doc-link="${escapeHtml(target)}">${label}</a>` : label;
+      if (!target) return label;
+      // /api/doc serves Markdown only, so a link to a .py, a config or a
+      // directory would be a click that does nothing. Keep the text and name
+      // the repository path instead of offering a dead link.
+      if (!/\.md$/i.test(target)) return `<span class="doc-link-inert" title="${target}">${label}</span>`;
+      return `<a href="#" data-doc-link="${target}">${label}</a>`;
     });
     return out;
   };
@@ -70,7 +78,10 @@ export function renderMarkdown(text, path = "") {
 
   const closeTable = () => {
     if (!table.length) return;
-    const cells = row => row.replace(/^\||\|$/g, "").split("|").map(cell => cell.trim());
+    // GFM's `\|` is a literal pipe inside a cell, not a column break: the
+    // optimize report's "max \|u_z\|" header split into three columns.
+    const cells = row => row.replace(/^\||(?<!\\)\|$/g, "").split(/(?<!\\)\|/)
+      .map(cell => cell.trim().replace(/\\\|/g, "|"));
     const header = cells(table[0]);
     // A separator row (|---|---|) is layout, not data.
     const body = table.slice(table.length > 1 && /^[\s|:-]+$/.test(table[1]) ? 2 : 1);

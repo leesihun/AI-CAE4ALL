@@ -114,9 +114,11 @@ class Decoder(nn.Module):
         for i in range(len(num_filter_dec)-1):
             self.decoder_residual_blocks.append(DecoderResidualBlock(num_filter_dec[i+1], small))
 
+        # No normalization before the Tanh: a GroupNorm here removed each
+        # sample's mean and scale over the whole field, so two responses that
+        # differ only in amplitude decoded identically.
         self.recon = nn.Sequential(
             nn.Conv1d(num_filter_dec[-1], num_node, kernel_size=1),
-            nn.GroupNorm(group_norm_groups(num_node), num_node),
             nn.Tanh()
         )
 

@@ -94,7 +94,7 @@ do not exist yet (see below):
   the only staged mesh dataset with one fixed `(T, N)` besides ex6/ex8;
   conditions come from the dataset's own `cond_var` rows via
   `lc_data_type hdf5`, no CSV) and Parametric response estimation (MLP on
-  `dataset/deterministic/mlp/train.h5` → `infer.h5`, `input_var 3` / `output_var 2`).
+  `dataset/deterministic/ex3_NASA_CRM_mlp_train.h5` → `ex3_NASA_CRM_mlp_test.h5`, `input_var 6` / `output_var 4`).
 - **Generative geometry (SDFFlow)** — SDFFlow train (DeepJEB) trains the merged
   VAE → flow-matching pipeline on `dataset/geometry_generation/ex1_deepjeb.h5` and feeds a sample-mode
   CAD Generator; Design optimization consumes the checkpoints that run writes

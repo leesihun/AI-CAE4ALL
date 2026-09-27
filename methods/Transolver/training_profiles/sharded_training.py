@@ -297,8 +297,10 @@ def shard_worker(rank, world_size, config, gpu_ids, config_filename='config.txt'
                 ema_model=ema_model, loss_weights=loss_weights,
             )
             train_loss = train_metrics['mean']
-            scheduler.step()
+            # Read before step(): afterwards it is the next epoch's LR, and after the
+            # last epoch a warm restart reports the peak LR for an epoch that never runs.
             current_lr = optimizer.param_groups[0]['lr']
+            scheduler.step()
 
             do_val = (epoch % val_interval == 0) or (epoch == total_epochs - 1)
             eval_model = ema_model.module if ema_model is not None else model

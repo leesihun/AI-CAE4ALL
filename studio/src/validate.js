@@ -101,6 +101,15 @@ export const STANDALONE_INFERENCE_MODEL_IDS = [
 ];
 const STANDALONE_INFERENCE_MODELS = new Set(STANDALONE_INFERENCE_MODEL_IDS);
 
+// SDFFlow sampling keys `mode optimize` never reads: the search draws its own
+// FM noise and sets its own conditions (opt_condition_dims). Mirrors
+// OPTIMIZE_INERT_KEYS in cae_suite/specs/sdfflow.py, which reports each one
+// present as SDF-OPT-INERT-001.
+export const SDFFLOW_OPTIMIZE_INERT_KEYS = new Set([
+  "num_samples", "cfg_scale", "cond_values", "candidate_multiplier",
+  "condition_audit", "guidance_enabled", "newton_rounds"
+]);
+
 /**
  * Build a runnable inference config from a checkpoint alone.
  *
@@ -322,6 +331,15 @@ export function executableSteps(targetId = null) {
       Object.entries(generatorValues).forEach(([key, value]) => {
         if (catalogKeys.includes(key) && String(value ?? "").trim()) overrides[key] = value;
       });
+      // In optimize these do nothing. Blanked rather than skipped, so a value
+      // carried in the connected SDFFlow block's own config is dropped too
+      // (rawConfig omits empty values) instead of reaching the launcher as a
+      // setting the run silently ignores.
+      if (mode === "optimize") {
+        SDFFLOW_OPTIMIZE_INERT_KEYS.forEach(key => {
+          if (catalogKeys.includes(key)) overrides[key] = "";
+        });
+      }
     }
     if (catalogKeys.includes("infer_dataset") && node.config.dataset_path) {
       // The graph is authoritative -- except when what it says is "run
@@ -387,6 +405,18 @@ function analysisInput(source, steps) {
   return source.config?.results_path || outputPathOf(source);
 }
 
+/**
+ * What an Export block packages from a CAD Generator: the run's whole output
+ * folder (STLs, summary, report, figures), not the design table that
+ * analysisInput names for the Optimization block. `@artifacts:<nodeId>` is
+ * resolved by the backend to the directory the step wrote; a generator that
+ * is not part of this run falls back to the folder it recorded earlier.
+ */
+function generatorArtifacts(source, steps) {
+  if (steps.some(step => step.nodeId === source.id)) return `@artifacts:${source.id}`;
+  return source.config?.results_dir || analysisInput(source, steps);
+}
+
 function outputPathOf(node) {
   const config = node?.config || {};
   return config.results_path || config.report_path || config.export_path
@@ -429,7 +459,10 @@ export function analysisStep(node, steps) {
     };
   }
   if (node.type === "output.export") {
-    const source = analysisInput(upstreamOf(node, "input"), steps);
+    const input = upstreamOf(node, "input");
+    const source = input?.type === "run.cad_generator"
+      ? generatorArtifacts(input, steps)
+      : analysisInput(input, steps);
     if (!source) return null;
     return {
       kind: "analysis",

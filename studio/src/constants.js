@@ -34,7 +34,7 @@ export const KEY_CATALOGS = {
   meshgraphnetsV: keys(`alpha_prior_max alpha_recon augment_geometry batch_size best_by beta_aux bipartite_unpool coarse_world_edges coarsening_type cond_var dataset_dir display_testset display_trainset edge_var ema_decay eval_dataset feature_loss_weights fit_latent_gmm free_bits gmm_components gmm_covariance_type gmm_reg_covar gpu_ids grad_accum_steps hierarchy_cache_build_workers hierarchy_cache_dir hierarchy_cache_keep hierarchy_cache_wait_timeout hierarchy_seed hierarchy_variants histogram_bins histogram_clip_quantile infer_dataset infer_timesteps inference_output_dir input_var lambda_det lambda_kl lambda_mmd latent_dim latent_inflation learningr log_file_dir make_histogram message_passing_num mmd_bandwidth mmd_gather_ranks mode model modelpath mp_per_level multiscale_levels noise_gamma noise_std_ratio num_vae_samples num_workers num_z output_var parallel_mode pin_memory pipeline_microbatches plot_feature_idx positional_encoding positional_features posterior_min_std prefetch_factor prior_cov_rank prior_family prior_fm_solver prior_fm_steps prior_freeze_epoch prior_grad_to_encoder prior_hidden_dim prior_kl_reg_weight prior_min_std prior_mixture_components prior_mp_layers prior_nll_weight prior_temperature prior_type pv_channel recon_loss residual_scale save_rollouts show_histogram split_seed static_cache_per_worker std_noise test_batch_idx test_interval test_max_batches time_integration training_epochs use_amp use_checkpointing use_compile use_conditional_prior use_ema use_multiscale use_node_types use_parallel_stats use_vae use_world_edges val_batch_size vae_batch_size vae_batch_size_max vae_batch_size_min vae_batch_vram_fraction vae_graph_aware vae_latent_dim vae_mp_layers vae_valid_prior_samples val_interval voronoi_clusters warmup_epochs weight_decay world_edge_backend world_max_num_neighbors world_radius_multiplier z_conditioning`),
   operator: keys(`_ddp_port _pin_memory augment_geometry batch_size checkpoint_interval coarse_cache_per_worker coarse_world_edges coarsening_type cond_var coordinate_normalization dataset_dir deeponet_activation deeponet_basis_dim deeponet_branch_depth deeponet_branch_source deeponet_hidden_channels deeponet_max_branch_params deeponet_multi_output deeponet_sensor_resolution deeponet_trunk_depth dimension_tolerance display_testset display_trainset edge_var ema_decay feature_loss_weights fno_grid_resolution fno_hidden_channels fno_layers fno_modes fno_norm fno_use_channel_mlp fno_variant free_bits global_condition_features gpu_ids grad_accum_steps grid_padding infer_dataset infer_query_chunk_size infer_timesteps inference_output_dir input_var integration_weight_source lambda_det lambda_kl lambda_mmd latent_dim learningr log_dir log_file_dir max_grad_norm message_passing_num mode model modelpath mp_per_level multiscale_levels noise_gamma noise_std_ratio num_node_types num_timesteps num_workers operator_dim out_of_bounds_policy output_var parallel_mode pipeline_microbatches plot_feature_idx point_branch_merge point_condition_depth point_feature_dim point_hidden_channels point_output_activation point_refiner_depth point_resample_each_epoch point_sampling point_sensor_count point_siren_omega0 point_trunk_depth point_variant pointnet_activation pointnet_depth pointnet_norm positional_features posterior_min_std prefetch_factor profile_batches sdf_sidecar sdf_source split_seed std_noise test_batch_idx test_interval test_max_batches time_integration train_eval_subset_size train_query_chunk_size training_epochs use_amp use_checkpointing use_compile use_ema use_multiscale use_node_types use_parallel_stats use_vae use_world_edges vae_graph_aware vae_latent_dim vae_mp_layers val_interval voronoi_clusters warmup_epochs weight_decay world_edge_backend world_max_num_neighbors world_radius_multiplier write_preprocessing`),
   transolver: keys(`amortized_cache_nodes amortized_query_nodes amortized_training attention_kernel augment_geometry batch_size chunk_size coarse_world_edges coarsening_type cond_var coordinate_normalization dataset_dir display_trainset dropout edge_var ema_decay feature_loss_weights gpu_ids grad_accum_steps infer_chunk_size infer_dataset infer_mode infer_timesteps inference_output_dir input_var latent_dim learningr log_file_dir max_grad_norm max_train_batches max_val_batches message_passing_num mlp_ratio mode model modelpath mp_per_level multiscale_levels noise_gamma num_heads num_layers num_workers output_var parallel_mode positional_features prefetch_factor slice_num small_output_init split_seed std_noise temperature_init temperature_max temperature_min test_batch_idx test_interval test_max_batches time_integration training_epochs use_amp use_checkpointing use_compile use_ema use_multiscale use_node_types use_parallel_stats use_world_edges val_interval voronoi_clusters warmup_epochs weight_decay world_edge_backend world_max_num_neighbors world_radius_multiplier write_preprocessing write_test_predictions`),
-  sdfflow: keys(`alpha batch_size candidate_multiplier cfg_scale clamp_dist cond_dropout cond_values condition_clip condition_names condition_ood_policy dataset_dir decoder_heads decoder_hidden decoder_layers decoder_type deterministic_warmup_epochs eikonal_weight ema_decay encode_batch_size encoder_blocks encoder_dim encoder_heads encoder_self_attention fm_arch fm_batch_size fm_blocks fm_cond_hidden fm_ema_decay fm_heads fm_hidden fm_learningr fm_log_file_dir fm_mc_resolution_test fm_modelpath fm_num_test_shapes fm_num_workers fm_test_interval fm_time_logit_mean fm_time_logit_std fm_time_sampling fm_training_epochs fm_use_amp fm_use_ema fm_val_interval fm_warmup_epochs fm_weight_decay fourier_bands fsdp_min_params gpu_ids hybrid_grad_points init_vae_modelpath input_mesh kl_warmup_epochs kl_weight latent_clip latent_dim latent_tokens learningr log_file_dir max_condition_z mc_resolution mc_resolution_test min_condition_std mode model normal_weight num_encoder_points num_query_points num_samples num_test_shapes num_workers ode_steps output_dir overfit_all_shapes overfit_num_shapes parallel_mode pipeline_log_file plot_dpi plot_max_faces posterior_noise_max_scale posterior_noise_warmup_epochs sample_index_a sample_index_b seed skip_completed_stages source_num_samples split_seed surface_weight test_interval training_epochs use_amp use_conditions use_ema vae_batch_size vae_ema_decay vae_learningr vae_log_file_dir vae_mc_resolution_test vae_modelpath vae_num_test_shapes vae_num_workers vae_test_interval vae_training_epochs vae_use_amp vae_use_ema vae_val_interval vae_warmup_epochs vae_weight_decay val_interval warmup_epochs weight_decay opt_subspace_dim opt_subspace_seed opt_condition_dims opt_latent_range opt_shell_scale opt_budget opt_popsize opt_sigma0 opt_baseline_size opt_load_cases opt_length_scale opt_stress_percentile opt_mesh_size_max opt_target_faces opt_material_e opt_material_nu opt_material_rho opt_yield_stress opt_stress_margin opt_disp_margin opt_stress_weight opt_disp_weight opt_verify_resolution opt_verify_target_faces opt_verify_mesh_size_max opt_analysis opt_surrogate_checkpoint opt_surrogate_config opt_surrogate_target_nodes`),
+  sdfflow: keys(`alpha batch_size candidate_multiplier cfg_scale clamp_dist cond_dropout cond_values condition_clip condition_names condition_ood_policy dataset_dir decoder_heads decoder_hidden decoder_layers decoder_type deterministic_warmup_epochs eikonal_weight ema_decay encode_batch_size encoder_blocks encoder_dim encoder_heads encoder_self_attention fm_arch fm_batch_size fm_blocks fm_cond_hidden fm_ema_decay fm_heads fm_hidden fm_learningr fm_log_file_dir fm_mc_resolution_test fm_modelpath fm_num_test_shapes fm_num_workers fm_test_interval fm_time_logit_mean fm_time_logit_std fm_time_sampling fm_training_epochs fm_use_amp fm_use_ema fm_val_interval fm_warmup_epochs fm_weight_decay fourier_bands fsdp_min_params gpu_ids hybrid_grad_points init_vae_modelpath input_mesh kl_warmup_epochs kl_weight latent_clip latent_dim latent_tokens learningr log_file_dir max_condition_z mc_resolution mc_resolution_test min_condition_std mode model normal_weight num_encoder_points num_query_points num_samples num_test_shapes num_workers ode_steps output_dir overfit_all_shapes overfit_num_shapes parallel_mode pipeline_log_file plot_dpi plot_max_faces posterior_noise_max_scale posterior_noise_warmup_epochs sample_index_a sample_index_b seed skip_completed_stages source_num_samples split_seed surface_weight test_interval training_epochs use_amp use_conditions use_ema vae_batch_size vae_ema_decay vae_learningr vae_log_file_dir vae_mc_resolution_test vae_modelpath vae_num_test_shapes vae_num_workers vae_test_interval vae_training_epochs vae_use_amp vae_use_ema vae_val_interval vae_warmup_epochs vae_weight_decay val_interval warmup_epochs weight_decay opt_subspace_dim opt_subspace_seed opt_condition_dims opt_latent_range opt_shell_scale opt_budget opt_popsize opt_sigma0 opt_baseline_size opt_screen_batch opt_load_cases opt_length_scale opt_stress_percentile opt_mesh_size_max opt_target_faces opt_material_e opt_material_nu opt_material_rho opt_yield_stress opt_stress_margin opt_disp_margin opt_stress_weight opt_disp_weight opt_vertical_disp_max opt_verify_resolution opt_verify_target_faces opt_verify_mesh_size_max opt_analysis opt_surrogate_checkpoint opt_surrogate_config opt_surrogate_target_nodes opt_fea_verify`),
   simulgenvae: keys(`alpha batch_size beta_target cond_var dataset_dir ema_decay field_start_row gpu_ids init_beta_divisor init_vae_modelpath kl_warmup_epochs kl_warmup_start_frac latent_dim latent_dim_end lc_batch_size lc_data_type lc_dropout lc_ema_decay lc_filter lc_learningr lc_log_file_dir lc_modelpath lc_num_workers lc_training_epochs lc_use_amp lc_use_ema lc_warmup_epochs lc_weight_decay learningr load_all log_file_dir loss_type mode model network_size node_end node_start num_filter_enc num_var num_workers output_dir parallel_mode param_data_type param_dir pipeline_log_file plot_mode recon_iter skip_completed_stages split_seed timesteps_reduced training_epochs use_amp use_ema use_spatial_attention vae_batch_size vae_ema_decay vae_learningr vae_log_file_dir vae_modelpath vae_num_workers vae_training_epochs vae_use_amp vae_use_ema vae_warmup_epochs vae_weight_decay val_interval warmup_epochs weight_decay`)
 };
 
@@ -77,7 +77,7 @@ KEY_CATALOGS.sdfflow = [...new Set([
 // the flow controls are the only model-specific additions.
 KEY_CATALOGS.chiMgnflow = [...new Set([
   ...KEY_CATALOGS.meshgraphnetsV,
-  ...keys(`flow_steps flow_solver flow_time_freqs flow_t_sampling flow_t_logit_scale flow_loss_weighting flow_det_prob flow_predict flow_head flow_head_eps val_flow_steps val_num_samples gamma_es es_samples es_steps es_noise_source es_start_epoch`),
+  ...keys(`flow_steps flow_solver flow_time_freqs flow_t_sampling flow_t_logit_scale flow_loss_weighting flow_det_prob flow_predict val_flow_steps val_num_samples gamma_es es_samples es_steps es_noise_source es_start_epoch`),
   // LDGN rewrite (Lino, Pfaff & Thuerey, ICLR 2025, arXiv:2504.02843): the
   // two-stage architecture/mode surface -- a near-lossless compressor (stage
   // 1, latent_ch/ae_kl_weight/ae_epochs) feeding a coarse-latent flow prior
@@ -133,24 +133,29 @@ export const MODEL_CATALOG = {
   "meshgraphnets-v": {
     label: "MeshGraphNets-V", short: "MGN-V", accent: "#407d69", modes: ["train", "inference"], keys: KEY_CATALOGS.meshgraphnetsV,
     description: "Variational mesh simulator with conditional priors and stochastic trajectories.", dataset: "mesh HDF5",
-    defaults: { model: "meshgraphnets-v", mode: "train", gpu_ids: "0", modelpath: "../../output/meshgraphnets_v/studio/meshgraphnets_v.pth", latent_dim: "128", edge_var: "8", vae_latent_dim: "256", num_vae_samples: "32", training_epochs: "500", batch_size: "4", learningr: "0.0001" }
+    // message_passing_num is required on a flat run (MGN-MP-REQ), and use_vae
+    // defaults to False natively -- without it a fresh "variational" block
+    // trained a deterministic model and every vae_* value here was inert.
+    defaults: { model: "meshgraphnets-v", mode: "train", gpu_ids: "0", modelpath: "../../output/meshgraphnets-v/studio/meshgraphnets_v.pth", message_passing_num: "15", latent_dim: "128", edge_var: "8", use_vae: "True", vae_latent_dim: "256", num_vae_samples: "32", training_epochs: "500", batch_size: "4", learningr: "0.0001" }
   },
   "chi-mgnflow": {
-    label: "cHI-MGNflow", short: "cHI-FM", accent: "#286d7a", modes: ["train", "inference"], keys: KEY_CATALOGS.chiMgnflow,
+    label: "cHI-MGNflow", short: "cHI-FM", accent: "#286d7a", modes: ["train", "train_ae", "train_prior", "inference"], keys: KEY_CATALOGS.chiMgnflow,
     description: "Conditional hierarchical MeshGraphNet with flow-matching field generation and deterministic or ensemble readout.", dataset: "mesh HDF5",
     defaults: {
       model: "chi-mgnflow", mode: "train", gpu_ids: "0", parallel_mode: "ddp",
       modelpath: "../../output/chi-mgnflow/studio/chi_mgnflow.pth",
       latent_dim: "128", edge_var: "8", use_multiscale: "True",
-      message_passing_num: "15", coarsening_type: "voronoi_seedmean",
+      // No message_passing_num: cHI-MGNflow never reads it (FLOW-MPNUM-INERT),
+      // and as a default it put that notice on every block and template.
+      coarsening_type: "voronoi_seedmean",
       multiscale_levels: "2", voronoi_clusters: "500,100", mp_per_level: "3,4,6,4,3",
       hierarchy_variants: "1", hierarchy_seed: "1234",
       // Stage-1 compressor (mode train_ae, or the first half of combined
       // train): ae_epochs has no launcher default and is REQUIRED for mode
       // train, unlike latent_ch/ae_kl_weight/prior_blocks below, which mirror
-      // cae_suite/specs/chi_mgnflow.py's own defaults. Ratio (epochs:200 of
-      // training_epochs:500) matches configs/HI_MGNFlow/deepjeb/config_train.txt,
-      // the one full-scale combined-train config in the repo.
+      // cae_suite/specs/chi_mgnflow.py's own defaults. The 200:500 split of
+      // ae_epochs to training_epochs is a Studio default, not a checked-in
+      // config's value.
       ae_epochs: "200", latent_ch: "4", ae_kl_weight: "1e-6", prior_blocks: "4",
       flow_steps: "30", flow_solver: "heun", flow_time_freqs: "16",
       flow_t_sampling: "uniform", flow_loss_weighting: "uniform", flow_det_prob: "0",
@@ -166,7 +171,7 @@ export const MODEL_CATALOG = {
     // bug as sdfflow's missing dataset_dir. Values mirror
     // configs/Neural_Operator/deterministic/ex9/baseline/config_train_point_deeponet.txt,
     // the one benchmarked, working Point-DeepONet configuration in the repo.
-    defaults: { model: "point_deeponet", mode: "train", gpu_ids: "0", modelpath: "../../output/point_deeponet/studio/point_deeponet.pth", coordinate_normalization: "centered_isotropic", point_sensor_count: "2048", point_hidden_channels: "128", point_feature_dim: "128", pointnet_depth: "3", point_trunk_depth: "3", training_epochs: "500", batch_size: "4", learningr: "0.0001" }
+    defaults: { model: "point_deeponet", mode: "train", gpu_ids: "0", modelpath: "../../output/point_deeponet/studio/point_deeponet.pth", coordinate_normalization: "centered_isotropic", point_variant: "mesh_state", point_sensor_count: "0", point_hidden_channels: "128", point_feature_dim: "128", pointnet_depth: "3", point_trunk_depth: "3", point_refiner_depth: "2", training_epochs: "500", batch_size: "8", learningr: "0.0001", weight_decay: "0.00001" }
   },
   deeponet: {
     label: "DeepONet", short: "DON", accent: "#526f9d", modes: ["train", "inference"], keys: KEY_CATALOGS.operator,
@@ -174,110 +179,195 @@ export const MODEL_CATALOG = {
     // deeponet_sensor_resolution / deeponet_basis_dim were missing -- both
     // NOVAR-REQ required. Values mirror
     // configs/Neural_Operator/deterministic/ex9/baseline/config_train_deeponet.txt.
-    defaults: { model: "deeponet", mode: "train", gpu_ids: "0", modelpath: "../../output/deeponet/studio/deeponet.pth", coordinate_normalization: "centered_isotropic", deeponet_sensor_resolution: "32,16", deeponet_hidden_channels: "256", deeponet_branch_depth: "3", deeponet_trunk_depth: "3", deeponet_basis_dim: "128", training_epochs: "500", batch_size: "4", learningr: "0.0001" }
+    defaults: { model: "deeponet", mode: "train", gpu_ids: "0", modelpath: "../../output/deeponet/studio/deeponet.pth", coordinate_normalization: "centered_isotropic", deeponet_sensor_resolution: "32, 16", deeponet_hidden_channels: "256", deeponet_branch_depth: "4", deeponet_trunk_depth: "4", deeponet_basis_dim: "128", deeponet_activation: "relu", training_epochs: "500", batch_size: "8", learningr: "0.0001", weight_decay: "0.0001" }
   },
   fno: {
     label: "FNO", short: "FNO", accent: "#6561a3", modes: ["train", "inference"], keys: KEY_CATALOGS.operator,
     description: "Fourier Neural Operator with explicit grid and spectral-mode controls.", dataset: "mesh HDF5",
-    defaults: { model: "fno", mode: "train", gpu_ids: "0", modelpath: "../../output/fno/studio/fno.pth", coordinate_normalization: "centered_isotropic", fno_grid_resolution: "64,64,64", fno_modes: "16,16,16", fno_hidden_channels: "64", fno_layers: "4", training_epochs: "500", batch_size: "4", learningr: "0.0001" }
+    // Grid and modes mirror configs/Neural_Operator/deterministic/ex9/baseline/config_train_fno.txt.
+    // Their length must equal the dataset's spatial dimension (NOVAR-FNO-001
+    // only checks that the two agree), so a 3-D dataset needs three entries.
+    defaults: { model: "fno", mode: "train", gpu_ids: "0", modelpath: "../../output/fno/studio/fno.pth", coordinate_normalization: "centered_isotropic", fno_variant: "mesh", fno_grid_resolution: "128, 32", fno_modes: "12, 12", fno_hidden_channels: "32", fno_layers: "4", training_epochs: "500", batch_size: "8", learningr: "0.0001", weight_decay: "0.0001" }
   },
   transolver: {
     label: "Transolver3", short: "TR3", accent: "#9a5e55", modes: ["train", "inference"], keys: KEY_CATALOGS.transolver,
     description: "Physics-Attention with slice-space and node-sharded execution controls.", dataset: "mesh HDF5",
-    defaults: { model: "transolver", mode: "train", gpu_ids: "0", modelpath: "../../output/transolver/studio/transolver.pth", coordinate_normalization: "centered_isotropic", latent_dim: "256", num_layers: "10", num_heads: "8", slice_num: "128", attention_kernel: "slice_space", use_checkpointing: "True", training_epochs: "500", batch_size: "1", grad_accum_steps: "4", learningr: "0.0001" }
+    // Mirrors configs/Transolver/deterministic/ex9/baseline/config_train_transolver3.txt.
+    defaults: { model: "transolver", mode: "train", gpu_ids: "0", modelpath: "../../output/transolver/studio/transolver.pth", coordinate_normalization: "centered_isotropic", latent_dim: "256", num_layers: "8", num_heads: "8", slice_num: "64", mlp_ratio: "2", attention_kernel: "slice_space", chunk_size: "4096", use_checkpointing: "True", training_epochs: "500", batch_size: "1", learningr: "0.001", weight_decay: "0.05", warmup_epochs: "25", max_grad_norm: "1" }
   },
   sdfflow: {
     label: "SDFFlow", short: "SDF", accent: "#8b7837", modes: ["train", "train_vae", "train_fm", "sample", "reconstruct", "interpolate", "optimize", "evaluate"], keys: KEY_CATALOGS.sdfflow,
     description: "SDF-VAE and conditional flow matching for CAD candidate generation.", dataset: "SDF HDF5",
     // SDFFlow's train route requires 25 keys. Without architecture/checkpoint
     // defaults a freshly added block needed 18 hand-typed values before it could
-    // even reach preflight, so these mirror configs/SDFFlow/config_train.txt
-    // (decoder_type=attention is the VecSet pairing for latent_tokens > 1).
+    // even reach preflight, so the architecture and training values below mirror
+    // configs/SDFFlow/geometry_generation/ex1/baseline/config_train_sdfflow.txt
+    // (the v3 recipe: FPS encoder queries, parent-grouped split, DiT FM trunk).
+    // Only the paths are the Studio's own.
     defaults: {
-      model: "sdfflow", mode: "train", gpu_ids: "0", latent_dim: "256", latent_tokens: "32",
-      // dataset_dir was missing here -- sdfflow train is the only model whose
-      // freshly dropped block failed preflight on a required field nothing in
-      // this table ever set (CFG-REQ-001). deepjeb.h5 is the only staged SDF
-      // dataset; its cond_names attr is exactly this five-column order.
+      model: "sdfflow", mode: "train", gpu_ids: "0", seed: "42",
+      // deepjeb.h5 is the only staged SDF dataset.
       dataset_dir: "../../dataset/geometry_generation/ex1_deepjeb.h5", split_seed: "42",
-      // use_conditions defaults to FALSE in the spec, so shipping
-      // condition_names without it left the FM stage unconditioned and the
-      // whole list inert -- and the downstream "generative" pipeline, which
-      // steers generation with cond_values, had nothing to steer. Turning it on
-      // makes cond_dropout mandatory (SDF-COND-001); 0.1 is the checked-in
-      // value and is what enables classifier-free guidance at sample time.
-      use_conditions: "True", cond_dropout: "0.1",
-      condition_names: "bbox_x,bbox_y,bbox_z,volume,area",
+      // DeepJEB shapes come in parent families; a shape-level split puts a
+      // sibling of every held-out shape in train (an interpolation split).
+      split_by_parent: "True",
+      num_encoder_points: "6144", num_query_points: "8192",
+      latent_tokens: "512", latent_dim: "32",
+      encoder_query_type: "fps", encoder_dim: "256", encoder_heads: "8", encoder_blocks: "4",
+      encoder_self_attention: "True",
+      decoder_type: "attention", decoder_hidden: "256", decoder_layers: "4", decoder_heads: "8",
+      fourier_bands: "8",
+      // Mirrors ex1's train config: the KL sweep showed 1e-4 collapses the posterior.
+      kl_weight: "0.000001", clamp_dist: "0.1", deterministic_warmup_epochs: "50",
+      posterior_noise_warmup_epochs: "100", posterior_noise_max_scale: "1",
+      kl_warmup_epochs: "200", posterior_min_std_rel: "0.05",
+      surface_weight: "1", normal_weight: "0.1", eikonal_weight: "0.1", hybrid_grad_points: "1024",
+      // use_conditions defaults to FALSE in the spec, so condition_names alone
+      // would leave the FM stage unconditioned and the generative pipeline, which
+      // steers generation with cond_values, with nothing to steer. Turning it on
+      // makes cond_dropout mandatory (SDF-COND-001); dropout is what enables
+      // classifier-free guidance at sample time.
+      use_conditions: "True", condition_names: "volume, area",
+      min_condition_std: "0.00001", condition_clip: "5",
+      cond_dropout: "0.2", cond_dropout_mode: "all",
+      fm_arch: "dit", fm_hidden: "256", fm_blocks: "8", fm_heads: "8", fm_cond_hidden: "128",
+      fm_time_sampling: "uniform", encode_batch_size: "8", ode_steps: "50",
+      vae_training_epochs: "1500", vae_batch_size: "8", vae_learningr: "0.0001",
+      vae_weight_decay: "0.0001", vae_warmup_epochs: "20", vae_num_workers: "2",
+      vae_use_amp: "False", vae_use_ema: "True", vae_ema_decay: "0.99",
+      vae_val_interval: "5", vae_test_interval: "100", vae_num_test_shapes: "2", vae_mc_resolution_test: "64",
+      fm_training_epochs: "500", fm_batch_size: "64", fm_learningr: "0.0001",
+      fm_weight_decay: "0.0001", fm_warmup_epochs: "10", fm_num_workers: "0",
+      fm_use_amp: "True", fm_use_ema: "True", fm_ema_decay: "0.99",
+      fm_val_interval: "5", fm_test_interval: "50", fm_num_test_shapes: "2", fm_mc_resolution_test: "64",
+      display_testset: "True",
       // Reuse a finished, config-compatible VAE stage instead of retraining it
       // when only the FM stage changed.
       skip_completed_stages: "True",
       output_dir: "../../output/geometry_generation/studio",
       vae_modelpath: "../../output/geometry_generation/studio/sdfflow_vae.pth",
       fm_modelpath: "../../output/geometry_generation/studio/sdfflow_fm.pth",
-      num_encoder_points: "4096", num_query_points: "4096",
-      decoder_type: "attention", decoder_hidden: "512", decoder_layers: "8",
-      encoder_dim: "256", encoder_heads: "4", encoder_blocks: "2",
-      fm_hidden: "256", fm_blocks: "4", fm_cond_hidden: "128",
-      vae_training_epochs: "500", vae_batch_size: "4", vae_learningr: "0.0005",
-      fm_training_epochs: "500", fm_batch_size: "64", fm_learningr: "0.0002",
-      training_epochs: "500", batch_size: "4", learningr: "0.0005"
+      fm_best_modelpath: "../../output/geometry_generation/studio/sdfflow_fm_best.pth",
+      // train_vae / train_fm read the generic trio instead of the vae_*/fm_* pair.
+      training_epochs: "1500", batch_size: "8", learningr: "0.0001"
     }
   }
 };
 
-export const REQUIRED = {
-  simulgenvae: {
-    train: keys(`model mode gpu_ids dataset_dir vae_modelpath lc_modelpath num_filter_enc latent_dim latent_dim_end lc_filter lc_data_type param_dir vae_training_epochs vae_batch_size vae_learningr lc_training_epochs lc_batch_size lc_learningr`),
-    train_vae: keys(`model mode gpu_ids dataset_dir vae_modelpath num_filter_enc latent_dim latent_dim_end training_epochs batch_size learningr`),
-    train_lc: keys(`model mode gpu_ids dataset_dir vae_modelpath lc_modelpath num_filter_enc latent_dim latent_dim_end lc_filter lc_data_type param_dir training_epochs batch_size learningr`),
-    reconstruct: keys(`model mode gpu_ids dataset_dir vae_modelpath lc_modelpath num_filter_enc latent_dim latent_dim_end lc_filter lc_data_type param_dir output_dir`)
-  },
-  mlp: {
-    train: keys(`model mode gpu_ids dataset_dir modelpath input_var output_var training_epochs batch_size learningr`),
-    inference: keys(`model mode gpu_ids modelpath infer_dataset input_var output_var`)
-  },
+/**
+ * The checked-in train configs a model block's "High performance" and
+ * "Low VRAM" presets read: the largest recipe the repo has run for the route,
+ * and the smallest. Only the recipe is copied (config.js presetRecipe says
+ * what stays the block's own), and Low VRAM additionally runs batch_size 1.
+ *
+ *  - meshgraphnets: both are the HI-MGN recipe. MGN checkpoints one GnBlock at
+ *    a time, so under use_checkpointing activation memory follows the number
+ *    of full-resolution blocks -- 15 on flat MGN, 4 + 4 on HI-MGN -- which makes
+ *    HI-MGN the smaller of the two, not the larger. ex8 is ex9's recipe at batch 1.
+ *  - meshgraphnets-v / chi-mgnflow: the tuned SAOI run (mp_per_level 4,6,8,6,4,
+ *    4 hierarchy variants, the larger prior) against the probabilistic ex1
+ *    baseline (2,3,5,3,2).
+ *  - transolver: ex3_full, 24 layers in full precision, against ex9, 8 under AMP.
+ *  - fno / deeponet: ex9 against ex10 (batch 1; FNO width 20 instead of 32).
+ *  - point_deeponet: ex9 reads every node (point_sensor_count 0); ex1 5000 at batch 1.
+ *  - sdfflow: ex1's 512 latent tokens against ex2's 32.
+ *  - simulgenvae: ex9 against ex3_full, the same network at vae_batch_size 2.
+ * MLP has no checked-in config, so its menu keeps "Studio defaults".
+ */
+export const PRESET_SOURCES = {
   meshgraphnets: {
-    train: keys(`model mode gpu_ids dataset_dir modelpath input_var output_var edge_var latent_dim training_epochs batch_size learningr`),
-    inference: keys(`model mode gpu_ids modelpath infer_dataset input_var output_var edge_var`)
+    high: { path: "configs/MeshGraphNets/deterministic/ex9/baseline/config_train_himgn.txt", note: "ex9 HI-MGN" },
+    low: { path: "configs/MeshGraphNets/deterministic/ex8/baseline/config_train_himgn.txt", note: "ex8 HI-MGN" }
   },
   "meshgraphnets-v": {
-    train: keys(`model mode gpu_ids dataset_dir modelpath input_var output_var edge_var latent_dim training_epochs batch_size learningr`),
-    inference: keys(`model mode gpu_ids modelpath infer_dataset input_var output_var edge_var`)
+    high: { path: "configs/MeshGraphNets_Variational/SAOI_run/config_train_bot.txt", note: "SAOI run" },
+    low: { path: "configs/MeshGraphNets_Variational/probabilistic/ex1/baseline/config_train_himgn_v.txt", note: "probabilistic ex1" }
   },
   "chi-mgnflow": {
-    train: keys(`model mode gpu_ids dataset_dir modelpath input_var output_var edge_var latent_dim training_epochs batch_size learningr`),
-    inference: keys(`model mode gpu_ids modelpath infer_dataset input_var output_var edge_var`)
-  },
-  point_deeponet: {
-    train: keys(`model mode gpu_ids dataset_dir modelpath input_var output_var coordinate_normalization training_epochs batch_size learningr point_sensor_count point_hidden_channels point_feature_dim pointnet_depth point_trunk_depth`),
-    inference: keys(`model mode gpu_ids modelpath infer_dataset input_var output_var`)
-  },
-  deeponet: {
-    train: keys(`model mode gpu_ids dataset_dir modelpath input_var output_var coordinate_normalization training_epochs batch_size learningr deeponet_sensor_resolution deeponet_hidden_channels deeponet_branch_depth deeponet_trunk_depth deeponet_basis_dim`),
-    inference: keys(`model mode gpu_ids modelpath infer_dataset input_var output_var`)
-  },
-  fno: {
-    train: keys(`model mode gpu_ids dataset_dir modelpath input_var output_var coordinate_normalization training_epochs batch_size learningr fno_grid_resolution fno_modes fno_hidden_channels fno_layers`),
-    inference: keys(`model mode gpu_ids modelpath infer_dataset input_var output_var`)
+    high: { path: "configs/HI_MGNFlow/SAOI_run/config_train_bot.txt", note: "SAOI run" },
+    low: { path: "configs/HI_MGNFlow/probabilistic/ex1/baseline/config_train_chi_mgnflow.txt", note: "probabilistic ex1" }
   },
   transolver: {
-    train: keys(`model mode gpu_ids dataset_dir modelpath input_var output_var coordinate_normalization training_epochs batch_size learningr latent_dim num_layers num_heads slice_num attention_kernel`),
-    inference: keys(`model mode gpu_ids modelpath infer_dataset input_var output_var`)
+    high: { path: "configs/Transolver/deterministic/ex3_full/baseline/config_train_transolver3.txt", note: "ex3_full, 24 layers" },
+    low: { path: "configs/Transolver/deterministic/ex9/baseline/config_train_transolver3.txt", note: "ex9, 8 layers" }
+  },
+  fno: {
+    high: { path: "configs/Neural_Operator/deterministic/ex9/baseline/config_train_fno.txt", note: "ex9" },
+    low: { path: "configs/Neural_Operator/deterministic/ex10/baseline/config_train_fno.txt", note: "ex10" }
+  },
+  deeponet: {
+    high: { path: "configs/Neural_Operator/deterministic/ex9/baseline/config_train_deeponet.txt", note: "ex9" },
+    low: { path: "configs/Neural_Operator/deterministic/ex10/baseline/config_train_deeponet.txt", note: "ex10" }
+  },
+  point_deeponet: {
+    high: { path: "configs/Neural_Operator/deterministic/ex9/baseline/config_train_point_deeponet.txt", note: "ex9, all nodes" },
+    low: { path: "configs/Neural_Operator/deterministic/ex1/baseline/config_train_point_deeponet.txt", note: "ex1, 5000 sensors" }
   },
   sdfflow: {
-    train: keys(`model mode gpu_ids dataset_dir output_dir vae_modelpath vae_training_epochs vae_batch_size vae_learningr fm_modelpath fm_training_epochs fm_batch_size fm_learningr latent_dim latent_tokens encoder_dim encoder_heads encoder_blocks decoder_type decoder_hidden decoder_layers num_encoder_points num_query_points fm_hidden fm_blocks fm_cond_hidden`),
-    train_vae: keys(`model mode gpu_ids dataset_dir output_dir vae_modelpath training_epochs batch_size learningr latent_dim latent_tokens encoder_dim encoder_heads encoder_blocks decoder_type decoder_hidden decoder_layers num_encoder_points num_query_points`),
-    train_fm: keys(`model mode gpu_ids dataset_dir output_dir vae_modelpath fm_modelpath training_epochs batch_size learningr fm_hidden fm_blocks fm_cond_hidden`),
-    sample: keys(`model mode gpu_ids vae_modelpath fm_modelpath output_dir num_samples seed ode_steps mc_resolution`),
-    reconstruct: keys(`model mode gpu_ids vae_modelpath input_mesh output_dir mc_resolution latent_refine_steps latent_refine_lr latent_refine_prior_weight`),
-    // sample_index_b is conditional (SDF-INTERP-007): slerp_noise / lerp_latent
-    // need the second endpoint, interpolation_space cond_sweep integrates the one
-    // noise row sample_index_a under a condition sweep. alpha has a spec default.
-    interpolate: keys(`model mode gpu_ids vae_modelpath fm_modelpath output_dir seed source_num_samples sample_index_a ode_steps mc_resolution interpolation_space`),
-    optimize: keys(`model mode gpu_ids vae_modelpath fm_modelpath output_dir seed ode_steps mc_resolution opt_subspace_dim opt_budget opt_popsize opt_baseline_size opt_load_cases`),
-    // Held-out VAE reconstruction metrics; the split keys must match the
-    // training run so the evaluated shapes are the ones the VAE never saw.
-    evaluate: keys(`model mode gpu_ids vae_modelpath dataset_dir output_dir split_seed split_by_parent eval_split eval_num_shapes eval_seed mc_resolution latent_refine_steps latent_refine_lr latent_refine_prior_weight`)
+    high: { path: "configs/SDFFlow/geometry_generation/ex1/baseline/config_train_sdfflow.txt", note: "ex1, 512 tokens" },
+    low: { path: "configs/SDFFlow/geometry_generation/ex2/baseline/config_train_sdfflow.txt", note: "ex2, 32 tokens" }
+  },
+  simulgenvae: {
+    high: { path: "configs/SimulGenVAE/deterministic/ex9/baseline/config_train_lsh_vae.txt", note: "ex9" },
+    low: { path: "configs/SimulGenVAE/deterministic/ex3_full/baseline/config_train_lsh_vae.txt", note: "ex3_full" }
+  }
+};
+
+// Offline fallback only: with the backend up, registerLiveModel replaces each
+// route's table with the spec's published `required`. This is a verbatim copy of
+// spec.required_fields(model, mode) for every route (regenerate it from
+// cae_suite, do not hand-edit); conditional requirements such as NOVAR-REQ or
+// MGN-MULTI-REQ stay with preflight, exactly as they do when the backend is up.
+export const REQUIRED = {
+  "chi-mgnflow": {
+    train: keys(`ae_epochs batch_size dataset_dir edge_var gpu_ids input_var latent_dim learningr mode model modelpath output_var training_epochs`),
+    train_ae: keys(`batch_size dataset_dir edge_var gpu_ids input_var latent_dim learningr mode model modelpath output_var training_epochs`),
+    train_prior: keys(`ae_checkpoint batch_size dataset_dir edge_var gpu_ids input_var latent_dim learningr mode model modelpath output_var training_epochs`),
+    inference: keys(`edge_var gpu_ids infer_dataset input_var mode model modelpath output_var`)
+  },
+  deeponet: {
+    train: keys(`batch_size coordinate_normalization dataset_dir gpu_ids input_var learningr mode model modelpath output_var training_epochs`),
+    inference: keys(`gpu_ids infer_dataset input_var mode model modelpath output_var`)
+  },
+  fno: {
+    train: keys(`batch_size coordinate_normalization dataset_dir gpu_ids input_var learningr mode model modelpath output_var training_epochs`),
+    inference: keys(`gpu_ids infer_dataset input_var mode model modelpath output_var`)
+  },
+  meshgraphnets: {
+    train: keys(`batch_size dataset_dir edge_var gpu_ids input_var latent_dim learningr mode model modelpath output_var training_epochs`),
+    inference: keys(`edge_var gpu_ids infer_dataset input_var mode model modelpath output_var`)
+  },
+  "meshgraphnets-v": {
+    train: keys(`batch_size dataset_dir edge_var gpu_ids input_var latent_dim learningr mode model modelpath output_var training_epochs`),
+    inference: keys(`edge_var gpu_ids infer_dataset input_var mode model modelpath output_var`)
+  },
+  mlp: {
+    train: keys(`batch_size dataset_dir gpu_ids input_var learningr mode model modelpath output_var training_epochs`),
+    inference: keys(`gpu_ids infer_dataset input_var mode model modelpath output_var`)
+  },
+  point_deeponet: {
+    train: keys(`batch_size coordinate_normalization dataset_dir gpu_ids input_var learningr mode model modelpath output_var training_epochs`),
+    inference: keys(`gpu_ids infer_dataset input_var mode model modelpath output_var`)
+  },
+  sdfflow: {
+    train: keys(`dataset_dir decoder_hidden decoder_layers decoder_type encoder_blocks encoder_dim encoder_heads fm_batch_size fm_blocks fm_cond_hidden fm_hidden fm_learningr fm_modelpath fm_training_epochs gpu_ids latent_dim latent_tokens mode model num_encoder_points num_query_points output_dir vae_batch_size vae_learningr vae_modelpath vae_training_epochs`),
+    train_vae: keys(`batch_size dataset_dir decoder_hidden decoder_layers decoder_type encoder_blocks encoder_dim encoder_heads gpu_ids latent_dim latent_tokens learningr mode model num_encoder_points num_query_points output_dir training_epochs vae_modelpath`),
+    train_fm: keys(`batch_size dataset_dir fm_blocks fm_cond_hidden fm_hidden fm_modelpath gpu_ids learningr mode model output_dir training_epochs vae_modelpath`),
+    sample: keys(`fm_modelpath gpu_ids mc_resolution mode model num_samples ode_steps output_dir seed vae_modelpath`),
+    reconstruct: keys(`gpu_ids input_mesh mc_resolution mode model output_dir vae_modelpath`),
+    interpolate: keys(`fm_modelpath gpu_ids mc_resolution mode model ode_steps output_dir sample_index_a seed source_num_samples vae_modelpath`),
+    optimize: keys(`fm_modelpath gpu_ids mc_resolution mode model ode_steps opt_baseline_size opt_budget opt_load_cases opt_popsize opt_subspace_dim output_dir seed vae_modelpath`),
+    evaluate: keys(`dataset_dir gpu_ids mode model output_dir vae_modelpath`)
+  },
+  simulgenvae: {
+    train: keys(`dataset_dir gpu_ids latent_dim latent_dim_end lc_batch_size lc_data_type lc_filter lc_learningr lc_modelpath lc_training_epochs mode model num_filter_enc vae_batch_size vae_learningr vae_modelpath vae_training_epochs`),
+    train_vae: keys(`batch_size dataset_dir gpu_ids latent_dim latent_dim_end learningr mode model num_filter_enc training_epochs vae_modelpath`),
+    train_lc: keys(`batch_size dataset_dir gpu_ids latent_dim latent_dim_end lc_data_type lc_filter lc_modelpath learningr mode model num_filter_enc training_epochs vae_modelpath`),
+    reconstruct: keys(`dataset_dir gpu_ids latent_dim latent_dim_end lc_data_type lc_filter lc_modelpath mode model num_filter_enc output_dir vae_modelpath`)
+  },
+  transolver: {
+    train: keys(`batch_size coordinate_normalization dataset_dir gpu_ids input_var learningr mode model modelpath output_var training_epochs`),
+    inference: keys(`gpu_ids infer_dataset input_var mode model modelpath output_var`)
   }
 };
 
@@ -293,7 +383,6 @@ export const CHOICES = {
   // instead of a separate param_dir file; omitting it hid that path entirely.
   lc_data_type: ["csv", "image", "hdf5"],
   loss_type: ["1", "2", "3", "4"],
-  parallel_mode: ["single", "ddp", "fsdp"],
   attention_kernel: ["naive", "slice_space"],
   infer_mode: ["direct", "decoupled"],
   coordinate_normalization: ["centered_isotropic"],
@@ -339,9 +428,22 @@ export const CHOICES = {
   flow_t_sampling: ["uniform", "logitnormal"],
   flow_loss_weighting: ["uniform", "x0"],
   flow_predict: ["sample", "mean", "ensemble_mean"],
-  flow_head: ["v", "x"],
-  best_by: ["recon", "crps", "det"]
+  // cHI-MGNflow's list; MeshGraphNets-V narrows it (MODEL_CHOICES below).
+  best_by: ["recon", "crps", "det"],
+  // MeshGraphNets-V enums, each a spec validator: MGNV-PRIOR-FAMILY, the
+  // prior_fm_solver check, the z_conditioning check, and spread_stat.
+  prior_family: ["fm", "gmm"],
+  prior_fm_solver: ["heun", "euler"],
+  z_conditioning: ["concat", "adaln"],
+  spread_stat: ["range", "mean", "std"]
 };
+
+// Per-route narrowing of a shared key's choices. MeshGraphNets-V has no
+// deterministic readout to select on, so its spec rejects best_by det
+// (MGNV-BESTBY) while cHI-MGNflow accepts it.
+export const MODEL_CHOICES = Object.freeze({
+  "meshgraphnets-v": { best_by: ["recon", "crps"] }
+});
 
 export const PARALLEL_MODE_CHOICES = Object.freeze({
   simulgenvae: ["single", "ddp", "fsdp"],
@@ -353,7 +455,7 @@ export const PARALLEL_MODE_CHOICES = Object.freeze({
   "chi-mgnflow": ["ddp"]
 });
 
-export const BOOLEAN_KEYS = new Set(keys(`augment_geometry bipartite_unpool coarse_world_edges display_testset display_trainset encoder_self_attention fit_latent_gmm fm_use_amp fm_use_ema guidance_enabled load_all make_histogram overfit_all_shapes point_resample_each_epoch resume_prior show_histogram skip_completed_stages small_output_init split_by_parent train_conditional_prior use_amp use_checkpointing use_compile use_conditional_prior use_ema use_multiscale use_node_types use_parallel_stats use_vae use_world_edges vae_graph_aware vae_use_amp vae_use_ema lc_use_amp lc_use_ema write_preprocessing write_test_predictions`));
+export const BOOLEAN_KEYS = new Set(keys(`augment_geometry bipartite_unpool coarse_world_edges display_testset display_trainset encoder_self_attention fit_latent_gmm fm_use_amp fm_use_ema guidance_enabled load_all make_histogram opt_fea_verify overfit_all_shapes point_resample_each_epoch resume_prior show_histogram skip_completed_stages small_output_init split_by_parent train_conditional_prior use_amp use_checkpointing use_compile use_conditional_prior use_ema use_multiscale use_node_types use_parallel_stats use_vae use_world_edges vae_graph_aware vae_use_amp vae_use_ema lc_use_amp lc_use_ema write_preprocessing write_test_predictions`));
 BOOLEAN_KEYS.delete("load_all");
 export const OPERATOR_REMOVED = new Set(keys(`message_passing_num latent_dim edge_var world_radius_multiplier world_max_num_neighbors world_edge_backend coarse_world_edges multiscale_levels mp_per_level coarsening_type voronoi_clusters coarse_cache_per_worker use_vae vae_latent_dim vae_mp_layers vae_graph_aware free_bits posterior_min_std lambda_mmd lambda_kl lambda_det`));
 export const TRANSOLVER_REJECTED = new Set(keys(`edge_var message_passing_num mp_per_level coarsening_type voronoi_clusters multiscale_levels world_radius_multiplier world_max_num_neighbors world_edge_backend coarse_world_edges`));
@@ -367,7 +469,7 @@ export const MGN_NATIVE_REMOVED = new Set(keys(`alpha_recon beta_aux fit_latent_
 export const MGN_VARIATIONAL_IGNORED = new Set(keys(`eval_dataset hierarchy_cache_build_workers hierarchy_cache_dir hierarchy_cache_keep hierarchy_cache_wait_timeout histogram_bins histogram_clip_quantile make_histogram mmd_bandwidth prior_cov_rank prior_family prior_fm_steps prior_kl_reg_weight prior_nll_weight prior_type recon_loss show_histogram static_cache_per_worker vae_batch_size vae_batch_size_max vae_batch_size_min vae_batch_vram_fraction`));
 
 export const VARIATIONAL_REMOVED = new Set(keys(`alpha_prior_max bipartite_unpool fit_latent_gmm free_bits gmm_components gmm_covariance_type gmm_reg_covar lambda_det lambda_kl positional_encoding residual_scale gamma_es es_samples es_steps es_noise_source es_start_epoch`));
-export const CHI_FLOW_REMOVED = new Set(keys(`use_vae vae_latent_dim vae_mp_layers vae_graph_aware posterior_min_std num_z z_conditioning mmd_bandwidth mmd_gather_ranks lambda_mmd beta_aux alpha_recon recon_loss prior_type use_conditional_prior prior_family prior_nll_weight prior_fm_steps prior_fm_solver prior_mp_layers prior_hidden_dim prior_temperature latent_inflation prior_kl_reg_weight prior_cov_rank prior_min_std prior_mixture_components prior_grad_to_encoder prior_freeze_epoch pv_channel vae_valid_prior_samples gamma_es es_samples es_steps es_noise_source es_start_epoch pipeline_microbatches std_noise noise_gamma noise_std_ratio`));
+export const CHI_FLOW_REMOVED = new Set(keys(`use_vae vae_latent_dim vae_mp_layers vae_graph_aware posterior_min_std num_z z_conditioning mmd_bandwidth mmd_gather_ranks lambda_mmd beta_aux alpha_recon recon_loss prior_type use_conditional_prior prior_family prior_nll_weight prior_fm_steps prior_fm_solver prior_mp_layers prior_hidden_dim prior_temperature latent_inflation prior_kl_reg_weight prior_cov_rank prior_min_std prior_mixture_components prior_grad_to_encoder prior_freeze_epoch pv_channel vae_valid_prior_samples gamma_es es_samples es_steps es_noise_source es_start_epoch pipeline_microbatches std_noise noise_gamma noise_std_ratio flow_head flow_head_eps`));
 VARIATIONAL_REMOVED.forEach(key => CHI_FLOW_REMOVED.add(key));
 
 export const BLOCK_SPECS = {
@@ -503,7 +605,7 @@ export const BLOCK_SPECS = {
     description: "Plot every metric discovered in a connected model run, with per-metric include and exclude controls.",
     inputs: [{ id: "metrics", type: "metrics", label: "training metrics", required: true }],
     outputs: [{ id: "metrics", type: "metrics", label: "selected metrics" }, { id: "report", type: "report", label: "metric plots" }],
-    defaults: { job_id: "", excluded_metrics: "", smoothing: "0" }, sampleLabel: "all discovered metrics",
+    defaults: { job_id: "", excluded_metrics: "", smoothing: "0", y_scale: "linear" }, sampleLabel: "all discovered metrics",
     isMetricsViewer: true
   },
   "evaluate.compare": {
@@ -551,7 +653,7 @@ function installModelBlock(modelId, model) {
     inputs: [
       { id: "data", type: "dataset", label: "training data", required: true },
       { id: "parameters", type: "parameters", label: "conditions", required: false },
-      { id: "resume", type: "checkpoint", label: "resume / stage model", required: false }
+      { id: "resume", type: "checkpoint", label: "resume from", required: false }
     ],
     outputs: [{ id: "model", type: "checkpoint", label: modelId === "simulgenvae" ? "VAE + LC bundle" : "saved model" }, { id: "metrics", type: "metrics", label: "training metrics" }],
     defaults: { ...model.defaults },
@@ -599,7 +701,12 @@ export function registerLiveModel(model) {
     backend: model,
     backendDefaults: liveDefaults,
     backendDefaultsByMode: liveDefaultsByMode,
-    defaults: { ...(local.defaults || {}), ...liveDefaults }
+    // Curated defaults win over the spec's published ones: they are chosen for
+    // the dataset the block ships pointed at (SimulGen-VAE's num_var 2 = ex9's
+    // ux,uy), while a spec default is route-generic and was silently replacing
+    // them (num_var 1). The spec's contract -- keys, required, modes -- is still
+    // taken from the live registry above.
+    defaults: { ...liveDefaults, ...(local.defaults || {}) }
   });
   MODEL_CATALOG[modelId] = local;
   if (!BLOCK_SPECS[`model.${modelId}`]) installModelBlock(modelId, local);
@@ -613,16 +720,43 @@ export function registerLiveModel(model) {
  * viewer hangs off the trainer, and inference → evaluation → export closes the loop.
  *
  * They all point at ex9 (plasticity: 900 samples x 3131 nodes x 20 steps), the
- * smallest staged mesh dataset, and mirror the checked-in ex9 configs under
- * `configs/<method>/ex9/` exactly — including `cond_var 2`, without which 50% of
- * the loss would sit on constant targets.
+ * smallest staged mesh dataset. Where a checked-in
+ * `configs/<method>/deterministic/ex9/baseline/config_train_*.txt` exists, the
+ * trainer values mirror it key for key, minus what the Studio owns (modelpath,
+ * log/output paths, gpu_ids, parallel_mode). That includes `cond_var 2`, without
+ * which 50% of the loss would sit on constant targets, and `write_preprocessing
+ * False`: the MeshGraphNets family defaults it ON and writes train-derived
+ * normalizers back into the shared dataset file (preflight: PATH-MUTATE-002).
  */
 const EX9_MESH = {
   dataset_dir: "../../dataset/deterministic/ex9_plasticity.h5",
   infer_dataset: "../../dataset/deterministic/ex9_plasticity_infer.h5",
   input_var: "2", output_var: "2", cond_var: "2",
-  feature_loss_weights: "1.0, 1.0", positional_features: "4",
-  use_node_types: "False", infer_timesteps: "19", split_seed: "42"
+  feature_loss_weights: "1, 1", positional_features: "4",
+  use_node_types: "False", infer_timesteps: "19", split_seed: "42",
+  time_integration: "ar_ot", training_epochs: "500",
+  num_workers: "2", prefetch_factor: "2", grad_accum_steps: "1", augment_geometry: "False",
+  use_checkpointing: "True", use_ema: "True", ema_decay: "0.99", use_parallel_stats: "False",
+  val_interval: "5", test_interval: "50", test_batch_idx: "0, 1", plot_feature_idx: "0",
+  display_trainset: "True", display_testset: "True",
+  write_preprocessing: "False", use_world_edges: "False"
+};
+
+// Shared by the two ex9 MeshGraphNets configs (himgn, meshgraphnets).
+const EX9_MGN = {
+  batch_size: "8", learningr: "0.0001", weight_decay: "0.0", warmup_epochs: "5",
+  std_noise: "0.01", use_amp: "True", edge_var: "8", latent_dim: "128",
+  geometry_state_mode: "displacement", displacement_state_indices: "0, 1, -1"
+};
+
+// Shared by the three ex9 operator configs (deeponet, fno, point_deeponet).
+const EX9_OPERATOR = {
+  batch_size: "8", learningr: "0.0001", weight_decay: "0.0001", warmup_epochs: "5",
+  std_noise: "0.01", use_amp: "False", use_multiscale: "False",
+  coordinate_normalization: "centered_isotropic", operator_dim: "2",
+  dimension_tolerance: "0.0001", grid_padding: "0.1", out_of_bounds_policy: "error",
+  sdf_source: "none", global_condition_features: "none", integration_weight_source: "none",
+  write_test_predictions: "True", max_grad_norm: "1", checkpoint_interval: "50"
 };
 
 function meshPipeline(name, modelType, trainerConfig = {}, inferenceConfig = {}) {
@@ -660,14 +794,15 @@ function meshPipeline(name, modelType, trainerConfig = {}, inferenceConfig = {})
 export const TEMPLATES = {
   // Default pipeline. Mirrors configs/MeshGraphNets/deterministic/ex9/baseline/config_train_himgn.txt:
   // a 2-level Voronoi hierarchy (voronoi_seedmean — the bare "voronoi" alias was
-  // removed and the native hierarchy build raises on it).
+  // removed and the native hierarchy build raises on it). message_passing_num
+  // is the config's value too, but with use_multiscale on it is inert --
+  // mp_per_level sets the depth, and the config sheet marks it inactive.
   himgn: meshPipeline("HI-MGN multiscale (ex9 plasticity)", "model.meshgraphnets", {
-    message_passing_num: "15", latent_dim: "128", edge_var: "8",
-    use_multiscale: "True", coarsening_type: "voronoi_seedmean",
-    voronoi_clusters: "500, 100", multiscale_levels: "2", mp_per_level: "4, 6, 8, 6, 4",
-    use_world_edges: "False", training_epochs: "500", batch_size: "4", learningr: "0.0001",
-    weight_decay: "0.0001", warmup_epochs: "3", use_amp: "True", use_ema: "True",
-    ema_decay: "0.99", val_interval: "5", num_workers: "2"
+    ...EX9_MGN, message_passing_num: "28",
+    use_multiscale: "True", coarsening_type: "voronoi_seedmean", multiscale_levels: "2",
+    voronoi_clusters: "512, 64", mp_per_level: "4, 6, 8, 6, 4",
+    pool_type: "mean", unpool_type: "sum", learned_interpolation: "True",
+    voronoi_branches: "1, 1", coarse_world_edges: "False"
   }),
   /**
    * SimulGen-VAE, on ex9 rather than ex1, reading its conditions out of the
@@ -686,8 +821,11 @@ export const TEMPLATES = {
    *    external file entirely -- so the separate parameters block and its two
    *    edges are gone, matching how every mesh template in this file is wired.
    *
-   * num_var 2 = ux,uy (rows 3:5), mirroring configs/SimulGenVAE/deterministic/ex9/
-   * config_train_vae.txt; the trailing rows are conditions, not field channels.
+   * num_var 2 = ux,uy (rows 3:5), as in configs/SimulGenVAE/deterministic/ex9/
+   * baseline/config_train_lsh_vae.txt; the trailing rows are conditions, not
+   * field channels. That config reads its conditions from a derived CSV instead
+   * (dataset/derived/config_matrix/), which is the same two rows exported;
+   * `hdf5` keeps the template independent of that derived file.
    */
   simulgen: {
     name: "SimulGen-VAE reconstruction (ex9)",
@@ -740,28 +878,29 @@ export const TEMPLATES = {
   // the key is inert -- and the value it used to carry, "none", is not one of
   // the four the spec accepts, so the config sheet's own dropdown could not
   // represent it. An inert key with an illegal value is worse than no key.
+  // Mirrors configs/MeshGraphNets/deterministic/ex9/baseline/config_train_meshgraphnets.txt.
   physics: meshPipeline("MeshGraphNets flat (ex9 plasticity)", "model.meshgraphnets", {
-    message_passing_num: "15", latent_dim: "128", edge_var: "8",
-    use_multiscale: "False",
-    training_epochs: "500", batch_size: "4", learningr: "0.0001"
+    ...EX9_MGN, message_passing_num: "15", use_multiscale: "False"
   }),
+  // Derived, not mirrored: there is no checked-in ex9 MeshGraphNets-V config
+  // (its campaigns are the probabilistic ex1/ex2 sets). This is the flat MGN
+  // recipe with the variational stage on. MeshGraphNets-V is meant for
+  // one-to-many problems and ex9 is deterministic, so this template shows the
+  // wiring, not a fitting use of the model.
   meshgraphnets_v: meshPipeline("MeshGraphNets-V variational (ex9)", "model.meshgraphnets-v", {
     message_passing_num: "15", latent_dim: "128", edge_var: "8",
     use_vae: "True", vae_latent_dim: "256", num_vae_samples: "32",
-    training_epochs: "500", batch_size: "4", learningr: "0.0001"
+    batch_size: "4", learningr: "0.0001", use_amp: "True"
   }),
-  // Mirrors configs/HI_MGNFlow/ex9/config_ex9_fm_v.txt (the FM_V arm: velocity
-  // prediction with uniform time weighting -- the sampling-optimal
-  // parameterization and the arm every other cHI-MGNflow config in the SAOI
-  // sweep is compared against). training_epochs 25 is that config's real
-  // budget, not a placeholder: flow-matching plus the multiscale hierarchy plus
-  // an 8-sample validation ensemble makes each epoch far heavier than a plain
-  // MeshGraphNets epoch on the same ex9 dataset, so 500 would never realistically
-  // finish as a default demo run. Was previously the one live route (of 12) with
-  // no pipeline template at all -- dragging its block in required hand-wiring
-  // every port from scratch.
+  // Derived from the FM_V arm of the (since removed) ex9 cHI-MGNflow sweep:
+  // velocity prediction with uniform time weighting, the sampling-optimal
+  // parameterization. The live cHI-MGNflow configs are
+  // configs/HI_MGNFlow/probabilistic/ex1 and ex2. training_epochs 25 was that
+  // arm's real budget: flow matching plus the hierarchy plus an ensemble
+  // validation makes each epoch far heavier than a plain MeshGraphNets epoch.
+  // No message_passing_num: with use_multiscale on it is inert.
   chimgnflow: meshPipeline("cHI-MGNflow (ex9 plasticity)", "model.chi-mgnflow", {
-    message_passing_num: "15", latent_dim: "96", edge_var: "8", parallel_mode: "ddp",
+    latent_dim: "96", edge_var: "8", parallel_mode: "ddp",
     use_multiscale: "True", coarsening_type: "voronoi_seedmean",
     voronoi_clusters: "500, 100", multiscale_levels: "2", mp_per_level: "3, 4, 6, 4, 3",
     hierarchy_variants: "1", hierarchy_seed: "1234", hierarchy_cache_keep: "True",
@@ -770,9 +909,7 @@ export const TEMPLATES = {
     flow_loss_weighting: "uniform", flow_det_prob: "0", flow_predict: "sample",
     val_flow_steps: "8", val_num_samples: "4", best_by: "crps",
     // Stage-1 compressor epoch budget -- required for mode train with no
-    // launcher default. 10 is config_ex9_fm_v.txt's real value, chosen there
-    // to match config_ex9_fm_x0.txt so the two arms differ only in
-    // flow_loss_weighting.
+    // launcher default. 10 was the FM_V arm's value.
     ae_epochs: "10",
     training_epochs: "25", batch_size: "8", learningr: "0.0003",
     use_checkpointing: "True", use_amp: "True", use_ema: "True", ema_decay: "0.99",
@@ -792,15 +929,23 @@ export const TEMPLATES = {
     // `mean` is the deterministic t=0 readout, and this arm mirrors FM_V
     // (flow_loss_weighting uniform, flow_det_prob 0) -- it spends no training
     // budget at t=0, so reading the mode out of it is reading out something it
-    // never trained. configs/HI_MGNFlow/ex9/config_ex9_fm_x0.txt is the arm
-    // built for that readout (x0 weighting + flow_det_prob 0.25 + best_by det).
+    // never trained. The arm built for that readout is x0 weighting +
+    // flow_det_prob 0.25 + best_by det.
     // For a better pointwise score without changing the training arm, raise
     // num_vae_samples and use flow_predict ensemble_mean, at N x the cost.
     flow_predict: "sample", num_vae_samples: "1"
   }),
+  // Mirrors configs/Transolver/deterministic/ex9/baseline/config_train_transolver3.txt.
   transolver: meshPipeline("Transolver (ex9 plasticity)", "model.transolver", {
-    latent_dim: "128", num_layers: "10", num_heads: "8", slice_num: "128",
-    attention_kernel: "slice_space", training_epochs: "500", batch_size: "8", learningr: "0.001"
+    batch_size: "1", learningr: "0.001", weight_decay: "0.05", warmup_epochs: "25",
+    std_noise: "0.01", use_amp: "True", use_multiscale: "False",
+    coordinate_normalization: "centered_isotropic",
+    latent_dim: "256", num_layers: "8", num_heads: "8", slice_num: "64", mlp_ratio: "2",
+    attention_kernel: "slice_space", chunk_size: "4096", dropout: "0.0",
+    temperature_init: "0.5", temperature_min: "0.1", temperature_max: "5",
+    amortized_training: "False", amortized_cache_nodes: "0", amortized_query_nodes: "0",
+    infer_mode: "direct", infer_chunk_size: "8192", write_test_predictions: "True",
+    max_grad_norm: "1"
   }),
   // Grid/mode axes below are 2 entries, not 3: ex9 is a 2-D forging domain
   // (Geo-FNO plasticity, 987 cases x 20 states x 3131 nodes). A 3-entry
@@ -808,53 +953,60 @@ export const TEMPLATES = {
   // consistent (same length both sides) so it clears NOVAR-FNO-001 at the spec
   // layer, but it fits a 3rd axis that does not exist in this
   // dataset. Values below instead mirror
-  // configs/Neural_Operator/deterministic/ex9/baseline/config_train_fno.txt exactly, the
-  // benchmarked, actually-run FNO configuration on this data.
+  // configs/Neural_Operator/deterministic/ex9/baseline/config_train_fno.txt.
   fno: meshPipeline("FNO (ex9 plasticity)", "model.fno", {
-    fno_variant: "mesh", fno_grid_resolution: "64, 32", fno_modes: "16, 12", fno_hidden_channels: "64",
-    fno_layers: "4", training_epochs: "500", batch_size: "20", learningr: "0.001"
+    ...EX9_OPERATOR,
+    fno_variant: "mesh", fno_grid_resolution: "128, 32", fno_modes: "12, 12", fno_hidden_channels: "32",
+    fno_layers: "4", fno_use_channel_mlp: "False", fno_norm: "none"
   }),
   // Mirrors configs/Neural_Operator/deterministic/ex9/baseline/config_train_deeponet.txt.
   // deeponet_sensor_resolution and deeponet_basis_dim were previously absent
   // here -- both NOVAR-REQ required, so this template failed preflight before
   // a user could even open it.
   deeponet: meshPipeline("DeepONet (ex9 plasticity)", "model.deeponet", {
-    deeponet_sensor_resolution: "32, 16", deeponet_hidden_channels: "256",
-    deeponet_branch_depth: "3", deeponet_trunk_depth: "3", deeponet_basis_dim: "128",
-    deeponet_activation: "silu",
-    training_epochs: "500", batch_size: "20", learningr: "0.001"
+    ...EX9_OPERATOR,
+    deeponet_branch_source: "fixed_sensors", deeponet_sensor_resolution: "32, 16",
+    deeponet_hidden_channels: "256", deeponet_branch_depth: "4", deeponet_trunk_depth: "4",
+    deeponet_basis_dim: "128", deeponet_activation: "relu", deeponet_multi_output: "split_both",
+    deeponet_max_branch_params: "100000000", infer_query_chunk_size: "16384"
   }),
   // Mirrors configs/Neural_Operator/deterministic/ex9/baseline/config_train_point_deeponet.txt.
   // point_feature_dim, pointnet_depth, and point_trunk_depth were previously
   // absent -- all three NOVAR-REQ required, same missing-required-field bug as
   // the other two operator templates above.
   point_deeponet: meshPipeline("Point-DeepONet (ex9 plasticity)", "model.point_deeponet", {
-    point_sensor_count: "2048", point_hidden_channels: "128", point_feature_dim: "128",
-    pointnet_depth: "3", point_trunk_depth: "3",
-    training_epochs: "500", batch_size: "2", learningr: "0.001"
+    ...EX9_OPERATOR, weight_decay: "0.00001",
+    point_variant: "mesh_state", point_sensor_count: "0", point_sampling: "random",
+    point_resample_each_epoch: "True", point_hidden_channels: "128", point_feature_dim: "128",
+    pointnet_depth: "3", pointnet_activation: "relu", pointnet_norm: "batch",
+    point_branch_merge: "sum", point_trunk_depth: "3", point_refiner_depth: "2",
+    point_siren_omega0: "10", point_output_activation: "identity",
+    infer_query_chunk_size: "16384"
   }),
   parametric: {
     name: "Parametric response estimation",
     nodes: [
       ["parameters", "source.parameters", 35, 295],
-      ["dataset", "source.hdf5", 35, 55, { path: "dataset/deterministic/mlp/train.h5" }],
+      ["dataset", "source.hdf5", 35, 55, { path: "dataset/deterministic/ex3_NASA_CRM_mlp_train.h5" }],
       // Same reason as meshPipeline: this template used to feed the *training*
       // table into the Inference block, so the shipped pipeline scored the MLP
       // on rows it had already fitted. The held-out split was sitting unused
       // next to it the whole time.
-      ["infer_dataset_src", "source.hdf5", 35, 470, { path: "dataset/deterministic/mlp/infer.h5" }],
+      ["infer_dataset_src", "source.hdf5", 35, 470, { path: "dataset/deterministic/ex3_NASA_CRM_mlp_test.h5" }],
       // input_var/output_var are stated rather than left to the user here, and
       // that is safe *only* because MLP is the suite's one tabular route
       // (dataset_kind=table_hdf5): the contract is X[S,N] -> Y[S,M] with no
-      // cond_var rows, so 3 and 2 are literally X.shape[1] and Y.shape[1] of
-      // dataset/deterministic/mlp/train.h5. Do not copy this to a mesh template -- there
+      // cond_var rows, so 6 and 4 are literally X.shape[1] and Y.shape[1] of
+      // dataset/deterministic/ex3_NASA_CRM_mlp_train.h5 (105 train / 44 held-out
+      // NASA-CRM cases). Do not copy this to a mesh template -- there
       // input_var is NOT the feature-row count and hardcoding it reintroduces
       // the ex9 constant-target class of bug. Without these three keys the
       // shipped template failed preflight with CFG-REQ-001 x3 before the user
       // touched anything.
       ["mlp", "model.mlp", 330, 115, {
-        dataset_dir: "../../dataset/deterministic/mlp/train.h5", infer_dataset: "../../dataset/deterministic/mlp/infer.h5",
-        input_var: "3", output_var: "2", split_seed: "42", val_interval: "5"
+        dataset_dir: "../../dataset/deterministic/ex3_NASA_CRM_mlp_train.h5",
+        infer_dataset: "../../dataset/deterministic/ex3_NASA_CRM_mlp_test.h5",
+        input_var: "6", output_var: "4", split_seed: "42", val_interval: "5"
       }],
       ["train_metrics", "evaluate.training_metrics", 625, 430],
       ["inference", "run.inference", 625, 115],
@@ -879,8 +1031,9 @@ export const TEMPLATES = {
   // configured in mode "sample", not "train". Before this template, SDFFlow
   // was the only mode among the suite's live routes with no from-scratch
   // pipeline: training it required hand-typing the merged VAE->FM route onto
-  // a bare block. This mirrors configs/SDFFlow/config_train.txt's merged
-  // `mode train` pipeline on the real deepjeb.h5 SDF dataset (2138 shapes),
+  // a bare block. The trainer block takes the SDFFlow catalog defaults, which
+  // mirror configs/SDFFlow/geometry_generation/ex1/baseline/config_train_sdfflow.txt's
+  // merged `mode train` pipeline on the real deepjeb.h5 SDF dataset (2138 shapes),
   // then feeds the resulting checkpoint straight into a sample-mode CAD
   // generator to prove the trained model actually produces candidates --
   // the natural on-ramp into the "generative" design-optimization template.
@@ -962,8 +1115,8 @@ export const STUDIO_SECTIONS = {
       ["Surrogate evaluation", "model", "adapter", "Consume actual outputs from linked inference or benchmark runs; the optimizer does not invent physics scores.", ["actual CSV", "multi-model", "lineage"], "optimize.design"],
       ["Objectives and constraints", "parameters", "native", "Select numeric columns, min/max direction, hard inequalities, and a top-k budget.", ["min/max", "inequalities", "columns"], "optimize.design"],
       ["Pareto and diversity", "optimize", "native", "Compute the feasible non-dominated set and crowding-distance top-k from actual numeric rows.", ["Pareto front", "top-k", "crowding"], "optimize.design"],
-      ["Iterative search", "run", "roadmap", "Use DOE, evolutionary, or constrained Bayesian search with caching and an evaluation budget.", ["DOE", "NSGA-II", "Bayesian"], "optimize.design"],
-      ["Solver verification", "prepare", "roadmap", "Re-simulate finalists, measure surrogate discrepancy, and approve, reject, or retrain.", ["truth gate", "OOD", "active learning"], "optimize.design"]
+      ["Iterative search", "run", "native", "SDFFlow mode optimize: CMA-ES over the generator's flow-matching noise under an evaluation budget, each candidate generated, meshed, and analyzed by FEA or the HI-MGN surrogate.", ["CMA-ES", "opt_budget", "FEA or surrogate"], "run.cad_generator"],
+      ["Solver verification", "prepare", "native", "Re-solve the winner, best baseline, and typical baseline with the real solver: an FEA search re-meshes them at opt_verify_*; a surrogate search re-solves them with tet4 FEA when opt_fea_verify is set, and the report sets surrogate against solver.", ["re-solve", "opt_fea_verify", "surrogate vs FEA"], "run.cad_generator"]
     ]
   },
   evaluation: {
@@ -1000,7 +1153,7 @@ export const STUDIO_SECTIONS = {
     label: "Campaigns", icon: "evaluate", color: "#8a613b", note: "Checked-in configs and preflight",
     title: "Benchmark campaign workspace", description: "Inspect, preflight, and load the checked-in cross-method campaign roster. A present or passing config is not evidence that its dataset was staged, training ran, or a published result was reproduced.",
     cards: [
-      ["Cross-method roster", "evaluate", "adapter", "Browse the ex4-ex9 model arms named by configs/campaigns/benchmarks_all/roster.tsv.", ["roster", "ex4-ex9", "config"]],
+      ["Cross-method roster", "evaluate", "adapter", "Browse every train/infer config pair named by configs/campaigns/dataset_matrix/manifest.json.", ["manifest", "ex1-ex10", "config"]],
       ["Native preflight", "evaluate", "native", "Run the launcher contract checks for one checked-in config before loading it into the graph.", ["validation", "warnings", "errors"]],
       ["Evidence boundary", "output", "adapter", "Campaign membership and preflight status do not create a score or validate a scientific claim.", ["not executed", "no score", "lineage"]]
     ]
@@ -1065,7 +1218,22 @@ export const HELP = {
   model: "Exact live registry ID. The display name may be friendlier, but saved config uses this route.",
   mode: "Only modes accepted by the selected live route are listed.",
   dataset_dir: "Input HDF5 path, resolved relative to the method repository by existing launcher rules.",
-  gpu_ids: "One CUDA ID or a comma-separated list. SimulGen DDP/FSDP requires multiple IDs to distribute.",
+  infer_dataset: "Held-out HDF5 read by mode inference (and by the periodic test pass). Keep it a different file from dataset_dir, or the score measures memorization.",
+  modelpath: "Checkpoint path: written by mode train, read by mode inference. Relative to the method directory, so it is spelled ../../output/...",
+  input_var: "Number of state rows after the three coordinate rows. On mesh routes it is NOT the feature-row count when cond_var rows follow; for MLP it is X.shape[1].",
+  output_var: "Number of predicted rows. Must equal input_var for T>1 autoregressive rollouts; for MLP it is Y.shape[1].",
+  training_epochs: "Total training epochs for single-stage routes and for SimulGen train_vae/train_lc and SDFFlow train_vae/train_fm.",
+  batch_size: "Samples per optimizer step (per GPU under DDP). On variable-size meshes memory scales with the largest graph in the batch.",
+  write_preprocessing: "Write train-derived normalizers back into the source HDF5. MeshGraphNets-family default is ON; the Studio templates turn it off so the shared dataset stays read-only.",
+  use_node_types: "Append a one-hot of the trailing node-type row to the node inputs. The row is copied through a rollout and never predicted.",
+  use_vae: "Turn on the variational latent. MeshGraphNets-V defaults it False natively, which silently trains a deterministic model.",
+  prior_family: "Conditional prior over the latent: fm (flow matching) or gmm (Gaussian mixture).",
+  prior_fm_solver: "ODE solver for the flow-matching prior: heun (2nd order, default) or euler.",
+  z_conditioning: "How the latent enters the processor: concat (legacy fuser) or adaln (AdaLN-Zero modulation).",
+  spread_stat: "How spread_channel is reduced to one number per realization for the spread histogram: range (max - min), mean or std. range is degenerate on displacement-driven fields.",
+  kl_weight: "SDFFlow VAE KL weight. Too high collapses the posterior toward the prior (reconstructions lose detail); too low makes the latent space hard for the flow model to cover.",
+  fm_arch: "Flow-matching trunk: mlp or dit. dit attends across latent tokens, so it needs latent_tokens > 1.",
+  gpu_ids: "CUDA device index, or a comma-separated list to train on several GPUs where the method supports it (see parallel_mode). Indices are physical: nothing in the suite remaps CUDA_VISIBLE_DEVICES.",
   vae_modelpath: "VAE checkpoint path. SimulGen uses it across VAE/LC stages; SDFFlow uses it to decode latent shapes.",
   fm_modelpath: "SDFFlow flow-matching checkpoint. It defines the learned latent distribution used by sample, interpolate, and optimize modes.",
   lc_modelpath: "SimulGen latent-conditioner checkpoint output for train/train_lc and input for reconstruct.",
@@ -1118,11 +1286,11 @@ export const HELP = {
   val_flow_steps: "Cheaper ODE step count used during validation.",
   val_num_samples: "Number of validation ensemble members used for sampling metrics.",
   best_by: "Checkpoint selection metric: reconstruction, CRPS, or deterministic validation error.",
-  opt_subspace_dim: "Number of orthonormal flow-noise directions exposed to the optimizer; a smaller subspace makes the search cheaper and easier to interpret.",
-  opt_subspace_seed: "Seed that fixes the orthonormal latent search basis. Keep it fixed when comparing optimization runs.",
+  opt_subspace_dim: "Number of flow-noise design coordinates the optimizer searches. Each one tilts the base noise draw toward its own Gaussian direction; every point stays an exact N(0, I) noise, so fewer coordinates make the search cheaper without leaving the learned distribution.",
+  opt_subspace_seed: "Seed that fixes the Gaussian search directions. Keep it fixed when comparing optimization runs.",
   opt_condition_dims: "Comma-separated trained FM condition names that become design variables, such as volume and area.",
-  opt_shell_scale: "Maximum latent-noise shell radius multiplier used to keep candidates near the learned distribution.",
-  opt_latent_range: "Per-coordinate bound for latent search variables inside the selected subspace.",
+  opt_shell_scale: "Default half-width of the latent search box when opt_latent_range is unset. Nothing is clipped: at the default 1.25 with 12 coordinates the box corner turns about 77 degrees away from the base noise draw. (Runs written before the gnomonic noise chart also clipped to this shell radius.)",
+  opt_latent_range: "Per-coordinate bound for the latent design coordinates; defaults to opt_shell_scale. |x| = 1 is a 45-degree turn from the base noise draw, so a wider box explores shapes further from it.",
   opt_target_faces: "Target surface-face count used for each search-stage FEA mesh.",
   opt_mesh_size_max: "Maximum gmsh element size, in normalized geometry units, during the search stage.",
   opt_load_cases: "Comma-separated structural load cases evaluated for every candidate: vertical, horizontal, diagonal, or torsion.",
@@ -1132,12 +1300,14 @@ export const HELP = {
   opt_material_rho: "Material density in kg/m^3, used to compute mass.",
   opt_yield_stress: "Yield stress in pascals used for the stress feasibility constraint.",
   opt_stress_percentile: "Nodal von Mises percentile treated as peak stress; a percentile is more robust than a single-node maximum.",
-  opt_baseline_size: "Number of random generated designs used to calibrate active stress and displacement allowables.",
-  opt_stress_margin: "Multiplier applied to the baseline peak-stress allowance; values below one are stricter.",
-  opt_disp_margin: "Multiplier applied to the baseline displacement allowance; values below one are stricter.",
+  opt_baseline_size: "Number of random generated designs analysed before the search. They calibrate the stress and displacement allowables; with opt_budget 0 they are the whole screen, and the lightest one meeting the limits is delivered.",
+  opt_screen_batch: "opt_analysis surrogate only: designs predicted per HI-MGN call while the opt_baseline_size population is analysed. Each call pays one model load, so larger chunks are faster; progress is printed after every chunk. 0 = the whole population in one call.",
+  opt_stress_margin: "Multiplier applied to the baseline peak-stress allowance; values below one are stricter. 0 turns the stress constraint off: only mass and the deflection limit score a design, and peak stress is still reported.",
+  opt_disp_margin: "Multiplier applied to the baseline displacement allowance; values below one are stricter. Ignored when opt_vertical_disp_max is set.",
+  opt_vertical_disp_max: "Deflection requirement in millimetres: the largest |u_z| allowed under the vertical load case. Mass is minimized subject to it (and the stress allowable); it replaces the population-calibrated displacement allowance. 0 turns it off. Needs vertical in opt_load_cases.",
   opt_stress_weight: "Quadratic objective penalty for exceeding the stress allowance.",
   opt_disp_weight: "Quadratic objective penalty for exceeding the displacement allowance.",
-  opt_budget: "Maximum number of generate-mesh-solve evaluations in the CMA-ES search.",
+  opt_budget: "Maximum number of generate-mesh-solve evaluations in the CMA-ES search. 0 = screening: no search, the opt_baseline_size designs are generated and analysed once, the lightest one meeting the limits is delivered, and screening.csv lists every screened design.",
   opt_popsize: "CMA-ES population evaluated per generation.",
   opt_sigma0: "Initial CMA-ES step size in normalized design coordinates.",
   opt_seed: "Seed for the baseline population and CMA-ES trajectory.",
@@ -1145,6 +1315,7 @@ export const HELP = {
   opt_surrogate_checkpoint: "HI-MGN checkpoint used only when opt_analysis is surrogate. It must match the model family and feature contract named by opt_surrogate_config.",
   opt_surrogate_config: "HI-MGN inference config used only when opt_analysis is surrogate. It defines the dataset schema, variables, normalization, graph construction, and rollout settings expected by the checkpoint.",
   opt_surrogate_target_nodes: "Approximate surface-node count sampled for each surrogate evaluation. Larger values preserve more geometric detail but increase graph construction and inference cost.",
+  opt_fea_verify: "Surrogate searches only: after the search, re-solve the optimized design, the best baseline, and the typical baseline with the real tet4 FEA solver at the surrogate's label resolution, and add the solver's mass, stress, |u_z|, and limit verdicts to report.md, summary.json, and the fea_* columns of the optimization table. Costs three meshes and solves. No effect with opt_analysis fea, which already re-solves its winner at opt_verify_*.",
   opt_verify_resolution: "Marching Cubes resolution used to regenerate the final winner for verification.",
   opt_verify_target_faces: "Surface-face target for the final refined verification mesh.",
   opt_verify_mesh_size_max: "Maximum gmsh element size for the final refined verification solve.",

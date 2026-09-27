@@ -22,18 +22,19 @@ if _REPO not in sys.path:
 
 from design_loop import fea                                          # noqa: E402
 from design_loop.generator import SDFFlowGenerator                   # noqa: E402
-from design_loop.loop import Evaluator                               # noqa: E402
+from design_loop.loop import Evaluator, select_best                  # noqa: E402
 from design_loop.problem import Bracket                              # noqa: E402
 from design_loop.visualize import render_comparison                  # noqa: E402
 
 
 def baseline_vector(history):
-    """The best-scoring baseline design -- the comparison reference `optimize` uses."""
+    """The comparison reference `optimize` uses: the best baseline member under the
+    same feasibility-first rule (`loop.select_best`) the search reports with."""
     scored = [r for r in history.get('baseline', [])
               if r.get('ok') and r.get('score') is not None]
     if not scored:
         raise SystemExit('history.json has no scored baseline designs')
-    return np.asarray(min(scored, key=lambda r: r['score'])['x'], dtype=float)
+    return np.asarray(select_best(scored)['x'], dtype=float)
 
 
 def main(argv=None):
@@ -58,13 +59,16 @@ def main(argv=None):
     if args.from_summary and 'verification_settings' in summary:
         v = summary['verification_settings']
         args.mc_resolution = int(v['mc_resolution'])
-        args.target_faces = int(v['target_faces'])
-        args.mesh_size_max = float(v['mesh_size_max'])
+        # A surrogate run records target_nodes instead; keep the FEA flags then.
+        args.target_faces = int(v.get('target_faces', args.target_faces))
+        args.mesh_size_max = float(v.get('mesh_size_max', args.mesh_size_max))
 
     best_x = np.asarray(summary['best_x'], dtype=float)
     base_x = baseline_vector(history)
     # `design_space` pins the exact parameterization; older runs predate it, so
     # fall back to the shipped defaults and reconstruct the split from len(best_x).
+    # A design_space without `noise_param` was written before the gnomonic chart,
+    # so it replays under the chart it was searched with (`NoiseChart`).
     space = summary.get('design_space')
     if space is None:
         cond_dims = ('volume', 'area')
@@ -79,7 +83,10 @@ def main(argv=None):
                                  base_seed=space['base_seed'],
                                  ode_steps=space['ode_steps'],
                                  cond_dims=tuple(space['condition_dims']),
-                                 mc_resolution=args.mc_resolution)
+                                 mc_resolution=args.mc_resolution,
+                                 shell_scale=space.get('shell_scale', 1.25),
+                                 latent_range=space.get('latent_range'),
+                                 noise_param=space.get('noise_param', 'subspace_v1'))
     if generator.n_design != len(best_x):
         raise SystemExit(f'reconstructed design space has {generator.n_design} variables '
                          f'but summary.json stores a {len(best_x)}-vector')

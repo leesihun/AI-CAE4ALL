@@ -7,6 +7,14 @@
 #   CHECK=1   bash configs/run_all_135.sh       launcher --check on every stage still to run
 #   SKIP_GPU_GATE=1 ...                         start without waiting for an idle box
 #
+# Train, then infer, every arm; then score each finished arm on its held-out
+# set and rank the methods per example:
+#   output/dataset_matrix/_campaign/135/report.txt     which stages finished
+#   output/dataset_matrix/_campaign/135/ranking.txt    per-example ranking (+ ranking.csv), and
+#       how far each arm's validation loss still fell at 80% of its epochs (+ convergence.csv)
+#   output/dataset_matrix/_campaign/135/spread_scores.csv  probabilistic calibration
+# Running it again after everything is done only re-scores and re-ranks.
+#
 # The launcher needs Python >= 3.10. Point each method at its venv in
 # ai_cae4all.local.toml, or run from one venv that has everything; PYTHON=...
 # picks the interpreter. See configs/campaigns/dataset_matrix/README.md.

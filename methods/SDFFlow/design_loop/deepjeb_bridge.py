@@ -42,6 +42,15 @@ DEEPJEB_CENTRE = np.array([15.789, -71.580, 32.743])
 DEEPJEB_MAX_SIDE = 184.181
 SDF_TARGET_EXTENT = 1.8          # normalize_mesh scales the longest side to this
 
+# The resolution build_deepjeb_fea labels at: every bracket surface is
+# decimated to LABEL_SURFACE_FACES by `mesher.prepare_surface`, handed to gmsh
+# (which keeps the surface and fills the interior at LABEL_MESH_SIZE_MAX), and
+# the solved boundary is clustered to the graph from there. A generated shape
+# has to reach the graph through the same surface, or the network is served a
+# discretization it never saw.
+LABEL_SURFACE_FACES = 12000
+LABEL_MESH_SIZE_MAX = 0.05
+
 
 def normalized_to_millimetres(vertices, centre=DEEPJEB_CENTRE,
                               max_side=DEEPJEB_MAX_SIDE):
@@ -49,9 +58,29 @@ def normalized_to_millimetres(vertices, centre=DEEPJEB_CENTRE,
     return np.asarray(vertices, dtype=np.float64) * (max_side / SDF_TARGET_EXTENT) + centre
 
 
+def serving_surface(mesh, surface_faces=LABEL_SURFACE_FACES):
+    """The surface a generated shape is bridged from: the label pipeline's.
+
+    The labels were never computed on a raw marching-cubes surface: each one is
+    the boundary of a gmsh mesh built from `prepare_surface(mesh,
+    LABEL_SURFACE_FACES)`. Clustering the raw MC surface (5-10x more faces, MC
+    staircase intact) straight to `target_nodes` gave the surrogate a graph
+    drawn from a different surface than any it was trained on. Falsy
+    `surface_faces` passes the mesh through unchanged.
+    """
+    if not surface_faces:
+        return mesh
+    from design_loop.mesher import prepare_surface
+    return prepare_surface(mesh, int(surface_faces))
+
+
 def mesh_to_records(mesh, load_cases=LOAD_CASES, target_nodes=5000,
                     already_millimetres=False, name='generated'):
-    """One record per load case for a single generated bracket."""
+    """One record per load case for a single bracket surface.
+
+    `mesh` is clustered as given; pass a generated shape through
+    `serving_surface` first.
+    """
     vertices = np.asarray(mesh.vertices, dtype=np.float64)
     if not already_millimetres:
         vertices = normalized_to_millimetres(vertices)
@@ -121,6 +150,9 @@ def main(argv=None):
     parser.add_argument('--stl-dir', default=None, help='directory of STL files')
     parser.add_argument('--out', required=True, help='output HDF5 in the mesh contract')
     parser.add_argument('--target-nodes', type=int, default=5000)
+    parser.add_argument('--surface-faces', type=int, default=LABEL_SURFACE_FACES,
+                        help='decimate each surface to this many faces first, as the '
+                             'labels were (0 bridges the STL as given)')
     parser.add_argument('--load-cases', default=','.join(LOAD_CASES))
     parser.add_argument('--millimetres', action='store_true',
                         help='input STLs are already in the DeepJEB physical frame')
@@ -147,7 +179,8 @@ def main(argv=None):
         mesh = trimesh.load(path, process=False)
         name = os.path.splitext(os.path.basename(path))[0]
         try:
-            recs = mesh_to_records(mesh, load_cases=cases,
+            recs = mesh_to_records(serving_surface(mesh, args.surface_faces),
+                                   load_cases=cases,
                                    target_nodes=args.target_nodes,
                                    already_millimetres=args.millimetres, name=name)
         except Exception as exc:

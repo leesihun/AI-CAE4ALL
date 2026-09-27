@@ -157,17 +157,20 @@ def train(params: Params, config_path: str) -> int:
                         ema[name].mul_(decay).add_(param.detach(), alpha=1 - decay)
                     else:
                         ema[name].copy_(param)
+        # Read before step(): afterwards it is the next epoch's LR, and after the
+        # last epoch a warm restart reports the peak LR for an epoch that never runs.
+        epoch_lr = scheduler.get_last_lr()[0]
         scheduler.step()
         train_loss = running / max(1, len(train_idx))
 
         if val_loader is not None and (epoch + 1) % params.val_interval == 0:
             val_loss = _evaluate(model, val_loader, loss_fn, device)
-            print(f"epoch {epoch + 1:4d} | train {train_loss:.6f} | val {val_loss:.6f} | lr {scheduler.get_last_lr()[0]:.2e}")
+            print(f"epoch {epoch + 1:4d} | train {train_loss:.4e} | val {val_loss:.4e} | lr {epoch_lr:.2e}")
             if val_loss < best_val:
                 best_val = val_loss
                 save("best")
         elif (epoch + 1) % max(1, params.val_interval) == 0:
-            print(f"epoch {epoch + 1:4d} | train {train_loss:.6f} | lr {scheduler.get_last_lr()[0]:.2e}")
+            print(f"epoch {epoch + 1:4d} | train {train_loss:.4e} | lr {epoch_lr:.2e}")
 
         if params.checkpoint_interval > 0 and (epoch + 1) % params.checkpoint_interval == 0:
             save("periodic")

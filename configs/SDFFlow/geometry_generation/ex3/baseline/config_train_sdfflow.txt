@@ -35,7 +35,8 @@ decoder_hidden                   256
 decoder_layers                   4
 decoder_heads                    8
 fourier_bands                    8
-kl_weight                        0.0001
+% 1e-10 (was 1e-4): 1e-4 collapsed the posterior on ex2-ex4 by epoch 50-75 (ex1 sweep: SNR 0).
+kl_weight                        0.0000000001
 clamp_dist                       0.1
 deterministic_warmup_epochs      50
 posterior_noise_warmup_epochs    100

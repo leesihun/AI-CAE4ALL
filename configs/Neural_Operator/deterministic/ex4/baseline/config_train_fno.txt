@@ -7,6 +7,10 @@
 % Static state input is zero; temporal input is current state and target is next-state delta.
 % Reference: https://arxiv.org/abs/2010.08895
 % See configs/campaigns/dataset_matrix/README.md for deviations and verification boundaries.
+% training_epochs 420 (not the roster's 500) is the paper's CylinderFlow budget:
+%   80 train trajectories x 599 windows = 47,920 items/epoch; 420 epochs = 20.1M
+%   sample presentations = the 10M steps x batch 2 of arXiv:2010.03409. Batch- and
+%   world-size-invariant, so it holds under ddp. Do not 'normalize' it to 500.
 % No source HDF5 writes. Checkpoints are created by the paired training config.
 
 model                            fno
@@ -36,7 +40,7 @@ num_workers                      2
 prefetch_factor                  2
 grad_accum_steps                 1
 augment_geometry                 False
-std_noise                        0.01
+std_noise                        0.0416
 use_amp                          False
 use_checkpointing                True
 use_ema                          True
@@ -64,8 +68,8 @@ max_grad_norm                    1
 checkpoint_interval              50
 fno_variant                      mesh
 fno_grid_resolution              128, 32
-fno_modes                        16, 12
-fno_hidden_channels              64
+fno_modes                        12, 12
+fno_hidden_channels              32
 fno_layers                       4
-fno_use_channel_mlp              True
+fno_use_channel_mlp              False
 fno_norm                         none

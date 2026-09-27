@@ -1,0 +1,30 @@
+% Geometry ingest -- CAD or surface mesh -> triangle surface -> shared HDF5 contract.
+% Mirrors the Studio "geometry" template (studio/src/constants.js TEMPLATES.geometry).
+% STL/PLY/OBJ go through trimesh (no gmsh); STEP/IGES are surface-meshed by gmsh.
+% Run:  python AI_CAE4ALL_main.py --config configs/GeometryIngest/config_ingest_surface.txt
+% Paths are relative to the tool repo (methods/GeometryIngest); absolute paths also work.
+% NOTE: comments must be on their own % line -- inline comments after a value are not stripped.
+
+model geometry_ingest
+mode ingest
+
+% A directory of CAD/geometry files (.step .stp .igs .iges .stl .ply .obj), or one file.
+input_geometry incoming_geometry
+output_dataset ../../output/geometry_ingest/ingested/parts_surface.h5
+
+% auto -> gmsh for CAD, trimesh for surface formats.
+reader auto
+% surface -> triangle graph (dim 2).
+mesh_type surface
+% GNN graph (nodes + mesh_edge) plus an operator point cloud.
+emit graph, pointcloud
+
+% Point-cloud resample size (0 = keep every node).
+num_points 4096
+% fps (even spread) | random.
+resample_method fps
+% Zero-filled solution-field rows after xyz (e.g. ux,uy,uz).
+num_fields 3
+% Cap inputs for a quick run (0 = all).
+limit 3
+seed 42

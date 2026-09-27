@@ -1,13 +1,14 @@
 import { $, $$, on, escapeHtml, toast, formatBytes, formatTimestamp, closeOverlay } from "./dom.js";
-import { applyPipelineDocument, savePipelineState } from "./persistence.js";
-import { state, snapshot } from "./state.js";
+import { applyPipelineDocument, savePipelineState, PipelineLoadCancelledError } from "./persistence.js";
+import { state, snapshot, newCanvasId } from "./state.js";
 import { ICONS, MODEL_CATALOG, BLOCK_SPECS, STUDIO_SECTIONS } from "./constants.js";
 import { renderMarkdown } from "./markdown.js";
 import { apiRequest, checkpointMetadata } from "./api.js";
 import { addBlock, render, selectNode } from "./graph.js";
 import { configureViaLlm, loadConfigExample, openConfig } from "./config.js";
-import { beginCommandJob, renderRuntimeJob } from "./run.js";
+import { beginCommandJob, renderRuntimeJob, reconcileFinishedJobs, canvasOwnership, markBlocksUndelivered } from "./run.js";
 import { applyGraphAutofill, autoFillCount, autoFillMeta, markManualConfigValue } from "./autofill.js";
+import { niceTicks, tickLabels, logTicks, logTickLabels } from "./axis.js";
 
 function assignManualConfig(node, values) {
   Object.assign(node.config, values);
@@ -193,7 +194,7 @@ export function renderStudio() {
   $$("[data-capability-block]").forEach(button => button.addEventListener("click", () => {
     const type = button.dataset.capabilityBlock;
     if (type && BLOCK_SPECS[type]) {
-      $("#studioOverlay").classList.remove("open");
+      closeOverlay("studioOverlay");
       let node = state.nodes.find(item => item.type === type);
       if (!node) {
         addBlock(type);
@@ -226,9 +227,18 @@ export function liveError(container, error) {
   container.innerHTML = `<div class="live-empty"><strong>Could not load live data</strong><br><br>${escapeHtml(error.message || String(error))}<br><br>Restart with studio/START_STUDIO.bat.</div>`;
 }
 
+// geometry_ingest is a registered route but a data-prep step, so its block is
+// the `prep.geometry` process block rather than a `model.*` trainer.
+const ROUTE_BLOCK_TYPES = { geometry_ingest: "prep.geometry" };
+
+function blockTypeForModel(modelId) {
+  const type = ROUTE_BLOCK_TYPES[modelId] || `model.${modelId}`;
+  return BLOCK_SPECS[type] ? type : null;
+}
+
 function ensureModelNode(modelId) {
-  const type = `model.${modelId}`;
-  if (!BLOCK_SPECS[type]) return null;
+  const type = blockTypeForModel(modelId);
+  if (!type) return null;
   let node = state.nodes.find(item => item.type === type);
   if (!node) {
     addBlock(type);
@@ -240,7 +250,7 @@ function ensureModelNode(modelId) {
 function editModelConfig(modelId, useLlm = false) {
   const node = ensureModelNode(modelId);
   if (!node) return;
-  $("#studioOverlay").classList.remove("open");
+  closeOverlay("studioOverlay");
   openConfig(node.id);
   if (useLlm) configureViaLlm();
 }
@@ -262,7 +272,7 @@ export async function renderModelsWorkspace(container) {
     <span><strong>${escapeHtml(model.model)} · ${escapeHtml(model.method)}</strong><small>${escapeHtml(model.repository)} → ${escapeHtml(model.entrypoint)}</small></span>
     <span class="chip-row">${model.modes.map(mode => `<span class="chip">${escapeHtml(mode)}</span>`).join("")}</span>
     <span><strong>${model.known_keys.length} keys</strong><small>${escapeHtml(model.dataset_kind || "no dataset contract")} · ${model.healthy ? "entrypoint found" : "entrypoint missing"}</small></span>
-    <span class="live-actions"><button class="button small" data-model-details="${escapeHtml(model.model)}">Details</button><button class="button small" data-live-configs="${escapeHtml(model.model)}">Examples</button>${BLOCK_SPECS[`model.${model.model}`] ? `<button class="button small primary" data-live-model="${escapeHtml(model.model)}">Open block</button>` : ""}</span>
+    <span class="live-actions"><button class="button small" data-model-details="${escapeHtml(model.model)}">Details</button><button class="button small" data-live-configs="${escapeHtml(model.model)}">Examples</button>${blockTypeForModel(model.model) ? `<button class="button small primary" data-live-model="${escapeHtml(model.model)}">Open block</button>` : ""}</span>
   </article>`).join("")}</div>`;
   $$("[data-live-model]", container).forEach(button => button.addEventListener("click", event => {
     event.stopPropagation();
@@ -323,8 +333,9 @@ async function renderModelDetail(container, model) {
     apiRequest(`/api/training-metrics?model_id=${encodeURIComponent(model.model)}`)
   ]);
   if (!isCurrentStudioRender(container, request)) return;
-  const blockSpec = BLOCK_SPECS[`model.${model.model}`];
-  const currentNode = state.nodes.find(item => item.type === `model.${model.model}`);
+  const blockType = blockTypeForModel(model.model);
+  const blockSpec = blockType ? BLOCK_SPECS[blockType] : null;
+  const currentNode = blockType ? state.nodes.find(item => item.type === blockType) : null;
   applyGraphAutofill();
   const configValues = currentNode?.config || MODEL_CATALOG[model.model]?.defaults || {};
   const configuredCount = model.known_keys.filter(key => Object.hasOwn(configValues, key) && String(configValues[key]) !== "").length;
@@ -348,7 +359,7 @@ async function renderModelDetail(container, model) {
     <label class="search"><span>⌕</span><input id="modelConfigSearch" type="search" placeholder="Filter all ${model.known_keys.length} config keys"></label>
     <div class="model-config-list" id="modelConfigList">${modelConfigRows(model.known_keys, configValues, "", currentNode)}</div>
   </div>
-  <div class="live-toolbar"><span><strong>Checked-in configurations</strong></span>${BLOCK_SPECS[`model.${model.model}`] ? `<button class="button small primary" data-live-model="${escapeHtml(model.model)}">Open block</button>` : ""}</div>
+  <div class="live-toolbar"><span><strong>Checked-in configurations</strong></span>${blockTypeForModel(model.model) ? `<button class="button small primary" data-live-model="${escapeHtml(model.model)}">Open block</button>` : ""}</div>
   <div class="live-list">${configs.items.map(item => `<article class="live-row">
     <span><strong>${escapeHtml(item.name)}</strong><small>${escapeHtml(item.path)}</small></span>
     <span class="chip-row"><span class="chip">${escapeHtml(item.mode || "unknown mode")}</span></span>
@@ -420,6 +431,25 @@ function formatMetricValue(value) {
 }
 
 /**
+ * The value a series ended on. A run whose loss went nan/inf ended there, not
+ * at its last finite point: showing that point made a diverged run read as a
+ * healthy one, and Compare ranked it first.
+ */
+function metricLastText(metric) {
+  return metric?.diverged ? String(metric.last_nonfinite || "nan") : formatMetricValue(metric?.last);
+}
+
+/** "nan from epoch 12", "3 non-finite", or "" when every value was finite. */
+function metricDivergenceText(metric) {
+  if (!metric?.nonfinite_count) return "";
+  if (metric.diverged) return `${metric.last_nonfinite || "nan"} from ${metric.event || "epoch"} ${metric.diverged_at}`;
+  return `${metric.nonfinite_count} non-finite`;
+}
+
+/** Compare lines runs up on this, so a job's shape (one step or two, one stage or a pipeline) does not hide a shared metric. */
+const metricCompareKey = metric => metric.compare_key || metric.key;
+
+/**
  * Short local timestamp for list rows. Job labels repeat constantly -- 24 of the
  * 46 persisted runs shared an identical "label · N metrics · status" string --
  * so the run picker needs the one field that is actually unique per run.
@@ -482,38 +512,80 @@ function downloadMetricCsv(job, metrics) {
   toast(`Downloaded ${metrics.length} visible metric series as CSV.`);
 }
 
-function trainingMetricPlot(metric, color, xLabel) {
-  const width = 620;
-  const height = 190;
-  const pad = { left: 48, right: 18, top: 18, bottom: 34 };
-  const points = sampledMetricPoints(metric.points || []);
-  const xs = points.map(point => Number(point.x));
-  const ys = points.map(point => Number(point.y));
+// Width of one 9px monospace glyph in the charts' viewBox units.
+const AXIS_GLYPH_WIDTH = 5.6;
+
+/**
+ * Round-numbered axes for a metric line chart: gridlines and labels, plus the
+ * value-to-coordinate maps its series use. The left margin is sized to the
+ * widest y label, so no label is clipped at the chart's edge. `log` asks for a
+ * log y axis; the caller decides whether the series allows one (all y > 0).
+ */
+function metricChartFrame(xs, ys, { width, height, right, top, bottom, xLabel, gap = 7, log = false }) {
+  const logAxis = log ? logTicks(Math.min(...ys), Math.max(...ys)) : null;
+  const yAxis = logAxis || niceTicks(Math.min(...ys), Math.max(...ys));
+  const yLabels = logAxis ? logTickLabels(yAxis.ticks) : tickLabels(yAxis.ticks, yAxis.step);
+  const left = Math.ceil(Math.max(...yLabels.map(label => label.length)) * AXIS_GLYPH_WIDTH + gap + 6);
   const minX = Math.min(...xs);
   const maxX = Math.max(...xs);
-  const rawMinY = Math.min(...ys);
-  const rawMaxY = Math.max(...ys);
-  const ySpan = rawMaxY - rawMinY;
-  const yPad = ySpan ? ySpan * .08 : Math.max(Math.abs(rawMaxY) * .08, 1e-9);
-  const minY = rawMinY - yPad;
-  const maxY = rawMaxY + yPad;
-  const plotWidth = width - pad.left - pad.right;
-  const plotHeight = height - pad.top - pad.bottom;
-  const xPosition = value => minX === maxX ? pad.left + plotWidth / 2 : pad.left + (value - minX) / (maxX - minX) * plotWidth;
-  const yPosition = value => pad.top + (maxY - value) / (maxY - minY) * plotHeight;
-  const coordinates = points.map(point => `${xPosition(Number(point.x)).toFixed(2)},${yPosition(Number(point.y)).toFixed(2)}`).join(" ");
+  const plotWidth = width - left - right;
+  const plotHeight = height - top - bottom;
+  const toAxis = logAxis ? Math.log10 : value => value;
+  const yLow = toAxis(yAxis.min);
+  const yHigh = toAxis(yAxis.max);
+  const px = value => minX === maxX ? left + plotWidth / 2 : left + (value - minX) / (maxX - minX) * plotWidth;
+  const py = value => top + (yHigh - toAxis(value)) / (yHigh - yLow) * plotHeight;
+  // Epochs and steps get whole-number ticks; the x axis never extends past the
+  // data, since that would draw an empty stretch of training that never ran.
+  const xAxis = niceTicks(minX, maxX, { target: 6, integer: xs.every(Number.isInteger) });
+  const xTicks = minX === maxX ? [minX] : xAxis.ticks.filter(value => value >= minX - 1e-9 && value <= maxX + 1e-9);
+  const xLabels = tickLabels(xTicks, xAxis.step);
+  const base = top + plotHeight;
+  const grid = `<g class="training-metric-grid">${yAxis.ticks.map((value, index) => {
+    const y = py(value).toFixed(2);
+    return `<path d="M${left} ${y}H${width - right}"/><text x="${left - gap}" y="${(Number(y) + 3).toFixed(2)}" text-anchor="end">${escapeHtml(yLabels[index])}</text>`;
+  }).join("")}${xTicks.map((value, index) => {
+    const x = px(value).toFixed(2);
+    return `<path d="M${x} ${base}v4"/><text x="${x}" y="${base + 14}" text-anchor="middle">${escapeHtml(xLabels[index])}</text>`;
+  }).join("")}</g>
+    <text class="training-axis-label" x="${width - right}" y="${height - 4}" text-anchor="end">${escapeHtml(xLabel)}</text>`;
+  return { px, py, grid };
+}
+
+/** A log axis needs every value above zero; KL, LR and losses qualify. */
+const logScalable = metric => (metric.points || []).length > 0 && metric.points.every(point => Number(point.y) > 0);
+
+function trainingMetricPlot(metric, color, xLabel, log = false) {
+  const width = 620;
+  const height = 190;
+  const top = 18;
+  const bottom = 36;
+  const points = sampledMetricPoints(metric.points || []);
+  const bands = (metric.nonfinite_ranges || []).filter(range => Array.isArray(range) && range.length === 2);
+  if (!points.length) {
+    return `<div class="training-metric-empty"><strong>No finite value to plot.</strong><small>Every logged value was ${escapeHtml(metric.last_nonfinite || "nan")}${bands.length ? ` (${escapeHtml(metric.event || xLabel)} ${bands.map(([start, end]) => start === end ? start : `${start}–${end}`).join(", ")})` : ""}.</small></div>`;
+  }
+  // The x axis spans the nan/inf stretches too, so a run that diverged shows
+  // where it did instead of a curve that simply stops.
+  const { px, py, grid } = metricChartFrame(
+    [...points.map(point => Number(point.x)), ...bands.flat().map(Number)],
+    points.map(point => Number(point.y)),
+    { width, height, right: 18, top, bottom, xLabel, log }
+  );
+  const bandMarks = bands.map(([start, end]) => {
+    const x0 = px(Number(start)) - 2;
+    const x1 = px(Number(end)) + 2;
+    return `<rect class="training-metric-nonfinite" x="${x0.toFixed(2)}" y="${top}" width="${(x1 - x0).toFixed(2)}" height="${height - top - bottom}"><title>nan/inf at ${escapeHtml(metric.event || xLabel)} ${start === end ? start : `${start}–${end}`}</title></rect>`;
+  }).join("");
+  const coordinates = points.map(point => `${px(Number(point.x)).toFixed(2)},${py(Number(point.y)).toFixed(2)}`).join(" ");
   const dots = points.length <= 80
-    ? points.map(point => `<circle cx="${xPosition(Number(point.x)).toFixed(2)}" cy="${yPosition(Number(point.y)).toFixed(2)}" r="3" fill="${color}"/>`).join("")
+    ? points.map(point => `<circle cx="${px(Number(point.x)).toFixed(2)}" cy="${py(Number(point.y)).toFixed(2)}" r="3" fill="${color}"/>`).join("")
     : "";
   return `<svg class="training-metric-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(metric.label)} plot">
-    <g class="training-metric-grid">${[0, 1, 2, 3, 4].map(index => {
-      const y = pad.top + index * plotHeight / 4;
-      return `<path d="M${pad.left} ${y}H${width - pad.right}"/><text x="${pad.left - 7}" y="${y + 3}" text-anchor="end">${escapeHtml(formatMetricValue(maxY - index * (maxY - minY) / 4))}</text>`;
-    }).join("")}</g>
+    ${grid}
+    ${bandMarks}
     ${points.length > 1 ? `<polyline points="${coordinates}" fill="none" stroke="${color}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>` : ""}
     ${dots}
-    <text class="training-axis-label" x="${pad.left}" y="${height - 9}">${escapeHtml(xLabel)} ${escapeHtml(minX)}</text>
-    <text class="training-axis-label" x="${width - pad.right}" y="${height - 9}" text-anchor="end">${escapeHtml(maxX)}</text>
   </svg>`;
 }
 
@@ -533,8 +605,12 @@ function metricExclusions(node) {
 
 function setMetricNodeConfig(node, values) {
   if (!node) return;
-  if (state.nodes.includes(node)) snapshot();
+  const onCanvas = state.nodes.includes(node);
+  if (onCanvas) snapshot();
   Object.assign(node.config, values);
+  // Persist like every other workspace write (assignManualConfig): an undoable
+  // but unsaved choice was lost on reload.
+  if (onCanvas) savePipelineState();
 }
 
 async function renderTrainingMetricsWorkspace(container, nodeId = "", preferredJobId = "", linkedModelOverride = null) {
@@ -545,7 +621,7 @@ async function renderTrainingMetricsWorkspace(container, nodeId = "", preferredJ
     container.innerHTML = `<div class="live-empty">The Train Metrics block is no longer in this pipeline.</div>`;
     return;
   }
-  const node = pipelineNode || { config: { job_id: preferredJobId, excluded_metrics: "", smoothing: "0" } };
+  const node = pipelineNode || { config: { job_id: preferredJobId, excluded_metrics: "", smoothing: "0", y_scale: "linear" } };
   const result = await apiRequest("/api/training-metrics");
   if (!isCurrentStudioRender(container, request)) return;
   const linkedModel = linkedModelOverride || connectedTrainingModel(nodeId);
@@ -561,16 +637,21 @@ async function renderTrainingMetricsWorkspace(container, nodeId = "", preferredJ
     return;
   }
 
+  // This canvas's own run of the linked model before anyone else's.
   let selected = jobs.find(job => job.job_id === (preferredJobId || node.config.job_id))
+    || jobs.find(job => linkedModel && job.models.includes(linkedModel.id) && canvasOwnership(job.job_id, job.canvas_id) === true)
     || jobs.find(job => linkedModel && job.models.includes(linkedModel.id))
     || jobs[0];
-  if (!node.config.job_id) node.config.job_id = selected.job_id;
+  // Showing a job is not choosing one. Writing the fallback (possibly jobs[0],
+  // another model's run) onto the block on render pinned Compare's run
+  // resolution to it, unsaved and un-undoable; only #trainingJob writes now.
 
   const renderDashboard = () => {
     if (!isCurrentStudioRender(container, request)) return;
     const excluded = metricExclusions(node);
     const visible = selected.metrics.filter(metric => !excluded.has(metric.key));
     const smoothing = Math.max(0, Math.min(.95, Number(node.config.smoothing) || 0));
+    const logScale = node.config.y_scale === "log";
     const modelText = linkedModel ? `Connected model: ${linkedModel.label}` : "No model is connected; showing all parsed jobs.";
     container.innerHTML = `
       <div class="live-toolbar training-metrics-toolbar">
@@ -592,18 +673,22 @@ async function renderTrainingMetricsWorkspace(container, nodeId = "", preferredJ
         <aside class="training-metric-picker">
           <header><span><strong>Metrics to plot</strong><small>All discovered items start selected.</small></span><span><button class="button small" id="metricsSelectAll">Plot all</button><button class="button small" id="metricsSelectNone">Plot none</button></span></header>
           <label class="training-smoothing"><span><strong>Smoothing</strong><small>Visual only; statistics and CSV stay raw.</small></span><output>${Math.round(smoothing * 100)}%</output><input id="metricsSmoothing" type="range" min="0" max=".95" step=".05" value="${smoothing}"></label>
+          <label class="training-smoothing training-scale"><span><strong>Log y-axis</strong><small>For losses that fall by decades. A metric with any value &le; 0 stays linear.</small></span><input id="metricsLogScale" type="checkbox"${logScale ? " checked" : ""}></label>
           <div class="training-metric-options">${selected.metrics.map((metric, index) => `<label class="training-metric-option">
             <input type="checkbox" data-metric-toggle="${escapeHtml(metric.key)}"${excluded.has(metric.key) ? "" : " checked"}>
             <i style="--metric-color:${TRAINING_METRIC_COLORS[index % TRAINING_METRIC_COLORS.length]}"></i>
-            <span><strong>${escapeHtml(metric.label)}</strong><small>${metric.count} points · last ${escapeHtml(formatMetricValue(metric.last))}</small></span>
+            <span><strong>${escapeHtml(metric.label)}</strong><small>${metric.count} points · last ${metric.diverged ? `<b class="metric-diverged">${escapeHtml(metricDivergenceText(metric))}</b>` : escapeHtml(metricLastText(metric))}${!metric.diverged && metric.nonfinite_count ? ` · ${escapeHtml(metricDivergenceText(metric))}` : ""}</small></span>
           </label>`).join("")}</div>
         </aside>
         <section class="training-metric-plots" aria-live="polite">${visible.length ? visible.map(metric => {
           const index = selected.metrics.findIndex(item => item.key === metric.key);
           const color = TRAINING_METRIC_COLORS[index % TRAINING_METRIC_COLORS.length];
+          const log = logScale && logScalable(metric);
           return `<article class="training-metric-card" data-metric-plot="${escapeHtml(metric.key)}">
-            <header><span><i style="--metric-color:${color}"></i><strong>${escapeHtml(metric.label)}</strong></span><small>last <b>${escapeHtml(formatMetricValue(metric.last))}</b> · min ${escapeHtml(formatMetricValue(metric.min))} · max ${escapeHtml(formatMetricValue(metric.max))}</small></header>
-            ${trainingMetricPlot(smoothedMetric(metric, smoothing), color, selected.x_label)}
+            <header><span><i style="--metric-color:${color}"></i><strong title="${escapeHtml(metric.label)}">${escapeHtml(metric.label)}</strong></span><small>${metric.diverged
+              ? `last <b class="metric-diverged">${escapeHtml(metricDivergenceText(metric))}</b>${metric.count ? ` · last finite ${escapeHtml(formatMetricValue(metric.last))}` : ""}`
+              : `last <b>${escapeHtml(metricLastText(metric))}</b>`}${metric.count ? ` · min ${escapeHtml(formatMetricValue(metric.min))} · max ${escapeHtml(formatMetricValue(metric.max))}` : ""}${!metric.diverged && metric.nonfinite_count ? ` · <span class="metric-diverged">${escapeHtml(metricDivergenceText(metric))}</span>` : ""}${logScale && metric.count && !log ? " · linear (has values &le; 0)" : ""}</small></header>
+            ${trainingMetricPlot(smoothedMetric(metric, smoothing), color, selected.x_label, log)}
           </article>`;
         }).join("") : `<div class="live-empty training-no-plots"><strong>No metrics selected.</strong><br><br>Check one or more metric items, or choose Plot all.</div>`}</section>
       </div>`;
@@ -625,6 +710,10 @@ async function renderTrainingMetricsWorkspace(container, nodeId = "", preferredJ
     });
     onStudio(container, "#metricsSmoothing", "change", event => {
       setMetricNodeConfig(node, { smoothing: event.target.value });
+      renderDashboard();
+    });
+    onStudio(container, "#metricsLogScale", "change", event => {
+      setMetricNodeConfig(node, { y_scale: event.target.checked ? "log" : "linear" });
       renderDashboard();
     });
     onStudio(container, "#metricsDownload", "click", () => downloadMetricCsv(selected, visible));
@@ -683,13 +772,17 @@ export async function renderFilesWorkspace(container, kind) {
       if ([".stl", ".step", ".stp", ".iges", ".igs", ".brep", ".obj", ".ply", ".off", ".msh", ".vtk", ".vtu", ".vtp"].includes(item.extension)) return "source.cad";
       return "";
     };
+    // /api/text and /api/image serve result roots only, which is exactly the
+    // artifact catalog; the dataset catalog includes dataset/, also a root.
+    const readable = item => [".csv", ".tsv", ".json", ".txt", ".log", ".md"].includes(item.extension);
+    const figure = item => [".png", ".jpg", ".jpeg"].includes(item.extension);
     const status = $("#liveFileCatalogStatus", container);
     status.innerHTML = `Showing <strong>${items.length}</strong> of <strong>${matches.length}</strong> loaded match${matches.length === 1 ? "" : "es"}${text ? ` for <code>${escapeHtml(query)}</code>` : ""}.${result.truncated ? ` The server catalog is capped at the newest ${serverLimit} files${repositoryMatches > result.items.length ? ` out of ${repositoryMatches} repository matches` : ""}; older matches are not available in this view.` : ` All ${repositoryMatches} repository matches are loaded.`}`;
     $("#liveFileList", container).innerHTML = items.map(item => `<article class="live-row">
       <span><strong>${escapeHtml(item.name)}</strong><small>${escapeHtml(item.path)}</small></span>
       <span class="chip-row"><span class="chip">${escapeHtml(item.extension || "file")}</span><span class="chip">${escapeHtml(item.kind)}</span></span>
       <span><strong>${formatBytes(item.size)}</strong><small title="${escapeHtml(item.modified)}">${escapeHtml(formatTimestamp(item.modified))}</small></span>
-      <span class="live-actions">${[".h5", ".hdf5"].includes(item.extension) ? `<button class="button small" data-inspect-hdf5="${escapeHtml(item.path)}">Inspect HDF5</button>` : ""}${pipelineType(item) ? `<button class="button small primary" data-use-file="${escapeHtml(item.path)}" data-use-type="${pipelineType(item)}">Use in pipeline</button>` : ""}</span>
+      <span class="live-actions">${[".h5", ".hdf5"].includes(item.extension) ? `<button class="button small" data-inspect-hdf5="${escapeHtml(item.path)}">Inspect HDF5</button>` : ""}${readable(item) ? `<button class="button small" data-open-text-file="${escapeHtml(item.path)}">Open</button>` : ""}${figure(item) ? `<button class="button small" data-view-figure="${escapeHtml(item.path)}">View</button>` : ""}${pipelineType(item) ? `<button class="button small primary" data-use-file="${escapeHtml(item.path)}" data-use-type="${pipelineType(item)}">Use in pipeline</button>` : ""}</span>
     </article>`).join("") || `<div class="live-empty">No loaded files match this filter.${result.truncated ? " Older files outside the server catalog limit were not searched." : ""}</div>`;
     if (items.length < matches.length) {
       $("#liveFileList", container).insertAdjacentHTML("beforeend", `<div class="live-toolbar"><span><small>${matches.length - items.length} more loaded matches are available.</small></span><button class="button small" id="liveFileShowMore">Show next ${Math.min(250, matches.length - items.length)}</button></div>`);
@@ -699,12 +792,15 @@ export async function renderFilesWorkspace(container, kind) {
       });
     }
     $$("[data-inspect-hdf5]", container).forEach(button => button.addEventListener("click", () => inspectHdf5(container, button.dataset.inspectHdf5, kind)));
+    const backToFiles = () => renderFilesWorkspace(container, kind);
+    $$("[data-open-text-file]", container).forEach(button => button.addEventListener("click", () => openTextArtifact(container, button.dataset.openTextFile, backToFiles)));
+    $$("[data-view-figure]", container).forEach(button => button.addEventListener("click", () => openImageArtifact(container, button.dataset.viewFigure, backToFiles)));
     $$("[data-use-file]", container).forEach(button => button.addEventListener("click", () => {
       addBlock(button.dataset.useType);
       const node = state.nodes.find(item => item.id === state.selectedNode);
       if (!node) return;
       node.config.path = button.dataset.useFile;
-      $("#studioOverlay").classList.remove("open");
+      closeOverlay("studioOverlay");
       render();
       toast(`${BLOCK_SPECS[node.type].label} now points to ${button.dataset.useFile}.`);
     }));
@@ -790,12 +886,26 @@ export async function renderJobsWorkspace(container) {
         return;
       }
       applyPipelineDocument(job.pipeline);
+      // The reopened graph is a copy of the canvas that launched the run, not
+      // that canvas: it keeps the saved id, so it used to claim every later run
+      // of the original (and they its runs). It gets its own identity and owns
+      // exactly the run it was reopened from.
+      state.canvasId = newCanvasId();
+      state.legacyCanvas = false;
+      state.ownedJobs = new Set([job.id]);
+      // The document is this run's launch snapshot: whatever its blocks carry
+      // predates the run, so the run's own outputs must replace it.
+      markBlocksUndelivered();
       savePipelineState();
       closeOverlay("studioOverlay");
+      if (["queued", "running"].includes(job.status)) beginCommandJob(job, { focus: false });
       render();
+      // Paints the run's status and results onto the blocks it ran.
+      reconcileFinishedJobs();
       toast(`Loaded the pipeline from ${job.label || "this run"}.`);
     } catch (error) {
-      toast(`Could not load that pipeline: ${error.message}`, "error");
+      if (error instanceof PipelineLoadCancelledError) toast("Pipeline load cancelled.", "warn");
+      else toast(`Could not load that pipeline: ${error.message}`, "error");
     }
   }));
   $$("[data-job-metrics]", container).forEach(button => button.addEventListener("click", () => {
@@ -886,7 +996,15 @@ export async function renderDocsWorkspace(container) {
 export async function openLiveDoc(container, path) {
   const request = beginStudioRender(container);
   if (!request) return;
-  const doc = await apiRequest(`/api/doc?path=${encodeURIComponent(path)}`);
+  let doc;
+  try {
+    doc = await apiRequest(`/api/doc?path=${encodeURIComponent(path)}`);
+  } catch (error) {
+    // Called from click handlers that do not await it, so an unhandled
+    // rejection here was a click that silently did nothing.
+    if (isCurrentStudioRender(container, request)) toast(`Could not open ${path}: ${error.message}`, "error");
+    return;
+  }
   if (!isCurrentStudioRender(container, request)) return;
   container.innerHTML = `<div class="live-toolbar"><strong>${escapeHtml(doc.path)}</strong><button class="button small" id="liveBackDocs">Back to documents</button></div><article class="live-document">${renderMarkdown(doc.text, doc.path)}</article>`;
   onStudio(container, "#liveBackDocs", "click", () => renderDocsWorkspace(container));
@@ -929,7 +1047,7 @@ export async function renderSystemWorkspace(container) {
     </div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:7px">
       <label class="config-help">Username<input class="config-control" id="llmUsername" value="${escapeHtml(llm?.username || "")}" autocomplete="username"></label>
-      <label class="config-help">Session password ${llm?.password_configured ? "(already set; blank keeps it)" : "(required)"}<input class="config-control" id="llmPassword" type="password" autocomplete="current-password" placeholder="••••••••"></label>
+      <label class="config-help">Session password ${llm?.password_configured ? "(already set; blank keeps it)" : "(required)"}<input class="config-control" id="llmPassword" type="password" autocomplete="current-password" placeholder="${llm?.password_configured ? "unchanged" : "enter password"}"></label>
     </div>
     <label class="check-row" style="margin-top:8px"><input id="llmAllowHttp" type="checkbox"${llm?.allow_insecure_http ? " checked" : ""}> I explicitly allow credentials and full configs over unencrypted HTTP</label>
     <button class="button primary" id="saveLlmSettings" style="margin-top:8px">Save connection + session secret</button>
@@ -1057,12 +1175,12 @@ export async function renderBenchmarksWorkspace(container) {
       size: entry.size,
       missing: !entry.exists,
       ex_slot: entry.ex_slot,
-      light: entry.light
+      category: entry.category
     }))
     : configs.items.filter(item => item.path.toLowerCase().includes("benchmarks/"));
   container.innerHTML = `<div class="live-toolbar"><span><strong>Checked-in benchmark campaign configs</strong><small>${items.length} roster entries${roster.roster ? ` · ${escapeHtml(roster.roster)}` : ""}${items.some(item => item.missing) ? ` · ${items.filter(item => item.missing).length} missing on disk` : ""} · config presence is not run evidence</small></span></div><div class="live-list">${items.map(item => `<article class="live-row">
     <span><strong>${escapeHtml(item.name)}</strong><small>${escapeHtml(item.path)}</small></span>
-    <span class="chip-row"><span class="chip">${escapeHtml(item.model || "unknown")}</span><span class="chip">${escapeHtml(item.mode || "unknown")}</span>${item.ex_slot ? `<span class="chip">${escapeHtml(item.ex_slot)}</span>` : ""}${item.missing ? '<span class="chip">missing</span>' : ""}</span>
+    <span class="chip-row"><span class="chip">${escapeHtml(item.model || "unknown")}</span><span class="chip">${escapeHtml(item.mode || "unknown")}</span>${item.category ? `<span class="chip">${escapeHtml(item.category)}</span>` : ""}${item.ex_slot ? `<span class="chip">${escapeHtml(item.ex_slot)}</span>` : ""}${item.missing ? '<span class="chip">missing</span>' : ""}</span>
     <span><strong>${formatBytes(item.size)}</strong><small>checked in · not executed here</small><small class="benchmark-preflight-result" data-benchmark-result="${escapeHtml(item.path)}"></small></span>
     <span class="live-actions"><button class="button small" data-benchmark-preflight="${escapeHtml(item.path)}">Preflight</button>${BLOCK_SPECS[`model.${item.model}`] ? `<button class="button small primary" data-benchmark-config="${escapeHtml(item.path)}" data-benchmark-model="${escapeHtml(item.model)}">Load</button>` : ""}</span>
   </article>`).join("")}</div>`;
@@ -1343,14 +1461,22 @@ export async function renderOptimizationWorkspace(container, nodeId = null) {
   const csvOptionLabel = item => {
     const parts = String(item.path).replace(/\\/g, "/").split("/");
     const short = parts.slice(-2).join("/");
+    if (item.size === undefined) return short;   // saved path, not in the listing
     return `${short} · ${formatBytes(item.size)}${item.modified ? ` · ${formatTimestamp(item.modified)}` : ""}`;
   };
-  const csvGroups = CSV_ROLE_ORDER
-    .map(role => [role, csvFiles.filter(item => csvRole(item.path) === role)])
-    .filter(([, items]) => items.length);
   const node = state.nodes.find(item => item.id === nodeId && item.type === "optimize.design")
     || state.nodes.find(item => item.type === "optimize.design");
   const selectedCsv = node?.config.csv_path || connectedOptimizationCsv(node?.id) || "";
+  const csvGroups = CSV_ROLE_ORDER
+    .map(role => [role, csvFiles.filter(item => csvRole(item.path) === role)])
+    .filter(([, items]) => items.length);
+  // The artifact listing is capped, so a saved csv_path can be missing from it.
+  // Without its own option the select shows the placeholder, and the next
+  // persistControls() writes "" over the block's real CSV -- same guard as the
+  // Evaluation and Deploy selects.
+  if (selectedCsv && !csvFiles.some(item => item.path === selectedCsv)) {
+    csvGroups.unshift(["Saved selection", [{ path: selectedCsv }]]);
+  }
   container.innerHTML = `<div class="live-toolbar"><span><strong>Evidence-based Pareto selection</strong><small>Reads actual numeric rows from an output CSV. No surrogate score is invented.</small></span></div>
     <div class="config-card">
       <label class="config-help">Candidate/evaluation CSV</label><select class="config-control" id="optimizationCsv"><option value="">Select an output CSV…</option>${csvGroups.map(([role, items]) => `<optgroup label="${escapeHtml(role)}">${items.map(item => `<option value="${escapeHtml(item.path)}"${item.path === selectedCsv ? " selected" : ""} title="${escapeHtml(item.path)}">${escapeHtml(csvOptionLabel(item))}</option>`).join("")}</optgroup>`).join("")}</select>
@@ -1406,7 +1532,7 @@ export async function renderOptimizationWorkspace(container, nodeId = null) {
     if (unknown.length) problems.push(`${unknown.map(item => `<code>${escapeHtml(item)}</code>`).join(", ")} ${unknown.length === 1 ? "is not a column" : "are not columns"} of this CSV.`);
     target.innerHTML = problems.length
       ? `<span class="constraint-invalid">${problems.join(" ")}</span>`
-      : `${clauses.length} constraint${clauses.length === 1 ? "" : "s"} check out against this CSV.`;
+      : `${clauses.length} constraint${clauses.length === 1 ? " checks" : "s check"} out against this CSV.`;
     return problems.length === 0;
   };
   const collectDirections = () => selectedObjectives().map(name => {
@@ -1423,11 +1549,16 @@ export async function renderOptimizationWorkspace(container, nodeId = null) {
     if (!node) return;
     const next = {
       csv_path: q("#optimizationCsv").value,
-      objectives: selectedObjectives().join(","),
-      directions: collectDirections().join(","),
       constraints: q("#optimizationConstraints").value,
       top_k: q("#optimizationTopK").value
     };
+    // No checkboxes means the schema is still loading, failed, or there is no
+    // CSV: an empty selection there is absence of a choice, not a choice, so
+    // editing constraints or top-k must not erase the saved objectives.
+    if ($$("[data-optimization-objective]", container).length) {
+      next.objectives = selectedObjectives().join(",");
+      next.directions = collectDirections().join(",");
+    }
     if (Object.entries(next).every(([key, value]) => String(node.config[key] || "") === String(value))) return;
     snapshot();
     assignManualConfig(node, next);
@@ -1592,14 +1723,57 @@ export async function openTextArtifact(container, path, back = null) {
       ? data.text.split(/\r?\n/).filter(line => line.trim()).slice(0, 500)
         .map(line => line.split(/\.tsv$/i.test(data.path) ? "\t" : ","))
       : null;
-    const body = rows && rows.length
+    const markdown = /\.md$/i.test(data.path);
+    const body = markdown
+      ? renderMarkdown(data.text, data.path)
+      : rows && rows.length
       ? `<div style="overflow:auto"><table class="artifact-table"><thead><tr>${rows[0].map(cell => `<th>${escapeHtml(cell)}</th>`).join("")}</tr></thead><tbody>${rows.slice(1).map(row => `<tr>${row.map(cell => `<td>${escapeHtml(cell)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`
       : `<pre class="doc-code">${escapeHtml(data.text)}</pre>`;
     container.innerHTML = `<div class="live-toolbar"><span><strong>${escapeHtml(data.path)}</strong><small>${formatBytes(data.size)}${data.truncated ? " · truncated for display" : ""}${rows ? ` · ${rows.length - 1} rows` : ""}</small></span><button class="button small" id="liveBackArtifact">Back</button></div><article class="live-document">${body}</article>`;
-    onStudio(container, "#liveBackArtifact", "click", () => (back ? back() : openStudio(state.studioSection, null)));
+    // Back to the same block's workspace: with a null node the workspace falls back
+    // to the first block of that type, which is a different one when several exist.
+    onStudio(container, "#liveBackArtifact", "click", () => (back ? back() : openStudio(state.studioSection, state.studioNode)));
+    // A report linking a sibling report opens it in the same pane, with the
+    // same way back.
+    if (markdown) container.querySelectorAll("[data-doc-link]").forEach(link => link.addEventListener("click", event => {
+      event.preventDefault();
+      openTextArtifact(container, link.dataset.docLink, back);
+    }));
   } catch (error) {
     if (!isCurrentStudioRender(container, request)) return;
     container.innerHTML = `<div class="live-empty"><strong>Could not open ${escapeHtml(path)}</strong><br><br>${escapeHtml(error.message)}</div>`;
+  }
+}
+
+/**
+ * Show a result figure (a convergence plot, a periodic prediction PNG).
+ *
+ * The catalog listed these with no way to look at one. The image is fetched
+ * first so a refused or missing file reports why instead of a broken icon.
+ */
+export async function openImageArtifact(container, path, back = null) {
+  const request = beginStudioRender(container);
+  if (!request) return;
+  container.innerHTML = `<div class="live-empty">Reading ${escapeHtml(path)}…</div>`;
+  const goBack = () => (back ? back() : openStudio(state.studioSection, state.studioNode));
+  try {
+    const response = await fetch(`/api/image?path=${encodeURIComponent(path)}`);
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      throw new Error(payload.error || `HTTP ${response.status}`);
+    }
+    const blob = await response.blob();
+    if (!isCurrentStudioRender(container, request)) return;
+    const url = URL.createObjectURL(blob);
+    container.innerHTML = `<div class="live-toolbar"><span><strong>${escapeHtml(path)}</strong><small>${formatBytes(blob.size)}</small></span><button class="button small" id="liveBackArtifact">Back</button></div><article class="live-document"><img class="artifact-figure" alt="${escapeHtml(path)}" style="max-width:100%;height:auto;display:block;margin:0 auto"></article>`;
+    const image = $(".artifact-figure", container);
+    image.addEventListener("load", () => URL.revokeObjectURL(url), { once: true });
+    image.src = url;
+    onStudio(container, "#liveBackArtifact", "click", goBack);
+  } catch (error) {
+    if (!isCurrentStudioRender(container, request)) return;
+    container.innerHTML = `<div class="live-toolbar"><span><strong>Could not open ${escapeHtml(path)}</strong><small>${escapeHtml(error.message)}</small></span><button class="button small" id="liveBackArtifact">Back</button></div>`;
+    onStudio(container, "#liveBackArtifact", "click", goBack);
   }
 }
 
@@ -1635,16 +1809,21 @@ export async function renderFieldEvaluationWorkspace(container, nodeId = null) {
   const evaluationNode = state.nodes.find(node => node.id === nodeId && node.type === "evaluate.predictions")
     || state.nodes.find(node => node.type === "evaluate.predictions");
   const pendingPrediction = state.pendingEvaluationPrediction;
+  const pendingTruth = pendingPrediction ? state.pendingEvaluationTruth : "";
   state.pendingEvaluationPrediction = "";
+  state.pendingEvaluationTruth = "";
   // No extension filter: a connected Inference Run publishes results_path, the
   // rollout DIRECTORY, and filtering on .h5 discarded exactly the value a
   // finished pipeline hands over.
-  const selectedPrediction = evaluationNode?.config.prediction_path || pendingPrediction || connectedNodeValue(
+  // pendingPrediction first: it is what the user just asked for from the
+  // viewer's Compare (whose toast promises it is retained), so the block's
+  // saved path must not silently replace it.
+  const selectedPrediction = pendingPrediction || evaluationNode?.config.prediction_path || connectedNodeValue(
     evaluationNode?.id,
     "prediction",
     ["results_path", "prediction_path", "output_path", "path"]
   ) || "";
-  const selectedTruth = evaluationNode?.config.truth_path || connectedNodeValue(
+  const selectedTruth = pendingTruth || evaluationNode?.config.truth_path || connectedNodeValue(
     evaluationNode?.id,
     "truth",
     ["path", "dataset_path"],
@@ -1923,6 +2102,11 @@ export async function renderFieldEvaluationWorkspace(container, nodeId = null) {
       const mae = report.aggregate.mae || {};
       const rmse = report.aggregate.rmse || {};
       const metricText = metric => Number.isFinite(Number(metric?.mean)) ? Number(metric.mean).toExponential(4) : "n/a";
+      // MAE/RMSE above pool every mapped field, so with stress (MPa) beside a
+      // displacement (mm) they mix units; the per-field rows are unit-free.
+      const byField = Object.entries(report.aggregate_by_field || {});
+      const statText = value => Number.isFinite(Number(value)) ? Number(value).toFixed(4) : "n/a";
+      const fieldTable = byField.length > 1 ? `<div style="overflow:auto"><table class="artifact-table" aria-label="Per-field metrics"><thead><tr><th>field</th><th>mean relative L2</th><th>median relative L2</th><th>mean R²</th><th>min R²</th></tr></thead><tbody>${byField.map(([label, metrics]) => `<tr><td>${escapeHtml(label)}</td><td>${statText(metrics.relative_l2?.mean)}</td><td>${statText(metrics.relative_l2?.median)}</td><td>${statText(metrics.r2?.mean)}</td><td>${statText(metrics.r2?.min)}</td></tr>`).join("")}</tbody></table></div><p class="schema-note">MAE and RMSE pool all ${byField.length} fields in their own units; compare fields by relative L2 and R².</p>` : "";
       const resultsEl = q("#evaluationResults");
       // Stamp the exact pair these metrics came from, so a later selection
       // change can tell whether what is on screen still describes it.
@@ -1933,7 +2117,7 @@ export async function renderFieldEvaluationWorkspace(container, nodeId = null) {
         <span><strong>${metricText(relativeL2)}</strong><small>mean relative L2</small></span>
         <span><strong>${metricText(mae)}</strong><small>mean MAE</small></span>
         <span><strong>${metricText(rmse)}</strong><small>mean RMSE</small></span>
-      </div><div class="live-toolbar"><span><strong>Evidence saved · ${escapeHtml(report.contract)}</strong><small>${escapeHtml(report.per_sample_csv)} · ${escapeHtml(report.report_path)} · truth ${escapeHtml(report.truth_source)}${report.skipped.length ? ` · ${report.skipped.length} skipped` : ""}</small></span><button class="button small" id="exportEvaluation">Open Export</button></div>`;
+      </div>${fieldTable}<div class="live-toolbar"><span><strong>Evidence saved · ${escapeHtml(report.contract)}</strong><small>${escapeHtml(report.per_sample_csv)} · ${escapeHtml(report.report_path)} · truth ${escapeHtml(report.truth_source)}${report.skipped.length ? ` · ${report.skipped.length} skipped` : ""}</small></span><button class="button small" id="exportEvaluation">Open Export</button></div>`;
       onStudio(container, "#exportEvaluation", "click", () => openStudio("export"));
       toast(`Evaluated ${report.evaluated_samples} actual field samples.`);
     } catch (error) {
@@ -1947,8 +2131,12 @@ export async function renderFieldEvaluationWorkspace(container, nodeId = null) {
 let comparisonRunNextId = 1;
 
 function comparisonRunRow(index, csvFiles, selected = "") {
+  // The CSV listing is capped, so a saved selection can fall outside it. Keep it
+  // as an explicit option instead of silently showing the row as unselected.
+  const saved = selected && !csvFiles.some(item => item.path === selected)
+    ? `<option value="${escapeHtml(selected)}" selected>${escapeHtml(selected)} (saved; not in the current listing)</option>` : "";
   return `<div class="comparison-run-row" data-run-row="${index}">
-    <select class="config-control" data-run-select="${index}"><option value="">Select a real CSV…</option>${csvFiles.map(item => `<option value="${escapeHtml(item.path)}"${item.path === selected ? " selected" : ""}>${escapeHtml(item.path)}</option>`).join("")}</select>
+    <select class="config-control" data-run-select="${index}"><option value="">Select a real CSV…</option>${saved}${csvFiles.map(item => `<option value="${escapeHtml(item.path)}"${item.path === selected ? " selected" : ""}>${escapeHtml(item.path)}</option>`).join("")}</select>
     <button class="button square" data-remove-run="${index}" aria-label="Remove this run" title="Remove this run">×</button>
   </div>`;
 }
@@ -1987,9 +2175,27 @@ function connectedComparisonSources(nodeId, metricJobs) {
       modelNode = modelEdge && state.nodes.find(node => node.id === modelEdge.fromNode);
     }
     const modelSpec = modelNode && BLOCK_SPECS[modelNode.type];
+    let foreign = false;
     if (!job && modelNode) {
-      job = metricJobs.find(item => item.node_ids?.includes(modelNode.id))
-        || (modelSpec?.isModel ? metricJobs.find(item => item.models?.includes(modelSpec.modelId)) : null);
+      // Every canvas made from one template shares its node ids, so a bare id
+      // match ranked another pipeline's run as this block's. Only a run this
+      // canvas owns resolves the block itself (the newest one: the catalog is
+      // newest first).
+      job = metricJobs.find(item => {
+        const owned = canvasOwnership(item.job_id, item.canvas_id);
+        // Same rule as the canvas: a legacy canvas claims an untagged run only
+        // while it is in flight (run.js jobBelongsToCanvas).
+        const inFlight = ["queued", "running"].includes(item.status);
+        if (!(owned === true || (owned === null && state.legacyCanvas && inFlight))) return false;
+        return (item.training_lineage || []).some(step => step.node_id === modelNode.id
+          && (!step.node_type || step.node_type === modelNode.type));
+      }) || null;
+      // Otherwise the newest run of the same model is still worth showing, but
+      // as what it is.
+      if (!job && modelSpec?.isModel) {
+        job = metricJobs.find(item => item.models?.includes(modelSpec.modelId)) || null;
+        foreign = Boolean(job);
+      }
     }
     if (!job) {
       unresolved.push({ node: source, label: spec?.label || source.id });
@@ -1997,7 +2203,7 @@ function connectedComparisonSources(nodeId, metricJobs) {
     }
     if (seenJobs.has(job.job_id)) return;
     seenJobs.add(job.job_id);
-    runs.push({ source, modelNode, job });
+    runs.push({ source, modelNode, job, foreign });
   });
   return { runs, unresolved };
 }
@@ -2014,48 +2220,34 @@ function connectedEvaluationCsvPaths(nodeId) {
 
 function sharedRunMetricKeys(runs) {
   if (!runs.length) return [];
-  const first = runs[0].job.metrics.map(metric => metric.key);
-  return first.filter(key => runs.every(run => run.job.metrics.some(metric => metric.key === key)));
+  const first = runs[0].job.metrics.map(metricCompareKey);
+  return first.filter(key => runs.every(run => run.job.metrics.some(metric => metricCompareKey(metric) === key)));
 }
 
 function connectedRunPlot(runs, metricKey) {
   const width = 900;
   const height = 270;
-  const pad = { left: 58, right: 22, top: 22, bottom: 38 };
   const series = runs.map((run, index) => ({
     ...run,
     color: TRAINING_METRIC_COLORS[index % TRAINING_METRIC_COLORS.length],
-    metric: run.job.metrics.find(metric => metric.key === metricKey)
+    metric: run.job.metrics.find(metric => metricCompareKey(metric) === metricKey)
   })).filter(item => item.metric?.points?.length);
   const points = series.flatMap(item => item.metric.points);
-  const xs = points.map(point => Number(point.x));
-  const ys = points.map(point => Number(point.y));
   if (!points.length) return "";
-  const minX = Math.min(...xs);
-  const maxX = Math.max(...xs);
-  const rawMinY = Math.min(...ys);
-  const rawMaxY = Math.max(...ys);
-  const yPad = rawMaxY === rawMinY ? Math.max(Math.abs(rawMaxY) * .08, 1e-9) : (rawMaxY - rawMinY) * .08;
-  const minY = rawMinY - yPad;
-  const maxY = rawMaxY + yPad;
-  const plotWidth = width - pad.left - pad.right;
-  const plotHeight = height - pad.top - pad.bottom;
-  const px = value => minX === maxX ? pad.left + plotWidth / 2 : pad.left + (value - minX) / (maxX - minX) * plotWidth;
-  const py = value => pad.top + (maxY - value) / (maxY - minY) * plotHeight;
+  const { px, py, grid } = metricChartFrame(
+    points.map(point => Number(point.x)),
+    points.map(point => Number(point.y)),
+    { width, height, right: 22, top: 22, bottom: 40, xLabel: series[0]?.job.x_label || "epoch", gap: 8 }
+  );
   return `<div class="connected-run-chart">
     <div class="connected-run-legend">${series.map(item => `<span><i style="--metric-color:${item.color}"></i>${escapeHtml(item.job.label)}</span>`).join("")}</div>
     <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Connected training run comparison">
-      <g class="training-metric-grid">${[0, 1, 2, 3, 4].map(index => {
-        const y = pad.top + index * plotHeight / 4;
-        return `<path d="M${pad.left} ${y}H${width - pad.right}"/><text x="${pad.left - 8}" y="${y + 3}" text-anchor="end">${escapeHtml(formatMetricValue(maxY - index * (maxY - minY) / 4))}</text>`;
-      }).join("")}</g>
+      ${grid}
       ${series.map(item => {
         const coordinates = item.metric.points.map(point => `${px(Number(point.x)).toFixed(2)},${py(Number(point.y)).toFixed(2)}`).join(" ");
         const dots = item.metric.points.length <= 80 ? item.metric.points.map(point => `<circle cx="${px(Number(point.x)).toFixed(2)}" cy="${py(Number(point.y)).toFixed(2)}" r="3" fill="${item.color}"/>`).join("") : "";
         return `${item.metric.points.length > 1 ? `<polyline points="${coordinates}" fill="none" stroke="${item.color}" stroke-width="2.5" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>` : ""}${dots}`;
       }).join("")}
-      <text class="training-axis-label" x="${pad.left}" y="${height - 10}">${escapeHtml(series[0]?.job.x_label || "epoch")} ${minX}</text>
-      <text class="training-axis-label" x="${width - pad.right}" y="${height - 10}" text-anchor="end">${maxX}</text>
     </svg>
   </div>`;
 }
@@ -2080,20 +2272,29 @@ function renderConnectedRunComparison(container, compareNode, resolved) {
       || sharedKeys[0]
       || "";
   const direction = compareNode.config.direction === "max" ? "max" : "min";
+  // A run whose metric ended nan/inf has no value to rank on; it goes last in
+  // either direction instead of competing with the last finite point it had.
   const ranked = metricKey ? resolved.runs.map(run => {
-    const metric = run.job.metrics.find(item => item.key === metricKey);
-    return { ...run, metric, value: Number(metric.last) };
-  }).sort((left, right) => direction === "max" ? right.value - left.value : left.value - right.value) : [];
+    const metric = run.job.metrics.find(item => metricCompareKey(item) === metricKey);
+    return { ...run, metric, value: metric.diverged || !metric.count ? NaN : Number(metric.last) };
+  }).sort((left, right) => {
+    const leftFinite = Number.isFinite(left.value);
+    const rightFinite = Number.isFinite(right.value);
+    if (leftFinite !== rightFinite) return leftFinite ? -1 : 1;
+    if (!leftFinite) return 0;
+    return direction === "max" ? right.value - left.value : left.value - right.value;
+  }) : [];
 
   target.innerHTML = `<div class="connected-comparison-head">
-    <span><strong>Graph-connected training runs</strong><small>${resolved.runs.length} resolved · ${resolved.unresolved.length} unresolved · last raw value used for ranking</small></span>
+    <span><strong>Graph-connected training runs</strong><small>${resolved.runs.length} resolved · ${resolved.unresolved.length} unresolved · last raw value used for ranking; a run that ended nan/inf ranks last</small></span>
     ${sharedKeys.length ? `<span><label>Metric<select id="connectedMetric">${sharedKeys.map(key => {
-      const label = resolved.runs[0].job.metrics.find(metric => metric.key === key)?.label || key;
+      const metric = resolved.runs[0].job.metrics.find(item => metricCompareKey(item) === key);
+      const label = metric?.compare_label || metric?.label || key;
       return `<option value="${escapeHtml(key)}"${key === metricKey ? " selected" : ""}>${escapeHtml(label)}</option>`;
     }).join("")}</select></label><label>Direction<select id="connectedDirection"><option value="min"${direction === "min" ? " selected" : ""}>Lower is better</option><option value="max"${direction === "max" ? " selected" : ""}>Higher is better</option></select></label></span>` : ""}
   </div>
-  <div class="connected-run-cards">${resolved.runs.map(item => `<article><span><strong>${escapeHtml(item.job.label)}</strong><small>${escapeHtml(item.job.job_id)} · ${escapeHtml((item.job.models || []).join(", ") || "unknown model")}</small></span><span class="chip ${item.job.status === "failed" ? "warn" : ""}">${escapeHtml(item.job.status)}</span></article>`).join("")}</div>
-  ${sharedKeys.length ? `${connectedRunPlot(resolved.runs, metricKey)}<div class="connected-ranking">${ranked.map((item, index) => `<article><strong>#${index + 1} · ${escapeHtml(item.job.label)}</strong><span>${escapeHtml(item.metric.label)} = <b>${escapeHtml(formatMetricValue(item.value))}</b></span></article>`).join("")}</div>` : `<div class="live-empty"><strong>The connected runs have no common metric key.</strong><br><br>Training losses from different model families are not automatically comparable. Connect evaluation results produced on the same held-out dataset, or select comparable CSV evidence below.</div>`}`;
+  <div class="connected-run-cards">${resolved.runs.map(item => `<article><span><strong>${escapeHtml(item.job.label)}</strong><small>${escapeHtml(item.job.job_id)} · ${escapeHtml((item.job.models || []).join(", ") || "unknown model")}${item.foreign ? ` · latest ${escapeHtml((item.job.models || []).join(", ") || "model")} run, not from this canvas` : ""}</small></span><span class="chip ${item.job.status === "failed" ? "warn" : ""}">${escapeHtml(item.job.status)}</span>${item.foreign ? `<span class="chip warn" title="${escapeHtml(item.modelNode?.id || "")} has no run of its own; this is the newest run of the same model from any pipeline.">not this canvas</span>` : ""}</article>`).join("")}</div>
+  ${sharedKeys.length ? `${connectedRunPlot(resolved.runs, metricKey)}<div class="connected-ranking">${ranked.map((item, index) => `<article><strong>${Number.isFinite(item.value) ? `#${index + 1}` : "unranked"} · ${escapeHtml(item.job.label)}</strong><span>${escapeHtml(item.metric.compare_label || item.metric.label)} = ${Number.isFinite(item.value) ? `<b>${escapeHtml(formatMetricValue(item.value))}</b>` : `<b class="metric-diverged">${escapeHtml(metricDivergenceText(item.metric) || "no finite value")}</b>`}</span></article>`).join("")}</div>` : `<div class="live-empty"><strong>The connected runs have no common metric key.</strong><br><br>Training losses from different model families are not automatically comparable. Connect evaluation results produced on the same held-out dataset, or select comparable CSV evidence below.</div>`}`;
 
   $("#connectedMetric", target)?.addEventListener("change", event => {
     snapshot();
@@ -2125,8 +2326,10 @@ export async function renderComparisonWorkspace(container, nodeId = null) {
   const compareNode = state.nodes.find(node => node.id === nodeId && node.type === "evaluate.compare")
     || state.nodes.find(node => node.type === "evaluate.compare")
     || null;
-  const connectedRuns = connectedComparisonSources(nodeId, metricCatalog.items);
-  const evaluationCsvPaths = connectedEvaluationCsvPaths(nodeId);
+  // Resolve links off the block actually chosen above: from the top nav nodeId
+  // is null, and both helpers return nothing for a null id.
+  const connectedRuns = connectedComparisonSources(compareNode?.id, metricCatalog.items);
+  const evaluationCsvPaths = connectedEvaluationCsvPaths(compareNode?.id);
   let savedCsvPaths = [];
   try {
     const parsed = JSON.parse(compareNode?.config.csv_paths || "[]");
@@ -2134,11 +2337,18 @@ export async function renderComparisonWorkspace(container, nodeId = null) {
   } catch { /* Ignore legacy or manually edited values. */ }
   const pendingCsvPaths = state.pendingComparisonPaths;
   state.pendingComparisonPaths = [];
-  const initialCsvPaths = evaluationCsvPaths.length
-    ? evaluationCsvPaths
-    : savedCsvPaths.length
-      ? savedCsvPaths
-      : pendingCsvPaths;
+  const baseCsvPaths = evaluationCsvPaths.length ? evaluationCsvPaths : savedCsvPaths;
+  // The viewer's Compare promises its CSV is "retained as run 1"; put it first
+  // rather than dropping it whenever the block already had saved runs.
+  const initialCsvPaths = [
+    ...pendingCsvPaths,
+    ...baseCsvPaths.filter(path => !pendingCsvPaths.includes(path))
+  ].slice(0, 12);                            // the "+ Add run" cap
+  // A blank group column is a real choice ("one mean per CSV"), so a saved ""
+  // must survive both this render and the schema autofill below; only a field
+  // the user has not chosen is autofilled from the detected columns.
+  const savedGroupColumn = compareNode?.config.group_column;
+  let groupColumnChosen = savedGroupColumn === "";
   container.innerHTML = `<div class="live-toolbar"><span><strong>Connected run comparison</strong><small>Graph links resolve persisted run IDs first; only actual logged values are plotted.</small></span></div>
     <section class="connected-comparison config-card" id="connectedComparison"></section>
     <div class="live-toolbar"><span><strong>Evaluation CSV mean ranking</strong><small>Ranks the mean of one numeric column. Selecting outputs from the same held-out set is yours to get right; the contract and sample IDs in each CSV are cross-checked and any mismatch is reported below.</small></span></div>
@@ -2146,7 +2356,7 @@ export async function renderComparisonWorkspace(container, nodeId = null) {
       <label class="config-help">Runs to compare${evaluationCsvPaths.length ? ` · ${evaluationCsvPaths.length} graph-connected evaluation output${evaluationCsvPaths.length === 1 ? "" : "s"} preselected` : ""}</label>
       <div id="comparisonRunList"></div>
       <button class="button small" id="comparisonAddRun" style="margin-top:6px">+ Add run</button>
-      <label class="config-help" style="margin-top:10px">Model / group column (matching rows are averaged; leave blank for one mean per CSV)</label><input class="config-control" id="comparisonGroup" value="${escapeHtml(compareNode?.config.group_column || "model")}">
+      <label class="config-help" style="margin-top:10px">Model / group column (matching rows are averaged; leave blank for one mean per CSV)</label><input class="config-control" id="comparisonGroup" value="${escapeHtml(savedGroupColumn === "" ? "" : savedGroupColumn || "model")}">
       <label class="config-help">Numeric metric column</label><select class="config-control" id="comparisonMetric"><option value="">Select CSV runs first</option></select>
       <div class="config-help" id="comparisonSchemaStatus" role="status" aria-live="polite">The common CSV schema will be detected automatically.</div>
       <div id="comparisonQualification"></div>
@@ -2197,10 +2407,11 @@ export async function renderComparisonWorkspace(container, nodeId = null) {
         ? schema.numeric_columns.map(column => `<option value="${escapeHtml(column)}"${column === preferredMetric ? " selected" : ""}>${escapeHtml(column)}</option>`).join("")
         : '<option value="">No common numeric column</option>';
       const groupInput = q("#comparisonGroup");
-      const preferredGroup = schema.group_columns.find(column => column === groupInput.value)
-        || schema.group_columns.find(column => /model|run|name|file|case|sample|id/i.test(column))
-        || "";
-      groupInput.value = preferredGroup;
+      if (!groupColumnChosen) {
+        groupInput.value = schema.group_columns.find(column => column === groupInput.value)
+          || schema.group_columns.find(column => /model|run|name|file|case|sample|id/i.test(column))
+          || "";
+      }
       groupInput.setAttribute("list", "comparisonGroupColumns");
       let groupList = q("#comparisonGroupColumns");
       if (!groupList) {
@@ -2229,6 +2440,7 @@ export async function renderComparisonWorkspace(container, nodeId = null) {
   };
   $$("[data-run-select]", container).forEach(select => select.addEventListener("change", refreshComparisonSchema));
   $$("[data-remove-run]", container).forEach(button => button.addEventListener("click", refreshComparisonSchema));
+  onStudio(container, "#comparisonGroup", "input", () => { groupColumnChosen = true; });
   onStudio(container, "#comparisonGroup", "change", persistCsvComparison);
   onStudio(container, "#comparisonMetric", "change", persistCsvComparison);
   onStudio(container, "#comparisonDirection", "change", persistCsvComparison);

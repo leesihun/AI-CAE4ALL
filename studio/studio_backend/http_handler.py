@@ -8,7 +8,6 @@ path-based dispatch.
 from __future__ import annotations
 
 import json
-import os
 import traceback
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -27,7 +26,7 @@ from studio_backend.analysis import (
     run_model_comparison,
     run_optimization,
 )
-from studio_backend.hdf5_preview import hdf5_sample, hdf5_samples, hdf5_summary
+from studio_backend.hdf5_preview import hdf5_facts, hdf5_sample, hdf5_samples, hdf5_summary
 from studio_backend.llm_configure import configure_via_llm, public_settings, save_settings
 from studio_backend.native_jobs import (
     UPLOAD_SUFFIXES,
@@ -55,6 +54,17 @@ from studio_backend.state import STATE, PreflightFailure
 from studio_backend.suite_bridge import benchmark_roster, checkpoint_metadata, config_catalog, documentation_catalog, file_catalog
 from studio_backend.system_info import deployment_status, gpu_inventory
 from studio_backend.training_metrics import training_metrics_catalog
+
+
+EXPORT_PREFIX = "/runtime/exports/"
+# Result figures a run writes beside its tables (convergence plots, the
+# periodic prediction PNGs). Served as bytes so an <img> can show them.
+IMAGE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg"}
+MAX_IMAGE = 32 * 1024 * 1024
+
+
+class UnsupportedMediaType(ValueError):
+    """A JSON endpoint was called without a JSON body type (HTTP 415)."""
 
 
 class StudioRequestHandler(SimpleHTTPRequestHandler):
@@ -106,8 +116,8 @@ class StudioRequestHandler(SimpleHTTPRequestHandler):
             except ValueError:
                 return None
             return canonical if candidate.is_file() else None
-        if canonical.startswith("/runtime/exports/"):
-            candidate = (FRONTEND_ROOT / canonical.lstrip("/")).resolve()
+        if canonical.startswith(EXPORT_PREFIX):
+            candidate = (RUNTIME_ROOT / "exports" / canonical[len(EXPORT_PREFIX):]).resolve()
             try:
                 candidate.relative_to((RUNTIME_ROOT / "exports").resolve())
             except ValueError:
@@ -116,6 +126,17 @@ class StudioRequestHandler(SimpleHTTPRequestHandler):
             # SimpleHTTPRequestHandler directory index from listing exports.
             return canonical if candidate.is_file() else None
         return None
+
+    def translate_path(self, path: str) -> str:
+        # export_artifact writes under RUNTIME_ROOT/exports, which is not
+        # necessarily FRONTEND_ROOT/runtime (the test suite redirects it), so
+        # the download URL is mapped there instead of under the served root.
+        # Only reached with the already-decoded canonical path from
+        # _allowed_static_path, so it is not unquoted a second time.
+        canonical = urlparse(path).path
+        if canonical.startswith(EXPORT_PREFIX):
+            return str(RUNTIME_ROOT / "exports" / canonical[len(EXPORT_PREFIX):])
+        return super().translate_path(path)
 
     def _serve_static(self, *, head_only: bool = False) -> None:
         canonical = self._allowed_static_path(self.path)
@@ -145,6 +166,30 @@ class StudioRequestHandler(SimpleHTTPRequestHandler):
         finally:
             self.path = original_path
 
+    def _send_image(self, raw: str) -> None:
+        """A result figure as bytes, under the same guard as /api/text.
+
+        Restricted to result roots and to raster formats whose type is decided
+        by the suffix -- never SVG, which is a document that can carry script.
+        """
+        path = safe_repo_path(raw, result_roots())
+        content_type = IMAGE_TYPES.get(path.suffix.lower())
+        if content_type is None:
+            raise ValueError("Only .png, .jpg and .jpeg figures can be shown here.")
+        if not path.is_file():
+            raise ValueError(f"{raw!r} does not exist.")
+        if path.stat().st_size > MAX_IMAGE:
+            raise ValueError(f"{raw!r} is larger than {MAX_IMAGE // (1024 * 1024)} MB.")
+        body = path.read_bytes()
+        try:
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except ConnectionError:
+            pass
+
     def send_json(self, payload: Any, status: int = 200) -> None:
         body = json.dumps(json_safe(payload), ensure_ascii=False).encode("utf-8")
         try:
@@ -160,7 +205,54 @@ class StudioRequestHandler(SimpleHTTPRequestHandler):
             # a second write failure and a misleading server traceback.
             self.close_connection = True
 
+    LOOPBACK_NAMES = frozenset({"127.0.0.1", "localhost", "[::1]"})
+
+    def _allowed_hosts(self) -> set[str] | None:
+        """Host header values this server answers to; None = do not check.
+
+        The Studio listens on loopback and launches processes, writes files and
+        reads the repository on request. A DNS-rebinding page (evil.example
+        resolving to 127.0.0.1) reaches it same-origin unless the Host header
+        is checked. A wildcard bind is an explicit choice to be reachable under
+        other names, so it is not second-guessed here.
+        """
+        host, port = self.server.server_address[:2]
+        host = str(host)
+        if host in {"", "0.0.0.0", "::"}:
+            return None
+        names = set(self.LOOPBACK_NAMES)
+        names.add(f"[{host}]" if ":" in host else host)
+        return {f"{name}:{port}" for name in names} | (names if int(port) == 80 else set())
+
+    def _reject_foreign_request(self, *, is_post: bool) -> bool:
+        """Answer and return True when the request must not be served."""
+        allowed = self._allowed_hosts()
+        if allowed is not None:
+            host = (self.headers.get("Host") or "").strip().lower()
+            if host not in allowed:
+                self.send_json({"error": "Request Host is not this Studio server."}, HTTPStatus.FORBIDDEN)
+                return True
+        if is_post:
+            # Cross-site form posts and fetches carry the page's Origin. The
+            # browser sends none for a same-origin GET, and the Studio's own
+            # POSTs carry its own origin, so only a present-and-foreign value
+            # is refused ("null" -- sandboxed frames, file:// -- is foreign).
+            origin = (self.headers.get("Origin") or "").strip().lower()
+            if origin:
+                host = (self.headers.get("Host") or "").strip().lower()
+                trusted = {f"http://{name}" for name in (allowed or {host})}
+                if origin not in trusted:
+                    self.send_json({"error": "Cross-origin requests are not accepted."}, HTTPStatus.FORBIDDEN)
+                    return True
+        return False
+
     def read_json(self) -> dict[str, Any]:
+        # application/json cannot be sent cross-origin without a CORS
+        # preflight (which this server never approves), so requiring it closes
+        # the "simple request" path a plain HTML form or text/plain fetch has.
+        content_type = (self.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+        if content_type != "application/json":
+            raise UnsupportedMediaType("JSON endpoints require Content-Type: application/json.")
         try:
             length = int(self.headers.get("Content-Length", "0"))
         except ValueError as exc:
@@ -172,6 +264,13 @@ class StudioRequestHandler(SimpleHTTPRequestHandler):
         if not isinstance(payload, dict):
             raise ValueError("JSON request body must be an object.")
         return payload
+
+    @staticmethod
+    def _hdf5_path(query: dict[str, list[str]]) -> Path:
+        path = safe_repo_path(query.get("path", [""])[0], (SUITE_ROOT,))
+        if path.suffix.lower() not in {".h5", ".hdf5"}:
+            raise ValueError("Select an .h5 or .hdf5 file.")
+        return path
 
     @staticmethod
     def _optional_truth(query: dict[str, list[str]]) -> Path | None:
@@ -234,6 +333,8 @@ class StudioRequestHandler(SimpleHTTPRequestHandler):
         }
 
     def do_GET(self) -> None:  # noqa: N802
+        if self._reject_foreign_request(is_post=False):
+            return
         parsed = urlparse(self.path)
         if not parsed.path.startswith("/api/"):
             self._serve_static()
@@ -265,8 +366,8 @@ class StudioRequestHandler(SimpleHTTPRequestHandler):
                 # Same path guard as every other reader, restricted to result
                 # roots and to formats that are text by definition.
                 path = safe_repo_path(query.get("path", [""])[0], result_roots())
-                if path.suffix.lower() not in {".csv", ".json", ".txt", ".log", ".tsv"}:
-                    raise ValueError("Only .csv, .tsv, .json, .txt and .log files can be opened here.")
+                if path.suffix.lower() not in {".csv", ".json", ".txt", ".log", ".tsv", ".md"}:
+                    raise ValueError("Only .csv, .tsv, .json, .txt, .log and .md files can be opened here.")
                 if not path.is_file():
                     raise ValueError(f"{query.get('path', [''])[0]!r} does not exist.")
                 self.send_json({
@@ -275,18 +376,19 @@ class StudioRequestHandler(SimpleHTTPRequestHandler):
                     "text": path.read_text(encoding="utf-8", errors="replace")[:MAX_TEXT],
                     "truncated": path.stat().st_size > MAX_TEXT,
                 })
+            elif parsed.path == "/api/image":
+                self._send_image(query.get("path", [""])[0])
             elif parsed.path == "/api/files":
                 self.send_json(file_catalog(query.get("kind", ["artifact"])[0]))
             elif parsed.path == "/api/hdf5":
-                path = safe_repo_path(query.get("path", [""])[0], (SUITE_ROOT,))
-                if path.suffix.lower() not in {".h5", ".hdf5"}:
-                    raise ValueError("Select an .h5 or .hdf5 file.")
-                self.send_json(hdf5_summary(path))
+                self.send_json(hdf5_summary(self._hdf5_path(query)))
+            elif parsed.path == "/api/hdf5/facts":
+                self.send_json(hdf5_facts(self._hdf5_path(query)))
             elif parsed.path == "/api/hdf5/samples":
-                path = safe_repo_path(query.get("path", [""])[0], (SUITE_ROOT,))
+                path = self._hdf5_path(query)
                 self.send_json(hdf5_samples(path))
             elif parsed.path == "/api/hdf5/sample":
-                path = safe_repo_path(query.get("path", [""])[0], (SUITE_ROOT,))
+                path = self._hdf5_path(query)
                 self.send_json(
                     hdf5_sample(
                         path,
@@ -349,6 +451,10 @@ class StudioRequestHandler(SimpleHTTPRequestHandler):
             self.send_json({"error": "Requested job was not found."}, HTTPStatus.NOT_FOUND)
         except (ValueError, FileNotFoundError) as exc:
             self.send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+        except OSError as exc:
+            # h5py reports "not an HDF5 file" / a truncated file as OSError; it
+            # is a bad selection, not a server fault.
+            self.send_json({"error": f"Could not read the selected file: {exc}"}, HTTPStatus.BAD_REQUEST)
         except Exception as exc:
             # Keep the traceback in the local server console where it is useful
             # to the operator; returning it to a browser exposes filesystem and
@@ -357,6 +463,8 @@ class StudioRequestHandler(SimpleHTTPRequestHandler):
             self.send_json({"error": f"{type(exc).__name__}: {exc}"}, HTTPStatus.INTERNAL_SERVER_ERROR)
 
     def do_HEAD(self) -> None:  # noqa: N802
+        if self._reject_foreign_request(is_post=False):
+            return
         parsed = urlparse(self.path)
         if parsed.path.startswith("/api/"):
             self.send_error(HTTPStatus.METHOD_NOT_ALLOWED, "HEAD is not available for API routes.")
@@ -364,6 +472,9 @@ class StudioRequestHandler(SimpleHTTPRequestHandler):
         self._serve_static(head_only=True)
 
     def do_POST(self) -> None:  # noqa: N802
+        if self._reject_foreign_request(is_post=True):
+            self.close_connection = True
+            return
         parsed = urlparse(self.path)
         try:
             if parsed.path == "/api/upload":
@@ -451,6 +562,9 @@ class StudioRequestHandler(SimpleHTTPRequestHandler):
                 self.send_json({"error": "Unknown API route."}, HTTPStatus.NOT_FOUND)
         except PreflightFailure as exc:
             self.send_json({"error": str(exc), "failures": exc.failures}, 422)
+        except UnsupportedMediaType as exc:
+            self.close_connection = True
+            self.send_json({"error": str(exc)}, HTTPStatus.UNSUPPORTED_MEDIA_TYPE)
         except KeyError:
             self.send_json({"error": "Requested job was not found."}, HTTPStatus.NOT_FOUND)
         except (ValueError, json.JSONDecodeError) as exc:
@@ -479,11 +593,14 @@ class StudioHTTPServer(ThreadingHTTPServer):
     already turns into "could not use port N, try another".
     """
 
+    # This is the whole mechanism. Measured on Windows 10: with the first
+    # socket bound WITHOUT SO_REUSEADDR, a second bind fails (WSAEADDRINUSE,
+    # or WSAEACCES when the second sets SO_REUSEADDR), in-process and across
+    # processes. `allow_reuse_port` does not help here -- Python 3.10's
+    # server_bind never reads it and Windows has no SO_REUSEPORT -- and
+    # SO_EXCLUSIVEADDRUSE is deliberately not set: it makes a restart fail
+    # while the old server's connections sit in TIME_WAIT.
     allow_reuse_address = False
-    # Windows-only and the actual teeth: without it SO_EXCLUSIVEADDRUSE is not
-    # set and another process can still steal the port. Harmless elsewhere.
-    if os.name == "nt":
-        allow_reuse_port = False
 
 
 def create_server(host: str, port: int) -> ThreadingHTTPServer:

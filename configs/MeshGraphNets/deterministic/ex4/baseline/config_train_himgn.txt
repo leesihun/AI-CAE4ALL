@@ -40,7 +40,7 @@ num_workers                      2
 prefetch_factor                  2
 grad_accum_steps                 1
 augment_geometry                 False
-std_noise                        0.01
+std_noise                        0.0416
 use_amp                          True
 use_checkpointing                True
 use_ema                          True
@@ -57,12 +57,12 @@ use_world_edges                  False
 use_multiscale                   True
 edge_var                         8
 latent_dim                       128
-message_passing_num              15
+message_passing_num              28
 geometry_state_mode              fixed
 coarsening_type                  voronoi_seedmean
 multiscale_levels                2
 voronoi_clusters                 256, 32
-mp_per_level                     2, 3, 5, 3, 2
+mp_per_level                     4, 6, 8, 6, 4
 pool_type                        mean
 unpool_type                      sum
 learned_interpolation            True

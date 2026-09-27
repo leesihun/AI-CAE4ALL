@@ -7,6 +7,7 @@ never needs to know cae_suite's import path or handle its absence twice.
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 from typing import Any
@@ -104,7 +105,7 @@ def file_catalog(kind: str) -> dict[str, Any]:
         )
     return walk_files(
         (RUNTIME_ROOT, SUITE_ROOT / "output", SUITE_ROOT / "outputs"),
-        {".h5", ".hdf5", ".csv", ".json", ".html", ".png", ".jpg", ".jpeg", ".stl", ".ply", ".obj", ".off", ".vtk", ".vtu", ".vtp", ".msh", ".pth", ".pt", ".txt", ".log"},
+        {".h5", ".hdf5", ".csv", ".json", ".html", ".png", ".jpg", ".jpeg", ".stl", ".ply", ".obj", ".off", ".vtk", ".vtu", ".vtp", ".msh", ".pth", ".pt", ".txt", ".log", ".md"},
         "artifact",
         # Every config save and every preflight writes a .txt here, so this one
         # directory outnumbers all real artifacts by an order of magnitude and,
@@ -115,43 +116,63 @@ def file_catalog(kind: str) -> dict[str, Any]:
 
 
 def benchmark_roster() -> dict[str, Any]:
-    """The checked-in benchmark campaign, read from its roster.
+    """The checked-in benchmark campaign, read from its manifest.
 
-    The Benchmarks workspace used to look for configs whose path contained
-    "benchmarks/" and reported "0 real configs", which was literally true and
-    completely misleading: the campaign was reorganized into
-    `configs/campaigns/benchmarks_all/`, whose roster.tsv names arms that live under each
-    method's own `configs/<Method>/<ex>/`. Nothing under a "benchmarks/" path
-    remains, so the workspace showed an empty page for a 25-arm campaign.
+    The campaign is `configs/campaigns/dataset_matrix/`: its manifest.json
+    lists every (example, method) pair with a train and an infer config that
+    live under each method's own `configs/<Method>/...` tree. Filtering the
+    config catalog by path cannot recover that set, and the previous source
+    (`configs/campaigns/benchmarks_all/roster.tsv`) was deleted, which left the
+    Benchmarks workspace reporting "0 roster entries" for a 78-pair campaign.
 
-    Returns roster order (which is the campaign's own grouping by ex slot),
-    flagging arms whose config is missing rather than dropping them -- a roster
-    pointing at a deleted config is exactly what someone needs to see.
+    Returns manifest order, one row per config (train, then infer), flagging
+    configs that are missing rather than dropping them -- a manifest pointing at
+    a deleted config is exactly what someone needs to see.
     """
-    roster = SUITE_ROOT / "configs" / "campaigns" / "benchmarks_all" / "roster.tsv"
-    if not roster.is_file():
+    manifest = SUITE_ROOT / "configs" / "campaigns" / "dataset_matrix" / "manifest.json"
+    if not manifest.is_file():
         return {"items": [], "roster": None}
+    try:
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"items": [], "roster": relative(manifest)}
     rows: list[dict[str, Any]] = []
-    lines = roster.read_text(encoding="utf-8").splitlines()
-    header = lines[0].split("\t") if lines else []
-    for line in lines[1:]:
-        if not line.strip():
+    for pair in data.get("pairs", []) if isinstance(data, dict) else []:
+        if not isinstance(pair, dict):
             continue
-        cells = line.split("\t")
-        entry = dict(zip(header, cells))
-        config = str(entry.get("train_config", "")).strip()
-        path = SUITE_ROOT / config if config else None
-        rows.append(
-            {
-                "label": str(entry.get("label", "")).strip(),
-                "path": config,
-                "ex_slot": str(entry.get("ex_slot", "")).strip(),
-                "light": str(entry.get("light", "")).strip() in {"1", "true", "True"},
-                "exists": bool(path and path.is_file()),
-                "size": path.stat().st_size if path and path.is_file() else 0,
-            }
-        )
-    return {"items": rows, "roster": relative(roster)}
+        example = str(pair.get("example", "")).strip()
+        method = str(pair.get("method", "")).strip()
+        for role in ("train", "infer"):
+            config = str(pair.get(role) or "").strip()
+            if not config:
+                continue
+            path = SUITE_ROOT / config
+            # The manifest's `method` is an arm name (himgn, lsh_vae,
+            # transolver3), not a registry ID; the Load action needs the
+            # config's own `model` line.
+            model, mode = "", ""
+            if path.is_file() and SUITE_IMPORT_ERROR is None:
+                try:
+                    parsed = parse_config(path)
+                    model = str(parsed.values.get("model", ""))
+                    mode = str(parsed.values.get("mode", ""))
+                except Exception:
+                    pass
+            rows.append(
+                {
+                    "label": f"{example}/{method} · {role}",
+                    "path": config,
+                    "ex_slot": example,
+                    "category": str(pair.get("category", "")).strip(),
+                    "method": method,
+                    "model": model,
+                    "mode": mode,
+                    "role": role,
+                    "exists": path.is_file(),
+                    "size": path.stat().st_size if path.is_file() else 0,
+                }
+            )
+    return {"items": rows, "roster": relative(manifest)}
 
 
 # The checkpoint families the Studio can build a standalone inference config for.

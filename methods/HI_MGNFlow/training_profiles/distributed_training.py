@@ -128,8 +128,10 @@ def _run_ae_stage_ddp(ddp_model, model, ema_model, optimizer, scheduler, train_s
                 print(f"\n[{tag}] stage interrupted by user (after validate_ae_epoch).")
             break
 
-        scheduler.step()
+        # Read before step(): afterwards it is the next epoch's LR, and after the
+        # last epoch a warm restart reports the peak LR for an epoch that never runs.
         current_lr = optimizer.param_groups[0]['lr']
+        scheduler.step()
         vram_str = (f" | VRAM peak={train_metrics.get('peak_gb', 0.0):.2f}GB "
                     f"reserved={train_metrics.get('reserved_gb', 0.0):.2f}GB")
 
@@ -167,7 +169,8 @@ def _run_ae_stage_ddp(ddp_model, model, ema_model, optimizer, scheduler, train_s
         if epoch % test_interval == 0 or last_epoch:
             if rank == 0:
                 eval_model = ema_model.module if ema_model is not None else model
-                run_periodic_test(eval_model, test_loader, device, config, epoch, train_dataset)
+                run_periodic_test(eval_model, test_loader, device, config, epoch, train_dataset,
+                                  tag=tag)
             dist.barrier(device_ids=[gpu_id] if torch.cuda.is_available() else None)
 
         if rank == 0:
@@ -237,14 +240,19 @@ def _run_prior_stage_ddp(ddp_model, model, ema_model, optimizer, scheduler, trai
                 print(f"\n[{tag}] stage interrupted by user (after validate_prior_epoch).")
             break
 
-        scheduler.step()
+        # Read before step(): afterwards it is the next epoch's LR, and after the
+        # last epoch a warm restart reports the peak LR for an epoch that never runs.
         current_lr = optimizer.param_groups[0]['lr']
+        scheduler.step()
         vram_str = (f" | VRAM peak={train_metrics.get('peak_gb', 0.0):.2f}GB "
                     f"reserved={train_metrics.get('reserved_gb', 0.0):.2f}GB")
         sample_str = ''
         if rank == 0 and sample_metrics is not None:
+            # det is the 1-forward readout `best_by det` selects on; on the
+            # epoch line it is charted, not only in the [FlowDiag] line.
             sample_str = (f" | CRPS {sample_metrics['crps']:.2e}"
-                          f" spread {sample_metrics['spread']:.3f}")
+                          f" spread {sample_metrics['spread']:.3f}"
+                          f" det mse {sample_metrics['det']:.2e}")
 
         if rank == 0:
             print(
@@ -294,7 +302,8 @@ def _run_prior_stage_ddp(ddp_model, model, ema_model, optimizer, scheduler, trai
         if epoch % test_interval == 0 or last_epoch:
             if rank == 0:
                 eval_model = ema_model.module if ema_model is not None else model
-                run_periodic_test(eval_model, test_loader, device, config, epoch, train_dataset)
+                run_periodic_test(eval_model, test_loader, device, config, epoch, train_dataset,
+                                  tag=tag)
             dist.barrier(device_ids=[gpu_id] if torch.cuda.is_available() else None)
 
         if rank == 0:

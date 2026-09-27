@@ -23,12 +23,12 @@ infer_timesteps                  1
 input_var                        4
 output_var                       4
 cond_var                         0
-feature_loss_weights             1, 1, 0.001, 1
+feature_loss_weights             1, 1, 0.001, 9.33
 use_node_types                   True
 positional_features              4
 time_integration                 ar_ot
-training_epochs                  2000
-batch_size                       2
+training_epochs                  5000
+batch_size                       1
 learningr                        0.0001
 weight_decay                     0.0
 warmup_epochs                    5

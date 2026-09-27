@@ -5,8 +5,12 @@
 % conditioner: none
 % partNo: partNo
 % Static state input is zero; temporal input is current state and target is next-state delta.
-% Reference: https://doi.org/10.1038/s42256-021-00302-5
+% Reference: https://doi.org/10.1038/s42256-021-00302-5 ; https://arxiv.org/abs/2111.05512
 % See configs/campaigns/dataset_matrix/README.md for deviations and verification boundaries.
+% training_epochs 420 (not the roster's 500) is the paper's CylinderFlow budget:
+%   80 train trajectories x 599 windows = 47,920 items/epoch; 420 epochs = 20.1M
+%   sample presentations = the 10M steps x batch 2 of arXiv:2010.03409. Batch- and
+%   world-size-invariant, so it holds under ddp. Do not 'normalize' it to 500.
 % No source HDF5 writes. Checkpoints are created by the paired training config.
 
 model                            deeponet
@@ -36,8 +40,8 @@ num_workers                      2
 prefetch_factor                  2
 grad_accum_steps                 1
 augment_geometry                 False
-std_noise                        0.01
-use_amp                          True
+std_noise                        0.0416
+use_amp                          False
 use_checkpointing                True
 use_ema                          True
 ema_decay                        0.99
@@ -68,7 +72,7 @@ deeponet_hidden_channels         256
 deeponet_branch_depth            4
 deeponet_trunk_depth             4
 deeponet_basis_dim               128
-deeponet_activation              gelu
+deeponet_activation              relu
 deeponet_multi_output            split_both
 deeponet_max_branch_params       100000000
 infer_query_chunk_size           16384

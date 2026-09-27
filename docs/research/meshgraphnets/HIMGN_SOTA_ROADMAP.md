@@ -73,7 +73,7 @@ Encoder(node MLP, edge MLP, world-edge MLP)
 CarBench의 결론: *"transformer-based and tokenization-aware architectures consistently
 outperform point-based and graph-based networks."* 그래프 계열은 **정확도가 아니라
 메모리·지연시간에서 죽는다**(27 GB, 232 ms). Transolver-3도 같은 얘기를 한다 —
-GNN(Graph U-Net, GINO)은 NASA-CRM 급에서는 괜찮은데 DrivAerML 급에서 무너진다.
+GNN(Graph U-Net)은 NASA-CRM 급에서는 괜찮은데 DrivAerML 급에서 무너진다.
 
 > **이 표에서 배울 것:** 다음 논문에서 latency/memory/params를 반드시 보고해야 한다.
 > 그래프 계열이 지는 축이 정확히 거기다. 이기지 못하면 최소한 설명해야 한다.

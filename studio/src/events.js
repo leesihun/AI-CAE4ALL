@@ -9,7 +9,7 @@ import {
   setPanelVisibility, dragNode, panCanvas, stopNodeDrag, stopCanvasPan,
   addBlock, deleteSelected, render, selectNode, startCanvasPan, renderEdges
 } from "./graph.js";
-import { validatePipeline, runGraph, stopRun, dismissRuntimeJob, toggleDrawerCollapsed, watchModalsForDrawer } from "./run.js";
+import { validatePipeline, runGraph, stopRun, dismissRuntimeJob, toggleDrawerCollapsed, watchModalsForDrawer, reconcileFinishedJobs } from "./run.js";
 import { openStudio } from "./studio.js";
 import {
   PipelineLoadCancelledError, downloadPipelineJson, importPipelineJson,
@@ -31,6 +31,9 @@ function undoGraphChange() {
   $("#templateSelect").value = "saved";
   render();
   schedulePipelineSave();
+  // The entry holds the block statuses of the moment it was taken, and may be
+  // another canvas (undoing a load); rebuild them from the runs it owns.
+  reconcileFinishedJobs();
   toast("Undid the last graph change.");
 }
 
@@ -73,6 +76,7 @@ export function bindEvents() {
       await importPipelineJson(file);
       $("#templateSelect").value = "saved";
       render();
+      reconcileFinishedJobs();
       toast(`Imported ${file.name}.`);
     } catch (error) {
       if (error instanceof PipelineLoadCancelledError) toast("Pipeline import cancelled.", "warn");
@@ -381,8 +385,11 @@ export function bindEvents() {
     if (event.key === "Escape") {
       const open = topOverlayId();
       if (open) closeOverlay(open);
-      else {
+      else if (state.pendingPort) {
+        // Only claim a cancellation when there was a link to cancel, and
+        // repaint so the highlighted source/target ports clear with it.
         state.pendingPort = null;
+        render();
         toast("Pending link cancelled.");
       }
       return;
@@ -392,8 +399,11 @@ export function bindEvents() {
     // user is typing a config value, a pipeline name, or a search term.
     const typing = event.target.matches("input,textarea,select") || event.target.isContentEditable;
     const chord = event.ctrlKey || event.metaKey;
+    // Nor while a dialog covers the canvas: Delete with the config sheet open
+    // would otherwise delete the very block being edited behind it.
+    const overlayOpen = Boolean(topOverlayId());
 
-    if (chord && event.key.toLowerCase() === "z" && !typing) {
+    if (chord && event.key.toLowerCase() === "z" && !typing && !overlayOpen) {
       event.preventDefault();
       undoGraphChange();
       return;
@@ -405,12 +415,15 @@ export function bindEvents() {
     }
     if (chord) return;                       // leave every other browser chord alone
 
-    if (event.key === "?" ) {
+    if (typing) return;
+    // After the typing guard so a literal "?" can still be typed into a field,
+    // and before the overlay guard so "?" also closes its own panel.
+    if (event.key === "?") {
       event.preventDefault();
       toggleShortcutsOverlay();
       return;
     }
-    if (typing) return;
+    if (overlayOpen) return;
 
     if (event.key === "Delete" || event.key === "Backspace") { deleteSelected(); return; }
     if (event.key === "/") {

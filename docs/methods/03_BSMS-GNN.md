@@ -126,7 +126,7 @@ use_multiscale     True
 coarsening_type    bfs        # BFS bi-stride (Cao et al. ICML 2023)
 voronoi_clusters   0          # unused for bfs
 multiscale_levels  2
-mp_per_level       2, 3, 5, 3, 2
+mp_per_level       4, 6, 8, 6, 4
 latent_dim         128
 time_integration   ar_ot
 ```

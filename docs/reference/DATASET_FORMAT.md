@@ -212,7 +212,8 @@ every other example:
   in the transient-safe order below; produced upstream (outside this repo, per
   the raw-data convention) and checked in as-is.
 - Mid: `dataset/deterministic/ex3_NASA_CRM_mid.h5` / `ex3_NASA_CRM_mid_infer.h5`
-  (122,778 nodes/sample). These keep the original solver row order and are
+  (123,217 nodes/sample; `rebuild_crm_mid.py` replaced the original 122,778-node
+  mesh, which was non-manifold). These keep the original solver row order and are
   never read directly by a config. `configs/campaigns/dataset_matrix/prepare.py`
   (`reorder_crm`) reorders them into the same transient-safe layout as a
   zero-copy virtual dataset at `dataset/derived/config_matrix/

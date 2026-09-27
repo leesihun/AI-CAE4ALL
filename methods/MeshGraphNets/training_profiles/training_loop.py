@@ -24,6 +24,17 @@ from training_profiles.ar_rollout import (
 )
 
 
+def _progress_disabled():
+    """Draw progress bars on rank 0 only.
+
+    Under DDP every rank would otherwise paint its own bar on the shared
+    stderr, and those frames interleave with (and glue onto) the rank-0 epoch
+    lines that the Studio's metrics parser reads.
+    """
+    dist = torch.distributed
+    return dist.is_available() and dist.is_initialized() and dist.get_rank() != 0
+
+
 def build_ema_model(model, config):
     """Create an EMA shadow model if use_ema is enabled."""
     if not config.get('use_ema', False):
@@ -200,7 +211,7 @@ def train_epoch(model, dataloader, optimizer, device, config, epoch, ema_model=N
     profiler = _start_profiler(config, epoch)
     profile_end_batch = _PROFILE_SKIP_BATCHES + int(config.get('profile_batches', 0))
 
-    pbar = tqdm.tqdm(dataloader, total=total_batches)
+    pbar = tqdm.tqdm(dataloader, total=total_batches, disable=_progress_disabled())
     for batch_idx, graph in enumerate(pbar):
         graph = _move_graph_to_device(graph, device, config)
 
@@ -265,7 +276,7 @@ def _evaluate_epoch(model, dataloader, device, config, *, progress_name='Validat
         total_loss_sum = torch.zeros((), dtype=torch.float64, device=device)
         total_loss_count = 0
 
-        pbar = tqdm.tqdm(dataloader, desc=progress_name)
+        pbar = tqdm.tqdm(dataloader, desc=progress_name, disable=_progress_disabled())
         for batch_idx, graph in enumerate(pbar):
             graph = _move_graph_to_device(graph, device, config)
             with torch.amp.autocast('cuda', dtype=amp_dtype, enabled=use_amp):
@@ -312,7 +323,9 @@ def run_periodic_test(model, test_loader, device, config, epoch, train_dataset):
     """
     start = time.time()
     test_loss = test_model(model, test_loader, device, config, epoch, train_dataset)
-    print(f"  Test loss: {test_loss:.2e} ({time.time() - start:.1f}s)")
+    # The epoch makes this a chartable series in the Studio's Train Metrics;
+    # an unanchored line is only readable in the raw log.
+    print(f"  Epoch {epoch} Test loss: {test_loss:.2e} ({time.time() - start:.1f}s)")
 
     if config.get('display_trainset', True):
         viz_indices = config.get('test_batch_idx', [0, 1, 2, 3, 4, 5, 6, 7])
@@ -326,7 +339,7 @@ def run_periodic_test(model, test_loader, device, config, epoch, train_dataset):
             viz_config['test_batch_idx'] = list(range(len(viz_indices)))
             viz_loss = test_model(model, viz_loader, device, viz_config, epoch,
                                   train_dataset, output_prefix='train')
-            print(f"  Train reconstruction loss: {viz_loss:.2e}")
+            print(f"  Epoch {epoch} Train reconstruction loss: {viz_loss:.2e}")
     return test_loss
 
 
@@ -360,7 +373,7 @@ def test_model(model, dataloader, device, config, epoch, dataset=None, output_pr
         total_loss_count = 0
         plot_data_queue = []
 
-        pbar = tqdm.tqdm(dataloader, total=effective_total)
+        pbar = tqdm.tqdm(dataloader, total=effective_total, disable=_progress_disabled())
         for batch_idx, graph in enumerate(pbar):
             if batch_idx >= max_test_batches:
                 break

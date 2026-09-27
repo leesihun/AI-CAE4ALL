@@ -21,6 +21,13 @@ MOUNT_ABS_Y = 0.60          # end pads start here
 MOUNT_Z_BAND = 0.06         # thickness of the bolted-down bottom face
 LUG_ABS_Y = 0.32            # central interface half-width along y
 LUG_Z_BAND = 0.10           # depth below the lug crown that carries the load
+# The lug crown must stand at least this far above the mounting face. Measured
+# over the 418 relabelled DeepJEB brackets: crown - base = 0.636 +/- 0.005
+# (min 0.623), while the end pads reach 0.23 (max 0.30). Without a floor a shape
+# whose lug has vanished still "has" a crown -- the top of whatever sits at
+# |y| <= 0.32 -- and gets loaded there as if it were the interface, which lets a
+# search delete the lug and call the result a lighter bracket.
+LUG_MIN_HEIGHT = 0.55
 
 # Unit conversions for the GE challenge's imperial load statement. `fea.py`
 # works in N, m and Pa, so every load has to enter in SI. Both factors are the
@@ -91,30 +98,7 @@ class Bracket:
 
     def interfaces(self, nodes_norm, faces):
         """Fixed (mount) and loaded (lug) node sets in normalized coordinates."""
-        y, z = nodes_norm[:, 1], nodes_norm[:, 2]
-        on_surface = np.zeros(len(nodes_norm), dtype=bool)
-        on_surface[np.unique(faces)] = True
-
-        pad = np.abs(y) >= MOUNT_ABS_Y
-        if not pad.any():
-            raise ValueError('no mounting pad region found')
-        z_base = z[pad].min()
-        mount = np.flatnonzero(pad & on_surface & (z <= z_base + MOUNT_Z_BAND))
-
-        lug_band = np.abs(y) <= LUG_ABS_Y
-        if not lug_band.any():
-            raise ValueError('no central lug region found')
-        z_crown = z[lug_band].max()
-        lug = np.flatnonzero(lug_band & on_surface & (z >= z_crown - LUG_Z_BAND))
-
-        if len(mount) < 12:
-            raise ValueError(f'mount region too small ({len(mount)} nodes)')
-        if len(lug) < 6:
-            raise ValueError(f'lug region too small ({len(lug)} nodes)')
-        # Both ends must be gripped, otherwise the part is a cantilever off one pad.
-        if (y[mount] > 0).sum() < 4 or (y[mount] < 0).sum() < 4:
-            raise ValueError('mounting pads found on only one end')
-        return mount, lug
+        return find_interfaces(nodes_norm, faces)
 
     # ---------------------------------------------------------------- #
     # Load assembly
@@ -178,6 +162,9 @@ class Bracket:
                 'max_von_mises': float(vm.max()),
                 'peak_von_mises': float(np.percentile(vm_nodal, self.stress_percentile)),
                 'max_displacement': float(disp.max()),
+                # Vertical is +z in this frame (see LOAD_CASES), so this is the
+                # deflection a "vertical displacement" requirement is written on.
+                'max_vertical_displacement': float(np.abs(u[:, 2]).max()),
                 'compliance': float(f @ u.ravel()),
                 'solver': solve_info,
             }
@@ -197,6 +184,7 @@ class Bracket:
             'max_displacement': max(c['max_displacement'] for c in cases.values()),
             'max_compliance': max(c['compliance'] for c in cases.values()),
             'worst_case': worst_name,
+            'vertical_displacement': vertical_displacement(cases),
         }
         if return_fields:
             result['fields'] = {
@@ -204,8 +192,59 @@ class Bracket:
                 'worst_case': worst_name,
                 'von_mises_nodal': fields[worst_name]['von_mises_nodal'],
                 'displacement': fields[worst_name]['displacement'],
+                'cases': fields,        # every case; the surrogate labels need all four
             }
         return result
+
+
+def find_interfaces(nodes_norm, faces):
+    """Fixed (mount) and loaded (lug) node sets, or ValueError naming what is missing.
+
+    One rule for both analysis backends: the FEA path applies it to the tet
+    mesh's boundary, the surrogate path to the surface it bridges (the same
+    vertices -- gmsh keeps the surface it is handed). A shape the solver would
+    refuse must not be scored by the surrogate as if it were a bracket.
+    """
+    nodes_norm = np.asarray(nodes_norm, dtype=float)
+    y, z = nodes_norm[:, 1], nodes_norm[:, 2]
+    on_surface = np.zeros(len(nodes_norm), dtype=bool)
+    on_surface[np.unique(faces)] = True
+
+    pad = np.abs(y) >= MOUNT_ABS_Y
+    if not pad.any():
+        raise ValueError('no mounting pad region found')
+    z_base = z[pad].min()
+    mount = np.flatnonzero(pad & on_surface & (z <= z_base + MOUNT_Z_BAND))
+
+    lug_band = np.abs(y) <= LUG_ABS_Y
+    if not lug_band.any():
+        raise ValueError('no central lug region found')
+    z_crown = z[lug_band].max()
+    if z_crown - z_base < LUG_MIN_HEIGHT:
+        raise ValueError(f'lug crown only {z_crown - z_base:.3f} above the mount '
+                         f'(needs >= {LUG_MIN_HEIGHT}): no loaded interface')
+    lug = np.flatnonzero(lug_band & on_surface & (z >= z_crown - LUG_Z_BAND))
+
+    if len(mount) < 12:
+        raise ValueError(f'mount region too small ({len(mount)} nodes)')
+    if len(lug) < 6:
+        raise ValueError(f'lug region too small ({len(lug)} nodes)')
+    # Both ends must be gripped, otherwise the part is a cantilever off one pad.
+    if (y[mount] > 0).sum() < 4 or (y[mount] < 0).sum() < 4:
+        raise ValueError('mounting pads found on only one end')
+    return mount, lug
+
+
+def vertical_displacement(cases):
+    """max |u_z| under the vertical load case, or None when it was not run.
+
+    The FEA path names the case 'vertical', the surrogate path 'ver' (the
+    DeepJEB label suffix); both are the same +z load.
+    """
+    for name in ('vertical', 'ver'):
+        if name in cases and 'max_vertical_displacement' in cases[name]:
+            return float(cases[name]['max_vertical_displacement'])
+    return None
 
 
 class MassObjective:
@@ -213,21 +252,42 @@ class MassObjective:
 
     Scalarized with quadratic exterior penalties so an infeasible design still
     gives a population search a direction to move in.
+
+    The deflection limit is one of two kinds. By default it is `disp_allow` on
+    the largest |u| over every load case, calibrated from the baseline
+    population. With `vertical_disp_allow` set it is instead an absolute limit
+    (metres) on max |u_z| under the vertical load case -- the requirement a
+    designer actually writes ("the lug may not drop more than 0.2 mm") --
+    and the calibrated one is not applied.
+
+    `stress_allow` None drops the stress constraint (`opt_stress_margin 0`):
+    the stress violation is then always 0 and only mass and deflection score.
     """
 
     def __init__(self, mass_ref, stress_allow, disp_allow,
-                 stress_weight=6.0, disp_weight=3.0, failure_score=10.0):
+                 stress_weight=6.0, disp_weight=3.0, failure_score=10.0,
+                 vertical_disp_allow=None):
         self.mass_ref = float(mass_ref)
-        self.stress_allow = float(stress_allow)
+        self.stress_allow = float(stress_allow) if stress_allow is not None else None
         self.disp_allow = float(disp_allow)
         self.stress_weight = float(stress_weight)
         self.disp_weight = float(disp_weight)
         self.failure_score = float(failure_score)
+        self.vertical_disp_allow = (float(vertical_disp_allow)
+                                    if vertical_disp_allow else None)
 
     def __call__(self, result):
         mass_term = result['mass'] / self.mass_ref
-        gs = max(0.0, result['peak_von_mises'] / self.stress_allow - 1.0)
-        gd = max(0.0, result['max_displacement'] / self.disp_allow - 1.0)
+        gs = (max(0.0, result['peak_von_mises'] / self.stress_allow - 1.0)
+              if self.stress_allow is not None else 0.0)
+        if self.vertical_disp_allow is not None:
+            uz = result.get('vertical_displacement')
+            if uz is None:
+                raise KeyError('vertical_disp_allow is set but the result has no '
+                               "vertical load case -- add 'vertical' to opt_load_cases")
+            gd = max(0.0, uz / self.vertical_disp_allow - 1.0)
+        else:
+            gd = max(0.0, result['max_displacement'] / self.disp_allow - 1.0)
         score = mass_term + self.stress_weight * gs ** 2 + self.disp_weight * gd ** 2
         return float(score), {
             'mass_term': float(mass_term),

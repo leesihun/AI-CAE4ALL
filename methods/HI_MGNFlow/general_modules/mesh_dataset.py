@@ -482,6 +482,10 @@ class MeshGraphDataset(Dataset):
 
     def _resolve_split_ids(self, train_ratio: float, val_ratio: float, test_ratio: float, seed: int):
         """Always generate a deterministic seeded split."""
+        if self.config.get('split_group_attr'):
+            from general_modules.grouped_split import grouped_split_ids
+            return grouped_split_ids(self.h5_file, self.sample_ids, self.config['split_group_attr'],
+                                     train_ratio, val_ratio, seed)
         rng = np.random.default_rng(seed)
         shuffled_ids = self.sample_ids.copy()
         rng.shuffle(shuffled_ids)

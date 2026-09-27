@@ -1,5 +1,13 @@
 """Convert DeepJEB FieldMesh HDF5 files into the suite's shared mesh contract.
 
+**Superseded for training data.** DeepJEB's `nodal_variables` are not in
+`vertices` (or `faces`) order, so the fields this script pairs with each node
+are scrambled -- edge-smoothness ratio 0.7-0.9 against ~0.05 for a real field.
+`ex10_deepjeb_mgn(.h5)` is now written by `build_deepjeb_fea.py`, which keeps
+DeepJEB's geometry and recomputes the fields with the design loop's own FEA.
+This module stays as the owner of the row layout, split policy and surface
+decimation that builder imports.
+
 DeepJEB ships one file per bracket holding a ~270k-node second-order tet mesh
 plus nodal fields for four load cases (vertical, horizontal, diagonal,
 torsional) and two mode shapes. Three conversions happen here:
@@ -21,11 +29,15 @@ visible rather than assumed.
 input-only channels the model reads but never predicts. Four load cases on one
 geometry therefore become four samples that share coordinates and connectivity.
 
-Outputs `stress(MPa)` and `resultant_disp(mm)`. Deliberately *not* the
-per-axis displacements: DeepJEB omits `ver_x_disp` entirely, so a uniform
-4-component layout would carry a constant-zero row for the vertical case -- the
-same silent degeneracy that made an earlier dataset spend half its loss on
-constant targets.
+Outputs `stress(MPa)`, `resultant_disp(mm)` and the signed `z_disp(mm)`.
+`z_disp` is the vertical component, which is what a vertical-deflection
+constraint is stated on: under the vertical case max u_z is ~0.89 of the
+resultant peak, so bounding the resultant would over-constrain the design by
+about 11%. It is the only per-axis row carried, and deliberately so --
+DeepJEB omits `ver_x_disp` entirely, so a uniform x/y/z layout would carry a
+constant-zero row for the vertical case, the same silent degeneracy that made
+an earlier dataset spend half its loss on constant targets. `{case}_z_disp`
+exists and varies for all four cases.
 
   python dataset/build_deepjeb_mgn.py --out dataset/deterministic/ex10_deepjeb_mgn.h5
 
@@ -42,9 +54,10 @@ import h5py
 import numpy as np
 
 LOAD_CASES = ('ver', 'hor', 'dia', 'tor')
-FEATURE_NAMES = ['x_coord', 'y_coord', 'z_coord', 'stress', 'disp',
+FIELD_KEYS = ('stress(MPa)', 'resultant_disp(mm)', 'z_disp(mm)')
+FEATURE_NAMES = ['x_coord', 'y_coord', 'z_coord', 'stress', 'disp', 'z_disp',
                  'lc_ver', 'lc_hor', 'lc_dia', 'lc_tor']
-INPUT_VAR = OUTPUT_VAR = 2
+INPUT_VAR = OUTPUT_VAR = len(FIELD_KEYS)
 COND_VAR = 4
 RAW_ROOT = os.environ.get('DEEPJEB_RAW', 'D:/CAE_datasets_raw/deepjeb')
 
@@ -88,10 +101,8 @@ def surface_from_fieldmesh(path):
         nv = f['nodal_variables']
         fields = {}
         for case in LOAD_CASES:
-            fields[case] = np.stack([
-                nv[f'{case}_stress(MPa)'][...].astype(np.float64),
-                nv[f'{case}_resultant_disp(mm)'][...].astype(np.float64),
-            ])
+            fields[case] = np.stack([nv[f'{case}_{key}'][...].astype(np.float64)
+                                     for key in FIELD_KEYS])
         resultant = np.stack([nv[f'{c}_resultant_disp(mm)'][...] for c in LOAD_CASES])
 
     faces = boundary_faces_from_cells(cells)
@@ -232,8 +243,8 @@ def build_records(items, target_nodes, verbose=True):
 
             nodal = np.zeros((len(FEATURE_NAMES), 1, num_nodes), dtype=np.float32)
             nodal[0:3, 0, :] = small['vertices'].T
-            nodal[3:5, 0, :] = small['fields'][c]
-            nodal[5 + index, 0, :] = 1.0                       # load-case one-hot
+            nodal[3:3 + OUTPUT_VAR, 0, :] = small['fields'][c]
+            nodal[3 + OUTPUT_VAR + index, 0, :] = 1.0          # load-case one-hot
             records.append({
                 'item': item, 'case': c, 'nodal': nodal, 'edges': edges,
                 'constrained': small['constrained'],

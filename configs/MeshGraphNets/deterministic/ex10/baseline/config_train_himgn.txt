@@ -1,7 +1,7 @@
 % deterministic/ex10 - himgn; paper-informed native adaptation, not an exact reproduction.
 % Field storage order (0-based): input -> output -> conditioner -> partNo.
 % input [0:3]: x_coord, y_coord, z_coord
-% output/state [3:]: stress, displacement_magnitude
+% output/state [3:]: stress, displacement_magnitude, z_disp
 % conditioner: lc_ver, lc_hor, lc_dia, lc_tor
 % partNo: absent
 % Static state input is zero; temporal input is current state and target is next-state delta.
@@ -20,15 +20,15 @@ modelpath                        ../../output/dataset_matrix/deterministic/ex10/
 log_file_dir                     ../../output/dataset_matrix/deterministic/ex10/himgn/train.log
 inference_output_dir             ../../output/dataset_matrix/deterministic/ex10/himgn/infer
 infer_timesteps                  1
-input_var                        2
-output_var                       2
+input_var                        3
+output_var                       3
 cond_var                         4
-feature_loss_weights             1, 1
+feature_loss_weights             1, 1, 1
 use_node_types                   False
 positional_features              4
 time_integration                 ar_ot
 training_epochs                  500
-batch_size                       4
+batch_size                       1
 learningr                        0.0001
 weight_decay                     0.0
 warmup_epochs                    5
@@ -54,12 +54,12 @@ use_multiscale                   True
 split_group_attr                 bracket
 edge_var                         8
 latent_dim                       128
-message_passing_num              15
+message_passing_num              28
 geometry_state_mode              fixed
 coarsening_type                  voronoi_seedmean
 multiscale_levels                2
 voronoi_clusters                 512, 64
-mp_per_level                     2, 3, 5, 3, 2
+mp_per_level                     4, 6, 8, 6, 4
 pool_type                        mean
 unpool_type                      sum
 learned_interpolation            True

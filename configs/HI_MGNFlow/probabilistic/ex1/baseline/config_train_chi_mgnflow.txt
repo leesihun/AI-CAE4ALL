@@ -75,5 +75,5 @@ flow_loss_weighting              uniform
 flow_steps                       30
 flow_solver                      heun
 flow_predict                     sample
-val_flow_steps                   20
+val_flow_steps                   30
 val_num_samples                  8

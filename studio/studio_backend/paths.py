@@ -12,7 +12,6 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote
 
 FRONTEND_ROOT = Path(__file__).resolve().parent.parent
 SUITE_ROOT = FRONTEND_ROOT.parent
@@ -56,7 +55,10 @@ def slug(value: str, default: str = "studio") -> str:
 
 
 def safe_repo_path(raw: str, roots: tuple[Path, ...] | None = None) -> Path:
-    path = (SUITE_ROOT / unquote(raw)).resolve()
+    # Every caller hands over an already-decoded string (parse_qs values, JSON
+    # bodies, catalog records). Unquoting again turned a real file named
+    # `run%201.h5` into `run 1.h5` and made it unreachable.
+    path = (SUITE_ROOT / raw).resolve()
     allowed = roots or (SUITE_ROOT,)
     if not any(path == root.resolve() or root.resolve() in path.parents for root in allowed):
         raise ValueError("Path is outside the allowed AI-CAE4ALL roots.")

@@ -18,19 +18,19 @@ python AI_CAE4ALL_main.py --config configs/SDFFlow/geometry_generation/ex1/basel
 ```
 
 The checked-in config roster lives under `configs/SDFFlow/geometry_generation/<ex>/baseline/`.
-All 14 files pass `--audit-configs` with errors=0, warnings=0; on a fresh checkout the
+All 19 files pass `--audit-configs` with errors=0, warnings=0; on a fresh checkout the
 non-`train` ones additionally report `PATH-INPUT-001` on the checkpoints their paired
 training config has not produced yet.
 
 | Route | Data | Configs | Output root |
 | --- | --- | --- | --- |
 | `ex1` | DeepJEB brackets (`ex1_deepjeb.h5`, 2138 shapes / 263 parents), conditioned on `volume, area`, `split_by_parent True` | `config_train_sdfflow.txt`, `config_infer_sdfflow.txt`, `config_evaluate_sdfflow.txt`, `config_interpolate_sdfflow.txt`, `config_optimize_sdfflow.txt` | `../../output/dataset_matrix/geometry_generation/ex1/sdfflow/` |
-| `ex2` | DrivAerML (`ex2_drivaerml.h5` 387 / `ex2_drivaerml_infer.h5` 97), 21 conditions | `config_train_sdfflow.txt`, `config_infer_sdfflow.txt`, `config_evaluate_sdfflow.txt` | `../../output/geometry_generation/ex2_drivaerml/sdfflow/` |
-| `ex3` | MCB nut subset (`ex3_mcb.h5` 1305 / `ex3_mcb_infer.h5` 329), five geometric descriptors | `config_train_sdfflow.txt`, `config_infer_sdfflow.txt`, `config_evaluate_sdfflow.txt` | `../../output/geometry_generation/ex3_mcb/sdfflow/` |
-| `ex4` | Thingi10K (`ex4_thingi10k.h5` 7234 / `ex4_thingi10k_infer.h5` 1807), **unconditional** (`use_conditions False`) | `config_train_sdfflow.txt`, `config_infer_sdfflow.txt`, `config_evaluate_sdfflow.txt` | `../../output/geometry_generation/ex4_thingi10k/sdfflow/` |
+| `ex2` | DrivAerML (`ex2_drivaerml.h5` 387 / `ex2_drivaerml_infer.h5` 97), 21 conditions | `config_train_sdfflow.txt`, `config_infer_sdfflow.txt`, `config_evaluate_sdfflow.txt`, `config_interpolate_sdfflow.txt` | `../../output/geometry_generation/ex2_drivaerml/sdfflow/` |
+| `ex3` | MCB nut subset (`ex3_mcb.h5` 1305 / `ex3_mcb_infer.h5` 329), five geometric descriptors | `config_train_sdfflow.txt`, `config_infer_sdfflow.txt`, `config_evaluate_sdfflow.txt`, `config_interpolate_sdfflow.txt`, `config_calibrate_sdfflow.txt` (`eval_task descriptor_calibration`), `config_evaluate_conditional_sdfflow.txt` (`eval_task conditional`) | `../../output/geometry_generation/ex3_mcb/sdfflow/` |
+| `ex4` | Thingi10K (`ex4_thingi10k.h5` 7234 / `ex4_thingi10k_infer.h5` 1807), **unconditional** (`use_conditions False`) | `config_train_sdfflow.txt`, `config_infer_sdfflow.txt`, `config_evaluate_sdfflow.txt`, `config_interpolate_sdfflow.txt` | `../../output/geometry_generation/ex4_thingi10k/sdfflow/` |
 
-By mode: `train`, `sample` and `evaluate` on all four routes; `interpolate` and
-`optimize` on `ex1` only (`optimize`'s load cases, length scale and Ti-6Al-4V
+By mode: `train`, `sample`, `evaluate` and `interpolate` on all four routes; the
+two conditional `evaluate` tasks on `ex3`; `optimize` on `ex1` only (its load cases, length scale and Ti-6Al-4V
 constants describe the DeepJEB brackets specifically). Three valid modes
 deliberately ship **no** config:
 
@@ -43,7 +43,7 @@ deliberately ship **no** config:
 **`ex1`'s `config_train_sdfflow.txt` and `config_infer_sdfflow.txt` are generated**
 by `configs/campaigns/dataset_matrix/generate.py`, whose `--check` asserts they are
 byte-identical to what it renders. Edit the generator, not those two files. The other
-twelve are hand-maintained.
+seventeen are hand-maintained.
 
 > Historical note: this file was written against an older flat roster
 > (`config_train_v3.txt`, `config_evaluate.txt`, `config_sample.txt`, `arms/A0.txt` ...)
@@ -540,15 +540,37 @@ is a hard failure because all three comparison meshes are required.
 VAE + FM pair: **generate -> mesh -> analyze -> score -> search**. It trains
 nothing; it searches the geometry the generator already knows.
 
-**The design vector is FM noise, not a latent and not a condition.** It is a
-`opt_subspace_dim`-dimensional orthonormal slice of the 256-d flow-matching
-noise space (`opt_subspace_seed` fixes the basis, `seed` the out-of-subspace
-remainder), optionally extended by `opt_condition_dims` descriptor conditions.
+**The design vector is FM noise, not a latent and not a condition.** Its first
+`opt_subspace_dim` coordinates chart the flow-matching noise space --
+`latent_tokens x latent_dim` wide, 512 x 32 = 16,384-d on the ex1 DeepJEB
+checkpoint -- optionally extended by `opt_condition_dims` descriptor conditions.
 Every point therefore integrates through the ODE to an on-manifold shape, which
-is what makes a derivative-free search viable. The composed noise is projected
-back onto the Gaussian shell, so the search cannot walk off the prior. Do not
-substitute a raw latent parameterization: latents off the FM prior decode to
-shapes the VAE never trained on.
+is what makes a derivative-free search viable. Do not substitute a raw latent
+parameterization: latents off the FM prior decode to shapes the VAE never
+trained on.
+
+The chart is `design_loop/generator.py::NoiseChart`, kind **`gnomonic_v2`**:
+`z(x) = (eps_0 + x @ E) / sqrt(1 + |x|^2)` with `eps_0` (from `seed`) and the
+`K` rows of `E` (from `opt_subspace_seed`) all i.i.d. N(0, I_D). The
+coefficient vector `(1, x) / sqrt(1 + |x|^2)` has unit norm, so **`z(x)` is
+exactly N(0, I_D) at every design point and nothing is clipped**. `|x|`
+measures the turn away from the base draw: `|x| = 1` is 45 degrees, and the
+default box corner (`1.25 * sqrt(12) = 4.33`) is 77 degrees, where
+`|z - eps_0|^2 / D` reaches about 1.55. `x = 0` is the same `eps_0` the old
+chart started from.
+
+The old chart, **`subspace_v1`**, replaced the in-subspace component of `eps_0`
+with `x` through an orthonormal `K x D` basis and clipped `x` to a shell of
+radius `opt_shell_scale * sqrt(K)`. That reads as a search over the Gaussian
+shell only when `K` is a sizeable fraction of `D`. At `D = 16384` the
+out-of-subspace remainder has norm about `sqrt(D) = 128` against a design part
+capped at 4.33, so the search moved about 3% of the noise norm (0.1% of its
+variance): almost every design decoded to nearly the same shape, and the
+conditions did the real work. `summary['design_space']['noise_param']` records
+the chart, and `design_loop/render_run.py` replays with it. **A summary without
+`noise_param` was written by v1** and replays as v1. There is deliberately no
+config key to select v1 for a new run. `tests/test_design_loop.py` pins both
+charts: v2 stays standard normal and moves, v1 still clips.
 
 `bbox_y` has exactly zero train-split standard deviation in DeepJEB and
 `bbox_x` a 0.45% coefficient of variation, so `opt_condition_dims` defaults to
@@ -557,16 +579,19 @@ move (`SDFFlow_ENCODER` findings in
 `GEOMETRY_UPGRADE_MESHING_SEMANTIC_2026-08.md`). The launcher warns on
 `bbox_y`.
 
-Keep `opt_latent_range` equal to `opt_shell_scale` (both default 1.25). That
-inscribes the search box's corner exactly on the shell for any
-`opt_subspace_dim`. A wider box is mostly *degenerate*, not merely generous: the
-composed noise is rescaled back onto the shell, which keeps direction and
-discards magnitude, so every point on a ray beyond the radius decodes to the
-identical shape. `output/geometry_generation/ex1/optimization_widebox/` is a
-kept 200-evaluation run at `latent_range 3.0` against the same 4.33 shell --
-its typical draw had norm about 6.0 and was always clipped, and it spent its
-whole budget repairing constraints instead of shedding mass. Compare it with
-`optimization/` before widening the box again.
+`opt_latent_range` is the per-coordinate half-width of the search box and
+defaults to `opt_shell_scale` (1.25). Under `gnomonic_v2` the box *is* the
+search space. A wider box is a larger turn away from `eps_0`, still a valid
+N(0, I) noise at every point, and the turn saturates toward 90 degrees as
+`|x|` grows. Under `subspace_v1` it was different: a box wider than
+`opt_shell_scale` was mostly *degenerate*, because the composed noise was
+rescaled back onto the shell, keeping direction and discarding magnitude, so
+every point on a ray beyond the radius decoded to the identical shape. The
+historical v1 run `output/geometry_generation/ex1/optimization_widebox/`
+(200 evaluations at `latent_range 3.0` against the same 4.33 shell) shows the
+failure: its typical draw had norm about 6.0 and was always clipped, and it
+spent its whole budget repairing constraints instead of shedding mass. That
+lesson applies to v1 replays only.
 
 `bounds()` takes no arguments on purpose. It is called from both the baseline
 sampler and the CMA-ES setup, and an earlier version that accepted a
@@ -587,10 +612,25 @@ failed design rather than silently analyzed as a cantilever.
 **Allowables are calibrated, not assumed.** A random population of
 `opt_baseline_size` designs is analyzed first and the stress/deflection limits
 are set to its medians. Absolute limits taken from the material would leave the
-constraints inactive -- the baseline sits near 7% of Ti-6Al-4V yield -- and the
-objective would collapse to unconstrained mass minimization. The comparison
-baseline reported at the end is the *best-scoring* population member, not the
-median.
+constraints slack, and the objective would collapse to near-unconstrained mass
+minimization. Under the SI loads, the 418 DeepJEB brackets relabelled by
+`build_deepjeb_fea.py` have a median governing (diagonal-case) peak von Mises
+of 327 MPa, about 36% of Ti-6Al-4V yield. The "7%" quoted here before the
+load-unit correction below was measured under loads that were 4.4x too small.
+`opt_vertical_disp_max` is the one absolute limit. It bounds max |u_z| under
+the vertical load case and replaces the calibrated |u| allowable; a solver can
+check it directly.
+
+**Selection is feasibility-first everywhere** (`design_loop/loop.py::select_best`).
+A feasible design beats any infeasible one, and among feasible designs the
+lower score wins. This rule picks the search winner, the comparison baseline,
+and the delivered design. The penalty alone cannot be trusted with that
+decision, because the quadratic exterior penalty `m/m_ref + 6 g_s^2 + 3 g_d^2`
+puts its unconstrained optimum slightly *past* each limit. The comparison
+baseline is the best-scoring feasible population member, not the median. If the search
+never beats that baseline, the baseline itself is delivered:
+`summary['search_improved_on_baseline']` is False, `report.md` says so, and the
+verify stage re-analyzes two designs instead of three.
 
 **The solver is 4-node tetrahedra, and tet4 is stiff.** `tests/test_design_loop.py`
 pins it down: the constant-strain patch test is exact to 1e-9, rigid-body modes
@@ -629,14 +669,94 @@ labels its horizontal case +x and the challenge reads "42 deg from vertical".
 runtime for the audit metadata, so nothing duplicates these numbers.
 
 **The search mesh is a ranking device.** `opt_target_faces` / `opt_mesh_size_max`
-size the per-evaluation mesh; the winner and the baseline are then re-analyzed
-together on the finer `opt_verify_*` mesh. `summary.json` records the
+size the per-evaluation mesh; the winner, the baseline and the typical member
+are then re-analyzed together on the finer `opt_verify_*` mesh. `summary.json` records the
 same-design shift between the two meshes under `mesh_sensitivity`; treat the
 search-phase feasibility flag as relative only.
 
-Artifacts in `output_dir`: `optimized.stl`, `baseline.stl`, `summary.json`,
-`history.json` (every evaluation, including failures and timings),
-`convergence.png`, `report.md`.
+Artifacts in `output_dir`:
+
+- `optimized.stl`, `baseline.stl` and `typical.stl` (the median-mass population
+  member);
+- `summary.json`;
+- `history.json` (every evaluation, including failures and timings);
+- `convergence.png`;
+- `stress_comparison.png` (FEA backend only, and skipped when the search did
+  not improve on its start, because the two designs would be the same);
+- `report.md`.
+
+A rerun into the same directory first deletes the previous run's files, so a
+stale STL or PNG never survives beside a new summary.
+
+`summary['verified']` holds one brief per design that re-analyzed cleanly. A
+design that failed on the verify mesh is listed under `verified['failed']` with
+its error rather than dropped silently. The change percentages and
+`vs_typical` appear only when both designs they compare are present.
+`optimized_score`, `optimized_penalty` and (with `opt_vertical_disp_max` set)
+`vertical_limit_met` score the delivered design on the verify mesh with the
+same objective the search used.
+
+With `opt_analysis surrogate`, every number is a HI-MGN prediction, and the
+summary records `surrogate` (stats, checkpoint, label constants). Confirm the
+winner with the real solver before quoting it:
+
+```bash
+python design_loop/verify_with_fea.py --run-dir <output_dir> \
+    --json-out <output_dir>/fea_verified.json
+```
+
+That script re-meshes the exported STLs with the run's material, load cases,
+length scale and stress percentile. It checks each design against the run's
+limits, and treats a calibrated allowable as surrogate-scale on a surrogate
+run.
+
+`opt_fea_verify True` (bool, default False) runs that same script at the end of
+a surrogate run, in-process (`optimize._fea_verify`), so the one launch ends
+with the solver's verdict:
+
+- the full report is written to `fea_verified.json` (an owned output, so a
+  rerun deletes a stale one);
+- `summary['fea_verification']` holds a compact copy: per design, mass,
+  peak von Mises, max |u|, vertical |u_z|, tets, the label-surface measures
+  and the limit verdicts, or `{'error'}` for a design whose mesh or solve
+  failed;
+- report.md gains an "FEA verification" section. It compares surrogate and
+  FEA on the label-surface measure the surrogate was trained on, states
+  whether the optimized design meets the vertical limit under FEA, and gives
+  the solver mass change against the best baseline.
+
+A failure inside the verification (import, gmsh, solve) is caught and recorded
+as `{'error'}`; it never fails the search that already finished. With
+`opt_analysis fea` the key is inert: the launcher emits `SDF-OPT-FEAVERIFY-001`
+(NOTICE) and the native side prints why, because every design is already
+solved by FEA and the winner is re-solved at `opt_verify_*`.
+
+**`opt_budget 0` is a screen, not an empty search** (`SDF-OPT-SCREEN-001`,
+NOTICE). No CMA-ES runs: the `opt_baseline_size` designs are drawn uniformly,
+generated, analysed once, and the best of them under `select_best` is
+delivered (under `MassObjective`, a feasible score is exactly `m/m_ref`, so
+that is the lightest design meeting the limits). What changes against a search:
+
+- the surrogate predicts in chunks of `opt_screen_batch` (default 64; 0 = one
+  call) with one progress line per chunk. The designs are drawn before the
+  first chunk, so the chunking never changes the population. A chunk whose
+  native call dies after an earlier chunk has predicted costs that chunk only;
+  a failed first chunk still stops the run (the surrogate itself is broken);
+- `screening.csv` holds one row per screened design (screening resolution;
+  failed designs keep their error and empty numbers, never 0), and
+  `summary['screening']` holds the counts, delivered/typical ids and timing;
+- only `optimized.stl` and `typical.stl` are exported and re-analysed (2
+  verify evaluations; `verify_with_fea.py` skips the absent `baseline.stl`),
+  and `summary['search_improved_on_baseline']` is None;
+- the Studio publishes the joined `optimize_screening.csv` (native rows plus
+  the delivered/typical verify and FEA columns) ahead of the
+  single-row summary table, so an Optimization block ranks the whole screen.
+
+`opt_stress_margin 0` switches the stress constraint off
+(`SDF-OPT-MARGIN-002`, NOTICE; < 0 is `SDF-OPT-MARGIN-001`): `calibrate`
+returns `stress_allow` None, `MassObjective` then scores mass and deflection
+only, and peak stress is still reported. This is the setting for "lightest
+bracket with max |u_z| <= `opt_vertical_disp_max`".
 
 ## v3 recipe (`config_train_v3.txt`) and the keys it introduced
 
@@ -1004,7 +1124,7 @@ split, `seed`, and 500-epoch budget. Most move one axis off A0; **two do not**:
 | `A8` | `num_encoder_points 4096` (A0: 6144) -- encoder input density; both ends are stochastic per-epoch draws |
 | `A9` | `seed 1` and nothing else -- **not a treatment**: `|A9 - A0|` is the sweep's run-to-run noise band, and an arm gap smaller than it is not evidence |
 
-`arms/roster.tsv` feeds `configs/campaigns/benchmarks_all/campaign_runner.py`
+`arms/roster.tsv` fed the (since removed) `configs/campaigns/benchmarks_all/campaign_runner.py`
 (`ex_slot` is `deepjeb`, a label only -- the runner never resolves it for
 `--mode train`). `arms/README.md` has the launch and scoring recipe: each arm
 is scored with a copy of `config_evaluate.txt` pointed at its checkpoint, the
@@ -1019,9 +1139,11 @@ does not see them; validate them with per-file `--check`.
 - VAE training supports deterministic, posterior-noise, and KL warmups, plus
   the optional relative posterior-std floor. FM consumes normalized encoder
   means rather than posterior samples.
-- The latent is `latent_tokens x latent_dim`. ex1 uses one global 256-d token
-  and the MLP decoder; the v3 recipe uses 32 x 32 FPS-anchored VecSet tokens
-  and the attention decoder.
+- The latent is `latent_tokens x latent_dim`. The ex1 DeepJEB config uses
+  512 x 32 FPS-anchored VecSet tokens (16,384-d, the FM noise dimension the
+  `optimize` chart works in); ex2-ex4 use 32 x 32. All of them use the attention
+  decoder. The MLP decoder with one global token is the pre-v3 layout, and old
+  checkpoints still rebuild it from their stored config.
 - FM uses rectified flow with AdaLN-Zero blocks. Latent and selected-condition
   statistics come from the train split and are stored in its checkpoint.
 - Checkpoints store config and stage metadata. Inference rebuilds architecture
@@ -1083,21 +1205,12 @@ VTK, because this has to run with no GL context.
 At minimum, run from the suite root:
 
 ```bash
-python AI_CAE4ALL_main.py --audit-configs          # all 14 SDFFlow configs, errors=0
-python AI_CAE4ALL_main.py --config configs/SDFFlow/geometry_generation/ex1/baseline/config_train_sdfflow.txt --check
-python AI_CAE4ALL_main.py --config configs/SDFFlow/geometry_generation/ex1/baseline/config_evaluate_sdfflow.txt --check
-python AI_CAE4ALL_main.py --config configs/SDFFlow/geometry_generation/ex1/baseline/config_infer_sdfflow.txt --check
-python AI_CAE4ALL_main.py --config configs/SDFFlow/geometry_generation/ex1/baseline/config_interpolate_sdfflow.txt --check
-python AI_CAE4ALL_main.py --config configs/SDFFlow/geometry_generation/ex1/baseline/config_optimize_sdfflow.txt --check
-python AI_CAE4ALL_main.py --config configs/SDFFlow/config_optimize.txt --check
-python AI_CAE4ALL_main.py --config configs/SDFFlow/config_train_v3_fea.txt --check
-python AI_CAE4ALL_main.py --config configs/SDFFlow/config_calibrate_descriptors.txt --check
-python AI_CAE4ALL_main.py --config configs/SDFFlow/config_sample_conditional.txt --check
-python AI_CAE4ALL_main.py --config configs/SDFFlow/config_cond_sweep.txt --check
-python AI_CAE4ALL_main.py --config configs/SDFFlow/config_evaluate_conditional.txt --check
-for f in configs/SDFFlow/arms/A*.txt; do python AI_CAE4ALL_main.py --config "$f" --check --strict; done
-python -m pytest -q tests/test_sdfflow_spec.py tests/test_studio_spec_key_parity.py tests/test_native_config_consumption_parity.py
-cd methods/SDFFlow && python -m pytest -q tests/test_conditional_tools.py   # proxy / calibration / E2 / C2 on analytic SDFs, no checkpoint
+python AI_CAE4ALL_main.py --audit-configs          # every checked-in config, errors=0
+# every SDFFlow config: ex1 DeepJEB, ex2 DrivAerML, ex3 MCB, ex4 Thingi10K
+for f in configs/SDFFlow/geometry_generation/ex*/baseline/config_*_sdfflow.txt; do
+  python AI_CAE4ALL_main.py --config "$f" --check
+done
+cd methods/SDFFlow && python -m pytest -q tests/   # conditional tools / design loop / surrogate reporting, no checkpoint
 ```
 
 **Boolean keys are read with `bool()`, so the validators are too.** The flat
@@ -1112,7 +1225,9 @@ the dataset layer), which reads `1`/`yes`/`on` as true and `''`/`0`/`false`/
 
 Expect `PATH-INPUT-001` only for checkpoints that have not been trained yet, and
 no `CFG-UNKNOWN-001`: a native `config.get('<key>')` whose key is missing from
-`SDFFLOW_KEYS` is a launcher bug, not a config bug. `config_train_v3_fea.txt`
+`SDFFLOW_KEYS` is a launcher bug, not a config bug. (The dataset-matrix configs
+set `gpu_ids` for an 8-GPU box, so on a smaller machine `ENV-CUDA-002` is
+expected too.) A config with `use_conditions` and FEA `condition_names`
 fails preflight against a `deepjeb.h5` without the sidecar with
 `SDF-COND-FEA-003` naming the `add_fea_conditions.py` command: the dataset
 probe now returns the merged condition vocabulary (`cond_names` +

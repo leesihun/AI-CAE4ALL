@@ -58,14 +58,19 @@ SDFFLOW_KEYS = frozenset(
         "opt_subspace_dim", "opt_subspace_seed", "opt_condition_dims",
         "opt_latent_range", "opt_shell_scale",
         "opt_budget", "opt_popsize", "opt_sigma0", "opt_seed", "opt_baseline_size",
+        "opt_screen_batch",
         "opt_load_cases", "opt_length_scale", "opt_stress_percentile",
         "opt_mesh_size_max", "opt_target_faces",
         "opt_material_e", "opt_material_nu", "opt_material_rho", "opt_yield_stress",
         "opt_stress_margin", "opt_disp_margin", "opt_stress_weight", "opt_disp_weight",
+        "opt_vertical_disp_max",
         "opt_verify_resolution", "opt_verify_target_faces", "opt_verify_mesh_size_max",
         # optimize: AI-surrogate analysis backend (HI-MGN in place of gmsh + FEA)
         "opt_analysis", "opt_surrogate_checkpoint", "opt_surrogate_config",
         "opt_surrogate_target_nodes",
+        # optimize, surrogate backend: re-solve the result with the real solver
+        # (design_loop/verify_with_fea.py, in-process) once the search is done
+        "opt_fea_verify",
         # v3 VAE recipe: geometry-anchored (FPS) encoder queries and a relative
         # posterior-std floor; parent-grouped dataset split; best-val checkpoint
         "encoder_query_type", "posterior_min_std_rel", "split_by_parent",
@@ -175,6 +180,45 @@ def _validate_condition_entries(ctx: SpecValidationContext, field_name: str) -> 
         )
 
 
+# The constants the HI-MGN surrogate's labels were solved with
+# (`design_loop/build_deepjeb_fea.py` builds `Bracket()` with every default);
+# mirrors `inference_profiles/optimize.py::_SURROGATE_LABEL_CONSTANTS`. The
+# surrogate predicts stress and displacement at these values whatever the
+# config says, so a different one is honoured by the FEA backend only.
+SURROGATE_LABEL_CONSTANTS = {
+    "opt_material_e": 113.8e9,
+    "opt_material_nu": 0.342,
+    "opt_length_scale": 0.19 / 1.8,
+}
+# Relative, so a value written to config precision (0.10556 for 0.19/1.8)
+# is not mistaken for a different one.
+_LABEL_CONSTANT_RTOL = 1e-3
+
+# Sampling keys `mode optimize` never reads: the search draws its own noise and
+# sets its own conditions, so a value carried over from a sample config would
+# otherwise look like it shaped the run.
+OPTIMIZE_INERT_KEYS = ("num_samples", "cfg_scale", "cond_values", "candidate_multiplier",
+                       "condition_audit", "guidance_enabled", "newton_rounds")
+
+
+def _warn_surrogate_constants(ctx: SpecValidationContext, keys, context: str, effect: str) -> None:
+    for key in keys:
+        value = numeric(ctx.values.get(key))
+        label = SURROGATE_LABEL_CONSTANTS[key]
+        if value is None or abs(value - label) <= _LABEL_CONSTANT_RTOL * abs(label):
+            continue
+        ctx.add(
+            "SDF-OPT-SURROGATE-002",
+            Severity.WARNING,
+            f"{key} {value:g} differs from the {label:g} the HI-MGN surrogate's labels were "
+            f"solved with; under {context} the surrogate's stress and displacement stay at "
+            f"the label value, so this setting {effect}.",
+            field_name=key,
+            hint="Use opt_analysis fea to analyze at this value, or remove the key.",
+            promote_in_strict=True,
+        )
+
+
 def _validate_structural_backend(ctx: SpecValidationContext) -> None:
     """Value checks for the `opt_*` structural settings, wherever they appear.
 
@@ -206,7 +250,9 @@ def _validate_structural_backend(ctx: SpecValidationContext) -> None:
                 "nodal von Mises field.",
                 field_name="opt_stress_percentile")
     audit = str(values.get("condition_audit", "")).strip().lower()
-    if audit == "surrogate":
+    # `mode optimize` never reads condition_audit (SDF-OPT-INERT-001 says so);
+    # its surrogate requirements are opt_analysis's, checked in validate_sdfflow.
+    if audit == "surrogate" and ctx.mode != "optimize":
         for field_name, label in (
             ("opt_surrogate_checkpoint", "HI-MGN checkpoint"),
             ("opt_surrogate_config", "HI-MGN inference config"),
@@ -221,6 +267,10 @@ def _validate_structural_backend(ctx: SpecValidationContext) -> None:
                     field_name=field_name,
                     hint="Choose an existing file or set condition_audit geometric.",
                 )
+        # opt_length_scale is left out on purpose: the audit uses it for mass,
+        # volume and area, which the surrogate does not predict.
+        _warn_surrogate_constants(ctx, ("opt_material_e", "opt_material_nu"),
+                                  "condition_audit surrogate", "changes nothing it reports")
 
 
 def _validate_descriptor_tools(ctx: SpecValidationContext) -> None:
@@ -804,11 +854,40 @@ def validate_sdfflow(ctx: SpecValidationContext) -> None:
         # every mode. Only the search-specific ones are left here.
         validate_positive_fields(
             ctx,
-            ("opt_subspace_dim", "opt_budget", "opt_popsize", "opt_baseline_size",
+            ("opt_subspace_dim", "opt_popsize", "opt_baseline_size",
              "opt_sigma0", "opt_verify_resolution", "opt_verify_target_faces",
              "opt_latent_range", "opt_shell_scale"),
             "SDF-OPT-POSITIVE-001",
         )
+        # opt_budget 0 is a screen, not an empty search (optimize.py).
+        validate_nonnegative_int_fields(ctx, ("opt_budget", "opt_screen_batch"),
+                                        "SDF-OPT-NONNEG-001")
+        if "opt_budget" in values and integer(values.get("opt_budget")) == 0:
+            ctx.add(
+                "SDF-OPT-SCREEN-001",
+                Severity.NOTICE,
+                "opt_budget 0 runs no CMA-ES search: the opt_baseline_size designs are "
+                "generated and analysed once (the surrogate in chunks of opt_screen_batch), "
+                "and the lightest one meeting the limits is delivered. screening.csv lists "
+                "every screened design.",
+                field_name="opt_budget",
+            )
+        stress_margin = numeric(values.get("opt_stress_margin"))
+        if "opt_stress_margin" in values and (stress_margin is None or stress_margin < 0):
+            ctx.add(
+                "SDF-OPT-MARGIN-001",
+                Severity.ERROR,
+                "opt_stress_margin must be a number >= 0 (0 turns the stress constraint off).",
+                field_name="opt_stress_margin",
+            )
+        elif stress_margin == 0:
+            ctx.add(
+                "SDF-OPT-MARGIN-002",
+                Severity.NOTICE,
+                "opt_stress_margin 0: no stress constraint. Only mass and the deflection "
+                "limit score a design; peak stress is still reported.",
+                field_name="opt_stress_margin",
+            )
         analysis_backend = str(values.get("opt_analysis", "fea")).strip().lower()
         if analysis_backend not in {"fea", "surrogate"}:
             ctx.add(
@@ -845,6 +924,29 @@ def validate_sdfflow(ctx: SpecValidationContext) -> None:
                         field_name=field_name,
                         hint="Choose an existing file or switch opt_analysis back to fea.",
                     )
+            _warn_surrogate_constants(ctx, ("opt_material_e", "opt_material_nu"),
+                                      "opt_analysis surrogate", "changes nothing but the report")
+            _warn_surrogate_constants(ctx, ("opt_length_scale",),
+                                      "opt_analysis surrogate", "moves only the mass")
+        if analysis_backend == "fea" and _flag(values.get("opt_fea_verify", False)):
+            ctx.add(
+                "SDF-OPT-FEAVERIFY-001",
+                Severity.NOTICE,
+                "opt_fea_verify has no effect with opt_analysis fea: every design is already "
+                "solved by FEA, and the winner is re-solved at the refined opt_verify_* "
+                "resolution.",
+                field_name="opt_fea_verify",
+            )
+        for key in OPTIMIZE_INERT_KEYS:
+            if key in values:
+                ctx.add(
+                    "SDF-OPT-INERT-001",
+                    Severity.NOTICE,
+                    f"mode optimize does not read {key}: the search draws its own FM noise "
+                    "and sets its own conditions (opt_condition_dims), so this sampling key "
+                    "has no effect on the run.",
+                    field_name=key,
+                )
         known_cases = {"vertical", "horizontal", "diagonal", "torsion"}
         cases = {str(c).strip().lower() for c in as_list(values.get("opt_load_cases", []))}
         unknown = cases - known_cases
@@ -852,6 +954,23 @@ def validate_sdfflow(ctx: SpecValidationContext) -> None:
             ctx.add("SDF-OPT-LOAD-001", Severity.ERROR,
                     f"opt_load_cases contains unknown case(s) {sorted(unknown)}; "
                     f"available: {sorted(known_cases)}.", field_name="opt_load_cases")
+        vertical_limit = str(values.get("opt_vertical_disp_max", "")).strip()
+        if vertical_limit:
+            try:
+                limit_mm = float(vertical_limit)
+            except ValueError:
+                limit_mm = None
+            if limit_mm is None or limit_mm < 0:
+                ctx.add("SDF-OPT-VERT-001", Severity.ERROR,
+                        "opt_vertical_disp_max must be a number of millimetres >= 0 "
+                        "(0 turns the vertical-deflection limit off).",
+                        field_name="opt_vertical_disp_max")
+            elif limit_mm > 0 and "vertical" not in cases:
+                ctx.add("SDF-OPT-VERT-002", Severity.ERROR,
+                        "opt_vertical_disp_max limits |u_z| under the vertical load case, "
+                        "but opt_load_cases does not run it.",
+                        field_name="opt_vertical_disp_max",
+                        hint="Add vertical to opt_load_cases.")
         known_dims = {"bbox_x", "bbox_y", "bbox_z", "volume", "area"}
         dims = {str(d).strip().lower() for d in as_list(values.get("opt_condition_dims", []))}
         if dims - known_dims:
@@ -866,7 +985,8 @@ def validate_sdfflow(ctx: SpecValidationContext) -> None:
                     field_name="opt_condition_dims", promote_in_strict=True)
         popsize = integer(values.get("opt_popsize"))
         budget = integer(values.get("opt_budget"))
-        if popsize and budget and budget < 2 * popsize:
+        # 0 is a screen and < 0 is already SDF-OPT-NONNEG-001: neither is a search.
+        if popsize and budget and 0 < budget < 2 * popsize:
             ctx.add("SDF-OPT-BUDGET-001", Severity.WARNING,
                     f"opt_budget={budget} allows fewer than two CMA-ES generations at "
                     f"opt_popsize={popsize}; the search cannot adapt.",
@@ -981,16 +1101,18 @@ def build_sdfflow_spec() -> MethodSpec:
             "optimize": {
                 "ode_steps": 50, "mc_resolution": 128, "opt_subspace_dim": 12,
                 "opt_condition_dims": "volume,area", "opt_budget": 120, "opt_popsize": 8,
-                "opt_sigma0": 1.0, "opt_baseline_size": 12, "opt_load_cases": "vertical,diagonal",
+                "opt_sigma0": 1.0, "opt_baseline_size": 12, "opt_screen_batch": 64,
+                "opt_load_cases": "vertical,diagonal",
                 "opt_length_scale": 0.19 / 1.8, "opt_stress_percentile": 99.5,
                 "opt_mesh_size_max": 0.05, "opt_target_faces": 12000,
                 "opt_material_e": 113.8e9, "opt_material_nu": 0.342,
                 "opt_material_rho": 4430.0, "opt_yield_stress": 903e6,
                 "opt_stress_margin": 1.0, "opt_disp_margin": 1.0,
                 "opt_stress_weight": 6.0, "opt_disp_weight": 3.0,
+                "opt_vertical_disp_max": 0.0,
                 "opt_analysis": "fea", "opt_surrogate_target_nodes": 5000,
                 "opt_verify_resolution": 160, "opt_verify_target_faces": 30000,
-                "opt_verify_mesh_size_max": 0.035,
+                "opt_verify_mesh_size_max": 0.035, "opt_fea_verify": False,
             },
         },
         path_rules=(

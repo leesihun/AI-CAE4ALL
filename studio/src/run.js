@@ -7,7 +7,12 @@ import { render } from "./graph.js";
 import { jumpToFailingField } from "./config.js";
 import { schedulePipelineSave, pipelineDocument } from "./persistence.js";
 
-const REJECTED_STATUSES = ["failed", "cancelled"];
+// "interrupted" is what recovery records for a run whose launcher died with
+// the server. Missing from the terminal list, a polled job that ended that way
+// was polled forever and its blocks kept showing "running".
+const REJECTED_STATUSES = ["failed", "cancelled", "interrupted"];
+const ACTIVE_STATUSES = ["queued", "running"];
+const isFinished = job => !ACTIVE_STATUSES.includes(job.status);
 
 /**
  * Whether the user wants the drawer collapsed when nothing else is covering it.
@@ -99,7 +104,10 @@ export function renderRuntimeJob(job, { reveal = true } = {}) {
     logEl.innerHTML = job.diagnostics.map((item, index) => {
       const severity = item.severity === "error" ? "error" : item.severity === "warning" ? "warn" : "";
       const clickable = item.nodeId ? " diagnostic-clickable" : "";
-      return `<div class="diagnostic ${severity}${clickable}" data-jump-diagnostic="${index}"><i></i><span>${item.stepLabel ? `<strong>${escapeHtml(item.stepLabel)}</strong> · ` : ""}[${escapeHtml(item.code || "")}]${item.field ? ` ${escapeHtml(item.field)}:` : ""} ${escapeHtml(item.message || "")}${item.hint ? ` <em>Hint: ${escapeHtml(item.hint)}</em>` : ""}${item.nodeId ? ' <b class="diagnostic-jump">Fix now →</b>' : ""}</span></div>`;
+      // A notice (e.g. STEP-ANALYSIS) has nothing to fix; the row still opens
+      // the block, so say that instead of promising a fix.
+      const jumpLabel = severity ? "Fix now →" : "Open block →";
+      return `<div class="diagnostic ${severity}${clickable}" data-jump-diagnostic="${index}"><i></i><span>${item.stepLabel ? `<strong>${escapeHtml(item.stepLabel)}</strong> · ` : ""}[${escapeHtml(item.code || "")}]${item.field ? ` ${escapeHtml(item.field)}:` : ""} ${escapeHtml(item.message || "")}${item.hint ? ` <em>Hint: ${escapeHtml(item.hint)}</em>` : ""}${item.nodeId ? ` <b class="diagnostic-jump">${jumpLabel}</b>` : ""}</span></div>`;
     }).join("");
     $$("[data-jump-diagnostic]", logEl).forEach(row => row.addEventListener("click", () => {
       const item = job.diagnostics[Number(row.dataset.jumpDiagnostic)];
@@ -118,6 +126,11 @@ export function renderRuntimeJob(job, { reveal = true } = {}) {
   if (firstError) firstError.scrollIntoView({ block: "nearest" });
   else logEl.scrollTop = logEl.scrollHeight;
   $("#runtimeCancel").disabled = !["queued", "running"].includes(job.status);
+  // A Validate result is rendered through this same drawer as a synthetic
+  // "preflight" job, but it is not a process: re-showing the banner here left
+  // "Real job · completed" with a spinner and a live Stop button on the canvas
+  // after every Validate, with nothing ever clearing it.
+  if (job.id === "preflight") return;
   if (job.status === "running" || job.status === "queued") {
     $("#runBanner").classList.add("show");
     $("#runTitle").textContent = `Real job · ${job.status}`;
@@ -153,9 +166,109 @@ export function dismissRuntimeJob() {
   $("#runtimeLog").textContent = "Connect with START_STUDIO.bat to enable the real AI-CAE4ALL runtime.";
 }
 
-export function applyJobStatus(job) {
-  const terminal = ["completed", "failed", "cancelled"].includes(job.status);
-  const exactNodeIds = new Set((job.steps || []).map(step => step.node_id).filter(Boolean));
+/**
+ * Whether a job's steps are blocks of the graph on the canvas.
+ *
+ * Node ids are only unique within one graph, and the templates reuse them
+ * ("trainer", "export", ...), so a job rejoined from another pipeline used to
+ * paint its status onto whatever block shared the id: an SDFFlow training run
+ * marked a fresh HI-MGN graph's MeshGraphNets block "Running" and bound its
+ * Train Metrics to the SDFFlow job. A step whose id names a block of a
+ * different type proves the job came from another graph. A missing block does
+ * not: deleting one while its run is live must not freeze the others.
+ */
+/**
+ * Whether this canvas owns a job, when that is knowable: true or false for a
+ * job that recorded the canvas it was launched from (or was reopened here from
+ * Runs), null for an untagged job from before canvases had ids.
+ */
+export function canvasOwnership(jobId, jobCanvasId) {
+  if (state.ownedJobs.has(jobId)) return true;
+  // Node ids cannot separate two canvases made from one template, so a job
+  // tagged with the canvas that launched it is owned by that canvas alone.
+  const canvasId = jobCanvasId || state.api.launchedJobs.get(jobId);
+  return canvasId ? canvasId === state.canvasId : null;
+}
+
+function jobBelongsToCanvas(job) {
+  const owned = canvasOwnership(job.id, job.canvas_id);
+  if (owned !== null) return owned;
+  // A legacy canvas claims an untagged run by node ids only while the run is
+  // in flight. Node ids cannot tell its own finished runs from those of every
+  // other canvas built on the same template, and claiming them all replayed the
+  // newest untagged run of any such pipeline onto this one (its results paths
+  // included, then saved). A claimed run is recorded as owned, so it is still
+  // this canvas's once it finishes.
+  if (!state.legacyCanvas || isFinished(job)) return false;
+  const steps = (job.steps || []).filter(step => step.node_id);
+  let matched = 0;
+  for (const step of steps) {
+    const node = state.nodes.find(item => item.id === step.node_id);
+    if (!node) continue;
+    if (step.node_type && node.type !== step.node_type) return false;
+    matched += 1;
+  }
+  if (!matched) return false;
+  state.ownedJobs.add(job.id);
+  schedulePipelineSave();
+  return true;
+}
+
+// Keys a run writes onto its blocks, which a later workspace action (Evaluate,
+// Export) may overwrite with the user's own evidence.
+const RUN_EVIDENCE_KEYS = ["results_path", "results_samples", "results_dir", "report_path",
+  "export_path", "evaluated_samples"];
+
+function metricsBlocksFedBy(nodeId) {
+  return state.edges
+    .filter(edge => edge.fromNode === nodeId && edge.fromPort === "metrics")
+    .map(edge => state.nodes.find(node => node.id === edge.toNode))
+    .filter(node => node?.type === "evaluate.training_metrics");
+}
+
+function carriesRunEvidence(node) {
+  return RUN_EVIDENCE_KEYS.some(key => String(node.config?.[key] ?? "") !== "")
+    || metricsBlocksFedBy(node.id).some(metrics => metrics.config?.job_id);
+}
+
+/** Whether what a block carries is exactly what this run's step wrote. */
+function carriesOutputsOf(node, step, job) {
+  const paths = [step.results, step.results_dir].filter(Boolean);
+  return paths.some(path => RUN_EVIDENCE_KEYS.some(key => node.config?.[key] === path))
+    || metricsBlocksFedBy(node.id).some(metrics => metrics.config?.job_id === job.id);
+}
+
+/** Marks every unmarked block as having received no run yet, so each finished
+ * run it belongs to is delivered on the next replay. For a document known to
+ * predate the runs (a run's own launch snapshot, reopened from Runs). */
+export function markBlocksUndelivered() {
+  state.nodes.forEach(node => { if (!node.resultsFrom) node.resultsFrom = { job: "", at: "" }; });
+}
+
+/**
+ * Whether a replayed finished run still has outputs to deliver to a block:
+ * only a run newer than the last one whose outputs the block received. Its
+ * status is always repainted; its paths are not, so a report, an export or a
+ * Train Metrics run chosen after that run survives every page load and undo.
+ */
+function runIsUndelivered(node, job) {
+  const from = node.resultsFrom;
+  if (!from) return true;
+  if (from.job === job.id) return false;
+  return String(job.finished_at || "") > String(from.at || "");
+}
+
+/**
+ * Paint one job's state onto the blocks of the canvas it belongs to: status,
+ * progress, the Train Metrics binding, and each step's results. Touches
+ * nothing else, so a finished run can be painted without being tracked.
+ * Returns whether any block of this canvas was painted.
+ */
+function paintJobOntoCanvas(job, { replay = false } = {}) {
+  const terminal = isFinished(job);
+  const ownsCanvas = jobBelongsToCanvas(job);
+  const exactNodeIds = new Set(ownsCanvas ? (job.steps || []).map(step => step.node_id).filter(Boolean) : []);
+  const hasNodeIds = (job.steps || []).some(step => step.node_id);
   // Which step index each block is, so a failure can say where it stopped.
   // Collapsing every block to "idle" on failure threw that away: after a run
   // that trained for 25 minutes and inferred 87 rollouts before the evaluation
@@ -167,7 +280,7 @@ export function applyJobStatus(job) {
   const failedAt = Number(job.current_step || 0);
   state.nodes.forEach(node => {
     const label = BLOCK_SPECS[node.type]?.label;
-    const legacyMatch = !exactNodeIds.size && label && job.steps?.some(step => step.label?.startsWith(label));
+    const legacyMatch = !hasNodeIds && label && job.steps?.some(step => step.label?.startsWith(label));
     if (exactNodeIds.has(node.id) || legacyMatch) {
       const position = stepIndexByNode.get(node.id) || 0;
       if (job.status === "running") {
@@ -187,19 +300,22 @@ export function applyJobStatus(job) {
       }
     }
   });
-  exactNodeIds.forEach(sourceNodeId => {
-    state.edges
-      .filter(edge => edge.fromNode === sourceNodeId && edge.fromPort === "metrics")
-      .map(edge => state.nodes.find(node => node.id === edge.toNode))
-      .filter(node => node?.type === "evaluate.training_metrics")
-      .forEach(node => { node.config.job_id = job.id; });
+  // The blocks this run may write its outputs onto: all of them live, and on a
+  // replay only those it has not already reached (runIsUndelivered).
+  const delivers = new Set([...exactNodeIds].filter(id => {
+    const node = state.nodes.find(item => item.id === id);
+    return node && (!replay || runIsUndelivered(node, job));
+  }));
+  delivers.forEach(sourceNodeId => {
+    metricsBlocksFedBy(sourceNodeId).forEach(node => { node.config.job_id = job.id; });
   });
   // The backend resolves where each step actually wrote its predictions (the
   // epoch-numbered directory is not derivable from the config). Carry it onto
   // the block so Inspect opens this run's own results instead of guessing at
   // whatever prediction file happens to be lying around the repository.
   (job.steps || []).forEach(step => {
-    if (!step.results || !step.node_id) return;
+    if (!ownsCanvas || !(step.results || step.results_dir) || !step.node_id) return;
+    if (!delivers.has(step.node_id)) return;
     const node = state.nodes.find(item => item.id === step.node_id);
     if (!node) return;
     if (step.kind === "analysis") {
@@ -217,10 +333,37 @@ export function applyJobStatus(job) {
       }
       return;
     }
-    node.config.results_path = step.results;
-    node.config.results_samples = String(step.results_samples ?? "");
+    if (step.results) {
+      node.config.results_path = step.results;
+      node.config.results_samples = String(step.results_samples ?? "");
+    } else {
+      // A generator run that wrote geometry but no table: the previous run's
+      // table must not stay on the block as if it described this one.
+      delete node.config.results_path;
+      delete node.config.results_samples;
+    }
+    // A CAD Generator's whole output folder (STLs, report, figures), beside
+    // the table the Optimization block reads. Cleared when absent for the same
+    // reason.
+    if (step.results_dir) node.config.results_dir = step.results_dir;
+    else delete node.config.results_dir;
   });
-  if (exactNodeIds.size) schedulePipelineSave();
+  // A finished run's outputs are final: record them as the block's latest.
+  if (terminal) {
+    delivers.forEach(id => {
+      const node = state.nodes.find(item => item.id === id);
+      if (node) node.resultsFrom = { job: job.id, at: String(job.finished_at || "") };
+    });
+  }
+  return exactNodeIds.size > 0;
+}
+
+export function applyJobStatus(job) {
+  const terminal = isFinished(job);
+  // Remembered so a /api/jobs listing fetched before this poll cannot bring
+  // the run back as in flight (reconcileFinishedJobs).
+  if (terminal) state.api.finishedJobs.set(job.id, job);
+  if (paintJobOntoCanvas(job)) schedulePipelineSave();
   if (terminal) state.api.trackedJobs.delete(job.id);
   else state.api.trackedJobs.set(job.id, job);
   state.running = state.api.trackedJobs.size > 0;
@@ -229,7 +372,7 @@ export function applyJobStatus(job) {
     renderRuntimeJob(job, { reveal: false });
   }
   renderActiveJobCount();
-  render();
+  render({ background: true });
   if (!terminal) return;
   if (!state.api.trackedJobs.size) {
     window.clearInterval(state.api.pollTimer);
@@ -244,6 +387,74 @@ export function applyJobStatus(job) {
       : `${job.label || "Job"} ${job.status}. Open the runtime log for details.`,
     job.status === "completed" ? "" : "error"
   );
+}
+
+/**
+ * Repaint the canvas from every run it owns.
+ *
+ * Only live jobs are polled, so a run that finished while the page was closed
+ * -- or before its graph was reopened from Runs, imported, or brought back by
+ * undo -- never reached the canvas: its blocks stayed idle and its results
+ * table never landed on the block Optimization and Export read from. Block
+ * status is derived from runs alone, so it is reset and rebuilt: finished runs
+ * oldest first, so the latest run of each block is the one left showing, then
+ * the runs still in flight. A replayed run writes its paths only onto blocks it
+ * has not reached yet (runIsUndelivered): a report, export or Train Metrics run
+ * the user chose after it is theirs, not the replay's. No toasts; a finished
+ * run was already announced. `jobs` is a /api/jobs listing when the caller
+ * already has one.
+ */
+export async function reconcileFinishedJobs(jobs = null) {
+  if (!state.api.connected) return;
+  const canvasId = state.canvasId;
+  let items = jobs;
+  if (!Array.isArray(items)) {
+    try {
+      items = (await apiRequest("/api/jobs")).items || [];
+    } catch {
+      return;
+    }
+  }
+  // The canvas changed while the listing was in flight: its own call follows.
+  if (state.canvasId !== canvasId) return;
+  // A run the poller saw finish while the listing was in flight is still
+  // "running" in it; its terminal record is the true one. Taken at face value
+  // it was polled again, repainted as running and announced a second time.
+  items = items.map(job => state.api.finishedJobs.get(job.id) || job);
+  const owned = items.filter(job => jobBelongsToCanvas(job));
+  const finished = owned
+    .filter(job => isFinished(job) && !state.api.trackedJobs.has(job.id))
+    .sort((left, right) => String(left.finished_at || "").localeCompare(String(right.finished_at || "")));
+  // A document saved before blocks recorded the run they last received. A
+  // block holding exactly what one of these runs wrote was delivered by that
+  // run (the newest such), so only later runs deliver to it; a block holding
+  // anything else holds the user's own choice, made after every run here.
+  const seeds = new Map();
+  finished.forEach(job => (job.steps || []).forEach(step => {
+    const node = step.node_id && state.nodes.find(item => item.id === step.node_id);
+    if (!node || node.resultsFrom || !carriesRunEvidence(node)) return;
+    const seed = seeds.get(node) || { match: null, newest: null };
+    seed.newest = job;
+    if (carriesOutputsOf(node, step, job)) seed.match = job;
+    seeds.set(node, seed);
+  }));
+  seeds.forEach(({ match, newest }, node) => {
+    const job = match || newest;
+    node.resultsFrom = { job: job.id, at: String(job.finished_at || "") };
+  });
+  state.nodes.forEach(node => {
+    node.status = "idle";
+    node.progress = 0;
+  });
+  let painted = seeds.size > 0;
+  finished.forEach(job => { painted = paintJobOntoCanvas(job, { replay: true }) || painted; });
+  // In-flight runs last, from the freshest record there is. One started from
+  // another tab of this canvas is not polled yet, so start polling it.
+  owned.filter(job => !isFinished(job) && !state.api.trackedJobs.has(job.id))
+    .forEach(job => beginCommandJob(job, { focus: false }));
+  state.api.trackedJobs.forEach(job => { paintJobOntoCanvas(job); });
+  if (painted) schedulePipelineSave();
+  render();
 }
 
 /** Shows how many other pipelines are still running behind the focused one. */
@@ -414,6 +625,11 @@ export async function runGraph(targetId = null) {
   $("#runTitle").textContent = "Submitting real pipeline";
   $("#runDetail").textContent = "submission checks → per-step launch gate → native process";
   try {
+    // Saved with the run so the exact graph can be reloaded from Runs later.
+    // Its canvas id is read now: the user can switch canvases while the
+    // request is in flight, and the run belongs to the one it was launched from.
+    const pipeline = pipelineDocument();
+    const launchCanvas = pipeline.canvas_id;
     const job = await apiRequest("/api/pipeline/run", {
       method: "POST",
       allowError: true,
@@ -421,8 +637,7 @@ export async function runGraph(targetId = null) {
         label: $("#pipelineName").value,
         strict: false,
         target_node_id: targetId || "",
-        // Saved with the run so the exact graph can be reloaded from Runs later.
-        pipeline: pipelineDocument(),
+        pipeline,
         steps: steps.map(step => ({
           label: step.label,
           kind: step.kind || "launcher",
@@ -464,6 +679,7 @@ export async function runGraph(targetId = null) {
       }
       return;
     }
+    state.api.launchedJobs.set(job.id, job.canvas_id || launchCanvas);
     beginCommandJob(job);
   } catch (error) {
     state.running = state.api.trackedJobs.size > 0;

@@ -239,7 +239,7 @@ function parameterSheetRow(table, row, index, selectable) {
 }
 
 function refreshParameterCardPreview(node) {
-  const preview = $(`[data-preview="${node.id}"] .parameters-table`);
+  const preview = $(`[data-preview="${CSS.escape(node.id)}"] .parameters-table`);
   if (preview) preview.outerHTML = parametersTableGraphic(node, true);
 }
 
@@ -648,9 +648,21 @@ export function renderArtifactCatalog(query = "") {
     button.addEventListener("click", () => {
       stopViewerPlayback();
       resetViewerCamera(false);
-      renderRealArtifactSample(Number(button.dataset.realSample), null, 0);
+      const index = Number(button.dataset.realSample);
+      renderRealArtifactSample(index, null, initialTimestep(index));
     })
   );
+}
+
+// A static model's rollout holds two frames: the state it was handed (t = 0)
+// and its one prediction (t = 1). Opening on t = 0 shows the input -- and,
+// against the dataset, an "error" of minus the truth -- so it opens on the
+// prediction. Longer rollouts still start at their initial condition.
+function initialTimestep(index) {
+  const artifact = state.realArtifact;
+  if (artifact?.contract !== "inference_rollout") return 0;
+  const nodal = (artifact.samples[index]?.datasets || []).find(item => String(item.name).split("/").pop() === "nodal_data");
+  return Number(nodal?.shape?.[1]) === 2 ? 1 : 0;
 }
 
 function formatStat(value) {
@@ -834,6 +846,16 @@ function configuredPreviewPath(node, spec) {
   if (spec.isModel) {
     return normalizeConfiguredPath(node.config.dataset_dir || node.config.infer_dataset);
   }
+  // A CAD Generator's results_path is its candidate/design table -- the CSV the
+  // Optimization block reads, which the geometry viewer cannot open. What the
+  // run produced is the folder beside it: the STLs. Runs recorded before
+  // results_dir existed still carry only the table, whose folder is the same
+  // (backend paths are suite-relative POSIX, so "/" is the only separator).
+  if (node.type === "run.cad_generator") {
+    if (node.config.results_dir) return String(node.config.results_dir).trim();
+    const table = String(node.config.results_path || "").trim();
+    if (/\.csv$/i.test(table) && table.includes("/")) return table.replace(/\/[^/]*$/, "");
+  }
   // A finished run records exactly where its predictions went. Two reasons this
   // value is returned raw: it is a directory of per-sample result files rather
   // than a single file, so it must skip the extension test below, and it is
@@ -941,6 +963,7 @@ async function loadArtifactPath(path, showToast = true) {
     return true;
   }
   state.realArtifact = { ...catalog, node, currentSample: null };
+  syncCompareButton();
   state.artifactSample = null;
   state.viewerMode = catalog.default_mode || "field";
   resetViewerCamera(false);
@@ -1114,6 +1137,7 @@ export async function openArtifact(nodeId) {
   state.artifactSample = null;
   state.viewerMode = "field";
   state.realArtifact = null;
+  syncCompareButton();
   resetViewerCamera(false);
   $("#artifactIcon").textContent = ICONS[spec.icon];
   $("#artifactIcon").style.color = spec.accent;
@@ -1135,6 +1159,7 @@ export async function openArtifact(nodeId) {
     const catalog = await resolvePreview(node, spec);
     if (!isCurrentArtifactLoad(requestGeneration)) return;
     state.realArtifact = { ...catalog, node, currentSample: null };
+    syncCompareButton();
     state.viewerMode = catalog.default_mode || "field";
     $("#artifactTitle").textContent = `${spec.label} · sample viewer`;
     $("#artifactSubtitle").textContent = `${catalog.path} · choose a sample to visualize`;
@@ -1195,27 +1220,54 @@ export function stopViewerPlayback() {
   if (playButton) playButton.textContent = "▶";
 }
 
+// Compare hands a CSV to the Compare workspace and HDF5 evidence to Evaluation.
+// A rollout directory is HDF5 evidence too (source_kind "hdf5"; Evaluation
+// lists it as "(N files)"), while an STL or a figure has nothing to hand over.
+function comparableArtifact(artifact) {
+  const lower = String(artifact?.path || "").toLowerCase();
+  if (lower.endsWith(".csv")) return "csv";
+  if (lower.endsWith(".h5") || lower.endsWith(".hdf5") || artifact?.source_kind === "hdf5") return "hdf5";
+  return "";
+}
+
+function syncCompareButton() {
+  const button = $("#artifactCompare");
+  const comparable = Boolean(comparableArtifact(state.realArtifact));
+  button.disabled = !comparable;
+  button.title = comparable
+    ? "Compare this sample against another"
+    : state.realArtifact
+      ? "Only CSV tables and HDF5 fields have a numeric comparison contract; this artifact has none."
+      : "Open an artifact before comparing.";
+}
+
 export function compareCurrentSample() {
   if (!state.realArtifact) {
     toast("Open an artifact before comparing.", "warn");
     return;
   }
   const path = String(state.realArtifact.path || "");
-  const lower = path.toLowerCase();
+  const kind = comparableArtifact(state.realArtifact);
+  if (!kind) {
+    // Keep the viewer open: closing it first left the user on the canvas with
+    // only a warning to show for the click.
+    toast("This artifact type has no numeric comparison contract. Export comparable CSV or HDF5 evidence first.", "warn");
+    return;
+  }
   $("#artifactOverlay").classList.remove("open");
-  if (lower.endsWith(".csv")) {
+  if (kind === "csv") {
     state.pendingComparisonPaths = [path];
     toast("Opening Compare with the current CSV retained as run 1.");
     openStudio("comparison");
     return;
   }
-  if (lower.endsWith(".h5") || lower.endsWith(".hdf5")) {
-    state.pendingEvaluationPrediction = path;
-    toast("Opening Evaluation with the current HDF5 retained as the prediction source.");
-    openStudio("evaluation");
-    return;
-  }
-  toast("This artifact type has no numeric comparison contract. Export comparable CSV or HDF5 evidence first.", "warn");
+  state.pendingEvaluationPrediction = path;
+  // A rollout previewed against its dataset already knows its ground truth.
+  state.pendingEvaluationTruth = String(state.realArtifact.truth_path || "");
+  toast(state.pendingEvaluationTruth
+    ? "Opening Evaluation with this prediction and its ground truth selected."
+    : "Opening Evaluation with the current HDF5 retained as the prediction source.");
+  openStudio("evaluation");
 }
 
 export function downloadCurrentSample() {

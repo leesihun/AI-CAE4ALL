@@ -5,7 +5,7 @@
 % conditioner: u_inf_x, u_inf_y, sdf, normal_x, normal_y
 % partNo: partNo
 % Static state input is zero; temporal input is current state and target is next-state delta.
-% Reference: https://doi.org/10.1038/s42256-021-00302-5
+% Reference: https://doi.org/10.1038/s42256-021-00302-5 ; https://arxiv.org/abs/2111.05512
 % See configs/campaigns/dataset_matrix/README.md for deviations and verification boundaries.
 % No source HDF5 writes. Checkpoints are created by the paired training config.
 
@@ -29,7 +29,7 @@ positional_features              4
 time_integration                 ar_ot
 training_epochs                  500
 batch_size                       1
-learningr                        0.0005
+learningr                        0.001
 weight_decay                     0.0001
 warmup_epochs                    5
 num_workers                      2
@@ -37,7 +37,7 @@ prefetch_factor                  2
 grad_accum_steps                 1
 augment_geometry                 False
 std_noise                        0.0
-use_amp                          True
+use_amp                          False
 use_checkpointing                True
 use_ema                          True
 ema_decay                        0.99
@@ -68,7 +68,7 @@ deeponet_hidden_channels         256
 deeponet_branch_depth            4
 deeponet_trunk_depth             4
 deeponet_basis_dim               128
-deeponet_activation              gelu
+deeponet_activation              relu
 deeponet_multi_output            split_both
 deeponet_max_branch_params       100000000
 infer_query_chunk_size           16384

@@ -234,7 +234,7 @@ def build_meshgraphnets_spec() -> MethodSpec:
         },
         recommended_by_mode={"train": frozenset({"feature_loss_weights", "split_seed", "parallel_mode"})},
         defaults={"parallel_mode": "ddp", "use_multiscale": False, "use_world_edges": False, "use_checkpointing": False, "use_ema": False},
-        defaults_by_mode={"inference": {"inference_output_dir": "outputs/rollout"}},
+        defaults_by_mode={"inference": {"inference_output_dir": "../../output/meshgraphnets/rollout"}},
         path_rules=(
             PathRule("dataset_dir", PathKind.INPUT_FILE, frozenset({"train"})),
             PathRule("init_modelpath", PathKind.INPUT_FILE, frozenset({"train"})),

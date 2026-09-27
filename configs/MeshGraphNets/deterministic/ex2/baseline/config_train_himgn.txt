@@ -27,7 +27,7 @@ feature_loss_weights             1, 1, 1, 1
 use_node_types                   True
 positional_features              4
 time_integration                 ar_ot
-training_epochs                  500
+training_epochs                  100
 batch_size                       1
 learningr                        0.0001
 weight_decay                     0.0
@@ -53,7 +53,7 @@ use_world_edges                  True
 use_multiscale                   True
 edge_var                         8
 latent_dim                       128
-message_passing_num              15
+message_passing_num              28
 geometry_state_mode              displacement
 displacement_state_indices       0, 1, 2
 world_radius_multiplier          2
@@ -61,8 +61,8 @@ world_max_num_neighbors          64
 world_edge_backend               scipy_kdtree
 coarsening_type                  voronoi_seedmean
 multiscale_levels                2
-voronoi_clusters                 5000, 250
-mp_per_level                     2, 3, 5, 3, 2
+voronoi_clusters                 5000, 100
+mp_per_level                     4, 6, 8, 6, 4
 pool_type                        mean
 unpool_type                      sum
 learned_interpolation            True

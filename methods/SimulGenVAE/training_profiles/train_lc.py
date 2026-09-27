@@ -164,6 +164,9 @@ def lc_worker(config, config_filename='config.txt'):
     modelpath = config.get('lc_modelpath', '../../output/simulgenvae/simulgenvae_lc.pth')
     log_file = init_log_file(config, config_filename) if rank0 else None
     test_interval = max(1, int(config.get('test_interval', 100)))
+    # The same cadence as the VAE stage (train_vae.py); a hardcoded 100 left
+    # a short LC run with a two-point curve.
+    val_interval = max(1, int(config.get('val_interval', 20)))
     display_testset = bool(config.get('display_testset', True))
     viz_dir = artifact_dir(config, modelpath) if rank0 else None
     if rank0:
@@ -201,13 +204,15 @@ def lc_worker(config, config_filename='config.txt'):
             optimizer.step()
             loss_sum += float(loss.item())
             batches += 1
+        # Read before step(): afterwards it is the next epoch's LR, and after the
+        # last epoch a warm restart reports the peak LR for an epoch that never runs.
+        lr = optimizer.param_groups[0]['lr']
         scheduler.step()
         train_loss = D.reduce_epoch_mean(loss_sum, batches, device)
 
         last_epoch = epoch == total_epochs - 1
-        if rank0 and (epoch % 100 == 0 or last_epoch):
+        if rank0 and (epoch % val_interval == 0 or last_epoch):
             val_loss = _validate(D.unwrap_model(train_lc_model), val_loader, device, mse)
-            lr = optimizer.param_groups[0]['lr']
             print(f'Epoch {epoch}/{total_epochs} LC train {train_loss:.4e} val {val_loss:.4e} LR {lr:.2e}')
             append_log(log_file, f'Elapsed {time.time()-start_time:.2f}s Epoch {epoch} '
                                  f'LC train {train_loss:.4e} val {val_loss:.4e} LR {lr:.4e}')

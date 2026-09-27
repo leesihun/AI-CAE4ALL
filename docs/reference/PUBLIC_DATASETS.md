@@ -288,7 +288,7 @@ not re-run against the new files:
 | Transolver, `ex6` (flag) | ✅ 98% epoch 0, no crash |
 | Transolver, `ex7` (airfrans) | preflight only |
 
-### 2026-08-19: ex8/ex9 rebuilt, real-execution-verified across all four methods
+### 2026-08-19: ex8/ex9 rebuilt, real-execution-verified across all three methods
 
 `dataset/benchmarks/` (and the scripts that built it) had gone missing entirely -- see the
 2026-08-10 recovery note above; this was never actually fixed until now. Raw Geo-FNO source was
@@ -359,6 +359,8 @@ epochs, decreasing reconstruction loss, no traceback). MLP was left alone per di
 tabular contract is a data-*shape* difference, not a bug, and building `X`/`Y` tables for
 elasticity/plasticity would be new scope (e.g. die-profile parameters -> integrated stress), not
 a fix.
+Since 2026-09-24 `group_norm_groups()` defaults to 1 group, so every VAE GroupNorm it sizes is
+1 group (8 groups reduced the 16-channel layers of a static T=1 dataset to 8 bits).
 
 **2026-08-18:** that 2026-08-10 `ex6` verification never actually got a committed config --
 `configs/SimulGenVAE/deterministic/ex6/` didn't exist until this session (`config_train_vae.txt`, `num_var 3`
@@ -413,7 +415,7 @@ No, and it was never intended to be -- each method has a different data contract
 | `geometry_ingest` | N/A | N/A | it's a producer of this contract from CAD, not a consumer of built HDF5 |
 
 So: **3 of 8 registered `model` values were architecturally untested until this session** (the
-four Neural_Operator aliases, deduplicated to one family); they now have passing preflight
+three Neural_Operator aliases, deduplicated to one family); they now have passing preflight
 configs. **3 of 8 are structurally incompatible** with ex4/ex5's per-sample-varying mesh
 (`simulgenvae`, `mlp`, `sdfflow`) for reasons unrelated to how the files were built -- more
 downloads of the same *kind* of dataset would not change that, only a fixed-topology multi-sample
@@ -580,7 +582,7 @@ read that before writing a new sidecar script or an ingestion config.
 
 | Dataset | Size | Why it might be worth it |
 | --- | --- | --- |
-| ShapeNet-Car (Umetani & Bickel) | 26 GB | 889 cars, 32k pts; the standard Transolver/GINO surface benchmark — closest thing to an apples-to-apples published baseline |
+| ShapeNet-Car (Umetani & Bickel) | 26 GB | 889 cars, 32k pts; the standard Transolver surface benchmark — closest thing to an apples-to-apples published baseline |
 | DeepMind `airfoil` | 56 GB | compressible, 5233 nodes, 600 steps — same converter, just bigger |
 | AhmedML surface-only | ~500 MB/case | 3.08 TB total, but `boundary_i.vtp` alone is ~500 MB — 100 cases ≈ 50 GB of industrial-scale automotive aero |
 | WindsorML / DrivAerML | 1 TB+ | over budget except as a small case subset |

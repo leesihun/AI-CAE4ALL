@@ -21,28 +21,50 @@ MC surface (measured watertight after, 0.1% volume error at 12k faces), and is
 what sets the resulting tet count. Note the corollary: gmsh keeps the surface it
 is handed and never remeshes it, so `mesh_size_max` sizes the *interior* only.
 `target_faces` is the knob that moves the tet count (12k -> 24.8k tets,
-25k -> 61.2k at an unchanged `mesh_size_max`); a coarse surface stays coarse. The other two traps still hold and are baked
+25k -> 61.2k at an unchanged `mesh_size_max`); a coarse surface stays coarse.
+Decimation is not always benign, though: on a thin member it can pinch the
+surface into non-manifold edges, which gmsh rejects as overlapping facets --
+see `DECIMATION_AGGRESSION`. The other two traps still hold and are baked
 in below: `MeshSizeFromCurvature` stays 0, and second-order elements need
 `ElementOrder = 2` before `generate(3)` plus `HighOrderOptimize = 2`.
 """
 
 import os
+import shutil
 import tempfile
 
 import numpy as np
 
 CLASSIFY_ANGLES = (40.0, 60.0, 30.0)
+# Face-budget multipliers tried in order by `tet_mesh_with_retries`.
+FACE_BUDGET_LADDER = (1.0, 1.25, 0.8, 1.5)
+# Quadric-decimation aggression, one full face-budget ladder each, in order.
+# `None` is fast_simplification's own default (7). Every DeepJEB label was
+# meshed at it, so it stays first: a shape that meshed before still meshes
+# through the same surface. At the default the decimation can pinch a thin
+# member -- a CMA-ES-lightened bracket went from a watertight single-body MC
+# surface to 5-6 non-manifold edges and 4-5 fragments at all four budgets, and
+# gmsh rejected every one as overlapping facets. Aggression 3 ("slower and
+# better") meshed that design, and at 12k/15k faces the baseline and typical
+# ones too. Lower settings stop short of the budget (2 leaves ~35% more faces,
+# 1 about 4x), which would move the tet count the budget exists to set.
+DECIMATION_AGGRESSION = (None, 3)
 
 
 class MeshingError(RuntimeError):
     pass
 
 
-def prepare_surface(mesh, target_faces=12000):
-    """Decimate the raw MC surface to the face budget that sets the tet count."""
+def prepare_surface(mesh, target_faces=12000, aggression=None):
+    """Decimate the raw MC surface to the face budget that sets the tet count.
+
+    `aggression` None keeps fast_simplification's default -- the setting the
+    surrogate's labels and its input graphs were built with.
+    """
     surface = mesh.copy()
     if target_faces and len(surface.faces) > target_faces:
-        surface = surface.simplify_quadric_decimation(face_count=int(target_faces))
+        kwargs = {} if aggression is None else {'aggression': int(aggression)}
+        surface = surface.simplify_quadric_decimation(face_count=int(target_faces), **kwargs)
     surface.remove_unreferenced_vertices()
     if len(surface.faces) == 0:
         raise MeshingError('surface decimation removed every face')
@@ -67,24 +89,66 @@ def _export_stl(surface, path):
 
 
 def tet_mesh_from_surface(mesh, mesh_size_max=0.05, target_faces=12000,
-                          angles=CLASSIFY_ANGLES, verbose=False, second_order=False):
+                          angles=CLASSIFY_ANGLES, verbose=False, second_order=False,
+                          aggression=None):
     """Tetrahedralize a closed surface mesh. Returns (nodes[N,3], tets[E,4|10], info)."""
-    surface = prepare_surface(mesh, target_faces)
-    stl_path = os.path.join(tempfile.mkdtemp(prefix='sdfflow_mesh_'), 'shape.stl')
-    _export_stl(surface, stl_path)
+    surface = prepare_surface(mesh, target_faces, aggression=aggression)
+    # One directory per call, removed on the way out: an optimize run meshes
+    # every candidate (~150 per run), and each call used to leave its STL behind.
+    tmpdir = tempfile.mkdtemp(prefix='sdfflow_mesh_')
+    try:
+        stl_path = os.path.join(tmpdir, 'shape.stl')
+        _export_stl(surface, stl_path)
 
-    last_error = None
-    for angle in angles:
-        try:
-            nodes, tets, info = _attempt(stl_path, angle, mesh_size_max, verbose, second_order)
-            info.update(classify_angle=angle,
-                        surface_faces=int(len(surface.faces)),
-                        surface_watertight=bool(surface.is_watertight))
+        last_error = None
+        for angle in angles:
+            try:
+                nodes, tets, info = _attempt(stl_path, angle, mesh_size_max, verbose,
+                                             second_order)
+                info.update(classify_angle=angle,
+                            surface_faces=int(len(surface.faces)),
+                            surface_watertight=bool(surface.is_watertight))
+                return nodes, tets, info
+            except Exception as exc:  # gmsh raises plain Exception for PLC/topology errors
+                last_error = exc
+                _finalize_quietly()
+        raise MeshingError(f'gmsh failed at every classify angle: {last_error}')
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def tet_mesh_with_retries(mesh, mesh_size_max=0.05, target_faces=12000,
+                          ladder=FACE_BUDGET_LADDER, aggressions=DECIMATION_AGGRESSION,
+                          **kwargs):
+    """`tet_mesh_from_surface`, retried over a ladder of nearby face budgets.
+
+    Quadric decimation occasionally leaves overlapping facets that gmsh rejects
+    at every classify angle; a slightly different budget decimates differently
+    and almost always clears it. The surrogate's labels were meshed through
+    exactly this ladder, so anything re-solved for comparison with them must be
+    too -- otherwise a shape the labels would have meshed reads as unmeshable.
+    When the whole ladder fails at the default decimation it is walked again
+    at each gentler `aggressions` entry; that fallback only ever runs for a
+    shape the labels' ladder could not mesh, so it changes no earlier result.
+    `info['face_budget']` and `info['decimation_aggression']` record the
+    attempt that succeeded (aggression None = the library default).
+    """
+    errors = []
+    for aggression in aggressions:
+        for factor in ladder:
+            budget = int(target_faces * factor)
+            try:
+                nodes, tets, info = tet_mesh_from_surface(
+                    mesh, mesh_size_max=mesh_size_max, target_faces=budget,
+                    aggression=aggression, **kwargs)
+            except Exception as exc:
+                tag = str(budget) if aggression is None else f'{budget} (aggression {aggression})'
+                errors.append(f'{tag}: {exc}')
+                continue
+            info.update(face_budget=budget, face_budget_attempts=len(errors) + 1,
+                        decimation_aggression=aggression)
             return nodes, tets, info
-        except Exception as exc:  # gmsh raises plain Exception for PLC/topology errors
-            last_error = exc
-            _finalize_quietly()
-    raise MeshingError(f'gmsh failed at every classify angle: {last_error}')
+    raise MeshingError('meshing failed at every face budget; ' + ' | '.join(errors))
 
 
 def _finalize_quietly():

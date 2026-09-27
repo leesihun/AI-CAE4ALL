@@ -913,7 +913,7 @@ def fea_condition_audit(meshes, cond_names, backend, config, workdir=None):
                 except Exception as exc:
                     errors[i] = f'{type(exc).__name__}: {exc}'
         else:
-            from design_loop.surrogate import HIMGNSurrogate
+            from design_loop.surrogate import HIMGNSurrogate, gpu_id_from_config
             surrogate = HIMGNSurrogate(
                 config_path=config['opt_surrogate_config'],
                 checkpoint=config['opt_surrogate_checkpoint'],
@@ -921,7 +921,8 @@ def fea_condition_audit(meshes, cond_names, backend, config, workdir=None):
                 target_nodes=int(config.get('opt_surrogate_target_nodes', 5000)),
                 density=density,
                 stress_percentile=stress_percentile,
-                workdir=workdir)
+                workdir=workdir,
+                gpu_id=gpu_id_from_config(config))
             print(f'Surrogate audit ({label}): {len(valid_idx)} mesh(es), load cases {needed_cases}')
             try:
                 batch = surrogate.analyze_batch([meshes[i] for i in valid_idx])
@@ -930,9 +931,11 @@ def fea_condition_audit(meshes, cond_names, backend, config, workdir=None):
                 for i in valid_idx:
                     errors[i] = f'{type(exc).__name__}: {exc}'
             long_names = {v: k for k, v in _SURROGATE_CASE_NAMES.items()}
-            for i, res in zip(valid_idx, batch):
+            reasons = getattr(surrogate, 'last_errors', None) or {}
+            for local_i, (i, res) in enumerate(zip(valid_idx, batch)):
                 if res is None:
-                    errors[i] = errors[i] or 'SurrogateError: surrogate could not bridge or predict this shape'
+                    errors[i] = (errors[i] or reasons.get(local_i)
+                                 or 'SurrogateError: surrogate could not bridge or predict this shape')
                     continue
                 remapped = dict(res)
                 remapped['cases'] = {long_names.get(k, k): v for k, v in (res.get('cases') or {}).items()}
@@ -1046,6 +1049,11 @@ def run_sample(config, config_filename='config.txt'):
             # 4x compute setting reads as a bug from the log.
             print(f'NOTE: candidate_multiplier {candidate_multiplier} needs cond_values to rank '
                   f'candidates against; an unconditional run draws num_samples and no more.')
+        if cfg_scale != 1.0:
+            # sample_latents only mixes branches when a condition is given; say
+            # so rather than let a guidance scale read as if it acted.
+            print(f'NOTE: cfg_scale {cfg_scale:g} guides a conditional request; this run is '
+                  f'unconditional, so the scale is inert.')
         print('Unconditional generation')
 
     # ---- Descriptor tools (guidance / Newton) ----

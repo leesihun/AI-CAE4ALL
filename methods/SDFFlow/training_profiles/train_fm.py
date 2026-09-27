@@ -322,9 +322,11 @@ def fm_worker(config, config_filename='config.txt'):
                 loss_sum += loss.item()
                 batches += 1
 
+            # Read before step(): afterwards it is the next epoch's LR, and after the
+            # last epoch a warm restart reports the peak LR for an epoch that never runs.
+            current_lr = optimizer.param_groups[0]['lr']
             scheduler.step()
             train_loss = D.reduce_epoch_mean(loss_sum, batches, device)
-            current_lr = optimizer.param_groups[0]['lr']
 
             do_val = (epoch % val_interval == 0) or (epoch == total_epochs - 1)
             eval_model = D.unwrap_model(ema_model) if ema_model is not None else model

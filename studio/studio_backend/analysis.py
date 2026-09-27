@@ -15,7 +15,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from studio_backend.paths import FRONTEND_ROOT, RUNTIME_ROOT, SUITE_ROOT, relative, safe_repo_path, slug, utc_now
+from studio_backend.paths import RUNTIME_ROOT, SUITE_ROOT, relative, safe_repo_path, slug, utc_now
 from studio_backend.paths import result_roots
 
 
@@ -108,14 +108,20 @@ def _hdf5_source(raw: Any, label: str) -> tuple[Path, list[Path], bool]:
     return path, candidates[:EVALUATION_FILE_LIMIT], len(candidates) > EVALUATION_FILE_LIMIT
 
 
-def _sample_aliases(path: Path, sample_id: str, handle: Any) -> list[str]:
-    aliases = [str(sample_id), path.stem]
-    declared = handle.attrs.get("sample_id")
-    if declared is not None:
-        aliases.append(_decode_hdf5(declared))
-    match = re.search(r"sample[_-]?(\d+)", path.stem, re.IGNORECASE)
-    if match:
-        aliases.append(match.group(1))
+def _sample_aliases(path: Path, sample_id: str, handle: Any, *, single_record: bool) -> list[str]:
+    aliases = [str(sample_id)]
+    # The file name and a file-level sample_id attribute identify a sample
+    # only when the file holds exactly one. In a multi-sample file every record
+    # got the same `path.stem` alias, so two `ex_infer.h5` files paired their
+    # samples by position ('100' with '0') instead of refusing to match.
+    if single_record:
+        aliases.append(path.stem)
+        declared = handle.attrs.get("sample_id")
+        if declared is not None:
+            aliases.append(_decode_hdf5(declared))
+        match = re.search(r"sample[_-]?(\d+)", path.stem, re.IGNORECASE)
+        if match:
+            aliases.append(match.group(1))
     return list(dict.fromkeys(alias for alias in aliases if alias))
 
 
@@ -248,6 +254,7 @@ def _inspect_hdf5_file(path: Path, role: str) -> dict[str, Any]:
         if isinstance(data, h5py.Group):
             records: list[dict[str, Any]] = []
             counts: list[int] = []
+            single_record = len(data.keys()) == 1
             for sample_id in sorted(data.keys(), key=lambda value: (not str(value).isdigit(), str(value))):
                 group = data[sample_id]
                 name = "nodal_data" if "nodal_data" in group else "nodal_field" if "nodal_field" in group else ""
@@ -259,7 +266,7 @@ def _inspect_hdf5_file(path: Path, role: str) -> dict[str, Any]:
                     counts.append(shape[0])
                 records.append({
                     "id": str(sample_id),
-                    "aliases": _sample_aliases(path, str(sample_id), handle),
+                    "aliases": _sample_aliases(path, str(sample_id), handle, single_record=single_record),
                     "file": relative(path),
                     "dataset": f"data/{sample_id}/{name}",
                     "shape": shape,
@@ -295,17 +302,19 @@ def _inspect_hdf5_file(path: Path, role: str) -> dict[str, Any]:
             target_name = next((name for name in ("target_denorm", "target_norm") if name in nodes), None)
             predicted = nodes[predicted_name]
             count = int(predicted.shape[1]) if predicted.ndim == 2 else 1
-            sample_id = _decode_hdf5(handle.attrs.get("sample_id", path.stem))
+            declared_id = handle.attrs.get("sample_id")
+            sample_id = _decode_hdf5(declared_id if declared_id is not None else path.stem)
             record = {
                 "id": sample_id,
-                "aliases": _sample_aliases(path, sample_id, handle),
+                "aliases": _sample_aliases(path, sample_id, handle, single_record=True),
                 "file": relative(path),
                 "dataset": f"nodes/{predicted_name}",
                 "truth_dataset": f"nodes/{target_name}" if target_name else "",
                 "shape": [int(value) for value in predicted.shape],
                 "truth_shape": [int(value) for value in nodes[target_name].shape] if target_name else [],
                 "rank_ok": predicted.ndim in {1, 2},
-                "explicit_id": True,
+                # A file-name fallback is not a declared sample identity.
+                "explicit_id": declared_id is not None,
             }
             names = _field_names(_hdf5_names(handle, "output_names"), count)
             return {
@@ -466,6 +475,11 @@ def _match_sample_records(prediction: dict[str, Any], truth: dict[str, Any]) -> 
         if index is not None:
             matched.append((left, available.pop(index)))
     if not matched and len(predicted) == len(actual) == 1:
+        # One-to-one by count is only a guess when an identity is missing. When
+        # both sides declare one and they differ, these are different samples
+        # (a rollout of 42 scored against truth 7 is not a score of anything).
+        if predicted[0]["explicit_id"] and actual[0]["explicit_id"]:
+            return [], "single-id-mismatch"
         return [(predicted[0], actual[0])], "single"
     return matched, "id"
 
@@ -548,6 +562,13 @@ def _schema_payload(payload: dict[str, Any]) -> tuple[dict[str, Any], Path, Path
             errors.append(
                 "Table row counts differ and neither file declares sample_ids; add matching sample_ids or select arrays with equal rows."
             )
+        elif strategy == "single-id-mismatch":
+            errors.append(
+                "The prediction holds one sample ({0}) and the ground truth one sample ({1}), but their sample IDs "
+                "differ, so they are different samples. Select the truth sample the prediction was made from.".format(
+                    prediction["sample_records"][0]["id"], truth["sample_records"][0]["id"]
+                )
+            )
         else:
             errors.append("No prediction samples match ground truth by sample ID.")
 
@@ -583,16 +604,16 @@ def _schema_payload(payload: dict[str, Any]) -> tuple[dict[str, Any], Path, Path
 
     incompatible_shapes = 0
     compatible_shapes = 0
+    static_one_shot = 0
     for left, right in matched:
         left_shape = left["shape"]
         right_shape = right["shape"]
         if prediction["kind"] == truth["kind"] == "mesh":
             ok = (
                 left.get("rank_ok") and right.get("rank_ok")
-                and len(left_shape) == len(right_shape) == 3
-                and left_shape[1] == right_shape[1]
-                and left_shape[2] == right_shape[2]
+                and _mesh_frames(left_shape, right_shape) is not None
             )
+            static_one_shot += int(bool(ok) and left_shape[1] != right_shape[1])
         else:
             left_tail = left_shape[2:] if len(left_shape) >= 2 else []
             right_tail = right_shape[2:] if len(right_shape) >= 2 else []
@@ -605,6 +626,11 @@ def _schema_payload(payload: dict[str, Any]) -> tuple[dict[str, Any], Path, Path
         )
     elif incompatible_shapes:
         warnings.append(f"{incompatible_shapes} matched sample(s) have incompatible shapes and will be skipped.")
+    if static_one_shot:
+        warnings.append(
+            f"{static_one_shot} matched sample(s) are static one-shot rollouts ([seed, prediction] against a "
+            "single-frame truth); only the predicted frame is scored."
+        )
 
     recommended = {
         "mode": mode,
@@ -702,7 +728,28 @@ def _resolved_field_pairs(payload: dict[str, Any], schema: dict[str, Any]) -> li
     return pairs
 
 
-def _metric_row(np: Any, prediction: Any, truth: Any, metadata: dict[str, Any]) -> dict[str, Any] | None:
+def _field_metric_keys(field_pairs: list[dict[str, Any]]) -> list[str]:
+    """Stable, unique per-field labels for the per-sample CSV columns."""
+    labels: list[str] = []
+    for index, pair in enumerate(field_pairs):
+        label = str(pair.get("name") or f"field {index}")
+        labels.append(label if label not in labels else f"{label} #{index}")
+    return labels
+
+
+def _metric_row(
+    np: Any, prediction: Any, truth: Any, metadata: dict[str, Any], field_labels: list[str] | None = None
+) -> dict[str, Any] | None:
+    """Per-sample metrics; axis 0 of both arrays is the field axis.
+
+    R^2 and relative L2 are computed per field and the headline value is their
+    macro-average. Pooling every field into one vector let the between-field
+    variance count as "explained": a constant predictor that emitted each
+    field's mean scored R^2 = 0.99999 and relative L2 = 0.001 on a sample whose
+    fields had different magnitudes. The pooled numbers are kept, labelled as
+    such, and a field whose truth is constant (or zero) has no R^2 (or relative
+    L2) rather than a division by ~0.
+    """
     if prediction.shape != truth.shape:
         return None
     finite = np.isfinite(prediction) & np.isfinite(truth)
@@ -715,19 +762,74 @@ def _metric_row(np: Any, prediction: Any, truth: Any, metadata: dict[str, Any]) 
     truth_centered = truth_values - truth_values.mean()
     total_variance = float(np.dot(truth_centered, truth_centered))
     squared_error = float(np.dot(difference, difference))
-    return {
+
+    field_count = int(prediction.shape[0]) if prediction.ndim else 1
+    per_prediction = np.asarray(prediction, dtype=np.float64).reshape(field_count, -1)
+    per_truth = np.asarray(truth, dtype=np.float64).reshape(field_count, -1)
+    per_finite = finite.reshape(field_count, -1)
+    labels = list(field_labels or [])
+    if len(labels) != field_count:
+        labels = [f"field {index}" for index in range(field_count)]
+    field_relative: list[float | None] = []
+    field_r2: list[float | None] = []
+    for index in range(field_count):
+        mask = per_finite[index]
+        if not mask.any():
+            field_relative.append(None)
+            field_r2.append(None)
+            continue
+        field_truth = per_truth[index][mask]
+        field_difference = per_prediction[index][mask] - field_truth
+        truth_norm = float(np.linalg.norm(field_truth))
+        field_relative.append(float(np.linalg.norm(field_difference) / truth_norm) if truth_norm > 0 else None)
+        centered = field_truth - field_truth.mean()
+        variance = float(np.dot(centered, centered))
+        field_r2.append(
+            float(1.0 - float(np.dot(field_difference, field_difference)) / variance) if variance > 0 else None
+        )
+
+    def macro(values: list[float | None]) -> float | None:
+        defined = [value for value in values if value is not None]
+        return float(np.mean(defined)) if defined else None
+
+    row = {
         **metadata,
         "values": int(prediction_values.size),
-        "relative_l2": float(np.linalg.norm(difference) / denominator),
+        "relative_l2": macro(field_relative),
         "mae": float(np.mean(np.abs(difference))),
         "rmse": float(np.sqrt(np.mean(np.square(difference)))),
         "max_absolute_error": float(np.max(np.abs(difference))),
-        "r2": float(1.0 - squared_error / total_variance) if total_variance > 0 else None,
+        "r2": macro(field_r2),
+        "relative_l2_pooled": float(np.linalg.norm(difference) / denominator),
+        "r2_pooled": float(1.0 - squared_error / total_variance) if total_variance > 0 else None,
     }
+    for label, relative_value, r2_value in zip(labels, field_relative, field_r2):
+        row[f"relative_l2[{label}]"] = relative_value
+        row[f"r2[{label}]"] = r2_value
+    return row
 
 
 def _record_path(record: dict[str, Any]) -> Path:
     return safe_repo_path(record["file"], result_roots())
+
+
+def _mesh_frames(prediction_shape: Any, truth_shape: Any) -> tuple[slice, slice] | None:
+    """Prediction/truth frame windows for one mesh pair, or None when they do not align.
+
+    Equal timestep counts score every frame. The one other accepted layout is a
+    static (T=1) truth against a two-frame rollout: the mesh writers store a
+    one-shot model as [seed, prediction] (steps1, T=2), and only the second frame
+    is a prediction -- the same rule configs/campaigns/dataset_matrix/score_rank.py
+    applies. Any other timestep mismatch is rejected, never truncated.
+    """
+    if len(prediction_shape) != 3 or len(truth_shape) != 3 or prediction_shape[2] != truth_shape[2]:
+        return None
+    prediction_t, truth_t = int(prediction_shape[1]), int(truth_shape[1])
+    if prediction_t == truth_t:
+        return slice(0, prediction_t), slice(0, truth_t)
+    if truth_t == 1 and prediction_t == 2:
+        return slice(1, 2), slice(0, 1)
+    return None
 
 
 def _evaluate_mesh(
@@ -759,19 +861,17 @@ def _evaluate_mesh(
             ):
                 skipped.append(f"{left['file']}:{left['id']} field mapping is outside nodal_data")
                 continue
-            if (
-                prediction_dataset.ndim != 3
-                or truth_dataset.ndim != 3
-                or prediction_dataset.shape[1:] != truth_dataset.shape[1:]
-            ):
+            frames = _mesh_frames(prediction_dataset.shape, truth_dataset.shape)
+            if frames is None:
                 skipped.append(
                     f"{left['file']}:{left['id']} has incompatible timestep/node shape "
                     f"{tuple(prediction_dataset.shape[1:])} vs {tuple(truth_dataset.shape[1:])}"
                 )
                 continue
-            timesteps = int(prediction_dataset.shape[1])
-            prediction = np.asarray(prediction_dataset[prediction_indices, :timesteps, :], dtype=np.float64)
-            truth = np.asarray(truth_dataset[truth_indices, :timesteps, :], dtype=np.float64)
+            prediction_frames, truth_frames = frames
+            prediction = np.asarray(prediction_dataset[prediction_indices, prediction_frames, :], dtype=np.float64)
+            truth = np.asarray(truth_dataset[truth_indices, truth_frames, :], dtype=np.float64)
+            timesteps = int(truth.shape[1])
         row = _metric_row(np, prediction, truth, {
             "contract": "mesh_state",
             "prediction_file": left["file"],
@@ -780,7 +880,7 @@ def _evaluate_mesh(
             "fields": len(field_pairs),
             "timesteps": timesteps,
             "nodes": int(prediction.shape[2]),
-        })
+        }, _field_metric_keys(field_pairs))
         if row is None:
             skipped.append(f"{left['file']}:{left['id']} contains no finite, shape-aligned values")
         else:
@@ -821,7 +921,7 @@ def _evaluate_table(schema: dict[str, Any], field_pairs: list[dict[str, Any]]) -
             "fields": len(field_pairs),
             "timesteps": 1,
             "nodes": int(prediction.size // max(1, len(field_pairs))),
-        })
+        }, _field_metric_keys(field_pairs))
         if row is None:
             skipped.append(f"{left['file']}:{left['id']} contains no finite, shape-aligned values")
         else:
@@ -839,7 +939,16 @@ def _evaluate_embedded(schema: dict[str, Any], field_pairs: list[dict[str, Any]]
         with h5py.File(_record_path(record), "r") as handle:
             prediction_dataset = handle[record["dataset"]]
             truth_dataset = handle[record["truth_dataset"]]
-            if prediction_dataset.ndim == 1:
+            if prediction_dataset.ndim == 1 and "row" in record:
+                # A 1-D table output holds one scalar per sample, and every
+                # record is one row of it. Reading the whole column scored all
+                # samples against all samples, so every row reported the same
+                # pooled numbers.
+                row_index = int(record["row"])
+                prediction = np.asarray([prediction_dataset[row_index]], dtype=np.float64)
+                truth = np.asarray([truth_dataset[row_index]], dtype=np.float64)
+            elif prediction_dataset.ndim == 1:
+                # native_inference_result: one channel over all nodes.
                 prediction = np.asarray([prediction_dataset[()]], dtype=np.float64)
                 truth = np.asarray([truth_dataset[()]], dtype=np.float64)
             elif schema["prediction"]["contract"] == "native_inference_result":
@@ -857,12 +966,23 @@ def _evaluate_embedded(schema: dict[str, Any], field_pairs: list[dict[str, Any]]
             "fields": len(field_pairs),
             "timesteps": 1,
             "nodes": int(prediction.size // max(1, len(field_pairs))),
-        })
+        }, _field_metric_keys(field_pairs))
         if row is None:
             skipped.append(f"{record['file']}:{record['id']} embedded truth is not shape-aligned or finite")
         else:
             rows.append(row)
     return rows, skipped
+
+
+def _payload_int(payload: dict[str, Any], key: str, default: int) -> int:
+    # A null or non-numeric field is a bad request (400), not a TypeError 500.
+    value = payload.get(key)
+    if value is None or value == "":
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{key} must be an integer, not {value!r}.") from exc
 
 
 def run_field_evaluation(payload: dict[str, Any]) -> dict[str, Any]:
@@ -896,9 +1016,9 @@ def run_field_evaluation(payload: dict[str, Any]) -> dict[str, Any]:
     field_pairs = _resolved_field_pairs(payload, schema)
     if not field_pairs and not use_legacy_rows:
         raise ValueError("Select at least one explicit prediction/truth field pair before scoring.")
-    prediction_start = max(0, int(payload.get("prediction_start", 3)))
-    truth_start = max(0, int(payload.get("truth_start", 3)))
-    num_fields = max(1, int(payload.get("num_fields", 1)))
+    prediction_start = max(0, _payload_int(payload, "prediction_start", 3))
+    truth_start = max(0, _payload_int(payload, "truth_start", 3))
+    num_fields = max(1, _payload_int(payload, "num_fields", 1))
     # Last line of defence, independent of how the pairs were chosen (recommended,
     # explicit, or legacy rows): a score computed only on reference-coordinate
     # rows is not a score of the model. Refuse rather than report R^2 = 1.
@@ -943,17 +1063,32 @@ def run_field_evaluation(payload: dict[str, Any]) -> dict[str, Any]:
         detail = f" First issue: {skipped[0]}" if skipped else ""
         raise ValueError("Matched samples were found, but none had compatible finite arrays." + detail)
 
+    def summarise(metric: str) -> dict[str, float] | None:
+        values = np.asarray([row[metric] for row in rows if row.get(metric) is not None], dtype=np.float64)
+        if not values.size:
+            return None
+        return {
+            "mean": float(values.mean()),
+            "median": float(np.median(values)),
+            "p95": float(np.percentile(values, 95)),
+            "min": float(values.min()),
+            "max": float(values.max()),
+        }
+
     aggregate: dict[str, Any] = {}
-    for metric in ("relative_l2", "mae", "rmse", "max_absolute_error", "r2"):
-        values = np.asarray([row[metric] for row in rows if row[metric] is not None], dtype=np.float64)
-        if values.size:
-            aggregate[metric] = {
-                "mean": float(values.mean()),
-                "median": float(np.median(values)),
-                "p95": float(np.percentile(values, 95)),
-                "min": float(values.min()),
-                "max": float(values.max()),
-            }
+    for metric in ("relative_l2", "mae", "rmse", "max_absolute_error", "r2", "relative_l2_pooled", "r2_pooled"):
+        summary = summarise(metric)
+        if summary is not None:
+            aggregate[metric] = summary
+    aggregate_by_field: dict[str, Any] = {}
+    for label in _field_metric_keys(field_pairs):
+        per_field = {
+            metric: summary
+            for metric in ("relative_l2", "r2")
+            if (summary := summarise(f"{metric}[{label}]")) is not None
+        }
+        if per_field:
+            aggregate_by_field[label] = per_field
 
     report_id = uuid.uuid4().hex[:12]
     report_dir = RUNTIME_ROOT / "evaluation" / report_id
@@ -977,6 +1112,7 @@ def run_field_evaluation(payload: dict[str, Any]) -> dict[str, Any]:
         "evaluated_samples": len(rows),
         "skipped": skipped,
         "aggregate": aggregate,
+        "aggregate_by_field": aggregate_by_field,
         "per_sample_csv": relative(csv_path),
     }
     report_path = report_dir / "report.json"
@@ -1138,6 +1274,10 @@ def optimization_schema(payload: dict[str, Any]) -> dict[str, Any]:
         "timestamp", "seed", "fold",
         "fields", "timesteps", "nodes", "points", "elements", "values", "count",
         "rows", "columns", "batch", "batch_size",
+        # Mesh-resolution counts (the SDFFlow optimize table's num_nodes /
+        # num_tets): they describe how a design was analysed, not the design.
+        "num_nodes", "num_tets", "num_points", "num_elements", "num_cells",
+        "tets",
     }
     identifier_columns = [
         column for column in columns
@@ -1294,7 +1434,7 @@ def run_model_comparison(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def export_artifact(payload: dict[str, Any]) -> dict[str, Any]:
-    source = safe_repo_path(str(payload.get("path", "")), (SUITE_ROOT,))
+    source = safe_repo_path(str(payload.get("path", "")), result_roots())
     if not source.exists():
         raise ValueError("Selected export source does not exist.")
     export_root = RUNTIME_ROOT / "exports"
@@ -1309,7 +1449,9 @@ def export_artifact(payload: dict[str, Any]) -> dict[str, Any]:
     else:
         destination = export_root / f"{label}-{token}{source.suffix}"
         shutil.copy2(source, destination)
-    browser_path = "/" + destination.resolve().relative_to(FRONTEND_ROOT).as_posix()
+    # Built from the export root, not FRONTEND_ROOT: the download route maps
+    # /runtime/exports/ onto RUNTIME_ROOT/exports wherever that lives.
+    browser_path = "/runtime/exports/" + destination.resolve().relative_to(export_root.resolve()).as_posix()
     return {
         "ok": True,
         "source": relative(source),
@@ -1322,6 +1464,132 @@ def export_artifact(payload: dict[str, Any]) -> dict[str, Any]:
 
 CANDIDATE_TABLE_NAME = "candidates.csv"
 OPTIMIZE_TABLE_NAME = "optimize_summary.csv"
+SCREENING_TABLE_NAME = "optimize_screening.csv"
+
+
+def _rounded(entry: dict[str, Any], key: str, digits: int) -> Any:
+    value = _finite_float(entry.get(key))
+    return "" if value is None else round(value, digits)
+
+
+def _fea_columns(fea_designs: dict[str, Any], tag: str) -> dict[str, Any]:
+    """The real solver's numbers for one design of an `opt_fea_verify` run."""
+    solved = fea_designs.get(tag)
+    if not isinstance(solved, dict) or not solved:
+        return {}
+    if "error" in solved:
+        return {"fea_error": str(solved["error"])}
+    columns: dict[str, Any] = {
+        "fea_mass_kg": _rounded(solved, "mass_kg", 4),
+        "fea_peak_von_mises_mpa": _rounded(solved, "peak_von_mises_MPa", 2),
+        "fea_max_displacement_mm": _rounded(solved, "max_displacement_mm", 4),
+    }
+    if _finite_float(solved.get("vertical_displacement_mm")) is not None:
+        columns["fea_vertical_displacement_mm"] = _rounded(solved, "vertical_displacement_mm", 4)
+    # verify_with_fea's own verdict against the run's vertical limit.
+    for check in solved.get("limits") or []:
+        if isinstance(check, dict) and check.get("limit") == "vertical max |u_z|":
+            columns["fea_vertical_limit_met"] = bool(check.get("met"))
+    return columns
+
+
+def write_screening_table(output_dir: Path) -> dict[str, Any] | None:
+    """SDFFlow `mode optimize` with `opt_budget 0`: every screened design, one row each.
+
+    A screen's result is the whole population, not three designs, so
+    `write_optimize_summary_table` would hand the Optimization block only the
+    delivered and typical shapes. The native `screening.csv` holds one row per
+    generated design at the screening resolution. This copies it and joins onto
+    the delivered and typical rows their refined re-analysis (`verify_*`) and,
+    with `opt_fea_verify`, the real solver's numbers (`fea_*`). Those stay in
+    their own columns: ranking on `mass_kg` / `vertical_displacement_mm` ranks
+    what the screen measured, and the delivered row's `fea_*` cells say how
+    well that pick held up.
+
+    Returns None unless `summary.json` records a screen whose table exists, so
+    callers try this first and fall back to the other two tables.
+    """
+    summary_path = output_dir / "summary.json"
+    if not summary_path.is_file():
+        return None
+    try:
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    screening = summary.get("screening") if isinstance(summary, dict) else None
+    if not isinstance(screening, dict):
+        return None
+    source = output_dir / os.path.basename(str(screening.get("table") or "screening.csv"))
+    if not source.is_file():
+        return None
+    try:
+        with source.open(encoding="utf-8", newline="") as handle:
+            reader = csv.DictReader(handle)
+            native_columns = list(reader.fieldnames or [])
+            rows = [dict(row) for row in reader]
+    except (OSError, csv.Error, UnicodeDecodeError):
+        return None
+    if not rows or "id" not in native_columns:
+        return None
+
+    backend = summary.get("analysis_backend", "fea")
+    verified = summary.get("verified") if isinstance(summary.get("verified"), dict) else {}
+    failed = verified.get("failed") if isinstance(verified.get("failed"), dict) else {}
+    fea_check = summary.get("fea_verification")
+    fea_designs = (fea_check.get("designs") if isinstance(fea_check, dict) else None) or {}
+    vertical_allow = _finite_float((summary.get("limits") or {}).get("vertical_disp_allow"))
+
+    def joined(tag: str) -> dict[str, Any]:
+        entry = verified.get(tag)
+        columns: dict[str, Any] = {}
+        if isinstance(entry, dict) and entry:
+            columns = {
+                "verify_mass_kg": _rounded(entry, "mass_kg", 4),
+                "verify_peak_von_mises_mpa": _rounded(entry, "peak_von_mises_MPa", 2),
+                "verify_max_displacement_mm": _rounded(entry, "max_displacement_mm", 4),
+            }
+            vertical = _finite_float(entry.get("vertical_displacement_mm"))
+            if vertical is not None:
+                columns["verify_vertical_displacement_mm"] = round(vertical, 4)
+                if vertical_allow:
+                    met = verified.get("vertical_limit_met") if tag == "optimized" else None
+                    columns["verify_vertical_limit_met"] = bool(
+                        met if isinstance(met, bool) else vertical <= vertical_allow * 1e3
+                    )
+        elif tag in failed:
+            columns["verify_error"] = str(failed[tag])
+        columns.update(_fea_columns(fea_designs, tag))
+        return columns
+
+    # Delivered first: a design that is also the typical one carries the
+    # delivered re-analysis (both tags re-solved the same shape).
+    joins: dict[str, dict[str, Any]] = {}
+    for key, tag in (("delivered_id", "optimized"), ("typical_id", "typical")):
+        row_id = screening.get(key)
+        if row_id and str(row_id) not in joins:
+            joins[str(row_id)] = joined(tag)
+    for row in rows:
+        row.update(joins.get(row.get("id", ""), {}))
+        row["analysis_backend"] = backend
+        # Only the delivered and typical shapes are exported, and only when
+        # their re-analysis succeeded; never point at a file that is not there.
+        if row.get("path") and not (output_dir / os.path.basename(row["path"])).is_file():
+            row["path"] = ""
+
+    extra_order = ("verify_mass_kg", "verify_peak_von_mises_mpa", "verify_max_displacement_mm",
+                   "verify_vertical_displacement_mm", "verify_vertical_limit_met",
+                   "fea_mass_kg", "fea_peak_von_mises_mpa", "fea_max_displacement_mm",
+                   "fea_vertical_displacement_mm", "fea_vertical_limit_met",
+                   "verify_error", "fea_error", "analysis_backend")
+    fieldnames = native_columns + [key for key in extra_order
+                                   if key not in native_columns and any(key in row for row in rows)]
+    table = output_dir / SCREENING_TABLE_NAME
+    with table.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({key: row.get(key, "") for key in fieldnames})
+    return {"path": relative(table), "rows": len(rows)}
 
 
 def write_optimize_summary_table(output_dir: Path) -> dict[str, Any] | None:
@@ -1329,9 +1597,21 @@ def write_optimize_summary_table(output_dir: Path) -> dict[str, Any] | None:
 
     That mode produces one winning design plus two comparison references, not
     a population of i.i.d. candidates, so it does not fit `write_candidate_table`
-    (built around `sample_*_meta.json`, which optimize mode never writes). This
-    reuses the same {path, rows} shape so the CAD Generator block's results
-    panel renders it exactly like the sample-mode gallery does.
+    (built around `sample_*_meta.json`, which optimize mode never writes). It
+    returns the same {path, rows} shape, so the Optimization block downstream
+    reads either table the same way.
+
+    A value the summary does not hold is written as an empty cell, never as 0:
+    a missing mass or displacement of 0 would rank as the best design.
+    `vertical_displacement_mm` and `vertical_limit_met` appear only when the run
+    searched under `opt_vertical_disp_max`; a design whose re-analysis failed is
+    listed with its error and no numbers, so the Optimization block skips it.
+
+    A surrogate run with `opt_fea_verify` also re-solved its three shapes with
+    the real solver (`summary["fea_verification"]`). Those numbers get `fea_*`
+    columns next to the surrogate's, so the Optimization block can rank on the
+    solver's result instead of the surrogate's prediction. They are never merged
+    into the surrogate columns.
 
     Returns None when no `summary.json` is present, so callers can try this
     before falling back to the sample-mode table without special-casing which
@@ -1345,30 +1625,64 @@ def write_optimize_summary_table(output_dir: Path) -> dict[str, Any] | None:
     except (OSError, ValueError):
         return None
     verified = summary.get("verified")
-    if not verified:
+    if not isinstance(verified, dict) or not verified:
         return None
 
     backend = summary.get("analysis_backend", "fea")
     mesh_key = "num_nodes" if backend == "surrogate" else "num_tets"
+    vertical_allow = _finite_float((summary.get("limits") or {}).get("vertical_disp_allow"))
+    failed = verified.get("failed") if isinstance(verified.get("failed"), dict) else {}
+    fea_check = summary.get("fea_verification")
+    fea_designs = (fea_check.get("designs") if isinstance(fea_check, dict) else None) or {}
+
+    rounded = _rounded
+
+    def fea_columns(tag: str) -> dict[str, Any]:
+        return _fea_columns(fea_designs, tag)
+
     rows: list[dict[str, Any]] = []
     for tag in ("baseline", "typical", "optimized"):
         entry = verified.get(tag)
-        if not entry:
-            continue
         stl_path = output_dir / f"{tag}.stl"
-        rows.append({
+        if not isinstance(entry, dict) or not entry:
+            if tag in failed:
+                rows.append({"id": tag, "analysis_backend": backend, "error": str(failed[tag]),
+                             **fea_columns(tag)})
+            continue
+        row: dict[str, Any] = {
             "id": tag,
-            "mass_kg": round(entry.get("mass_kg", 0.0), 4),
-            "peak_von_mises_mpa": round(entry.get("peak_von_mises_MPa", 0.0), 2),
-            "max_displacement_mm": round(entry.get("max_displacement_mm", 0.0), 4),
+            "mass_kg": rounded(entry, "mass_kg", 4),
+            "peak_von_mises_mpa": rounded(entry, "peak_von_mises_MPa", 2),
+            "max_displacement_mm": rounded(entry, "max_displacement_mm", 4),
+        }
+        vertical = _finite_float(entry.get("vertical_displacement_mm"))
+        if vertical is not None:
+            row["vertical_displacement_mm"] = round(vertical, 4)
+            if vertical_allow:
+                # The delivered design's verdict is the one the run itself
+                # recorded; the references are judged against the same limit.
+                met = verified.get("vertical_limit_met") if tag == "optimized" else None
+                row["vertical_limit_met"] = bool(
+                    met if isinstance(met, bool) else vertical <= vertical_allow * 1e3
+                )
+        row.update(fea_columns(tag))
+        row.update({
             mesh_key: entry.get(mesh_key, ""),
             "analysis_backend": backend,
             "path": stl_path.name if stl_path.is_file() else "",
         })
+        rows.append(row)
     if not rows:
         return None
     table = output_dir / OPTIMIZE_TABLE_NAME
-    fieldnames = list(rows[0])
+    # The union of every row's keys: a column that only some rows carry (the
+    # vertical displacement, an error) must still reach the header.
+    order = ("id", "mass_kg", "peak_von_mises_mpa", "max_displacement_mm",
+             "vertical_displacement_mm", "vertical_limit_met",
+             "fea_mass_kg", "fea_peak_von_mises_mpa", "fea_max_displacement_mm",
+             "fea_vertical_displacement_mm", "fea_vertical_limit_met", mesh_key,
+             "analysis_backend", "path", "error", "fea_error")
+    fieldnames = [key for key in order if any(key in row for row in rows)]
     with table.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()

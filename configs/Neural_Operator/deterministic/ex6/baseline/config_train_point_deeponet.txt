@@ -7,6 +7,9 @@
 % Static state input is zero; temporal input is current state and target is next-state delta.
 % Reference: https://arxiv.org/abs/2412.18362
 % See configs/campaigns/dataset_matrix/README.md for deviations and verification boundaries.
+% training_epochs 313 at batch 1 (not the roster's 500 x 2) is the paper's
+%   FlagSimple budget: 80 train trajectories x 400 windows = 32,000 updates/epoch;
+%   313 epochs = 10.0M = the 10M steps x batch 1 of arXiv:2010.03409.
 % No source HDF5 writes. Checkpoints are created by the paired training config.
 
 model                            point_deeponet
@@ -27,17 +30,17 @@ feature_loss_weights             1, 1, 1
 use_node_types                   True
 positional_features              4
 time_integration                 ar_ot
-training_epochs                  500
-batch_size                       2
+training_epochs                  313
+batch_size                       1
 learningr                        0.0001
-weight_decay                     0.0001
+weight_decay                     0.00001
 warmup_epochs                    5
 num_workers                      2
 prefetch_factor                  2
 grad_accum_steps                 1
 augment_geometry                 False
-std_noise                        0.01
-use_amp                          True
+std_noise                        0.00134
+use_amp                          False
 use_checkpointing                True
 use_ema                          True
 ema_decay                        0.99
@@ -63,7 +66,7 @@ write_test_predictions           True
 max_grad_norm                    1
 checkpoint_interval              50
 point_variant                    mesh_state
-point_sensor_count               5000
+point_sensor_count               0
 point_sampling                   random
 point_resample_each_epoch        True
 point_hidden_channels            128
@@ -74,6 +77,6 @@ pointnet_norm                    batch
 point_branch_merge               sum
 point_trunk_depth                3
 point_refiner_depth              2
-point_siren_omega0               30
+point_siren_omega0               10
 point_output_activation          identity
 infer_query_chunk_size           16384

@@ -23,6 +23,17 @@ export const state = {
   running: false,
   runTimer: null,
   nodeCounter: 1,
+  // Identity of this canvas, sent with every run and recorded on the job, so
+  // a rejoined job is painted only onto the canvas that launched it. Node ids
+  // cannot tell two canvases apart: every copy of a template shares them.
+  canvasId: "",
+  // A canvas restored from a document written before canvasId existed. Only
+  // such a canvas may still claim an untagged (pre-canvasId) job by node ids.
+  legacyCanvas: false,
+  // Runs this canvas owns although they carry another canvas id: a graph
+  // reopened from Runs is a copy with its own identity, and it owns the one
+  // run it was reopened from.
+  ownedJobs: new Set(),
   configNode: null,
   configSection: "Required",
   configSearch: "",
@@ -42,6 +53,7 @@ export const state = {
   viewerDatasetChoices: [],
   realArtifact: null,
   pendingEvaluationPrediction: "",
+  pendingEvaluationTruth: "",
   pendingComparisonPaths: [],
   // path -> what /api/checkpoint said about that .pth. This is what lets an
   // Inference block run against a saved model whose trainer is not on the
@@ -58,6 +70,12 @@ export const state = {
     // own thread; the single-job limit was purely client-side).
     activeJob: null,
     trackedJobs: new Map(),
+    // job id -> canvasId for runs started from this page, so ownership holds
+    // even against a server started before jobs recorded their canvas.
+    launchedJobs: new Map(),
+    // job id -> terminal record for runs seen to finish on this page, so a
+    // stale listing cannot resurrect one as still running.
+    finishedJobs: new Map(),
     pollTimer: null,
     lastPreflight: null,
     // Cached by renderDocsWorkspace so the Docs sidebar badge can report the
@@ -67,6 +85,11 @@ export const state = {
 };
 
 let mutationHook = null;
+
+export function newCanvasId() {
+  const random = globalThis.crypto?.randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  return random.replace(/[^A-Za-z0-9_-]/g, "").slice(0, 64);
+}
 
 export function registerMutationHook(hook) {
   mutationHook = typeof hook === "function" ? hook : null;
@@ -93,6 +116,19 @@ export function restoreSnapshot(serialized) {
   if (Number.isFinite(Number(previous.nodeCounter))) {
     state.nodeCounter = Number(previous.nodeCounter);
   }
+  if (typeof previous.canvasId === "string") {
+    const ownedThen = Array.isArray(previous.ownedJobs)
+      ? previous.ownedJobs.filter(id => typeof id === "string") : [];
+    if (previous.canvasId === state.canvasId) {
+      // Undo edits the graph, not its identity: a run this canvas claimed (or
+      // had its legacy flag cleared) after the snapshot is still its own.
+      ownedThen.forEach(id => state.ownedJobs.add(id));
+    } else {
+      state.canvasId = previous.canvasId;
+      state.legacyCanvas = Boolean(previous.legacyCanvas);
+      state.ownedJobs = new Set(ownedThen);
+    }
+  }
   const name = Object.hasOwn(previous, "pipelineName") ? previous.pipelineName : previous.name;
   const nameInput = pipelineNameInput();
   if (nameInput && typeof name === "string") nameInput.value = name;
@@ -105,7 +141,10 @@ export function snapshot() {
     edges: state.edges,
     pipelineName: pipelineNameInput()?.value ?? "Untitled pipeline",
     view: state.view,
-    nodeCounter: state.nodeCounter
+    nodeCounter: state.nodeCounter,
+    canvasId: state.canvasId,
+    legacyCanvas: state.legacyCanvas,
+    ownedJobs: [...state.ownedJobs]
   }));
   if (state.history.length > 25) state.history.shift();
   const savedState = typeof document === "undefined" ? null : document.getElementById("savedState");

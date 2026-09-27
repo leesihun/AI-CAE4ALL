@@ -10,6 +10,9 @@ from .meshgraphnets import validate_meshgraphnets
 VAR_KEYS = frozenset(
     {
         "geometry_state_mode", "displacement_state_indices", "periodic_box", "write_preprocessing",
+        # Group samples by data/{sid}/metadata.attrs[<attr>] so every draw of
+        # one geometry lands in the same split (general_modules/grouped_split.py).
+        "split_group_attr",
         "model", "mode", "gpu_ids", "parallel_mode", "log_file_dir", "modelpath",
         "dataset_dir", "infer_dataset", "eval_dataset", "inference_output_dir",
         "infer_timesteps", "split_seed", "input_var", "output_var", "cond_var",
@@ -256,6 +259,17 @@ def validate_variational(ctx: SpecValidationContext) -> None:
                 field_name="z_conditioning",
             )
 
+    # The native trainers branch only on 'crps' and rank everything else by the
+    # reconstruction loss, so 'det' (a cHI-MGNflow criterion) was accepted here
+    # and then silently trained as 'recon' while the log said "best by det".
+    if "best_by" in values and str(values["best_by"]).lower().strip() not in {"recon", "crps"}:
+        ctx.add(
+            "MGNV-BESTBY",
+            Severity.ERROR,
+            "best_by must be 'recon' or 'crps' for MeshGraphNets-V.",
+            field_name="best_by",
+        )
+
     if ctx.mode == "inference" and values.get("use_vae", False) is True:
         if "num_vae_samples" not in values:
             ctx.add("MGNV-SAMPLES-DEFAULT", Severity.NOTICE, "num_vae_samples is absent; the native default of 1 will be used.", field_name="num_vae_samples")
@@ -350,7 +364,7 @@ def build_variational_spec() -> MethodSpec:
         },
         recommended_by_mode={"train": frozenset({"feature_loss_weights", "split_seed", "parallel_mode"})},
         defaults={"parallel_mode": "ddp", "use_vae": False, "use_conditional_prior": False, "use_multiscale": False},
-        defaults_by_mode={"inference": {"inference_output_dir": "outputs/rollout"}},
+        defaults_by_mode={"inference": {"inference_output_dir": "../../output/meshgraphnets-v/rollout"}},
         path_rules=(
             PathRule("dataset_dir", PathKind.INPUT_FILE, frozenset({"train"})),
             PathRule("modelpath", PathKind.OUTPUT_FILE, frozenset({"train"})),

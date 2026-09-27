@@ -18,7 +18,7 @@ dataset_dir                      ../../dataset/geometry_generation/ex1_deepjeb.h
 split_by_parent                  True
 num_encoder_points               6144
 num_query_points                 8192
-latent_tokens                    32
+latent_tokens                    512
 latent_dim                       32
 encoder_query_type               fps
 encoder_dim                      256
@@ -30,7 +30,10 @@ decoder_hidden                   256
 decoder_layers                   4
 decoder_heads                    8
 fourier_bands                    8
-kl_weight                        0.0001
+% 1e-6 from the 2026-09 KL sweep (epoch 500): 1e-4 collapsed the posterior
+% (SNR 0, valid 1.98e-2); 1e-6 reached SNR 1024 and valid 7.09e-3, within 4%
+% of 1e-8 / 1e-10 at roughly a third of their KL.
+kl_weight                        0.000001
 clamp_dist                       0.1
 deterministic_warmup_epochs      50
 posterior_noise_warmup_epochs    100

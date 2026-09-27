@@ -30,14 +30,14 @@ time_integration                 ar_ot
 training_epochs                  500
 batch_size                       8
 learningr                        0.0001
-weight_decay                     0.0001
+weight_decay                     0.00001
 warmup_epochs                    5
 num_workers                      2
 prefetch_factor                  2
 grad_accum_steps                 1
 augment_geometry                 False
 std_noise                        0.01
-use_amp                          True
+use_amp                          False
 use_checkpointing                True
 use_ema                          True
 ema_decay                        0.99
@@ -63,7 +63,7 @@ write_test_predictions           True
 max_grad_norm                    1
 checkpoint_interval              50
 point_variant                    mesh_state
-point_sensor_count               5000
+point_sensor_count               0
 point_sampling                   random
 point_resample_each_epoch        True
 point_hidden_channels            128
@@ -74,6 +74,6 @@ pointnet_norm                    batch
 point_branch_merge               sum
 point_trunk_depth                3
 point_refiner_depth              2
-point_siren_omega0               30
+point_siren_omega0               10
 point_output_activation          identity
 infer_query_chunk_size           16384

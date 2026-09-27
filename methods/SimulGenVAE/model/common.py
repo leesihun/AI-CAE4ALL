@@ -36,19 +36,15 @@ def add_sn(m):
     else:
         return m
 
-def group_norm_groups(num_channels, max_groups=8):
+def group_norm_groups(num_channels, max_groups=1):
     """Largest group count <= max_groups that evenly divides num_channels.
 
-    nn.GroupNorm requires num_channels % num_groups == 0. The old
-    ``min(8, max(1, num_channels // 4))`` heuristic silently assumed
-    num_channels was already a multiple of 8 -- true for the hardcoded
-    architecture filter widths (1024, 512, ... or 32, 16, 8, 4) but not for
-    the data-dependent ``num_var * num_nodes`` channel count the decoder's
-    final reconstruction layer uses, which crashed for any dataset where that
-    product wasn't divisible by 8 (e.g. 972, 12524). Falls back down to 1
-    (equivalent to LayerNorm-over-channels) for channel counts with no small
-    divisor; always returns 8 when num_channels % 8 == 0, so behavior for
-    every existing config is unchanged.
+    The default of 1 makes every nn.GroupNorm a LayerNorm over (channels,
+    time) of each sample. With 8 groups a static (T=1) dataset leaves each
+    group only num_channels/8 values to normalize: the 16-channel layers
+    get groups of 2, which normalize to exactly (+1, -1) or (-1, +1), so
+    those layers carried 8 bits. (nn.LayerNorm(C) is not the substitute:
+    on a [B, C, T] tensor it normalizes the time axis.)
     """
     max_groups = max(1, min(max_groups, num_channels))
     for groups in range(max_groups, 0, -1):

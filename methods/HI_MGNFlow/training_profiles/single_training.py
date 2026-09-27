@@ -43,8 +43,13 @@ def _run_ae_stage(model, ema_model, optimizer, scheduler, train_loader, val_load
                 model, train_loader, optimizer, device, config, epoch, ema_model=ema_model,
             )
             train_loss = train_metrics['mean']
-            scheduler.step()
+            # `mean` is the optimized recon + ae_kl_weight*kl; the line prints
+            # the reconstruction term alone, as the DDP stage does.
+            train_recon = train_metrics['recon']
+            # Read before step(): afterwards it is the next epoch's LR, and after the
+            # last epoch a warm restart reports the peak LR for an epoch that never runs.
             current_lr = optimizer.param_groups[0]['lr']
+            scheduler.step()
             vram_str = (f" | VRAM peak={train_metrics.get('peak_gb', 0.0):.2f}GB "
                         f"reserved={train_metrics.get('reserved_gb', 0.0):.2f}GB")
 
@@ -60,13 +65,13 @@ def _run_ae_stage(model, ema_model, optimizer, scheduler, train_loader, val_load
             if do_val:
                 print(
                     f"[{tag}] Epoch {epoch}/{total_epochs} LR: {current_lr:.2e} | "
-                    f"Train recon={train_loss:.2e} kl={train_metrics['kl']:.2e} | "
+                    f"Train recon={train_recon:.2e} kl={train_metrics['kl']:.2e} | "
                     f"Valid recon={valid_loss:.2e} kl={valid_metrics.get('kl', 0.0):.2e}{vram_str}"
                 )
             else:
                 print(
                     f"[{tag}] Epoch {epoch}/{total_epochs} LR: {current_lr:.2e} | "
-                    f"Train recon={train_loss:.2e} kl={train_metrics['kl']:.2e}{vram_str}"
+                    f"Train recon={train_recon:.2e} kl={train_metrics['kl']:.2e}{vram_str}"
                 )
 
             last_epoch = (epoch == total_epochs - 1)
@@ -91,11 +96,12 @@ def _run_ae_stage(model, ema_model, optimizer, scheduler, train_loader, val_load
                     val_str = (f"Valid recon={valid_loss:.4e}" if do_val else "Valid skipped")
                     f.write(
                         f"[{tag}] Elapsed: {elapsed:.2f}s Epoch {epoch} LR: {current_lr:.4e} | "
-                        f"Train recon={train_loss:.4e} | {val_str}{vram_str}\n"
+                        f"Train recon={train_recon:.4e} | {val_str}{vram_str}\n"
                     )
 
             if epoch % test_interval == 0 or last_epoch:
-                run_periodic_test(eval_model, test_loader, device, config, epoch, train_dataset)
+                run_periodic_test(eval_model, test_loader, device, config, epoch, train_dataset,
+                                  tag=tag)
 
             dump_memory_snapshot(epoch, mem_recording, config)
 
@@ -125,8 +131,10 @@ def _run_prior_stage(model, ema_model, optimizer, scheduler, train_loader, val_l
                 model, train_loader, optimizer, device, config, epoch, ema_model=ema_model,
             )
             train_loss = train_metrics['mean']
-            scheduler.step()
+            # Read before step(): afterwards it is the next epoch's LR, and after the
+            # last epoch a warm restart reports the peak LR for an epoch that never runs.
             current_lr = optimizer.param_groups[0]['lr']
+            scheduler.step()
             vram_str = (f" | VRAM peak={train_metrics.get('peak_gb', 0.0):.2f}GB "
                         f"reserved={train_metrics.get('reserved_gb', 0.0):.2f}GB")
 
@@ -168,8 +176,11 @@ def _run_prior_stage(model, ema_model, optimizer, scheduler, train_loader, val_l
 
             sample_str = ''
             if sample_metrics is not None:
+                # det is the 1-forward readout `best_by det` selects on; on the
+                # epoch line it is charted, not only in the [FlowDiag] line.
                 sample_str = (f" | CRPS {sample_metrics['crps']:.2e}"
-                              f" spread {sample_metrics['spread']:.3f}")
+                              f" spread {sample_metrics['spread']:.3f}"
+                              f" det mse {sample_metrics['det']:.2e}")
             if do_val:
                 print(
                     f"[{tag}] Epoch {epoch}/{total_epochs} LR: {current_lr:.2e} | "
@@ -218,7 +229,8 @@ def _run_prior_stage(model, ema_model, optimizer, scheduler, train_loader, val_l
                     )
 
             if epoch % test_interval == 0 or last_epoch:
-                run_periodic_test(eval_model, test_loader, device, config, epoch, train_dataset)
+                run_periodic_test(eval_model, test_loader, device, config, epoch, train_dataset,
+                                  tag=tag)
 
             dump_memory_snapshot(epoch, mem_recording, config)
 

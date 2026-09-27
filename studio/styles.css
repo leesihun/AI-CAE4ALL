@@ -151,12 +151,17 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 }
 .button:hover { border-color: var(--line-strong); box-shadow: var(--shadow-sm); }
 .button:active { transform: translateY(1px); }
+/* A disabled button must read as one: without this, Compute metrics or Run
+   optimization looked clickable and a click simply did nothing. */
+.button:disabled { opacity: .45; cursor: not-allowed; box-shadow: none; transform: none; }
+.button:disabled:hover { border-color: var(--line); }
 .button.small { min-height: 29px; padding: 0 9px; font-size: 8px; }
 .button.square { width: 31px; min-height: 31px; padding: 0; }
 .button.dark { color: rgba(255,255,255,.84); border-color: rgba(255,255,255,.19); background: rgba(255,255,255,.065); }
 .button.acid { color: #11241a; border-color: var(--acid); background: var(--acid); }
 .button.primary { color: #fff; border-color: var(--green); background: var(--green); }
 .button.primary:hover { background: var(--green-dark); }
+.button.primary:disabled:hover { background: var(--green); }
 .button.warn { color: #78471f; border-color: #e4bd98; background: #fff7ee; }
 .button.danger { color: var(--red); border-color: #e1bbb8; background: var(--red-soft); }
 .play { font-size: 7px; }
@@ -1066,6 +1071,7 @@ body.drawer-open .zoom { bottom: calc(16px + var(--drawer-clearance, 0px)); }
 .training-smoothing small { display: block; margin-top: 2px; color: var(--muted); font-size: 8px; }
 .training-smoothing output { color: var(--green); font-size: 10px; font-weight: 850; }
 .training-smoothing input { grid-column: 1 / -1; width: 100%; accent-color: var(--green); }
+.training-scale input { grid-column: auto; width: auto; }
 .training-metric-option {
   display: grid; grid-template-columns: auto auto minmax(0, 1fr); align-items: center; gap: 8px;
   padding: 8px; border: 1px solid #e6e8e2; border-radius: 8px; cursor: pointer; background: #fafbf8;
@@ -1088,6 +1094,15 @@ body.drawer-open .zoom { bottom: calc(16px + var(--drawer-clearance, 0px)); }
 .training-metric-grid text,
 .training-axis-label { fill: #748079; font: 9px ui-monospace, SFMono-Regular, Consolas, monospace; }
 .training-no-plots { grid-column: 1 / -1; min-height: 220px; display: grid; place-content: center; }
+/* Epochs whose value was nan/inf: shaded, since there is no point to draw. */
+.training-metric-nonfinite { fill: var(--red); fill-opacity: .12; stroke: var(--red); stroke-opacity: .35; stroke-width: 1; }
+.training-metric-empty { display: grid; place-content: center; gap: 4px; min-height: 155px; padding: 12px; color: var(--red); background: var(--red-soft); text-align: center; }
+.training-metric-empty strong { font-size: 11px; }
+.training-metric-empty small { color: var(--muted); font-size: 9px; }
+.training-metric-card header b.metric-diverged,
+.training-metric-option b.metric-diverged,
+.connected-ranking b.metric-diverged,
+.metric-diverged { color: var(--red); }
 .connected-comparison { display: grid; gap: 10px; }
 .connected-comparison-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; }
 .connected-comparison-head > span:first-child strong,
@@ -1451,7 +1466,11 @@ body {
   font-weight: 820;
   letter-spacing: -.02em;
 }
-.saved-state { font-size: 10px; white-space: nowrap; }
+/* The status line carries a full runtime config path after a save, which is
+   wider than the toolbar has room for. It used to be nowrap and unshrinkable,
+   so the pipeline name gave way instead ("HI-MGN multiscale (ex"). The name
+   is what the user reads; the status shrinks first and ellipsizes. */
+.saved-state { font-size: 10px; white-space: nowrap; flex: 0 100 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .canvas-actions { min-width: 0; }
 .canvas-actions select {
   min-width: 210px;
@@ -2036,3 +2055,24 @@ body {
   .evaluation-map-arrow { display: none; }
   .evaluation-field-row .config-control { grid-column: 2; }
 }
+
+/* Block facts: what the block is, read from its config, links and data file. */
+.node-preview { cursor: default; }
+.node-preview:hover::after { content: none; }
+.node-preview.has-facts { background: #f7faf8; border-color: #e3e9e5; }
+.block-facts { display: grid; align-content: center; gap: 3px; height: 100%; margin: 0; padding: 7px 10px; }
+.block-facts > div { display: grid; grid-template-columns: 78px minmax(0, 1fr); gap: 6px; align-items: baseline; }
+.block-facts dt { color: var(--quiet); font-size: 9.5px; font-weight: 700; text-transform: lowercase; white-space: nowrap; }
+.block-facts dd { margin: 0; overflow: hidden; color: var(--ink); font-size: 10.5px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+.facts-empty { display: block; padding: 10px; color: var(--muted); font-size: 10px; line-height: 1.35; }
+.node-actions.single { grid-template-columns: 1fr; }
+.node-kind { color: var(--muted); }
+.inspect-facts { display: grid; gap: 5px; margin: 0; }
+.inspect-facts > div { display: grid; grid-template-columns: 104px minmax(0, 1fr); gap: 8px; align-items: baseline; }
+.inspect-facts dt { color: var(--quiet); font-size: 11px; font-weight: 700; }
+.inspect-facts dd { margin: 0; overflow-wrap: anywhere; color: var(--ink); font-size: 12px; font-weight: 600; }
+.form-row label .raw-key { margin-left: 6px; color: var(--quiet); font: 500 9.5px/1 ui-monospace, SFMono-Regular, Consolas, monospace; text-transform: none; }
+.connection-row { display: grid; grid-template-columns: 10px minmax(0, 1fr) auto; gap: 7px; align-items: center; padding: 5px 0; border-bottom: 1px solid #eef1ee; font-size: 11.5px; }
+.connection-row i { width: 8px; height: 8px; border-radius: 50%; background: var(--port); }
+.connection-row small { color: var(--muted); font-size: 10.5px; text-align: right; }
+.connection-row.missing small { color: var(--red); font-weight: 700; }

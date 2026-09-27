@@ -256,7 +256,7 @@ no `ex5` configs are checked in.
 | Key | Meaning |
 | --- | --- |
 | `model` / `mode` / `gpu_ids` | `SDFFlow`, mode, single GPU id |
-| `pipeline_log_file` / `output_dir` | Pipeline banner log / artifact base dir |
+| `pipeline_log_file` / `output_dir` | Pipeline banner log (default `<output_dir>/pipeline.log`) / artifact base dir |
 | `skip_completed_stages` | Reuse a complete, config-compatible stage checkpoint |
 | `vae_modelpath` / `fm_modelpath` | VAE / FM checkpoint paths |
 | `vae_best_modelpath` | Optional: best-validation VAE checkpoint, saved after each validation (final save unchanged) |

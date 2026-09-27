@@ -14,11 +14,13 @@ import csv
 import io
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
 import threading
 import time
+import traceback
 import uuid
 from pathlib import Path
 from typing import Any
@@ -30,6 +32,7 @@ from studio_backend.analysis import (
     run_optimization,
     write_candidate_table,
     write_optimize_summary_table,
+    write_screening_table,
 )
 from studio_backend.prediction_preview import (
     invalidate_prediction_runs,
@@ -56,6 +59,15 @@ from studio_backend.suite_bridge import (
 )
 
 
+# Mirrors _LC_MODES in cae_suite/specs/simulgenvae.py: the modes that run the
+# latent conditioner and therefore read its condition source.
+SGV_LC_MODES = frozenset({"train", "train_lc", "reconstruct"})
+
+# What a tqdm repaint looks like: `45%|####5     | 18/40` or a rate such as
+# `7.1it/s`, `?it/s`, `2.30s/it` (an unsized bar shows only the rate).
+PROGRESS_FRAME_RE = re.compile(r"\d+%\||[0-9?.]+\s*(?:it|s)/(?:s|it)\b")
+
+
 def studio_preflight_diagnostics(result: Any) -> list[dict[str, Any]]:
     if result.resolved is None or result.resolved.model_id != "simulgenvae":
         return []
@@ -75,7 +87,15 @@ def studio_preflight_diagnostics(result: Any) -> list[dict[str, Any]]:
             }
         )
 
-    param_value = values.get("param_dir")
+    # param_dir is read only by the file-backed conditioner sources (csv/image)
+    # in the modes that run the LC, exactly as SGV-LC-002 in
+    # cae_suite/specs/simulgenvae.py scopes it. `lc_data_type hdf5` takes the
+    # conditions from dataset_dir, so a stale param_dir left in such a config
+    # is dead and must not block the launch.
+    mode = str(values.get("mode", "")).lower()
+    lc_data_type = str(values.get("lc_data_type", "")).lower()
+    param_used = mode in SGV_LC_MODES and lc_data_type in {"csv", "image"}
+    param_value = values.get("param_dir") if param_used else None
     param_path = (repository / str(param_value)).resolve() if param_value else None
     if param_path is not None and not param_path.exists():
         error(
@@ -135,7 +155,7 @@ def studio_preflight_diagnostics(result: Any) -> list[dict[str, Any]]:
         sample_count is not None
         and param_path is not None
         and param_path.is_file()
-        and str(values.get("lc_data_type", "csv")).lower() == "csv"
+        and lc_data_type == "csv"
     ):
         try:
             with param_path.open("r", encoding="utf-8-sig", newline="") as handle:
@@ -157,6 +177,10 @@ def studio_preflight_diagnostics(result: Any) -> list[dict[str, Any]]:
     return diagnostics
 
 
+# The job drawer gets only a recent tail; read_job_log returns the full log.
+LOG_TAIL_CHARS = 120_000
+
+
 class PreflightFailure(Exception):
     def __init__(self, failures: list[dict[str, Any]]) -> None:
         super().__init__("One or more pipeline steps failed preflight.")
@@ -166,8 +190,19 @@ class PreflightFailure(Exception):
 def terminate_process_tree(process: subprocess.Popen[str]) -> None:
     if process.poll() is not None:
         return
+    terminate_pid_tree(int(process.pid))
+
+
+def terminate_pid_tree(pid: int) -> None:
+    """Kill a process and its descendants by pid alone.
+
+    Split out of terminate_process_tree so a job adopted after a Studio restart
+    -- whose Popen object died with the previous server -- can still be
+    cancelled. Both launch paths start the child as its own process group
+    (CREATE_NEW_PROCESS_GROUP / start_new_session), so on POSIX the group id is
+    the pid and killpg reaches the whole tree without a parent-child link.
+    """
     if os.name == "nt":
-        pid = int(process.pid)
         script = (
             f"$rootId={pid};"
             "$all=Get-CimInstance Win32_Process;"
@@ -186,9 +221,20 @@ def terminate_process_tree(process: subprocess.Popen[str]) -> None:
         )
     else:
         try:
-            os.killpg(os.getpgid(process.pid), signal.SIGTERM)
-        except ProcessLookupError:
+            os.killpg(os.getpgid(pid), signal.SIGTERM)
+        except (ProcessLookupError, PermissionError):
             return
+
+
+_CANVAS_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
+
+
+def _canvas_id(pipeline: Any) -> str:
+    # fullmatch, not match with "$": "$" also matches before a trailing
+    # newline, which let "abc\n" through. A non-string is never an id -- str()
+    # would have turned 0 into "0".
+    value = pipeline.get("canvas_id") if isinstance(pipeline, dict) else None
+    return value if isinstance(value, str) and _CANVAS_ID.fullmatch(value) else ""
 
 
 class StudioState:
@@ -266,8 +312,67 @@ class StudioState:
                 self.jobs[job_id] = job
                 if payload.get("status") == "interrupted":
                     self._persist_job(job)
+                elif status in {"queued", "running"}:
+                    self._adopt_running_job(job_id, int(payload["pid"]))
             except (OSError, ValueError, KeyError, json.JSONDecodeError):
                 continue
+
+    ADOPT_POLL_SECONDS = 5.0
+
+    def _adopt_running_job(self, job_id: str, pid: int) -> None:
+        """Watch a job whose native process outlived the previous Studio server.
+
+        Recovery used to leave such a job "running" forever: nothing was left
+        to wait on its process, so it never got a finished_at, and cancel could
+        not reach it because its Popen died with the old server. The watcher
+        polls the recorded pid and finalises the record once it is gone.
+        """
+        thread = threading.Thread(
+            target=self._watch_adopted_job, args=(job_id, pid), daemon=True
+        )
+        thread.start()
+
+    def _watch_adopted_job(self, job_id: str, pid: int) -> None:
+        while self._process_alive(pid):
+            time.sleep(self.ADOPT_POLL_SECONDS)
+        # Give a server that still owns this job (StudioState is built at
+        # import in any process) time to write its own final record first.
+        time.sleep(1.0)
+        with self.lock:
+            job = self.jobs.get(job_id)
+            if job is None or job.get("status") not in {"queued", "running"}:
+                return
+            try:
+                on_disk = json.loads(job["metadata_path"].read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                on_disk = {}
+            if on_disk and (
+                on_disk.get("status") not in {"queued", "running"} or on_disk.get("pid") != pid
+            ):
+                # Another live process owns this job and has moved it on;
+                # take its record rather than overwrite it with a guess.
+                job.update({key: value for key, value in on_disk.items() if key != "log_path"})
+                return
+            cancelled = bool(job.get("cancel_requested"))
+            job.update(
+                status="cancelled" if cancelled else "interrupted",
+                finished_at=utc_now(),
+                returncode=None,
+                pid=None,
+                note=(
+                    "The Studio server restarted while this job ran. Its process "
+                    "(pid {0}) was adopted and has since exited, but its exit code "
+                    "cannot be recovered and any later pipeline steps were not run."
+                ).format(pid),
+            )
+            try:
+                self._persist_job(job)
+            except OSError:
+                pass
+        try:
+            self._append_log(job, "\n[studio] Adopted process {0} exited; exit code unknown.\n".format(pid))
+        except OSError:
+            pass
 
     def require_suite(self) -> None:
         if self.start_error or self.registry is None or self.settings is None:
@@ -449,7 +554,9 @@ class StudioState:
     }
 
     @staticmethod
-    def _resolve_step_reference(value: Any, produced: dict[str, str]) -> Any:
+    def _resolve_step_reference(
+        value: Any, produced: dict[str, str], produced_dirs: dict[str, str] | None = None
+    ) -> Any:
         """Substitute `@results:<node_id>` with what that step actually wrote.
 
         An analysis step's input cannot be known when the pipeline is submitted:
@@ -457,21 +564,36 @@ class StudioState:
         has run. So the frontend sends a reference to the producing block and the
         substitution happens here, at execution time, against the results the
         earlier step recorded.
+
+        `@artifacts:<node_id>` names the step's whole output directory instead
+        (a CAD Generator's STLs, report and figures). A step that recorded no
+        directory falls back to its results file, so the reference never
+        resolves to less than `@results:` would.
         """
-        if not isinstance(value, str) or not value.startswith("@results:"):
+        if not isinstance(value, str):
             return value
-        return produced.get(value[len("@results:"):], "")
+        if value.startswith("@results:"):
+            return produced.get(value[len("@results:"):], "")
+        if value.startswith("@artifacts:"):
+            node_id = value[len("@artifacts:"):]
+            return (produced_dirs or {}).get(node_id) or produced.get(node_id, "")
+        return value
 
     def _run_analysis_step(
-        self, job: dict[str, Any], index: int, item: dict[str, Any], produced: dict[str, str]
+        self,
+        job: dict[str, Any],
+        index: int,
+        item: dict[str, Any],
+        produced: dict[str, str],
+        produced_dirs: dict[str, str] | None = None,
     ) -> int:
-        action = item["action"]
+        action = item.get("action", "")
         handler = self.ANALYSIS_ACTIONS.get(action)
         if handler is None:
             self._append_log(job, "[studio] Unknown analysis action: {0}.\n".format(action))
             return 2
         payload = {
-            key: self._resolve_step_reference(value, produced)
+            key: self._resolve_step_reference(value, produced, produced_dirs)
             for key, value in (item.get("payload") or {}).items()
         }
         missing = [
@@ -491,6 +613,17 @@ class StudioState:
             result = handler(payload)
         except (ValueError, OSError, KeyError) as exc:
             self._append_log(job, "[studio] {0} failed: {1}\n".format(item["label"], exc))
+            return 2
+        except Exception as exc:
+            # Anything else (a TypeError from a malformed field, say) used to
+            # escape and kill the runner thread, leaving the job "running"
+            # forever. It is a failed step, with the traceback in the log.
+            self._append_log(
+                job,
+                "[studio] {0} failed: {1}: {2}\n{3}".format(
+                    item["label"], type(exc).__name__, exc, traceback.format_exc()
+                ),
+            )
             return 2
         written = result.get("report_path") or result.get("path") or ""
         with self.lock:
@@ -531,13 +664,31 @@ class StudioState:
             node_type = str(step.get("node_type", "")).strip()[:200]
             if str(step.get("kind", "launcher")) == "analysis":
                 # No config text and nothing for the launcher's preflight to
-                # check; these run in-process against the Studio APIs.
+                # check; these run in-process against the Studio APIs. Their
+                # shape is still checked here, so a bad step is a 400 now
+                # rather than a runner crash minutes into the pipeline.
+                action = str(step.get("action", ""))
+                if action not in self.ANALYSIS_ACTIONS:
+                    raise ValueError(
+                        "Analysis step {0!r} has unknown action {1!r}; expected one of {2}.".format(
+                            step_label, action, ", ".join(sorted(self.ANALYSIS_ACTIONS))
+                        )
+                    )
+                step_payload = step.get("payload")
+                if step_payload is None:
+                    step_payload = {}
+                if not isinstance(step_payload, dict):
+                    raise ValueError(
+                        "Analysis step {0!r} payload must be a JSON object, not {1}.".format(
+                            step_label, type(step_payload).__name__
+                        )
+                    )
                 prepared.append(
                     {
                         "kind": "analysis",
                         "label": step_label,
-                        "action": str(step.get("action", "")),
-                        "payload": step.get("payload") or {},
+                        "action": action,
+                        "payload": step_payload,
                         "node_id": node_id,
                         "node_type": node_type,
                     }
@@ -604,6 +755,10 @@ class StudioState:
             "step_label": None,
             "cancel_requested": False,
             "target_node_id": str(target_node_id or "").strip()[:200],
+            # Which canvas launched the run. Node ids alone cannot say: every
+            # canvas made from one template shares them, so a fresh copy of a
+            # template used to claim another pipeline's live job.
+            "canvas_id": _canvas_id(pipeline),
             "log_path": job_dir / "run.log",
             "metadata_path": job_dir / "job.json",
             "steps": [
@@ -669,6 +824,22 @@ class StudioState:
     def _run_command_job(self, job_id: str, command: list[str], cwd: Path) -> None:
         with self.lock:
             job = self.jobs[job_id]
+        returncode = 127
+        crashed = False
+        try:
+            returncode = self._execute_command_job(job, job_id, command, cwd)
+        except Exception:
+            # Without this an unexpected error killed the runner thread and
+            # left the job "running" with no finished_at, uncancellable.
+            crashed = True
+            returncode = 1
+            self._log_runner_crash(job)
+        finally:
+            status = self._finalise_job(job_id, job, returncode, crashed=crashed)
+        self._append_log_quietly(job, f"\n[studio] Command job {status}.\n")
+
+    def _execute_command_job(self, job: dict[str, Any], job_id: str, command: list[str], cwd: Path) -> int:
+        with self.lock:
             job.update(status="running", started_at=utc_now(), current_step=1)
             self._persist_job(job)
         self._append_log(job, f"[studio] Command: {subprocess.list2cmdline(command)}\n\n")
@@ -676,6 +847,10 @@ class StudioState:
         env = os.environ.copy()
         env["PYTHONUNBUFFERED"] = "1"
         returncode = 127
+        with self.lock:
+            if job["cancel_requested"]:
+                self._append_log(job, "[studio] Cancelled before the process started.\n")
+                return -1
         try:
             process = subprocess.Popen(
                 command,
@@ -691,10 +866,7 @@ class StudioState:
                 creationflags=creationflags,
                 start_new_session=os.name != "nt",
             )
-            with self.lock:
-                self.processes[job_id] = process
-                job["pid"] = process.pid
-                self._persist_job(job)
+            self._register_process(job_id, job, process)
             assert process.stdout is not None
             stream = io.TextIOWrapper(process.stdout, encoding="utf-8", errors="replace", newline="")
             for line in self._collapse_progress(stream):
@@ -706,16 +878,65 @@ class StudioState:
             with self.lock:
                 self.processes.pop(job_id, None)
                 job["pid"] = None
+        return returncode
+
+    def _register_process(self, job_id: str, job: dict[str, Any], process: subprocess.Popen[Any]) -> None:
+        """Publish a just-started process to cancel_job, honouring a late cancel.
+
+        The cancel flag is checked just before Popen, but a cancel can still land
+        between that check and this registration, when cancel_job finds no
+        process to kill. Re-checking under the same lock closes that window.
+        """
         with self.lock:
-            if job["cancel_requested"]:
-                status = "cancelled"
-            elif returncode == 0:
+            self.processes[job_id] = process
+            job["pid"] = process.pid
+            self._persist_job(job)
+            cancelled = bool(job["cancel_requested"])
+        if cancelled:
+            terminate_process_tree(process)
+
+    def _log_runner_crash(self, job: dict[str, Any]) -> None:
+        self._append_log_quietly(
+            job,
+            "\n[studio] The Studio job runner failed unexpectedly:\n" + traceback.format_exc(),
+        )
+
+    def _append_log_quietly(self, job: dict[str, Any], text: str) -> None:
+        try:
+            self._append_log(job, text)
+        except OSError:
+            pass
+
+    def _finalise_job(self, job_id: str, job: dict[str, Any], code: int, *, crashed: bool) -> str:
+        """Record the terminal status; runs from a `finally`, so it never raises.
+
+        A cancel only counts when it interrupted something: a pipeline whose
+        last step had already succeeded when the cancel arrived is 'completed'.
+        """
+        process = None
+        with self.lock:
+            process = self.processes.pop(job_id, None)
+        if process is not None:
+            # Only reachable when the runner crashed while a child was running.
+            try:
+                terminate_process_tree(process)
+            except Exception:
+                pass
+        with self.lock:
+            if crashed:
+                status = "failed"
+            elif code == 0:
                 status = "completed"
+            elif job.get("cancel_requested"):
+                status = "cancelled"
             else:
                 status = "failed"
-            job.update(status=status, returncode=returncode, finished_at=utc_now())
-            self._persist_job(job)
-        self._append_log(job, f"\n[studio] Command job {status}.\n")
+            job.update(status=status, returncode=code, finished_at=utc_now(), pid=None)
+            try:
+                self._persist_job(job)
+            except Exception:
+                pass
+        return status
 
     def _record_step_results(
         self,
@@ -724,6 +945,7 @@ class StudioState:
         item: dict[str, Any],
         step_started: float,
         produced: dict[str, str] | None = None,
+        produced_dirs: dict[str, str] | None = None,
     ) -> None:
         """Pin a finished step to the prediction directory it just wrote.
 
@@ -786,25 +1008,43 @@ class StudioState:
         generated_dir = configured_dir("output_dir") if item.get("node_type") == "run.cad_generator" else None
         if generated_dir is not None:
             # `mode optimize` writes summary.json, not sample_*_meta.json --
-            # try its table first so a closed-loop run's winner/baseline/typical
-            # comparison shows up instead of silently falling through empty.
-            table = write_optimize_summary_table(generated_dir) or write_candidate_table(generated_dir)
-            if table:
-                with self.lock:
-                    steps = job.get("steps") or []
-                    if index - 1 < len(steps):
+            # try its tables first so a closed-loop run's winner/baseline/typical
+            # comparison shows up instead of silently falling through empty. A
+            # screen (opt_budget 0) publishes every screened design instead.
+            table = (write_screening_table(generated_dir)
+                     or write_optimize_summary_table(generated_dir)
+                     or write_candidate_table(generated_dir))
+            # The table is what the Optimization block reads, but it is not what
+            # the run *is*: the geometry, report and figures sit beside it. The
+            # directory is recorded separately so "Open results" can show the
+            # STLs (the shared viewer rejects a CSV) and Export can package the
+            # whole run rather than the one table.
+            results_dir = relative(generated_dir) if generated_dir.is_dir() else ""
+            with self.lock:
+                steps = job.get("steps") or []
+                if index - 1 < len(steps):
+                    if table:
                         steps[index - 1]["results"] = table["path"]
                         steps[index - 1]["results_samples"] = table["rows"]
-                    self._persist_job(job)
-                if produced is not None and item.get("node_id"):
+                    if results_dir:
+                        steps[index - 1]["results_dir"] = results_dir
+                self._persist_job(job)
+            if item.get("node_id"):
+                if produced is not None and table:
                     produced[item["node_id"]] = table["path"]
+                if produced_dirs is not None and results_dir:
+                    produced_dirs[item["node_id"]] = results_dir
+            if table:
                 self._append_log(
                     job,
-                    "[studio] Step {0} tabulated {1} candidate(s) to {2}.\n".format(
+                    "[studio] Step {0} tabulated {1} design(s) to {2}.\n".format(
                         index, table["rows"], table["path"]
                     ),
                 )
-                return
+            # Terminal either way: a generator's outputs are exactly its
+            # output_dir. The repository-wide scan below would pin whatever
+            # unrelated file happened to change during the step.
+            return
         configured = configured_dir("inference_output_dir")
         found: list[dict[str, Any]] = []
         if configured is not None:
@@ -819,6 +1059,28 @@ class StudioState:
                 found = outputs_since(SUITE_ROOT / repository, step_started)
             except OSError:
                 return
+            # "Written since this step started" is only exact while nothing else
+            # runs. A 21 h SDFFlow train step was pinned to the 480 HI-MGN
+            # rollouts another job wrote into output/ meanwhile, and its output
+            # edge then carried them. Keep what lies under a directory this
+            # step's own config writes to; with no such path, nothing narrows it.
+            roots = self._own_output_roots(item, repository, resolved)
+            if roots and found:
+                mine = [
+                    entry for entry in found
+                    if any(root == (SUITE_ROOT / entry["path"]).resolve()
+                           or root in (SUITE_ROOT / entry["path"]).resolve().parents
+                           for root in roots)
+                ]
+                if not mine:
+                    self._append_log(
+                        job,
+                        "[studio] Step {0}: {1} prediction folder(s) changed during this step "
+                        "outside its own output paths (newest: {2}); not attributed to it.\n".format(
+                            index, len(found), found[0]["path"]
+                        ),
+                    )
+                found = mine
         if not found:
             return
         with self.lock:
@@ -837,6 +1099,39 @@ class StudioState:
                 index, found[0]["samples"], found[0]["path"]
             ),
         )
+
+    @staticmethod
+    def _own_output_roots(item: dict[str, Any], repository: str, resolved: dict[str, Any]) -> list[Path]:
+        """The run directories a step's own config names under an output root.
+
+        Every path value is taken -- `log_file_dir`, `modelpath`, `output_dir`,
+        the stage-prefixed SDFFlow/SimulGen-VAE keys -- as its directory, or its
+        parent when it names a file (train.log, model.pth). Inputs under
+        dataset/ never qualify. Paths come from what preflight resolved and from
+        the config text the step ran, since steps after the first skip the
+        filesystem layer and arrive with no resolved paths.
+        """
+        values = [SUITE_ROOT / str(value) for value in resolved.values() if str(value or "").strip()]
+        config_path = item.get("path")
+        if config_path:
+            try:
+                text = Path(config_path).read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                text = ""
+            for line in text.splitlines():
+                parts = line.split("%", 1)[0].split()
+                if len(parts) >= 2 and ("/" in parts[1] or "\\" in parts[1]):
+                    values.append(resolve_native_path(parts[1].rstrip(","), SUITE_ROOT / repository))
+        output_roots = [SUITE_ROOT / "output", SUITE_ROOT / "outputs",
+                        SUITE_ROOT / repository / "output", SUITE_ROOT / repository / "outputs"]
+        roots: list[Path] = []
+        for value in values:
+            path = value.resolve()
+            directory = path.parent if path.suffix else path
+            if any(directory == root or root in directory.parents for root in output_roots):
+                if directory not in roots:
+                    roots.append(directory)
+        return roots
 
     def _persist_job(self, job: dict[str, Any]) -> None:
         payload = {
@@ -859,10 +1154,18 @@ class StudioState:
 
         A progress line is still emitted every `keep_every` frames, so a long
         epoch does not look frozen and the log keeps a coarse trace of it.
+
+        Only a blank or bar-shaped piece is a repaint. Under DDP another rank's
+        `\\r`+frame can land between rank 0's epoch text and its newline, and
+        that text, now ending in `\\r`, is real content that must survive.
         """
         pending = 0
         for line in stream:
             if line.endswith("\r") or (not line.endswith("\n") and "\r" in line):
+                text = line.replace("\r", "")
+                if text.strip() and not PROGRESS_FRAME_RE.search(text):
+                    yield text + "\n"
+                    continue
                 pending += 1
                 if pending % keep_every:
                     continue
@@ -879,6 +1182,24 @@ class StudioState:
     def _run_pipeline(self, job_id: str, prepared: list[dict[str, Any]], strict: bool) -> None:
         with self.lock:
             job = self.jobs[job_id]
+        final_code = 1
+        crashed = False
+        try:
+            final_code = self._execute_pipeline(job_id, job, prepared, strict)
+        except Exception:
+            # Without this an analysis/bookkeeping error killed the runner
+            # thread and the job stayed "running" forever, uncancellable.
+            crashed = True
+            final_code = 1
+            self._log_runner_crash(job)
+        finally:
+            status = self._finalise_job(job_id, job, final_code, crashed=crashed)
+        self._append_log_quietly(job, f"[studio] Pipeline {status}.\n")
+
+    def _execute_pipeline(
+        self, job_id: str, job: dict[str, Any], prepared: list[dict[str, Any]], strict: bool
+    ) -> int:
+        with self.lock:
             job.update(status="running", started_at=utc_now())
             self._persist_job(job)
         self._append_log(job, f"[studio] Starting {job['label']} with {len(prepared)} executable step(s).\n")
@@ -886,6 +1207,8 @@ class StudioState:
         # node_id -> whatever that step wrote, so a later analysis step can name
         # its input by block instead of by a path nobody can know up front.
         produced: dict[str, str] = {}
+        # node_id -> the directory that step wrote, for `@artifacts:` references.
+        produced_dirs: dict[str, str] = {}
         for index, item in enumerate(prepared, start=1):
             with self.lock:
                 if job["cancel_requested"]:
@@ -894,7 +1217,7 @@ class StudioState:
                 job.update(current_step=index, step_label=item["label"])
                 self._persist_job(job)
             if item.get("kind") == "analysis":
-                final_code = self._run_analysis_step(job, index, item, produced)
+                final_code = self._run_analysis_step(job, index, item, produced, produced_dirs)
                 if final_code != 0:
                     break
                 continue
@@ -1015,6 +1338,14 @@ class StudioState:
             # Filesystem mtimes have coarse resolution, so start the window a
             # second early rather than miss a fast step's own output.
             step_started = time.time() - 1
+            with self.lock:
+                # The launch preflight can take a while (it probes the method
+                # venv); a cancel that arrived during it must stop the launch
+                # here, not be discovered after the step has run to completion.
+                if job["cancel_requested"]:
+                    self._append_log(job, "[studio] Cancelled before the native process started.\n")
+                    final_code = -1
+                    break
             try:
                 process = subprocess.Popen(
                     command,
@@ -1031,10 +1362,7 @@ class StudioState:
                 self._append_log(job, f"[studio] Failed to start process: {type(exc).__name__}: {exc}\n")
                 final_code = 127
                 break
-            with self.lock:
-                self.processes[job_id] = process
-                job["pid"] = process.pid
-                self._persist_job(job)
+            self._register_process(job_id, job, process)
             assert process.stdout is not None
             stream = io.TextIOWrapper(process.stdout, encoding="utf-8", errors="replace", newline="")
             for line in self._collapse_progress(stream):
@@ -1045,20 +1373,11 @@ class StudioState:
                 job["pid"] = None
                 self._persist_job(job)
             if final_code == 0:
-                self._record_step_results(job, index, item, step_started, produced)
+                self._record_step_results(job, index, item, step_started, produced, produced_dirs)
             if final_code != 0:
                 self._append_log(job, f"\n[studio] Step failed with exit code {final_code}.\n")
                 break
-        with self.lock:
-            if job["cancel_requested"]:
-                status = "cancelled"
-            elif final_code == 0:
-                status = "completed"
-            else:
-                status = "failed"
-            job.update(status=status, returncode=final_code, finished_at=utc_now(), pid=None)
-            self._persist_job(job)
-        self._append_log(job, f"[studio] Pipeline {status}.\n")
+        return final_code
 
     def cancel_job(self, job_id: str) -> dict[str, Any]:
         with self.lock:
@@ -1067,9 +1386,14 @@ class StudioState:
                 raise KeyError(job_id)
             job["cancel_requested"] = True
             process = self.processes.get(job_id)
+            orphan_pid = job.get("pid") if process is None and job.get("status") in {"queued", "running"} else None
             self._persist_job(job)
         if process is not None and process.poll() is None:
             terminate_process_tree(process)
+        elif orphan_pid and self._process_alive(orphan_pid):
+            # A job adopted after a restart has a pid but no Popen; its
+            # watcher finalises the record once the tree is gone.
+            terminate_pid_tree(int(orphan_pid))
         return self.public_job(job, include_log=True)
 
     def public_job(self, job: dict[str, Any], *, include_log: bool = False) -> dict[str, Any]:
@@ -1084,7 +1408,22 @@ class StudioState:
                 text = job["log_path"].read_text(encoding="utf-8", errors="replace")
             except OSError:
                 text = ""
-            payload["log"] = text[-120_000:]
+            payload["log_truncated"] = len(text) > LOG_TAIL_CHARS
+            if payload["log_truncated"]:
+                # Say so instead of silently starting mid-line: the drawer
+                # otherwise reads as if the run began at this point.
+                tail = text[-LOG_TAIL_CHARS:]
+                newline = tail.find("\n")
+                if 0 <= newline < 2_000:
+                    tail = tail[newline + 1:]
+                payload["log"] = (
+                    "[studio] Log truncated: showing the last {0:,} of {1:,} characters.\n".format(
+                        len(tail), len(text)
+                    )
+                    + tail
+                )
+            else:
+                payload["log"] = text
         return payload
 
     def list_jobs(self) -> list[dict[str, Any]]:

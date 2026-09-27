@@ -22,7 +22,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from design_loop import fea                                          # noqa: E402
 from design_loop.mesher import tet_mesh_from_surface                 # noqa: E402
-from design_loop.problem import LBF_TO_N, LBIN_TO_NM, Bracket           # noqa: E402
+from design_loop.problem import LBF_TO_N, LBIN_TO_NM, Bracket, MassObjective  # noqa: E402
 
 
 def box_mesh(extents, divisions):
@@ -247,6 +247,44 @@ def test_load_cases_apply_the_requested_resultant():
         / Bracket.LOAD_CASES['torsion']['magnitude'] < 1e-6, f'torsion moment {moment}'
 
 
+def test_vertical_displacement_is_uz_of_the_vertical_case():
+    """The vertical requirement reads |u_z| under the +z load, not the worst |u|.
+
+    A diagonal load deflects more in total than the vertical one; if the
+    top-level value were a max over cases (like max_displacement) the vertical
+    limit would silently constrain the wrong load.
+    """
+    nodes, tets = box_mesh((1.0, 1.8, 0.6), (6, 12, 4))
+    nodes = nodes - nodes.mean(axis=0)
+    nodes[:, 1] *= 1.8 / (nodes[:, 1].max() - nodes[:, 1].min())
+    both = Bracket(load_cases=('vertical', 'diagonal'))
+    result = both.analyze(nodes, tets, return_fields=True)
+    u = result['fields']['cases']['vertical']['displacement']
+    assert np.isclose(result['vertical_displacement'], np.abs(u[:, 2]).max(), rtol=1e-12)
+    vert = result['cases']['vertical']
+    assert vert['max_vertical_displacement'] <= vert['max_displacement'] * (1 + 1e-12)
+    assert result['vertical_displacement'] == vert['max_vertical_displacement']
+    no_vertical = Bracket(load_cases=('diagonal',)).analyze(nodes, tets)
+    assert no_vertical['vertical_displacement'] is None
+
+
+def test_vertical_limit_replaces_the_calibrated_deflection_allowable():
+    result = {'mass': 1.0, 'peak_von_mises': 1.0, 'max_displacement': 9.0,
+              'vertical_displacement': 0.5e-3}
+    calibrated = MassObjective(1.0, 2.0, 1.0)
+    assert not calibrated(result)[1]['feasible']        # |u| 9 > allow 1
+    limited = MassObjective(1.0, 2.0, 1.0, vertical_disp_allow=1e-3)
+    score, penalty = limited(result)
+    assert penalty['feasible'] and score == 1.0         # 0.5 mm <= 1 mm; |u| ignored
+    tight = MassObjective(1.0, 2.0, 1.0, vertical_disp_allow=0.25e-3)
+    score, penalty = tight(result)
+    assert np.isclose(penalty['disp_violation'], 1.0) and np.isclose(score, 1.0 + 3.0)
+    with pytest.raises(KeyError):
+        limited({**result, 'vertical_displacement': None})
+    # 0 / None mean "off", matching opt_vertical_disp_max 0.
+    assert MassObjective(1.0, 2.0, 1.0, vertical_disp_allow=0).vertical_disp_allow is None
+
+
 def test_structured_mesh_is_conforming_and_fills_the_box():
     """Guard the test fixture itself: volumes must sum to the box exactly."""
     extents = (1.0, 1.8, 0.6)
@@ -266,6 +304,42 @@ def test_mesher_fills_a_dense_surface():
     _, vol = fea.element_gradients(nodes, tets)
     sphere_volume = 4.0 / 3.0 * np.pi * 0.5 ** 3
     assert abs(np.abs(vol).sum() - sphere_volume) / sphere_volume < 0.02
+
+
+def test_gentler_decimation_runs_only_after_the_labels_ladder_fails(monkeypatch):
+    """The aggression fallback must never change a shape the labels could mesh.
+
+    Regression: a surrogate-optimized bracket failed FEA verification at every
+    face budget because default decimation pinched a thin member; the fallback
+    walks the ladder again gently, but only once the default ladder is spent.
+    """
+    from design_loop import mesher
+
+    calls = []
+
+    def fake(mesh, mesh_size_max=0.05, target_faces=12000, aggression=None, **kwargs):
+        calls.append((target_faces, aggression))
+        if aggression is None:
+            raise RuntimeError('Invalid boundary mesh (overlapping facets)')
+        return 'nodes', 'tets', {}
+
+    monkeypatch.setattr(mesher, 'tet_mesh_from_surface', fake)
+    _, _, info = mesher.tet_mesh_with_retries(None, target_faces=1000)
+    ladder = [int(1000 * f) for f in mesher.FACE_BUDGET_LADDER]
+    assert calls == [(b, None) for b in ladder] + [(ladder[0], 3)]
+    assert info['decimation_aggression'] == 3 and info['face_budget'] == ladder[0]
+    assert info['face_budget_attempts'] == len(ladder) + 1
+
+    calls.clear()
+    monkeypatch.setattr(mesher, 'tet_mesh_from_surface',
+                        lambda mesh, aggression=None, **kw: calls.append(aggression) or (0, 0, {}))
+    _, _, info = mesher.tet_mesh_with_retries(None)
+    assert calls == [None] and info['decimation_aggression'] is None
+
+    monkeypatch.setattr(mesher, 'tet_mesh_from_surface',
+                        lambda *a, **kw: (_ for _ in ()).throw(RuntimeError('nope')))
+    with pytest.raises(mesher.MeshingError, match=r'\(aggression 3\): nope'):
+        mesher.tet_mesh_with_retries(None)
 
 
 _SUITE = os.path.dirname(os.path.dirname(os.path.dirname(
@@ -310,14 +384,264 @@ def test_latent_range_override_is_honoured():
     assert np.allclose(wide.bounds()[1][:wide.subspace_dim], 3.0)
 
 
-@requires_checkpoints
-def test_noise_never_leaves_the_gaussian_shell(generator):
-    """Any design vector, in or out of bounds, must map inside the shell."""
+# ---- Noise chart (checkpoint-free) ---------------------------------------- #
+# The FM start noise is a pure function of the design vector, so the chart is
+# tested directly at the DeepJEB latent size rather than behind a checkpoint.
+
+DEEPJEB_LATENT_DIM = 512 * 32
+
+
+def _chart(kind, dim=DEEPJEB_LATENT_DIM, k=12, **kwargs):
+    from design_loop.generator import NoiseChart
+    return NoiseChart(dim, k, subspace_seed=0, base_seed=0, kind=kind, **kwargs)
+
+
+def test_gnomonic_noise_stays_standard_normal_at_any_design():
+    """|z| stays ~sqrt(D) for every |x|: each design is a draw the FM prior could make."""
     import torch
-    radius = generator.shell_scale * np.sqrt(generator.subspace_dim)
+    chart = _chart('gnomonic_v2')
+    d = chart.latent_flat_dim
+    rng = np.random.default_rng(0)
+    for scale in (0.0, 0.1, 1.0, 4.33, 100.0):
+        x = rng.standard_normal(chart.subspace_dim) * scale
+        z = chart(x).squeeze(0)
+        assert z.shape == (d,)
+        # |z|^2 ~ chi^2_D: mean D, sd sqrt(2D) -> relative 6-sigma band ~0.066 at D=16384.
+        assert abs(float(torch.linalg.norm(z)) / np.sqrt(d) - 1.0) < 0.04
+        assert abs(float(z.std()) - 1.0) < 0.04
+
+
+def test_gnomonic_origin_is_the_base_draw_and_nothing_is_clipped():
+    import torch
+    chart = _chart('gnomonic_v2')
+    k = chart.subspace_dim
+    base = torch.randn(chart.latent_flat_dim, generator=torch.Generator().manual_seed(0))
+    assert torch.allclose(chart(np.zeros(k)).squeeze(0), base)
+    # v1 clipped everything past its shell onto one point per ray; here every
+    # magnitude along a ray is a distinct noise, turning monotonically away from eps_0.
+    direction = np.eye(k)[0]
+    cosines = []
+    for t in (0.5, 1.0, 4.0, 16.0):
+        z = chart(direction * t).squeeze(0)
+        cosines.append(float(torch.nn.functional.cosine_similarity(z, base, dim=0)))
+    assert all(a > b for a, b in zip(cosines, cosines[1:]))
+    # |x| = 1 is a 45-degree turn: cos = 1/sqrt(1 + |x|^2), up to the O(1/sqrt(D))
+    # overlap of two independent Gaussian draws.
+    assert abs(cosines[1] - 1 / np.sqrt(2)) < 0.03
+
+
+def test_gnomonic_design_actually_moves_the_noise():
+    """The v1 failure: at D = 16384 a full-range design moved ~3% of the norm."""
+    import torch
+    corner = np.full(12, 1.25)                       # the default box corner
+
+    def moved(chart):
+        step = chart(corner) - chart(np.zeros(12))
+        return float(torch.linalg.norm(step)) / np.sqrt(chart.latent_flat_dim)
+
+    # gnomonic: |z(x) - eps_0|^2 / D -> 2 - 2 / sqrt(1 + |x|^2) = 1.55 at |x| = 4.33.
+    assert abs(moved(_chart('gnomonic_v2')) - np.sqrt(1.55)) < 0.05
+    assert moved(_chart('subspace_v1')) < 0.05       # 4.33 / 128 = 0.034
+
+
+def test_legacy_subspace_chart_still_clips_to_its_shell():
+    """subspace_v1 is kept so old summaries replay with the chart they were searched in."""
+    import torch
+    chart = _chart('subspace_v1', dim=512, shell_scale=1.25)
+    radius = chart.shell_scale * np.sqrt(chart.subspace_dim)
     rng = np.random.default_rng(0)
     for scale in (0.1, 1.0, 10.0):
-        x = rng.standard_normal(generator.subspace_dim) * scale
-        composed = generator._noise(x)
-        in_subspace = (composed.squeeze(0) @ generator.basis.T)
+        x = rng.standard_normal(chart.subspace_dim) * scale
+        in_subspace = chart(x).squeeze(0) @ chart.basis.T
         assert float(torch.linalg.norm(in_subspace)) <= radius * (1 + 1e-5)
+        if np.linalg.norm(x) <= radius:
+            assert np.allclose(in_subspace.numpy(), x, atol=1e-4)
+
+
+def test_unknown_noise_param_is_rejected():
+    with pytest.raises(ValueError, match='noise_param'):
+        _chart('gnomonic', dim=64)
+
+
+# ---- Selection and bookkeeping --------------------------------------------- #
+
+def _record(score, feasible, ok=True):
+    return {'ok': ok, 'score': score, 'x': [score],
+            'penalty': {'feasible': feasible}, 'fea': {'mass': score}}
+
+
+def test_select_best_prefers_feasible_over_a_lower_infeasible_score():
+    """The quadratic exterior penalty puts its optimum just past the limit."""
+    from design_loop.loop import select_best
+    slightly_over = _record(0.80, feasible=False)
+    within = _record(0.85, feasible=True)
+    worse_within = _record(0.95, feasible=True)
+    assert select_best([slightly_over, worse_within, within]) is within
+    # No feasible record: fall back to the solved minimum, then to anything.
+    failed = {'ok': False, 'score': 10.0, 'penalty': {'feasible': False}}
+    assert select_best([failed, slightly_over]) is slightly_over
+    assert select_best([failed]) is failed
+    # The exterior penalty is unbounded: a badly violating solve can score
+    # above failure_score, and a shape that could not be analysed must still
+    # never be the delivered design while any solve exists.
+    far_over = _record(40.0, feasible=False)
+    cheap_failure = {'ok': False, 'score': 1.0, 'penalty': {'feasible': False}}
+    assert select_best([cheap_failure, far_over]) is far_over
+
+
+def test_failures_rank_behind_every_solved_candidate():
+    """What CMA-ES is told: a failure is worse than the worst solve, always."""
+    from design_loop.loop import rank_failures_last
+    records = [_record(0.9, True), {'ok': False}, _record(40.0, False), {'ok': False}]
+    scores = rank_failures_last(records, failure_score=10.0)
+    assert scores[0] == 0.9 and scores[2] == 40.0
+    assert scores[1] == scores[3] == 41.0
+    assert [r['score'] for r in records] == scores
+    # With every solve under failure_score, failures keep failure_score.
+    assert rank_failures_last([_record(0.9, True), {'ok': False}], 10.0) == [0.9, 10.0]
+    assert rank_failures_last([{'ok': False}], 10.0) == [10.0]
+
+
+def test_interface_detection_rejects_a_shape_with_no_lug_crown():
+    """Both pads present, but no part reaches a lug's height above them.
+
+    Over the 418 DeepJEB label brackets the crown sits 0.623..0.645 above the
+    mount (normalized frame) and a pad's own top at most 0.304 above it, so a
+    flat plate must be refused as having no loaded interface -- not loaded on
+    its own top face as if that were the lug.
+    """
+    from design_loop.problem import LUG_MIN_HEIGHT, find_interfaces
+    nodes, tets = box_mesh((1.0, 1.8, 0.2), (6, 12, 2))
+    nodes = nodes - nodes.mean(axis=0)
+    faces = fea.boundary_faces(tets)
+    with pytest.raises(ValueError, match='lug crown only 0.200'):
+        find_interfaces(nodes, faces)
+    assert 0.304 < LUG_MIN_HEIGHT < 0.623
+
+    tall, tall_tets = box_mesh((1.0, 1.8, 0.6), (6, 12, 4))
+    tall = tall - tall.mean(axis=0)
+    mount, lug = find_interfaces(tall, fea.boundary_faces(tall_tets))
+    assert len(mount) >= 12 and len(lug) >= 6
+
+
+def test_gpu_id_from_config():
+    from design_loop.surrogate import gpu_id_from_config
+    assert gpu_id_from_config({'gpu_ids': 3}) == 3
+    assert gpu_id_from_config({'gpu_ids': '5'}) == 5
+    assert gpu_id_from_config({'gpu_ids': [7, 1]}) == 7
+    assert gpu_id_from_config({'gpu_ids': 'cpu'}) is None
+    assert gpu_id_from_config({'gpu_ids': []}) is None
+    assert gpu_id_from_config({}) is None
+
+
+def test_surrogate_mass_matches_the_fea_frame_when_given_a_length_scale(tmp_path):
+    """Surrogate and FEA runs must weigh the same shape the same."""
+    from design_loop.surrogate import HIMGNSurrogate
+    box = trimesh.creation.box(extents=(1.0, 1.8, 0.6))
+    scale = 0.19 / 1.8
+    sur = HIMGNSurrogate('infer.txt', 'model.pth', load_cases=('ver',),
+                         workdir=str(tmp_path), density=4430.0, length_scale=scale)
+    # Bracket.analyze's mass: tet volumes of the length_scale-scaled nodes x rho
+    # (the solve itself needs bolt-hole interfaces a plain box does not have).
+    nodes, tets = box_mesh((1.0, 1.8, 0.6), (2, 3, 1))
+    _, vol = fea.element_gradients(nodes * Bracket(length_scale=scale).length_scale, tets)
+    fea_mass = float(np.abs(vol).sum()) * fea.Material().rho
+    assert abs(sur.mass_of(box) - fea_mass) / fea_mass < 1e-9
+    legacy = HIMGNSurrogate('infer.txt', 'model.pth', load_cases=('ver',),
+                            workdir=str(tmp_path), density=4430.0)
+    assert legacy.mass_of(box) != pytest.approx(fea_mass, rel=1e-3)
+
+
+def test_rerun_clears_the_previous_runs_outputs(tmp_path):
+    from inference_profiles.optimize import _OWNED_OUTPUTS, _clear_owned_outputs
+    for name in _OWNED_OUTPUTS:
+        (tmp_path / name).write_text('stale')
+    (tmp_path / 'notes.txt').write_text('keep')
+    (tmp_path / 'surrogate_batches').mkdir()
+    _clear_owned_outputs(str(tmp_path))
+    assert sorted(p.name for p in tmp_path.iterdir()) == ['notes.txt', 'surrogate_batches']
+
+
+def test_fea_verdicts_check_the_absolute_vertical_limit():
+    from design_loop.verify_with_fea import limit_verdicts
+    limits = {'vertical_disp_allow': 2e-4, 'stress_allow': 300e6, 'disp_allow': 1e-3}
+    results = {'optimized': {'vertical_displacement_mm': 0.25, 'peak_von_mises_MPa': 200.0,
+                             'max_displacement_mm': 0.3},
+               'baseline': {'vertical_displacement_mm': 0.15, 'peak_von_mises_MPa': 320.0,
+                            'max_displacement_mm': 0.2}}
+    v = limit_verdicts(limits, results, 'surrogate')
+    by = {name: {c['limit']: c for c in checks} for name, checks in v.items()}
+    assert by['optimized']['vertical max |u_z|']['met'] is False
+    assert by['baseline']['vertical max |u_z|']['met'] is True
+    # The vertical limit replaces the calibrated |u| allowable, as in the search.
+    assert not any('max |u|' in k for k in by['optimized'])
+    assert by['baseline']['peak von Mises (calibrated)']['met'] is False
+    assert 'surrogate' in by['baseline']['peak von Mises (calibrated)']['note']
+
+
+def test_verification_resolution_follows_what_the_run_recorded():
+    """A surrogate run re-solves at its labels' resolution, an FEA run at its own."""
+    from design_loop.verify_with_fea import solve_resolution
+    surrogate = {'analysis_backend': 'surrogate',
+                 'surrogate': {'label_resolution': {'target_faces': 9000,
+                                                    'mesh_size_max': 0.06,
+                                                    'target_nodes': 4000}},
+                 'verification_settings': {'mc_resolution': 160, 'target_nodes': 5000}}
+    res = solve_resolution(surrogate)
+    assert (res['target_faces'], res['mesh_size_max'], res['target_nodes']) == (9000, 0.06, 4000)
+    assert res['source'] == 'surrogate.label_resolution'
+    # A summary written before label_resolution existed falls back to the label constants.
+    old = solve_resolution({'analysis_backend': 'surrogate', 'surrogate': {}})
+    assert (old['target_faces'], old['mesh_size_max']) == (12000, 0.05)
+    assert 'predates' in old['source']
+    fea_run = {'analysis_backend': 'fea',
+               'verification_settings': {'mc_resolution': 160, 'target_faces': 30000,
+                                         'mesh_size_max': 0.035}}
+    res = solve_resolution(fea_run)
+    assert (res['target_faces'], res['mesh_size_max']) == (30000, 0.035)
+    assert res['source'] == 'verification_settings'
+
+
+def test_fea_verdicts_judge_a_surrogate_allowable_on_the_label_statistic():
+    """The calibrated stress allowable is read in the measure it was calibrated in,
+    at the verification resolution; the vertical limit stays on the solver's u_z."""
+    from design_loop.verify_with_fea import limit_verdicts
+    limits = {'vertical_disp_allow': 2e-4, 'stress_allow': 300e6, 'disp_allow': 1e-3}
+    transported = {'stress_allow_MPa': 330.0, 'disp_allow_mm': 1.1}
+    rec = {'vertical_displacement_mm': 0.19, 'peak_von_mises_MPa': 360.0,
+           'max_displacement_mm': 0.3,
+           'label_surface': {'peak_von_mises_MPa': 310.0, 'max_displacement_mm': 0.29,
+                             'vertical_displacement_mm': 0.18}}
+    by = {c['limit']: c for c in limit_verdicts(limits, {'d': rec}, 'surrogate',
+                                                transported)['d']}
+    stress = by['peak von Mises (calibrated)']
+    assert stress['value'] == 310.0 and stress['allow'] == 330.0 and stress['met'] is True
+    assert stress['statistic'] == 'label_surface'
+    vertical = by['vertical max |u_z|']
+    assert vertical['value'] == 0.19 and vertical['allow'] == 0.2
+    assert vertical['statistic'] == 'solver'
+    # An FEA run's allowable was calibrated on the solver's own statistic.
+    by = {c['limit']: c for c in limit_verdicts(limits, {'d': rec}, 'fea', transported)['d']}
+    assert by['peak von Mises (calibrated)']['value'] == 360.0
+    assert by['peak von Mises (calibrated)']['met'] is False
+
+
+def test_surface_statistics_reduce_the_solve_as_the_labels_do():
+    """Boundary nodes only, per case, then max over cases -- the surrogate's measure."""
+    from design_loop.verify_with_fea import surface_statistics
+    nodes, tets = box_mesh((1.0, 1.8, 0.6), (6, 12, 4))
+    nodes = nodes - nodes.mean(axis=0)
+    nodes[:, 1] *= 1.8 / (nodes[:, 1].max() - nodes[:, 1].min())
+    result = Bracket(load_cases=('vertical', 'diagonal')).analyze(nodes, tets,
+                                                                 return_fields=True)
+    stats = surface_statistics(nodes, result, target_nodes=10 ** 6, percentile=99.5)
+    used = np.unique(result['fields']['faces'])
+    assert stats['nodes'] == len(used)                   # nothing decimated at this target
+    assert set(stats['cases']) == {'vertical', 'diagonal'}
+    expect = {}
+    for name, case in result['fields']['cases'].items():
+        expect[name] = np.percentile(np.abs(case['von_mises_nodal'][used]) / 1e6, 99.5)
+    assert np.isclose(stats['peak_von_mises_MPa'], max(expect.values()), rtol=1e-9)
+    u = result['fields']['cases']['vertical']['displacement']
+    assert np.isclose(stats['vertical_displacement_mm'], np.abs(u[used, 2]).max() * 1e3,
+                      rtol=1e-9)

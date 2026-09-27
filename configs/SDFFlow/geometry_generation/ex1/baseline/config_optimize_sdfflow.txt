@@ -4,19 +4,22 @@
 %   scored by an actual FEA run rather than by a distance to the dataset.
 % This route is DeepJEB-specific. The load cases, the bracket bounding-box length scale, and the
 %   Ti-6Al-4V constants below describe the ex1 brackets; do not copy them to ex2/ex3/ex4.
-% CMA-ES searches the FM NOISE (opt_subspace_dim leading dimensions), not the VAE latent, so
-%   every point it visits is on-manifold for the generator. opt_condition_dims must be a subset
+% CMA-ES searches the FM NOISE, not the VAE latent: opt_subspace_dim coordinates tilt one base
+%   noise draw toward as many Gaussian directions (the gnomonic chart), so every point it visits
+%   is an exact N(0, I) noise and on-manifold for the generator. opt_condition_dims must be a subset
 %   of the FM checkpoint's condition names -- volume, area here, matching condition_names in
 %   config_train_sdfflow.txt.
-% opt_latent_range is deliberately absent: it defaults to opt_shell_scale, which puts the box
-%   corner exactly on the sampling shell. Setting only one of the two de-tunes the search.
-% Units are SI throughout: opt_length_scale 0.10556 m is the DeepJEB bracket bounding-box
-%   length, opt_material_e 113.8 GPa and opt_yield_stress 903 MPa are Ti-6Al-4V. A generated
+% opt_latent_range is absent, so the box half-width is opt_shell_scale 1.25: the corner
+%   (|x| = 4.33 at 12 coordinates) turns the noise 77 degrees from the base draw. Nothing is
+%   clipped, so a wider box is a genuinely larger search, not a degenerate one.
+% Units are SI throughout: opt_length_scale 0.10556 is metres per normalized unit (0.19 m / 1.8,
+%   so the 1.8-unit long axis is a 190 mm bracket), opt_material_e 113.8 GPa and
+%   opt_yield_stress 903 MPa are Ti-6Al-4V. A generated
 %   shape lives in the unit cube; without the length scale the stresses are meaningless.
 % opt_budget 120 CMA-ES evaluations at popsize 8 = 15 generations, plus opt_baseline_size 12
 %   unoptimized samples to calibrate the allowables against the population.
 % Requires gmsh, pyamg and cma in the SDFFlow venv (mode optimize only).
-% Writes .stl per candidate plus the optimization history under output_dir.
+% Writes optimized/baseline/typical .stl, summary.json, history.json, report.md under output_dir.
 % Reference: https://arxiv.org/abs/2410.23130 ; https://arxiv.org/abs/2301.11445 ; https://arxiv.org/abs/2210.02747
 % No source HDF5 writes. Checkpoints are created by the paired training config.
 
@@ -31,6 +34,10 @@ output_dir                       ../../output/dataset_matrix/geometry_generation
 ode_steps                        50
 mc_resolution                    128
 opt_analysis                     fea
+% opt_fea_verify re-solves the optimized, best-baseline and typical designs with tet4 FEA after a
+%   SURROGATE search (report.md section, fea_verified.json). Inert here: opt_analysis fea already
+%   solves every design and re-solves the winner at opt_verify_*.
+opt_fea_verify                   False
 opt_subspace_dim                 12
 opt_condition_dims               volume, area
 opt_shell_scale                  1.25
@@ -51,6 +58,12 @@ opt_stress_margin                1
 opt_disp_margin                  1
 opt_stress_weight                6
 opt_disp_weight                  3
+% opt_vertical_disp_max is the designer's deflection requirement: max |u_z| (mm) under the
+%   vertical load case. Mass is minimized subject to it and the stress allowable; it replaces the
+%   population-calibrated |u| allowable (opt_disp_margin). 0 = off. 0.20 mm is the median (0.192)
+%   of the 418 FEA-relabeled DeepJEB brackets (range 0.09-0.52 mm; corr with mass -0.76), so the
+%   limit binds: about half the dataset, mostly its lighter parts, violates it.
+opt_vertical_disp_max            0.2
 opt_verify_resolution            160
 opt_verify_target_faces          30000
 opt_verify_mesh_size_max         0.035

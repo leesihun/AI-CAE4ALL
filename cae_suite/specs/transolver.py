@@ -213,7 +213,7 @@ def build_transolver_spec() -> MethodSpec:
         },
         recommended_by_mode={"train": frozenset({"feature_loss_weights", "split_seed", "parallel_mode", "write_preprocessing"})},
         defaults={"parallel_mode": "ddp", "attention_kernel": "slice_space", "infer_mode": "direct", "chunk_size": 0, "infer_chunk_size": 0, "amortized_training": False, "amortized_cache_nodes": 0, "amortized_query_nodes": 0, "coordinate_normalization": "centered_isotropic"},
-        defaults_by_mode={"inference": {"inference_output_dir": "outputs/rollout"}},
+        defaults_by_mode={"inference": {"inference_output_dir": "../../output/transolver/rollout"}},
         path_rules=(
             PathRule("dataset_dir", PathKind.INPUT_FILE, frozenset({"train"})),
             PathRule("modelpath", PathKind.OUTPUT_FILE, frozenset({"train"})),

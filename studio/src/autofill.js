@@ -1,4 +1,4 @@
-import { BLOCK_SPECS, MODEL_CATALOG } from "./constants.js";
+import { BLOCK_SPECS, MODEL_CATALOG, REQUIRED } from "./constants.js";
 import { state } from "./state.js";
 import { checkpointMetadata, checkpointMetaNow } from "./api.js";
 
@@ -278,8 +278,15 @@ function modelAutofill(desired, node) {
   const dataLink = linkedInputs(node, "data")[0];
   const parameterLink = linkedInputs(node, "parameters")[0];
   const checkpointLink = linkedInputs(node, "resume")[0];
+  // A mode whose required fields name neither dataset_dir nor infer_dataset
+  // never opens the wired file (SDFFlow sample, reconstruct, interpolate,
+  // optimize): filling dataset_dir and condition_names from it there wrote keys
+  // into the native config that nothing reads, which a training pipeline
+  // switched to optimize carried and the checked-in optimize config does not.
+  const required = model.required?.[mode] || REQUIRED[spec.modelId]?.[mode];
+  const readsData = !required || ["dataset_dir", "infer_dataset"].some(key => new Set(required).has(key));
 
-  if (dataLink) {
+  if (dataLink && readsData) {
     const path = datasetPath(dataLink.node);
     const key = mode === "inference" && accepted.has("infer_dataset") ? "infer_dataset" : accepted.has("dataset_dir") ? "dataset_dir" : "";
     // Same rule validate.js applies when building the inference step: the graph

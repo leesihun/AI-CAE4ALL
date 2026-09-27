@@ -211,9 +211,11 @@ def _split_worker_inner(rank: int, num_stages: int, config: dict, gpu_ids: list,
             ema_model=ema_model,
             microbatches=microbatches,
         )
+        # Read before step(): afterwards it is the next epoch's LR, and after the
+        # last epoch a warm restart reports the peak LR for an epoch that never runs.
+        current_lr = optimizer.param_groups[0]['lr']
         scheduler.step()
         if rank == 0:
-            current_lr = optimizer.param_groups[0]['lr']
             print(
                 f"[model_split] epoch {epoch}/{total_epochs} "
                 f"train_loss={train_loss:.2e} lr={current_lr:.2e} "

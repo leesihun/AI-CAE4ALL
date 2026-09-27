@@ -134,7 +134,7 @@ AI-CAE4ALL/
 │   ├── Neural_Operator/{ex1..ex9}/     Transolver/{ex1..ex9}/
 │   ├── HI_MGNFlow/                     SDFFlow/
 │   ├── SimulGenVAE/                    MLP/            GeometryIngest/
-│   └── campaigns/                #   multi-arm runners: ex1, ex2, ex3, benchmarks_all
+│   └── campaigns/                #   cross-method campaign: dataset_matrix (manifest.json)
 │
 ├── dataset/                      # shared HDF5 data (payloads are git-ignored)
 │   ├── ex1_static_thermoelastic.h5 … ex9_plasticity.h5           #   training datasets, one per experiment slot
@@ -735,7 +735,7 @@ dataset/campaign. Counts drift; use
 | `configs/Transolver/deterministic/ex1` … `ex9` | Transolver training/inference profiles |
 | `configs/SDFFlow/` | SDFFlow train (ex1 / v2 / v3 / 8-GPU b300 / FEA-conditioned ex5), evaluate (reconstruction, descriptor calibration, conditional benchmark), sample (unconditional, extrapolation, partial conditional), interpolate (slerp, condition sweep), and optimize profiles, plus the `arms/` VAE ablation sweep (`A0`..`A9`, mostly single-axis) |
 | `configs/SimulGenVAE/`, `configs/MLP/`, `configs/GeometryIngest/` | Fixed-geometry latent, tabular, and ingestion workflows |
-| `configs/campaigns/benchmarks_all/` | Cross-method campaign scheduling, roster, inference, and scoring helpers; no bundled paper dataset or reproduced-result report |
+| `configs/campaigns/dataset_matrix/` | Cross-method campaign: `manifest.json` (every train/infer config pair per example × method), the config generator, audit, runner, and spread scorer; no bundled reproduced-result report |
 
 Paper-profile modules and optional tests exist, but the previously described
 `dataset/benchmarks/` evidence bundle is not present in this checkout. Do not

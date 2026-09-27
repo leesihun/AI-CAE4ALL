@@ -116,7 +116,7 @@ def build_mlp_spec() -> MethodSpec:
             "output_activation": "none",
             "loss": "mse",
         },
-        defaults_by_mode={"inference": {"inference_output_dir": "outputs/predictions"}},
+        defaults_by_mode={"inference": {"inference_output_dir": "../../output/mlp/predictions"}},
         path_rules=(
             PathRule("dataset_dir", PathKind.INPUT_FILE, frozenset({"train"})),
             PathRule("modelpath", PathKind.OUTPUT_FILE, frozenset({"train"})),

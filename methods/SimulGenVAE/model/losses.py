@@ -32,19 +32,25 @@ def kl(mu, log_var):
     return torch.mean(loss, dim=0)
 
 def kl_2(delta_mu, delta_log_var, mu, log_var):
+    """Residual KL(q || p) of one hierarchical level.
+
+    The decoder samples z from q = N(mu + delta_mu, var * delta_var) against the
+    prior p = N(mu, var), so the KL depends on mu only through the shift:
+    0.5 * sum(delta_mu**2 / var + delta_var - delta_log_var - 1).
+    """
     # Clamp log_var values to prevent numerical instability
     # Start with wider range, tighten if you get NaN/Inf
     log_var = torch.clamp(log_var, min=-30, max=30)
     delta_log_var = torch.clamp(delta_log_var, min=-30, max=30)
-    
+
     var = torch.exp(log_var)
     delta_var = torch.exp(delta_log_var)
-    
+
     # Add small epsilon to prevent division by zero
     eps = 1e-8
     var = var + eps
-    
-    loss = 0.5*torch.sum(torch.div(delta_var, var)+torch.div((mu-delta_mu)**2, var)-delta_log_var+log_var-1, dim=[1,2])
+
+    loss = 0.5*torch.sum(torch.div(delta_mu**2, var)+delta_var-delta_log_var-1, dim=[1,2])
     return torch.mean(loss, dim=0)
 
 def log_sum_exp(x):

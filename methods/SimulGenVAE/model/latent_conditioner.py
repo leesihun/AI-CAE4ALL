@@ -83,7 +83,7 @@ class LatentConditioner(nn.Module):
         dropout_rate (float): Base dropout rate for regularization (default: 0.3)
     
     Attributes:
-        input_norm (nn.LayerNorm): Input normalization layer
+        input_norm (nn.Identity): Placeholder; inputs arrive MinMax-scaled
         backbone (nn.ModuleList): Residual blocks for feature extraction
         feature_projection (nn.Sequential): Final feature projection layer
         latent_out (nn.Sequential): Output head for main latent predictions
@@ -107,8 +107,10 @@ class LatentConditioner(nn.Module):
         self.num_latent_conditioner_filter = len(self.latent_conditioner_filter)
         self.dropout_rate = dropout_rate
 
-        # Input normalization for numerical stability
-        self.input_norm = nn.LayerNorm(input_shape)
+        # No input normalization: the inputs arrive MinMax-scaled per feature,
+        # and a LayerNorm across heterogeneous parameters erased each sample's
+        # mean and std over them (2 of ex3's 6 flight conditions).
+        self.input_norm = nn.Identity()
         
         # Progressive dropout rates (lighter early layers, heavier later)
         dropout_schedule = [

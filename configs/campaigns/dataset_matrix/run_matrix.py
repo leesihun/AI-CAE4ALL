@@ -14,15 +14,18 @@ generate.py):
 
     lane 0  deeponet + fno        lane 4  meshgraphnets
     lane 1  point_deeponet        lane 5  himgn
-    lane 2  (no home arms)        lane 6  himgn_v + lsh_vae
+    lane 2  (no generated arms)   lane 6  himgn_v + lsh_vae
     lane 3  transolver3           lane 7  chi_mgnflow + sdfflow
+
+The hand-maintained SDFFlow geometry ex2/ex3/ex4 configs (generated: false in
+manifest.json) carry their own gpu_ids 0/1/2 and run on those lanes.
 
 Behaviour
   - Start gate: checks at once, then every GATE_INTERVAL seconds (3600), and
-    starts once EXPECTED_GPUS (8) GPUs are visible, all at 0% utilisation with
-    no compute process on them, so whatever already runs finishes first. One
-    check is GATE_SAMPLES readings GATE_SAMPLE_GAP seconds apart;
-    GATE_ALLOW_APPS=1 drops the compute-process condition.
+    starts once EXPECTED_GPUS (8) GPUs are visible, all at 0% utilisation, so
+    whatever already runs finishes first. Utilisation is the only condition:
+    a process that holds memory but computes nothing does not keep it shut.
+    One check is GATE_SAMPLES readings GATE_SAMPLE_GAP seconds apart.
   - One worker per GPU. Worker i runs lane i in manifest (example) order, then
     takes the next arm of whichever lane is furthest behind. A worker with
     nothing left to take stays until every running arm has finished, because
@@ -34,26 +37,58 @@ Behaviour
     never modified, and a taken-over arm runs unchanged on any card.
   - A failed training skips that arm's inference. A failed stage is that
     arm's own problem: it is reported and the worker moves on to the next arm.
+  - Strikes: a worker whose card fails STRIKE_LIMIT (3) stages in a row --
+    failed, not launched or interrupted; any successful stage resets the count
+    -- retires, and the other workers take over its lane. The arms it failed
+    are reported as failed, not retried; the next run picks them up.
   - A lost GPU stops only its own worker. nvidia-smi is polled every
     WATCH_INTERVAL seconds (300) while a stage runs, and after any stage that
     does not succeed the card is also opened through the CUDA driver. A card
     confirmed gone has its stage killed and the arm goes back to the front of
     its lane for another card (once per arm). The other workers carry on and
     take over the dead card's lane.
-  - Resume: a finished stage leaves a marker under
-    output/dataset_matrix/_campaign/<machine>/done/ and is skipped next time.
-    Retraining an arm always re-runs its inference.
+  - Resume: a finished stage leaves a marker (the config's sha256, start and
+    finish times) under output/dataset_matrix/_campaign/<machine>/done/. A
+    stage is skipped only while its marker matches the config byte for byte
+    (an edited comment counts), and an inference only if it also started
+    after the arm's current training finished. Any other marker -- stale,
+    unreadable, or the old bash runner's empty file -- runs the stage again.
+  - Set aside: before a stage runs, what an earlier run left for it moves to
+    _campaign/<machine>/set_aside/<run id>/<arm>__before_<stage>/ -- its
+    stale marker and the arm's prediction directory, and before a training
+    also the inference's marker. SimulGenVAE's vae.pth/lc.pth move too unless
+    _campaign/<machine>/started/<arm>__train says this very config started
+    them: skip_completed_stages checks only its own compatibility keys and
+    would carry an older config's checkpoint into this run. Nothing is
+    deleted. Only paths inside output/ that hold no checkpoint, dataset or
+    log a config names are moved; a stage that cannot be cleared fails
+    without a strike. SDFFlow geometry keeps its own stage bookkeeping, so
+    only its markers move.
   - Stop: Ctrl-C or SIGTERM (and SIGHUP, unless started under nohup) sends
     SIGTERM to every running stage and SIGKILL after KILL_GRACE seconds (at
     once on a second signal); nothing is recorded for those stages. SIGINT is
     never forwarded: the trainers turn it into a normal-looking exit.
+  - Scoring: after the report, unless stopped, score_spread.py scores the
+    probabilistic example (spread_scores.csv) and score_rank.py scores every
+    deterministic and probabilistic arm of this machine on its held-out set
+    and ranks the methods per example (ranking.txt, ranking.csv), under the
+    MeshGraphNets interpreter because it needs numpy and h5py. It scores an
+    arm only while both of its markers match the configs as they are now and
+    its predictions postdate the inference marker's start; any other arm is
+    listed with its status and shares last place. It also reads every arm's
+    training log, geometry arms included, and shows how far the validation
+    loss was still falling at 80% of the planned epochs (a column in the
+    rank tables, a convergence section, convergence.csv). All of it is
+    informational: it never changes the exit code. Running again once every
+    stage is done only re-scores. The two-machine ranking is score_rank.py run by hand once
+    both output trees (markers included) are together.
 
 Modes (environment variable or flag):
   DRY_RUN=1        --dry-run        print the plan; writes nothing
   CHECK=1          --check          launcher --check on every stage still to run
   SKIP_GPU_GATE=1  --skip-gpu-gate  start without waiting for an idle box
-Tuning: GATE_INTERVAL GATE_SAMPLES GATE_SAMPLE_GAP GATE_ALLOW_APPS
-        EXPECTED_GPUS WATCH_INTERVAL KILL_GRACE DEAD_CONFIRM_GAP
+Tuning: GATE_INTERVAL GATE_SAMPLES GATE_SAMPLE_GAP EXPECTED_GPUS
+        WATCH_INTERVAL KILL_GRACE DEAD_CONFIRM_GAP
 """
 from __future__ import annotations
 
@@ -73,6 +108,7 @@ import time
 import traceback
 from collections import deque
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from datetime import datetime
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -80,28 +116,34 @@ ROOT = HERE.parents[2]
 MANIFEST = HERE / "manifest.json"
 LAUNCHER = ROOT / "AI_CAE4ALL_main.py"
 SCORE_SPREAD = HERE / "score_spread.py"
+SCORE_RANK = HERE / "score_rank.py"
+RANK_TIMEOUT = 3600
 LOCAL_TOMLS = (ROOT / "ai_cae4all.local.toml", ROOT / "cae_suite.local.toml")
 LAUNCHER_PYTHON = (3, 10)  # pyproject.toml: requires-python >= 3.10
 
 # Each machine owns a disjoint set of examples. The heavy slots (ex2 at 200k
 # nodes x 50 steps, ex3_full, ex4 at 599 steps, ex6 at 400, ex7 at 1000
-# samples) are split across the two boxes rather than stacked on one.
+# samples) are split across the two boxes rather than stacked on one. Of the
+# SDFFlow geometry runs, 136 has DeepJEB (ex1) and MCB (ex3) and 135 has
+# DrivAerML (ex2) and Thingi10k (ex4, the largest), which is lane 2's only
+# home arm.
 MACHINES = {
     "135": (
         "deterministic/ex1", "deterministic/ex2", "deterministic/ex3_full",
         "deterministic/ex5", "deterministic/ex8", "deterministic/ex10",
-        "probabilistic/ex1",
+        "probabilistic/ex1", "geometry_generation/ex2", "geometry_generation/ex4",
     ),
     "136": (
         "deterministic/ex3_mid", "deterministic/ex4", "deterministic/ex6",
         "deterministic/ex7", "deterministic/ex9", "probabilistic/ex2",
-        "geometry_generation/ex1",
+        "geometry_generation/ex1", "geometry_generation/ex3",
     ),
 }
 
 STAGES = ("train", "infer")
 NUM_LANES = 8
 MAX_DEAD_REQUEUES = 1    # an arm that has lost two cards is not handed to a third
+STRIKE_LIMIT = 3         # stages failed in a row on one card before its worker retires
 NVSMI_TIMEOUT = 60
 CUDA_PROBE_TIMEOUT = 120
 IDLE_POLL = 10           # a worker with nothing to take looks again this often
@@ -188,8 +230,10 @@ def fmt_secs(seconds: float) -> str:
     m, s = divmod(rem, 60)
     return f"{h}h{m:02d}m{s:02d}s" if h else (f"{m}m{s:02d}s" if m else f"{s}s")
 
+ISO_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
+
 def now_iso() -> str:
-    return time.strftime("%Y-%m-%dT%H:%M:%S%z")
+    return time.strftime(ISO_FORMAT)
 
 class UsageError(Exception):
     """A bad mode or tuning value: main() prints it and starts nothing (exit 2)."""
@@ -233,8 +277,9 @@ def parse_lane(data: bytes):
         return None, f"has {len(hits)} gpu_ids lines; the runner needs exactly one"
     match = GPU_IDS_LINE.fullmatch(hits[0].rstrip(b"\r"))
     if not match:
-        return None, (f"gpu_ids line {hits[0].decode('utf-8', 'replace').strip()!r} "
-                      "is not a single GPU index 0-7")
+        line = hits[0].rstrip(b"\r").decode("utf-8", "replace")
+        return None, (f"gpu_ids line {line!r} must read 'gpu_ids <0-7>': key in lower case "
+                      "at the start of the line, one digit, no trailing comment")
     return int(match.group(2)), None
 
 def launch_bytes(source_rel: str, data: bytes, lane: int, gpu) -> bytes:
@@ -265,9 +310,10 @@ def launch_bytes(source_rel: str, data: bytes, lane: int, gpu) -> bytes:
 class Arm:
     """One (example, method) pair: a train stage, then an infer stage."""
 
-    def __init__(self, category, example, method, lane, rank, rels):
+    def __init__(self, category, example, method, lane, rank, rels, generated=True):
         self.category, self.example, self.method = category, example, method
         self.lane, self.rank, self.rels = lane, rank, rels
+        self.generated = generated  # False: a hand-maintained config generate.py does not render
         self.key = f"{category}__{example}__{method}"
         self.label = f"{category}/{example}/{method}"
         self.dead_requeues = 0
@@ -311,13 +357,13 @@ def load_plan(machine: str):
     problems, warnings = [], []
     try:
         pairs = json.loads(MANIFEST.read_text(encoding="utf-8"))["pairs"]
-        entries = [(p["category"], p["example"], p["method"], {s: p[s] for s in STAGES})
-                   for p in pairs]
+        entries = [(p["category"], p["example"], p["method"], {s: p[s] for s in STAGES},
+                    p.get("generated", True) is not False) for p in pairs]
     except (OSError, ValueError, KeyError, TypeError) as exc:
         return [], [f"cannot read the pairs in {rel(MANIFEST)}: {exc!r}"], []
 
     ranks = {}
-    for category, example, _, _ in entries:
+    for category, example, *_ in entries:
         ranks.setdefault(f"{category}/{example}", len(ranks))
     owners = {}
     for name, examples in MACHINES.items():
@@ -334,7 +380,7 @@ def load_plan(machine: str):
             problems.append(f"{example} is in manifest.json but MACHINES gives it to no machine")
 
     arms, keys, mine = [], set(), set(MACHINES[machine])
-    for i, (category, example, method, rels) in enumerate(entries):
+    for i, (category, example, method, rels, generated) in enumerate(entries):
         name = f"{category}/{example}"
         if name not in mine:
             continue
@@ -353,7 +399,7 @@ def load_plan(machine: str):
             problems.append(f"{name}/{method}: config_train says gpu_ids {lanes['train']} "
                             f"but config_infer says {lanes['infer']}")
         arm = Arm(category, example, method, lanes.get("train", lanes.get("infer", -1)),
-                  (ranks[name], i), rels)
+                  (ranks[name], i), rels, generated)
         if arm.key in keys:
             problems.append(f"{arm.label} appears twice in manifest.json")
         keys.add(arm.key)
@@ -361,7 +407,9 @@ def load_plan(machine: str):
 
     by_method = {}
     for arm in arms:
-        if arm.lane >= 0:  # -1: neither config parsed, already a problem above
+        # -1: neither config parsed, already a problem above. Hand-maintained
+        # configs choose their own lane.
+        if arm.lane >= 0 and arm.generated:
             by_method.setdefault(arm.method, set()).add(arm.lane)
     for method, lanes in sorted(by_method.items()):
         if len(lanes) > 1:
@@ -377,39 +425,251 @@ def load_plan(machine: str):
 
 class StatePaths:
     def __init__(self, machine: str):
-        self.state = ROOT / "output" / "dataset_matrix" / "_campaign" / machine
+        self.campaign = ROOT / "output" / "dataset_matrix" / "_campaign"
+        self.state = self.campaign / machine
         self.logs = self.state / "logs"
         self.stage_logs = self.logs / "stages"
         self.done = self.state / "done"
         self.launch = self.state / "launch"
+        self.set_aside = self.state / "set_aside"
+        self.started = self.state / "started"
         self.lock = self.state / "runner.lock"
 
     def marker(self, arm: Arm, stage: str) -> Path:
         return self.done / f"{arm.key}__{stage}"
 
-def marker_state(paths: StatePaths, arm: Arm, stage: str):
-    """(done, note). A marker whose config has changed since still counts as done."""
+    def start_record(self, arm: Arm) -> Path:
+        return self.started / f"{arm.key}__train"
+
+RUNS_AGAIN = "; counted as not done, so it runs again"
+
+def marker_time(record: dict, field: str):
+    """Seconds since the epoch for a marker's "started"/"finished", or None.
+    Markers from before started_epoch/finished_epoch only carry the ISO text."""
+    value = record.get(f"{field}_epoch")
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value):
+        return float(value)
+    text = record.get(field)
+    if isinstance(text, str):
+        try:
+            return datetime.strptime(text, ISO_FORMAT).timestamp()
+        except ValueError:
+            pass
+    return None
+
+def read_marker(paths: StatePaths, arm: Arm, stage: str):
+    """(record, note): the marker's JSON record if it was written for the
+    config as it is now, else (None, why not). No marker at all is (None, "")."""
     marker = paths.marker(arm, stage)
     if not marker.exists():
-        return False, ""
+        return None, ""
     try:
         raw = marker.read_bytes()
     except OSError as exc:
-        return True, f"marker unreadable ({exc}); counted as done"
+        return None, f"marker unreadable ({exc})" + RUNS_AGAIN
     if not raw.strip():
-        return True, "empty marker from the old bash runner, config hash unknown; counted as done"
+        return None, "empty marker from the old bash runner, config hash unknown" + RUNS_AGAIN
     try:
-        recorded = json.loads(raw.decode("utf-8")).get("sha256")
-    except (ValueError, AttributeError):
-        return True, "marker is not JSON; counted as done"
+        record = json.loads(raw.decode("utf-8"))
+    except ValueError:
+        record = None
+    if not isinstance(record, dict):
+        return None, "marker is not a JSON record" + RUNS_AGAIN
     try:
         current = sha256(arm.path(stage).read_bytes())
-    except OSError:
-        current = None
+    except OSError as exc:
+        return None, f"its config cannot be read ({exc.strerror or exc})" + RUNS_AGAIN
+    recorded = record.get("sha256")
     if recorded != current:
-        return True, (f"config changed since it ran (marker {str(recorded)[:12]}, now "
-                      f"{str(current)[:12]}); delete {rel(marker)} to run it again")
+        return None, (f"config changed since it ran (marker {str(recorded)[:12]}, now "
+                      f"{current[:12]})" + RUNS_AGAIN)
+    return record, ""
+
+def marker_state(paths: StatePaths, arm: Arm, stage: str):
+    """(done, note). A stage is done only while its marker matches the config
+    as it is now; an inference also has to have started after the arm's
+    current training finished, or it scored an older checkpoint."""
+    record, note = read_marker(paths, arm, stage)
+    if record is None:
+        return False, note
+    if stage == "train":
+        return True, ""
+    train, _ = read_marker(paths, arm, "train")
+    if train is None:
+        return False, ("its training is not done for the current config, so this result "
+                       "belongs to an older checkpoint; it runs again")
+    trained = marker_time(train, "finished")
+    ran = marker_time(record, "started")
+    if ran is None:
+        ran = marker_time(record, "finished")
+    if trained is None or ran is None:
+        return False, ("its time or its training's time cannot be read, so it cannot be tied "
+                       "to the current checkpoint; it runs again")
+    if ran + 1.0 < trained:
+        return False, ("it ran before the arm's current training finished, so it scored an "
+                       "older checkpoint; it runs again")
     return True, ""
+
+# ------------------------------------------------- outputs a rerun moves aside
+
+PREDICTION_KEYS = ("inference_output_dir", "output_dir")  # score_rank.py reads the same
+LSH_CHECKPOINT_KEYS = ("vae_modelpath", "lc_modelpath")
+
+def config_parser():
+    """cae_suite.config_parser: the configs as the launcher itself reads them."""
+    if str(ROOT) not in sys.path:
+        sys.path.insert(0, str(ROOT))
+    from cae_suite import config_parser as parser
+    return parser
+
+def config_values(path: Path) -> dict:
+    values = config_parser().parse_config(path).values
+    if not values:
+        raise ValueError(f"{rel(path)} has no readable keys")
+    return values
+
+def native_path(arm: Arm, stage: str, value):
+    """Where a config path points. The native process runs in methods/<Name>/,
+    which configs/<Name>/ mirrors. Lexical only: nothing is resolved."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    base = ROOT / "methods" / Path(arm.rels[stage]).parts[1]
+    return Path(os.path.normpath(str(base / value.strip())))
+
+def within(child: Path, parent: Path) -> bool:
+    """child is parent or below it, compared lexically."""
+    c = os.path.normcase(os.path.abspath(child))
+    p = os.path.normcase(os.path.abspath(parent))
+    return c == p or c.startswith(p.rstrip(os.sep) + os.sep)
+
+def prediction_dir(arm: Arm, infer_values: dict):
+    """The directory an arm's inference writes its predictions to. Geometry
+    arms have none: SDFFlow keeps its own stage bookkeeping."""
+    if arm.category not in ("deterministic", "probabilistic"):
+        return None
+    for key in PREDICTION_KEYS:
+        if key in infer_values:
+            return native_path(arm, "infer", infer_values[key])
+    return None
+
+def read_start_record(paths: StatePaths, arm: Arm):
+    try:
+        record = json.loads(paths.start_record(arm).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return record if isinstance(record, dict) else None
+
+def stale_outputs(paths: StatePaths, arm: Arm, stage: str):
+    """What a stage about to run first moves out of the way. Pure, so a dry run
+    can print it. Returns (targets, record_sha, protected):
+
+    targets     [(path, what)] that exist now: the stage's own stale markers
+                (a training also takes the inference's, which scored the
+                checkpoint about to be replaced) and the arm's prediction
+                directory, so nothing a later score reads is left from an
+                earlier run. For SimulGenVAE, also vae.pth/lc.pth unless the
+                start record says this very config wrote them: with
+                skip_completed_stages it reuses a checkpoint that matches
+                only its own compatibility keys, which would carry an older
+                config's training into this one.
+    record_sha  the train config's sha256 to record as started (SimulGenVAE
+                only; None otherwise)
+    protected   every other path either config names (checkpoints, datasets,
+                logs); a target that holds one is not moved
+    """
+    train_values = config_values(arm.path("train"))
+    infer_values = config_values(arm.path("infer"))
+    targets = []
+    for s in (("train", "infer") if stage == "train" else ("infer",)):
+        marker = paths.marker(arm, s)
+        if os.path.lexists(marker):
+            targets.append((marker, f"{s} marker"))
+    pred = prediction_dir(arm, infer_values)
+    if pred is not None and os.path.lexists(pred):
+        targets.append((pred, "predictions"))
+    record_sha = None
+    if stage == "train" and train_values.get("model") == "simulgenvae":
+        record_sha = sha256(arm.path("train").read_bytes())
+        record = read_start_record(paths, arm)
+        if record is None or record.get("sha256") != record_sha:
+            for key in LSH_CHECKPOINT_KEYS:
+                ckpt = native_path(arm, "train", train_values.get(key))
+                if ckpt is not None and os.path.lexists(ckpt):
+                    targets.append((ckpt, "checkpoint not written by this config"))
+    named = set()
+    path_keys = config_parser().PATH_KEYS
+    for s, values in (("train", train_values), ("infer", infer_values)):
+        for key, value in values.items():
+            if key in path_keys:
+                p = native_path(arm, s, value)
+                if p is not None:
+                    named.add(os.path.normcase(os.path.abspath(p)))
+    moving = {os.path.normcase(os.path.abspath(t)) for t, _ in targets}
+    protected = [Path(p) for p in sorted(named - moving)]
+    return targets, record_sha, protected
+
+def move_problem(paths: StatePaths, target: Path, protected):
+    """None if target may be set aside, else why not."""
+    if (os.path.normcase(os.path.dirname(os.path.abspath(target)))
+            == os.path.normcase(os.path.abspath(paths.done))):
+        return None  # a marker
+    output = ROOT / "output"
+    if not within(target, output) or within(output, target):
+        return "it is not inside output/"
+    if within(target, paths.campaign) or within(paths.campaign, target):
+        return f"it is or holds the campaign state {rel(paths.campaign)}"
+    for p in protected:
+        if within(p, target):
+            return f"it holds {rel(p)}, which a config names"
+    return None
+
+def set_aside(ctx, arm: Arm, stage: str, targets, say):
+    """Moves each target under set_aside/<run id>/<arm>__before_<stage>/.
+    Nothing is deleted. None, or why a target could not be moved."""
+    base = ctx.paths.set_aside / ctx.run_id
+    dest, n = base / f"{arm.key}__before_{stage}", 1
+    while os.path.lexists(dest):
+        n += 1
+        dest = base / f"{arm.key}__before_{stage}.{n}"
+    for target, what in targets:
+        to, k = dest / target.name, 1
+        while os.path.lexists(to):
+            k += 1
+            to = dest / f"{target.name}.{k}"
+        try:
+            dest.mkdir(parents=True, exist_ok=True)
+            try:
+                os.replace(target, to)
+            except OSError:
+                shutil.move(str(target), str(to))  # another filesystem
+        except OSError as exc:  # shutil.Error is an OSError
+            return f"could not set aside {rel(target)}: {exc}"
+        say(f"set aside {what} {rel(target)} -> {rel(to)}")
+    return None
+
+def prepare_stage(ctx, arm: Arm, stage: str, say):
+    """Clears what an earlier run left for this stage. None, or why it could not."""
+    try:
+        targets, record_sha, protected = stale_outputs(ctx.paths, arm, stage)
+    except (OSError, ValueError, ImportError) as exc:
+        return f"could not read its configs to clear earlier outputs: {exc}"
+    for target, _ in targets:
+        problem = move_problem(ctx.paths, target, protected)
+        if problem:
+            return f"will not set aside {rel(target)}: {problem}"
+    problem = set_aside(ctx, arm, stage, targets, say)
+    if problem:
+        return problem
+    if record_sha is not None:
+        record = {"config": arm.rels["train"], "sha256": record_sha, "run_id": ctx.run_id,
+                  "machine": ctx.machine, "started": now_iso()}
+        try:
+            ctx.paths.started.mkdir(parents=True, exist_ok=True)
+            write_atomic(ctx.paths.start_record(arm),
+                         (json.dumps(record, indent=1) + "\n").encode("utf-8"))
+        except OSError as exc:
+            return f"could not write {rel(ctx.paths.start_record(arm))}: {exc}"
+    return None
 
 # ---------------------------------------------------------- nvidia-smi and CUDA
 
@@ -469,16 +729,6 @@ def query_gpus():
     if not gpus:
         return None, f"nvidia-smi listed no GPUs (exit {rc}): {out.strip()[:300]!r}"
     return gpus, ""
-
-def query_apps():
-    rc, out = run_bounded("nvidia-smi", ["nvidia-smi",
-                                         "--query-compute-apps=pid,gpu_uuid,process_name,used_memory",
-                                         "--format=csv,noheader"], NVSMI_TIMEOUT)
-    if rc is None:
-        return None, out
-    if rc != 0:
-        return None, f"nvidia-smi --query-compute-apps exited {rc}: {out.strip()[:300]!r}"
-    return [ln.strip() for ln in out.splitlines() if ln.count(",") >= 3], ""
 
 def cuda_usable(uuid: str):
     """(True, "") / (False, why) / (None, why) for one card, through the CUDA driver."""
@@ -609,7 +859,6 @@ class Settings:
         self.gate_interval = max(1.0, env_number("GATE_INTERVAL", 3600.0))
         self.gate_samples = max(1, env_number("GATE_SAMPLES", 3, int))
         self.gate_gap = env_number("GATE_SAMPLE_GAP", 20.0)
-        self.gate_allow_apps = env_flag("GATE_ALLOW_APPS")
         self.expected_gpus = env_number("EXPECTED_GPUS", 8, int)
         if self.expected_gpus < 1:
             raise UsageError("EXPECTED_GPUS must be at least 1")
@@ -695,6 +944,7 @@ class Ctx:
         self.queue = None
         self.log = Log()
         self.workers = {}
+        self.strikes = {}  # GPU index -> stages failed in a row on that card
         self._results = {}
         self._results_lock = threading.Lock()
 
@@ -761,6 +1011,7 @@ def run_stage(ctx: Ctx, gpu: Gpu, arm: Arm, stage: str) -> str:
     except (OSError, ValueError) as exc:
         say(f"cannot write the launch copy: {exc}")
         ctx.record(arm, stage, FAILED, detail=f"launch copy: {exc}", gpu=gpu.index)
+        strike(ctx, gpu, FAILED)
         return FAILED
 
     stage_tag = f"{ctx.run_id}:{gpu.index}:{arm.key}:{stage}"
@@ -783,6 +1034,7 @@ def run_stage(ctx: Ctx, gpu: Gpu, arm: Arm, stage: str) -> str:
     )
     say(f"running, log {rel(log_path)}")
     started = time.monotonic()
+    started_wall, started_iso = time.time(), now_iso()
     try:
         with open(log_path, "ab") as fh:
             fh.write(header.encode("utf-8"))
@@ -793,6 +1045,7 @@ def run_stage(ctx: Ctx, gpu: Gpu, arm: Arm, stage: str) -> str:
     except OSError as exc:
         say(f"could not start the launcher: {exc}")
         ctx.record(arm, stage, FAILED, detail=f"could not start: {exc}", gpu=gpu.index)
+        strike(ctx, gpu, FAILED)
         return FAILED
 
     prefix = f"CAE4ALL_STAGE_TAG={stage_tag}".encode()
@@ -854,7 +1107,9 @@ def run_stage(ctx: Ctx, gpu: Gpu, arm: Arm, stage: str) -> str:
                  f"{outcome} =====\n".encode("utf-8"))
     if outcome == OK:
         marker = {
-            "config": arm.rels[stage], "sha256": sha256(data), "finished": now_iso(),
+            "config": arm.rels[stage], "sha256": sha256(data),
+            "started": started_iso, "finished": now_iso(),
+            "started_epoch": round(started_wall, 3), "finished_epoch": round(time.time(), 3),
             "machine": ctx.machine, "run_id": ctx.run_id, "gpu_index": gpu.index,
             "gpu_uuid": gpu.uuid, "elapsed_s": round(elapsed, 1),
             "launch_copy": rel(launch), "log": rel(log_path),
@@ -871,33 +1126,56 @@ def run_stage(ctx: Ctx, gpu: Gpu, arm: Arm, stage: str) -> str:
     }[outcome]
     ctx.record(arm, stage, outcome, detail=detail, rc=rc, gpu=gpu.index, uuid=gpu.uuid,
                log=rel(log_path), elapsed_s=round(elapsed, 1))
+    strike(ctx, gpu, outcome)
     say(f"{outcome} (exit {rc}, {fmt_secs(elapsed)})"
         + (f" - {detail}" if detail and outcome != FAILED else ""))
     return outcome
+
+def strike(ctx: Ctx, gpu: Gpu, outcome: str) -> None:
+    """A successful stage clears the card's count; a failed, unlaunched or
+    interrupted one adds to it. A lost card or a stop ends the worker anyway."""
+    if outcome == OK:
+        ctx.strikes[gpu.index] = 0
+    elif outcome in (FAILED, NOT_LAUNCHED, INTERRUPTED):
+        ctx.strikes[gpu.index] = ctx.strikes.get(gpu.index, 0) + 1
+
+def start_stage(ctx: Ctx, gpu: Gpu, arm: Arm, stage: str) -> str:
+    """Sets aside what an earlier run left for the stage, then runs it. A stage
+    that cannot be cleared is failed without a strike: the card is not at fault."""
+    say = lambda msg: ctx.log(f"  {stage}: {msg}", f"gpu{gpu.index}")  # noqa: E731
+    if ctx.stopping():
+        return STOPPED
+    problem = prepare_stage(ctx, arm, stage, say)
+    if problem:
+        say(f"not started - {problem}")
+        ctx.record(arm, stage, FAILED, detail=problem, gpu=gpu.index)
+        return FAILED
+    return run_stage(ctx, gpu, arm, stage)
 
 def run_arm(ctx: Ctx, gpu: Gpu, arm: Arm, stolen: bool) -> str:
     tag = f"gpu{gpu.index}"
     ctx.log(arm.label + (f"  (taken over from lane {arm.lane})" if stolen else ""), tag)
     done, note = marker_state(ctx.paths, arm, "train")
     if done:
-        ctx.log("  train: already done" + (f" - {note}" if note else ""), tag)
+        ctx.log("  train: already done", tag)
     else:
-        outcome = run_stage(ctx, gpu, arm, "train")
+        if note:
+            ctx.log(f"  train: {note}", tag)
+        # Its preparation also sets aside the inference marker and predictions,
+        # which belong to the checkpoint this training replaces.
+        outcome = start_stage(ctx, gpu, arm, "train")
         if outcome != OK:
             if outcome in (FAILED, NOT_LAUNCHED, INTERRUPTED):
                 ctx.record(arm, "infer", SKIPPED, detail="its training did not finish")
                 ctx.log("  infer: skipped - training did not finish", tag)
             return outcome
-        stale = ctx.paths.marker(arm, "infer")
-        if stale.exists():
-            stale.unlink()  # it scored the checkpoint that was just replaced
-            ctx.log("  infer: the earlier result belongs to the previous checkpoint; "
-                    "running it again", tag)
     done, note = marker_state(ctx.paths, arm, "infer")
     if done:
-        ctx.log("  infer: already done" + (f" - {note}" if note else ""), tag)
+        ctx.log("  infer: already done", tag)
         return OK
-    return run_stage(ctx, gpu, arm, "infer")
+    if note:
+        ctx.log(f"  infer: {note}", tag)
+    return start_stage(ctx, gpu, arm, "infer")
 
 def worker_loop(ctx: Ctx, gpu: Gpu, tag: str) -> str:
     standing_by = False
@@ -927,6 +1205,7 @@ def worker_loop(ctx: Ctx, gpu: Gpu, tag: str) -> str:
                 stage = "infer" if marker_state(ctx.paths, arm, "train")[0] else "train"
                 ctx.record(arm, stage, FAILED, detail="runner error; see runner.log",
                            gpu=gpu.index)
+                strike(ctx, gpu, FAILED)
                 outcome = FAILED
             if outcome == GPU_LOST:
                 arm.dead_requeues += 1
@@ -943,6 +1222,10 @@ def worker_loop(ctx: Ctx, gpu: Gpu, tag: str) -> str:
             return "stopped"
         if outcome == GPU_LOST:
             return "GPU lost"
+        if ctx.strikes.get(gpu.index, 0) >= STRIKE_LIMIT:
+            ctx.log(f"{STRIKE_LIMIT} stages in a row failed on this card; this worker "
+                    "retires and the other cards take over its lane", tag)
+            return f"retired after {STRIKE_LIMIT} failed stages in a row"
     return "stopped"
 
 def worker(ctx: Ctx, gpu: Gpu) -> None:
@@ -970,19 +1253,10 @@ def gate_reading(ctx: Ctx):
             f"GPU{g['index']}={g['raw']}" for g in gpus if g["util"] != 0]
     if busy:
         return None, "utilisation not 0% on " + ", ".join(busy)
-    if not ctx.s.gate_allow_apps:
-        apps, err = query_apps()
-        if apps is None:
-            return None, err
-        if apps:
-            more = f" (+{len(apps) - 4} more)" if len(apps) > 4 else ""
-            return None, (f"{len(apps)} compute process(es) on the GPUs: "
-                          + "; ".join(apps[:4]) + more)
     return gpus, ""
 
 def gate_condition(s: Settings) -> str:
-    return (f"{s.expected_gpus} GPUs at 0% utilisation"
-            + ("" if s.gate_allow_apps else " with no compute process"))
+    return f"{s.expected_gpus} GPUs at 0% utilisation"
 
 def wait_for_gate(ctx: Ctx):
     """The GPU list once the box is idle (at once with SKIP_GPU_GATE), None if not."""
@@ -1064,11 +1338,15 @@ def write_report(ctx: Ctx, arms, gpus, started_at: str, stopped: bool) -> int:
                 lines.append(f"  {r['arm']} {r['stage']}: {res['outcome']}{where}{why}{log}")
             else:
                 lines.append(f"  {r['arm']} {r['stage']}: not attempted in this run")
-        lines.append("Run the same command again to pick these up; finished stages are skipped.")
+        lines.append("Run the same command again to pick these up; a stage is skipped only "
+                     "while its marker matches the current config.")
     notes = [r for r in rows if r["marker_note"]]
     if notes:
-        lines += ["", "markers to look at:"]
+        lines += ["", "markers that no longer count:"]
         lines += [f"  {r['arm']} {r['stage']}: {r['marker_note']}" for r in notes]
+    moved = ctx.paths.set_aside / ctx.run_id
+    if moved.is_dir():
+        lines += ["", f"earlier outputs moved aside by this run (nothing was deleted): {rel(moved)}"]
     text = "\n".join(lines) + "\n"
     report = {
         "machine": ctx.machine, "run_id": ctx.run_id, "started": started_at,
@@ -1103,6 +1381,55 @@ def spread_scores(ctx: Ctx, arms) -> None:
     except (OSError, subprocess.TimeoutExpired) as exc:
         ctx.log(f"score_spread.py did not run: {exc}")
 
+def ranking_python():
+    """(interpreter, where it came from) for score_rank.py. It needs numpy and
+    h5py, which the launcher's interpreter need not have, so it runs under the
+    MeshGraphNets interpreter the launcher itself would pick."""
+    try:
+        if str(ROOT) not in sys.path:
+            sys.path.insert(0, str(ROOT))
+        from cae_suite.settings import LocalSettings
+        settings = LocalSettings.load(ROOT)
+        python = settings.resolve_python("meshgraphnets", "meshgraphnets")
+        if "meshgraphnets" in settings.model_pythons:
+            source = "meshgraphnets in ai_cae4all.local.toml"
+        elif settings.default_python:
+            source = "default in ai_cae4all.local.toml"
+        else:
+            source = "no local toml entry: this interpreter"
+        return str(python), source
+    except Exception as exc:  # the ranking is informational; never stop the run over it
+        return sys.executable, f"this interpreter ({type(exc).__name__}: {exc})"
+
+def ranking_examples(machine: str):
+    """Every example of this machine. score_rank.py ranks the deterministic
+    and probabilistic ones; geometry arms (one method per example) appear
+    only in its convergence section."""
+    return list(MACHINES[machine])
+
+def rank_scores(ctx: Ctx, arms) -> None:
+    """Informational only: scores every deterministic and probabilistic arm of
+    this machine on its held-out set and ranks the methods per example
+    (score_rank.py). An arm whose markers are not current for its configs, or
+    whose stages did not finish, is listed under its status and shares last
+    place, not dropped. The convergence readout covers every arm, geometry
+    included."""
+    examples = ranking_examples(ctx.machine)
+    if not SCORE_RANK.is_file() or not examples:
+        return
+    python, source = ranking_python()
+    ctx.log(f"held-out ranking (informational; {python}, {source}):")
+    try:
+        cp = subprocess.run([python, "-B", str(SCORE_RANK), "--examples", *examples,
+                             "--out", str(ctx.paths.state)],
+                            cwd=str(ROOT), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, timeout=RANK_TIMEOUT)
+        ctx.log(cp.stdout.decode("utf-8", "replace").rstrip() or "(no output)")
+        if cp.returncode:
+            ctx.log(f"score_rank.py exited {cp.returncode}: some arms above are not ranked")
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        ctx.log(f"score_rank.py did not run: {exc}")
+
 # ---------------------------------------------------------------------- modes
 
 def lock_state(paths: StatePaths):
@@ -1128,6 +1455,21 @@ def lock_state(paths: StatePaths):
     finally:
         os.close(fd)
 
+def aside_plan(paths: StatePaths, arm: Arm, stage: str):
+    """The dry run's lines for what starting `stage` would first move aside."""
+    try:
+        targets, _, protected = stale_outputs(paths, arm, stage)
+    except (OSError, ValueError, ImportError) as exc:
+        return [f"(!) cannot tell what its {stage} would set aside: {exc}"]
+    lines = []
+    for target, what in targets:
+        problem = move_problem(paths, target, protected)
+        if problem:
+            lines.append(f"(!) {stage} would not start: will not set aside {rel(target)}: {problem}")
+        else:
+            lines.append(f"{stage} would first set aside {what} {rel(target)}")
+    return lines
+
 def dry_run(machine: str, arms, s: Settings) -> int:
     paths = StatePaths(machine)
     held = lock_state(paths)
@@ -1139,6 +1481,10 @@ def dry_run(machine: str, arms, s: Settings) -> int:
     print(f"  examples  {', '.join(MACHINES[machine])}")
     print(f"  state     {rel(paths.state)}"
           + ("   <- a runner is active on it right now" if held else ""))
+    print(f"  set aside {rel(paths.set_aside)}/<run id>/  (what a rerun replaces; nothing is deleted)")
+    python, source = ranking_python()
+    print(f"  ranking   {rel(SCORE_RANK)} under {python} ({source}) -> "
+          f"{rel(paths.state / 'ranking.txt')}, ranking.csv, convergence.csv")
     gpus, _ = query_gpus()
     uuid_of = {g["index"]: g["uuid"] for g in gpus} if gpus else {}
     total = done_total = 0
@@ -1151,22 +1497,24 @@ def dry_run(machine: str, arms, s: Settings) -> int:
             continue
         print(f"lane {lane}: {len(lane_arms)} arm(s)")
         for arm in lane_arms:
-            cells, notes = [], []
-            train_done = marker_state(paths, arm, "train")[0]
+            cells, notes, runs = [], [], None
             for stage in STAGES:
                 done, note = marker_state(paths, arm, stage)
-                if stage == "infer" and done and not train_done:  # see run_arm
-                    done, note = False, "a successful retrain removes this marker and runs it again"
                 total += 1
                 done_total += done
                 cells.append(f"{stage} {'done' if done else 'pending'}{' (!)' if note else ''}")
                 if note:
                     notes.append(f"{stage}: {note}")
+                if not done and runs is None:
+                    runs = stage  # the first stage a run would start; it clears for both
                 if not done and first is None:
                     first = (arm, stage)
             print(f"    {arm.label:<46} {cells[0]:<16} {cells[1]}")
             for note in notes:
                 print(f"        (!) {note}")
+            if runs is not None:
+                for line in aside_plan(paths, arm, runs):
+                    print(f"        {line}")
     print()
     print(f"{len(arms)} arm(s), {total} stage(s): {done_total} done, {total - done_total} to run")
     if first is not None:
@@ -1411,6 +1759,7 @@ def run(machine: str, arms, s: Settings) -> int:
     code = write_report(ctx, arms, gpus, started_at, stopped=ctx.stopping())
     if not ctx.stopping():
         spread_scores(ctx, arms)
+        rank_scores(ctx, arms)
     return code
 
 def main(argv=None) -> int:

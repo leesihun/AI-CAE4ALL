@@ -295,6 +295,58 @@ class EvaluationContractTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "timestep/node"):
                 run_field_evaluation({"prediction_path": str(prediction), "truth_path": str(truth)})
 
+    def test_static_one_shot_rollout_scores_only_the_predicted_frame(self) -> None:
+        """A statically trained mesh model writes [seed, prediction] (steps1, T=2).
+
+        Against the single-frame truth it was inferred from, the schema used to
+        report "incompatible timestep/node counts" and the Studio's evaluate
+        step failed on every sample of the ex10 DeepJEB HI-MGN run. Only frame
+        1 is a prediction; the zero seed at frame 0 must never reach the score.
+        Any other timestep mismatch is still rejected.
+        """
+        import h5py
+        import numpy as np
+
+        with tempfile.TemporaryDirectory(prefix="evaluation-static-", dir=RUNTIME_ROOT) as directory:
+            root = Path(directory)
+            prediction = root / "rollout_sample2_steps1.h5"
+            truth = root / "truth.h5"
+            nodes = 5
+            # ex10 layout: 3 coordinates, 3 state rows, 4 input-only condition rows.
+            truth_names = ["x_coord", "y_coord", "z_coord", "ux", "uy", "uz", "c0", "c1", "c2", "c3"]
+            truth_values = np.arange(10 * 1 * nodes, dtype=np.float32).reshape(10, 1, nodes) + 1.0
+            self._mesh(truth, {"2": truth_values}, truth_names, 3, 4, 3)
+            rollout = np.zeros((7, 2, nodes), dtype=np.float32)
+            rollout[0:3, :, :] = truth_values[0:3, 0:1, :]
+            rollout[3:6, 1, :] = truth_values[3:6, 0, :] + 0.5  # frame 0 stays the zero seed
+            with h5py.File(prediction, "w") as handle:
+                handle.attrs["num_samples"] = 1
+                handle.attrs["num_features"] = 7
+                handle.attrs["num_timesteps"] = 2
+                handle.attrs["output_var"] = 3
+                handle.create_group("metadata").create_dataset(
+                    "feature_names", data=np.asarray([n.encode() for n in truth_names[:6] + ["part_id"]])
+                )
+                handle.create_group("data").create_group("2").create_dataset("nodal_data", data=rollout)
+
+            schema = evaluation_schema({"prediction_path": str(prediction), "truth_path": str(truth)})
+
+            self.assertTrue(schema["compatible"], schema["errors"])
+            self.assertEqual(schema["sample_matching"]["compatible_shape_count"], 1)
+            self.assertTrue(any("static one-shot" in warning for warning in schema["warnings"]))
+            self.assertEqual([item["name"] for item in schema["recommended_mapping"]["field_pairs"]], ["ux", "uy", "uz"])
+            report = run_field_evaluation({"prediction_path": str(prediction), "truth_path": str(truth)})
+            self.assertEqual(report["evaluated_samples"], 1)
+            self.assertAlmostEqual(report["aggregate"]["mae"]["mean"], 0.5, places=6)
+
+            # Three frames against one is not the static layout: still rejected.
+            with h5py.File(prediction, "r+") as handle:
+                del handle["data/2/nodal_data"]
+                handle["data/2"].create_dataset("nodal_data", data=np.zeros((7, 3, nodes), dtype=np.float32))
+            schema = evaluation_schema({"prediction_path": str(prediction), "truth_path": str(truth)})
+            self.assertFalse(schema["compatible"])
+            self.assertEqual(schema["sample_matching"]["incompatible_shape_count"], 1)
+
     def test_table_schema_matches_declared_sample_ids_and_scores_named_columns(self) -> None:
         import h5py
         import numpy as np

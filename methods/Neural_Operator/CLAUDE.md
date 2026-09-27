@@ -41,7 +41,7 @@ selects which file to read.
 | [model/adapters/grid.py](model/adapters/grid.py) | Deterministic splat/sample; the axis-order convention is documented at the top of the file. |
 | [model/adapters/coordinate_domain.py](model/adapters/coordinate_domain.py) | Active axes, `[0,1]^d` mapping, out-of-bounds policy. |
 | [model/adapters/point_sampling.py](model/adapters/point_sampling.py) | Deterministic fixed-size sensor sampling. |
-| [model/adapters/radius_neighbors.py](model/adapters/radius_neighbors.py) | scipy KDTree baseline + optional torch_cluster; no core builds radius graphs, `min_reachable_radius` feeds `misc/audit_input_identifiability.py`. |
+| [model/adapters/radius_neighbors.py](model/adapters/radius_neighbors.py) | `min_reachable_radius` only (grid-coverage arithmetic for `misc/audit_input_identifiability.py`); no core builds radius graphs. |
 | [general_modules/mesh_dataset.py](general_modules/mesh_dataset.py) | HDF5 loading, split, normalization, `pos_normalized`, augmentation. |
 | [general_modules/dataset_stats.py](general_modules/dataset_stats.py) | Moments, `position_scale`, active axes, grid bounds, rotation-safe radius. |
 | [general_modules/config_validation.py](general_modules/config_validation.py) | Full key registry; unknown/legacy keys fail fast. |

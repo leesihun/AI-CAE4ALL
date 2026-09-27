@@ -1,6 +1,6 @@
 import { toast } from "./dom.js";
 import { BLOCK_SPECS, FIT_MIN_ZOOM, MAX_ZOOM } from "./constants.js";
-import { state, registerMutationHook, snapshot } from "./state.js";
+import { state, registerMutationHook, snapshot, newCanvasId } from "./state.js";
 import { applyGraphAutofill } from "./autofill.js";
 
 export const PIPELINE_STORAGE_KEY = "ai-cae4all.studio.pipeline.v1";
@@ -27,6 +27,12 @@ export function pipelineDocument() {
     version: PIPELINE_VERSION,
     saved_at: new Date().toISOString(),
     name: pipelineName(),
+    canvas_id: state.canvasId || (state.canvasId = newCanvasId()),
+    // Both survive a reload: a legacy canvas that lost its flag on the first
+    // save could no longer claim the untagged run it was still showing, and a
+    // graph reopened from Runs would forget the run it came from.
+    ...(state.legacyCanvas ? { legacy_canvas: true } : {}),
+    ...(state.ownedJobs.size ? { owned_jobs: [...state.ownedJobs] } : {}),
     node_counter: state.nodeCounter,
     view: {
       x: finite(state.view.x, 22),
@@ -43,7 +49,8 @@ export function pipelineDocument() {
       ...(Array.isArray(node.manualConfigKeys) && node.manualConfigKeys.length ? { manual_config_keys: node.manualConfigKeys } : {}),
       ...(node.loadedConfigPath ? { loaded_config_path: node.loadedConfigPath } : {}),
       ...(node.savedConfigPath ? { saved_config_path: node.savedConfigPath } : {}),
-      ...(node.optimizationReport ? { optimization_report: node.optimizationReport } : {})
+      ...(node.optimizationReport ? { optimization_report: node.optimizationReport } : {}),
+      ...(node.resultsFrom ? { results_from: node.resultsFrom } : {})
     })),
     edges: state.edges.map(edge => ({
       id: edge.id,
@@ -80,6 +87,8 @@ function confirmPipelineReplacement(payload) {
   return window.confirm(`Replace the current pipeline with "${name}"?\n\nYour current pipeline will be kept as one Undo step.`);
 }
 
+const NODE_ID_PATTERN = /^[A-Za-z0-9_.-]+$/;
+
 export function applyPipelineDocument(payload, {
   confirmReplacement = true,
   recordHistory = true,
@@ -93,6 +102,10 @@ export function applyPipelineDocument(payload, {
     if (!spec) throw new Error(`Node ${index + 1} uses unknown block type ${type || "<empty>"}.`);
     const id = String(raw?.id || "").trim();
     if (!id || ids.has(id)) throw new Error(`Node ${index + 1} has a missing or duplicate ID.`);
+    // IDs land in HTML attributes and CSS selectors. Everything the Studio
+    // generates (template ids, `<type>_<n>`, `<id>_copy_<n>`) fits this set, so
+    // anything outside it is a hand-edited or hostile file, not a saved one.
+    if (!NODE_ID_PATTERN.test(id)) throw new Error(`Node ${index + 1} has an invalid ID "${id.slice(0, 40)}" (letters, digits, "_", "-", "." only).`);
     ids.add(id);
     const config = raw.config && typeof raw.config === "object" && !Array.isArray(raw.config) ? raw.config : {};
     return {
@@ -114,7 +127,10 @@ export function applyPipelineDocument(payload, {
       progress: 0,
       ...(raw.loaded_config_path ? { loadedConfigPath: String(raw.loaded_config_path) } : {}),
       ...(raw.saved_config_path ? { savedConfigPath: String(raw.saved_config_path) } : {}),
-      ...(raw.optimization_report ? { optimizationReport: String(raw.optimization_report) } : {})
+      ...(raw.optimization_report ? { optimizationReport: String(raw.optimization_report) } : {}),
+      // The last run whose outputs reached this block (run.js runIsUndelivered).
+      ...(raw.results_from && typeof raw.results_from === "object" && typeof raw.results_from.job === "string"
+        ? { resultsFrom: { job: raw.results_from.job, at: String(raw.results_from.at ?? "") } } : {})
     };
   });
   const nodeById = new Map(nodes.map(node => [node.id, node]));
@@ -190,6 +206,17 @@ export function applyPipelineDocument(payload, {
   state.selectedEdge = null;
   state.pendingPort = null;
   if (resetHistory) state.history = [];
+  // A document keeps the canvas it was saved from (a reload or an imported
+  // file is that same canvas; a run's graph reopened from Runs is a copy and
+  // is given its own id by the caller). One saved before canvas ids existed
+  // gets a fresh id but may still claim untagged jobs.
+  const savedCanvasId = typeof payload.canvas_id === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(payload.canvas_id)
+    ? payload.canvas_id : "";
+  state.canvasId = savedCanvasId || newCanvasId();
+  state.legacyCanvas = !savedCanvasId || payload.legacy_canvas === true;
+  state.ownedJobs = new Set(Array.isArray(payload.owned_jobs)
+    ? payload.owned_jobs.filter(id => typeof id === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(id)).slice(0, 64)
+    : []);
   state.nodeCounter = Math.min(1_000_000, Math.max(1, Math.floor(finite(payload.node_counter, nodes.length + 1))));
   state.view = {
     x: finite(payload.view?.x, 22),

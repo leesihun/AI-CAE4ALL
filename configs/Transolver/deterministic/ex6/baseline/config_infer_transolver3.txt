@@ -7,6 +7,9 @@
 % Static state input is zero; temporal input is current state and target is next-state delta.
 % Reference: https://arxiv.org/abs/2602.04940
 % See configs/campaigns/dataset_matrix/README.md for deviations and verification boundaries.
+% training_epochs 500 at batch 1 = 16.0M updates, 1.6x the FlagSimple budget the
+%   other ex6 mesh methods train on (313 epochs): only shortfalls were raised, so
+%   this over-budget is kept and recorded in the campaign README.
 % No source HDF5 writes. Checkpoints are created by the paired training config.
 
 model                            transolver
@@ -36,7 +39,7 @@ num_workers                      2
 prefetch_factor                  2
 grad_accum_steps                 1
 augment_geometry                 False
-std_noise                        0.01
+std_noise                        0.00134
 use_amp                          True
 use_checkpointing                True
 use_ema                          True
@@ -56,7 +59,7 @@ latent_dim                       256
 num_layers                       8
 num_heads                        8
 slice_num                        64
-mlp_ratio                        4
+mlp_ratio                        2
 attention_kernel                 slice_space
 chunk_size                       4096
 dropout                          0.0
@@ -66,7 +69,7 @@ temperature_max                  5
 amortized_training               False
 amortized_cache_nodes            0
 amortized_query_nodes            0
-infer_mode                       decoupled
+infer_mode                       direct
 infer_chunk_size                 8192
 write_test_predictions           True
 max_grad_norm                    1

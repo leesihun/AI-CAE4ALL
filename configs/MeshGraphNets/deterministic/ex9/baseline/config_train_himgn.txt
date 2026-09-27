@@ -53,13 +53,13 @@ use_world_edges                  False
 use_multiscale                   True
 edge_var                         8
 latent_dim                       128
-message_passing_num              15
+message_passing_num              28
 geometry_state_mode              displacement
 displacement_state_indices       0, 1, -1
 coarsening_type                  voronoi_seedmean
 multiscale_levels                2
 voronoi_clusters                 512, 64
-mp_per_level                     2, 3, 5, 3, 2
+mp_per_level                     4, 6, 8, 6, 4
 pool_type                        mean
 unpool_type                      sum
 learned_interpolation            True

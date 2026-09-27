@@ -1,19 +1,27 @@
-import { $, $$, escapeHtml, toast, formatBytes, on } from "./dom.js";
+import { $, $$, escapeHtml, toast, formatBytes, on, closeOverlay } from "./dom.js";
 import { state, snapshot } from "./state.js";
 import { savePipelineState } from "./persistence.js";
 import { BLOCK_SPECS, MODEL_CATALOG, TYPE_META, INPUT_SOURCE_META, HELP } from "./constants.js";
 import { apiRequest, requireRuntime } from "./api.js";
-import { previewGraphic, nodeVisualLabel } from "./graphics.js";
-import { typeColor, STANDALONE_INFERENCE_MODEL_IDS } from "./validate.js";
-import { duplicateNode, deleteSelected, nodeEvidenceLabel, render } from "./graph.js";
+import { typeColor, STANDALONE_INFERENCE_MODEL_IDS, SDFFLOW_OPTIMIZE_INERT_KEYS, inferenceModel } from "./validate.js";
+import { blockFacts, factsTable } from "./cards.js";
+import { duplicateNode, deleteSelected, render } from "./graph.js";
 import { openConfig, choicesFor, requiredFor } from "./config.js";
 import { openArtifact } from "./viewer.js";
 import { runGraph } from "./run.js";
 import { activateStudioWorkspace, openStudio, openModelDetailWorkspace, openTrainingMetricsWorkspace, liveShell, liveError } from "./studio.js";
 import { applyGraphAutofill, autoFillCount, autoFillMeta, markManualConfigValue, selectedParameterCandidate } from "./autofill.js";
 
-export function inspectorCard(title, status, text, stateClass = "") {
-  return `<article class="inspect-card"><header class="inspect-card-head"><strong>${escapeHtml(title)}</strong><span class="state-pill ${stateClass}">${escapeHtml(status)}</span></header><p>${escapeHtml(text)}</p></article>`;
+/**
+ * Closed-choice values compare case-insensitively, exactly as the config
+ * sheet's dropdown does: the native parsers lowercase every non-path value, so
+ * "DDP" in a loaded config is "ddp". A case-sensitive match selected nothing,
+ * and the <select> then displayed its FIRST option as though it were the
+ * configured value. Path keys keep their case but never carry a choice list,
+ * so they cannot reach this comparison.
+ */
+function sameChoice(value, choice) {
+  return String(value ?? "").toLowerCase() === String(choice ?? "").toLowerCase();
 }
 
 function parameterNames(node, key) {
@@ -53,65 +61,11 @@ function parameterTableEditor(node) {
   </section>`;
 }
 
-export function embeddedInspector(node, spec) {
-  if (spec.modelId === "simulgenvae") {
-    return `<div class="inspect-section">
-      <div class="section-title">SimulGen-VAE live contract</div>
-      <div class="inspect-card-list">
-        ${inspectorCard("Sequential pipeline", "Native", "train executes the hierarchical VAE stage and then the latent-conditioner stage; compatible completed stages may be reused.")}
-        ${inspectorCard("VAE stage", "Native", "Compress fixed-geometry field tensors into a main latent code plus per-level hierarchical latent codes.")}
-        ${inspectorCard("Latent conditioner", "Native", "Map conditions into the VAE latent representation: the dataset's own cond_var rows (lc_data_type hdf5, the default), an ordered CSV, or condition images.")}
-        ${inspectorCard("Reconstruction", "Native", "Load both checkpoints, generate fields from conditions, write reconstructions.h5, and report field MSE.")}
-        ${inspectorCard("Dataset gate", "Required", "The current loader requires uniform node count N and timestep count T across samples.", "adapter")}
-      </div>
-    </div>`;
-  }
-  if (spec.isModel) {
-    return `<div class="inspect-section">
-      <div class="section-title">Model-owned workspace</div>
-      <div class="inspect-card-list">
-        ${inspectorCard("Data contract", "Full config", "input_var / output_var / cond_var, edge and positional features, and normalization live in Full config; preflight checks them against the dataset's real row layout before launch.")}
-        ${inspectorCard("Automatic preflight", "Before run", "Graph, config, route, paths, environment, dataset, checkpoint, native dry-run, and command checks.")}
-        ${inspectorCard("Resources", "Presets + preflight", "gpu_ids, mixed precision, activation checkpointing, batch size and the Low-VRAM preset. Peak VRAM is read back from the run log in Train Metrics; it is not estimated in advance.")}
-        ${inspectorCard("Training outputs", ".pth on disk", "Loss curves in Train Metrics, the checkpoint at modelpath, periodic prediction dumps under log_file_dir, and warm-start via the resume port.")}
-      </div>
-    </div>`;
-  }
-  if (node.type === "source.hdf5") {
-    return `<div class="inspect-section"><div class="section-title">Dataset workspace</div><div class="inspect-card-list">
-      ${inspectorCard("Samples and fields", "Click preview", "Inspect mesh, points, topology, field channels, timesteps, split, and provenance.")}
-      ${inspectorCard("Safe parameter binding", "Schema aware", "Only declared input roles are editable; coordinates, targets, IDs, and outputs stay protected.")}
-      ${inspectorCard("SimulGen compatibility", "Fixed geometry", "Show whether every selected sample has the same N and T required by SimulGen-VAE.", "adapter")}
-    </div></div>`;
-  }
-  if (node.type === "run.inference") {
-    return `<div class="inspect-section"><div class="section-title">Inference modes</div><div class="inspect-card-list">
-      ${inspectorCard("Family-resolved run", "Automatic", "Single, batch, rollout, ensemble, and SimulGen reconstruction controls follow the linked model metadata.")}
-      ${inspectorCard("SimulGen reconstruction", "Native", "Uses the VAE + LC bundle and ordered conditions to create field reconstructions and sample MSE.")}
-      ${inspectorCard("Result viewer", "Embedded", "Prediction, truth, error, timestep player, distributions, and per-sample export.")}
-    </div></div>`;
-  }
-  if (node.type === "optimize.design") {
-    return `<div class="inspect-section"><div class="section-title">Optimization layers</div><div class="inspect-card-list">
-      ${inspectorCard("Geometry feasibility", "CSV evidence", "Use explicit geometry-check columns from the selected evaluation CSV as hard constraints.", "adapter")}
-      ${inspectorCard("Physics evaluators", "Actual outputs", "Consume completed inference or benchmark CSVs; no physics score is synthesized.", "adapter")}
-      ${inspectorCard("Objectives and constraints", "CSV evidence", "Numeric columns, min/max direction, and hard inequalities read from the selected CSV.", "adapter")}
-      ${inspectorCard("Pareto and diversity", "CSV evidence", "Feasible non-dominated set with crowding-distance top-k. There is no scalarization.", "adapter")}
-      ${inspectorCard("Search and verification", "Roadmap", "DOE/evolutionary/Bayesian search, solver verification, OOD gates, and active learning.", "roadmap")}
-    </div></div>`;
-  }
-  return "";
-}
-
 export function inputSourcePanel(node) {
   const meta = INPUT_SOURCE_META[node.type];
   if (!meta) return "";
   return `<section class="inspect-section input-source-panel">
-    <div class="section-title">Input source</div>
-    <div class="input-source-current">
-      <strong>${escapeHtml(meta.label)}</strong>
-      <small>${escapeHtml(node.config[meta.key] || "No input selected")}</small>
-    </div>
+    <div class="section-title">${escapeHtml(meta.label)}</div>
     <div class="input-source-actions">
       <button class="button" id="browseInputSource">Browse repository…</button>
       <button class="button primary" id="uploadInputSource">Upload local file…</button>
@@ -152,7 +106,7 @@ export async function openInputPicker(nodeId) {
         markManualConfigValue(node, meta.key, button.dataset.useInput);
         applyGraphAutofill();
         savePipelineState();
-        $("#studioOverlay").classList.remove("open");
+        closeOverlay("studioOverlay");
         render();
         toast(`${meta.label} selected: ${button.dataset.useInput}`);
       }));
@@ -222,7 +176,7 @@ export async function createGeometrySample(nodeId) {
 
 /** Keys a run writes back onto a block: evidence, never user input. */
 const RUN_EVIDENCE_KEYS = new Set([
-  "results_path", "results_samples", "report_path", "export_path", "evaluated_samples", "job_id"
+  "results_path", "results_samples", "results_dir", "report_path", "export_path", "evaluated_samples", "job_id"
 ]);
 
 /**
@@ -313,6 +267,31 @@ function inertGeometryKey(node, key) {
   return false;
 }
 
+/**
+ * The surrogate search's honesty statement. opt_fea_verify lives in the
+ * connected SDFFlow block's Full config (the generator block does not carry
+ * it, so it cannot shadow that value), and it is read from the same merge the
+ * run config is built from: model block first, generator block over it.
+ */
+function surrogateGateSection(node) {
+  const modelEdge = state.edges.find(edge => edge.toNode === node.id && edge.toPort === "model");
+  const modelNode = modelEdge && state.nodes.find(candidate => candidate.id === modelEdge.fromNode);
+  const merged = { ...(modelNode?.config || {}), ...node.config };
+  const verified = ["true", "1", "yes", "on"].includes(String(merged.opt_fea_verify ?? "").trim().toLowerCase());
+  const pair = "Needs <code>opt_surrogate_checkpoint</code> and <code>opt_surrogate_config</code> in the connected SDFFlow block's Full config; preflight blocks a missing pair.";
+  return verified
+    ? `<section class="inspect-section"><div class="section-title">Surrogate accuracy gate</div><div class="diagnostic"><i></i><div><strong>FEA verification on (<code>opt_fea_verify</code>).</strong><br>The search ranks with HI-MGN; afterwards the optimized design, the best baseline, and the typical baseline are re-solved with the tet4 FEA solver. report.md and the <code>fea_*</code> columns of the optimization table carry the solver's numbers: judge the design on those. ${pair}</div></div></section>`
+    : `<section class="inspect-section"><div class="section-title">Surrogate accuracy gate</div><div class="diagnostic warning"><i></i><div><strong>Demonstration path, not verified structural evidence.</strong><br>Every number this run reports is a HI-MGN prediction. Set <code>opt_fea_verify</code> True in the connected SDFFlow block's Full config to re-solve the result with the real solver at the end, or use FEA analysis. ${pair}</div></div></section>`;
+}
+
+/** A CAD Generator sampling row that `mode optimize` never reads (the run
+ * config drops them too), so it is not offered as a control there. */
+function inertGeneratorKey(node, key) {
+  return node.type === "run.cad_generator"
+    && String(node.config.mode || "").toLowerCase() === "optimize"
+    && (SDFFLOW_OPTIMIZE_INERT_KEYS.has(key) || ["candidates", "guidance"].includes(key));
+}
+
 function isFixedBehaviour(node, key) {
   return FIXED_BEHAVIOUR_KEYS.has(key) || Boolean(FIXED_BEHAVIOUR_BY_TYPE[node.type]?.has(key));
 }
@@ -367,6 +346,112 @@ const MODEL_INSPECTOR_PRIORITY = [
  * block has no second surface at all: prep.geometry's twelve fields -- reader,
  * emit, mesh_size_max and the rest -- had nowhere to say what they mean.
  */
+/**
+ * Readable labels for the rows the inspector shows. The raw key still renders
+ * beside it in small monospace, because it is what the config file, the logs
+ * and the docs all use; the label only has to say what the value *is*.
+ */
+const KEY_LABELS = {
+  mode: "Mode", model_id: "Model family", gpu_ids: "GPUs", seed: "Random seed",
+  dataset_dir: "Training data", infer_dataset: "Held-out data", path: "File",
+  modelpath: "Checkpoint", vae_modelpath: "VAE checkpoint", fm_modelpath: "Flow checkpoint",
+  lc_modelpath: "LC checkpoint", output_dir: "Output folder",
+  training_epochs: "Epochs", vae_training_epochs: "VAE epochs", fm_training_epochs: "Flow epochs",
+  lc_training_epochs: "LC epochs", batch_size: "Batch size", fm_batch_size: "Flow batch size",
+  lc_batch_size: "LC batch size", learningr: "Learning rate", vae_learningr: "VAE learning rate",
+  fm_learningr: "Flow learning rate", lc_learningr: "LC learning rate",
+  num_samples: "Shapes to generate", ode_steps: "ODE steps", mc_resolution: "Mesh resolution",
+  cfg_scale: "Guidance scale", cond_values: "Condition values", opt_analysis: "Analysis backend", opt_vertical_disp_max: "Vertical deflection limit (mm)", opt_load_cases: "Load cases",
+  infer_timesteps: "Rollout steps", inference_output_dir: "Results folder", num_workers: "Loader workers",
+  infer_chunk_size: "Node chunk", infer_query_chunk_size: "Query chunk",
+  num_vae_samples: "Ensemble draws", flow_steps: "Flow steps", flow_solver: "Flow solver",
+  flow_predict: "Flow output", reader: "Reader", mesh_type: "Mesh type", emit: "Writes",
+  num_fields: "Field rows", num_points: "Points per sample", resample_method: "Resampling",
+  mesh_size_min: "Min element size", mesh_size_max: "Max element size",
+  output_dataset: "Output dataset", limit: "File limit", export_label: "Export name",
+  csv_path: "Candidate CSV", objectives: "Objectives", directions: "Directions",
+  constraints: "Constraints", top_k: "Designs kept", mapping_mode: "Field mapping",
+  field_pairs: "Field pairs", mapping_confirmed: "Mapping reviewed", job_id: "Training run",
+  excluded_metrics: "Hidden metrics", smoothing: "Smoothing", y_scale: "Y axis", metric: "Metric",
+  direction: "Direction", compatibility: "Detected model", checkpoint_path: "Checkpoint",
+  input_path: "Sample input", output_name: "Output name", timesteps: "Rollout steps",
+  results_path: "Results", results_samples: "Result samples", results_dir: "Results folder",
+  report_path: "Report",
+  export_path: "Exported to", evaluated_samples: "Samples scored", binding: "Bound to",
+  value: "Value", format: "Copy mode"
+};
+
+function keyLabel(key) {
+  const label = KEY_LABELS[key] || (key.charAt(0).toUpperCase() + key.slice(1).replaceAll("_", " "));
+  return `${escapeHtml(label)}<span class="raw-key">${escapeHtml(key)}</span>`;
+}
+
+/**
+ * Rows that are prose about the block, not settings of it. They were already
+ * read-only, but a read-only "split · seeded 80/10/10" still reads as a fact
+ * about *this* dataset -- and the split is chosen by the model block's
+ * split_seed, not here -- while "viewer · prediction · truth · error ..." is a
+ * feature list. The block description and the At-a-glance facts say what is
+ * true; these rows only took space from the settings that matter.
+ */
+const STATEMENT_ROWS = {
+  "*": new Set(["split", "edit_mode", "range_policy", "version", "geometry_checks", "error_view", "qualification", "selection"]),
+  "run.inference": new Set(["mode", "viewer"]),
+  "optimize.design": new Set(["mode"]),
+  "evaluate.predictions": new Set(["metrics", "aggregate"]),
+  "source.cad": new Set(["units"])
+};
+
+function isStatementRow(node, key) {
+  return STATEMENT_ROWS["*"].has(key) || Boolean(STATEMENT_ROWS[node.type]?.has(key));
+}
+
+/**
+ * run.inference carries every family's inference knobs, because which family
+ * runs is decided by the link, not the block. Mirrors the specs' known_keys:
+ * transolver alone reads infer_chunk_size, the operators infer_query_chunk_size,
+ * the stochastic MGN pair the ensemble keys, cHI-MGNflow the flow keys. A key
+ * the linked family cannot read is hidden unless the user filled it in.
+ */
+const INFERENCE_KEY_FAMILIES = {
+  infer_chunk_size: ["transolver"],
+  infer_query_chunk_size: ["fno", "deeponet", "point_deeponet"],
+  num_vae_samples: ["meshgraphnets-v", "chi-mgnflow"],
+  vae_batch_size: ["meshgraphnets-v", "chi-mgnflow"],
+  flow_steps: ["chi-mgnflow"], flow_solver: ["chi-mgnflow"], flow_predict: ["chi-mgnflow"]
+};
+
+function inferenceKeyApplies(node, key, resolved) {
+  const filled = Boolean(String(node.config[key] || "").trim());
+  // With a model block linked, the family is that block's (inferenceModel
+  // prefers the trainer), so the field would be ignored and only invited edits.
+  if (key === "model_id") return resolved.source !== "trainer";
+  if (key === "infer_timesteps" && resolved.modelId === "mlp") return filled;
+  const families = INFERENCE_KEY_FAMILIES[key];
+  if (!families) return true;
+  return families.includes(resolved.modelId) || filled;
+}
+
+/** What each port is linked to, so a missing required input is visible here. */
+function connectionsSection(node, spec) {
+  const nameOf = id => {
+    const other = state.nodes.find(item => item.id === id);
+    return other ? (BLOCK_SPECS[other.type]?.label || other.type) : id;
+  };
+  const rows = [
+    ...spec.inputs.map(port => {
+      const linked = state.edges.filter(edge => edge.toNode === node.id && edge.toPort === port.id).map(edge => nameOf(edge.fromNode));
+      const missing = !linked.length && port.required;
+      return `<div class="connection-row${missing ? " missing" : ""}"><i style="--port:${typeColor(port.type)}"></i><span>← ${escapeHtml(port.label)}</span><small>${linked.length ? escapeHtml(linked.join(", ")) : missing ? "required · not linked" : "optional"}</small></div>`;
+    }),
+    ...spec.outputs.map(port => {
+      const linked = state.edges.filter(edge => edge.fromNode === node.id && edge.fromPort === port.id).map(edge => nameOf(edge.toNode));
+      return `<div class="connection-row"><i style="--port:${typeColor(port.type)}"></i><span>→ ${escapeHtml(port.label)}</span><small>${linked.length ? escapeHtml(linked.join(", ")) : "not used"}</small></div>`;
+    })
+  ];
+  return rows.length ? `<section class="inspect-section"><div class="section-title">Connections</div>${rows.join("")}</section>` : "";
+}
+
 function rowHelp(node, key) {
   if (BLOCK_SPECS[node.type]?.isModel) return "";
   const text = HELP[key];
@@ -436,7 +521,10 @@ function inspectorActions(node, spec) {
   if (node.type === "source.hdf5") return { primary: "Open samples" };
   if (node.type === "source.cad") return { primary: "Browse files", secondary: "Open geometry" };
   if (node.type === "source.parameters") return { primary: "Browse files", secondary: "Open spreadsheet" };
-  return { primary: "Run selected", secondary: "Open samples" };
+  // Executable blocks: the secondary opens what the run wrote, so it says so.
+  // It read "Open samples" on Inference / CAD Generator / Geometry blocks,
+  // whose output is results, candidates and a converted dataset.
+  return { primary: "Run", secondary: "Open results" };
 }
 
 export function renderInspector() {
@@ -470,13 +558,22 @@ export function renderInspector() {
     return;
   }
   const spec = BLOCK_SPECS[node.type];
-  $("#inspectorHint").textContent = spec.maturity;
+  // The hint used to print spec.maturity ("native" / "adapter"), an internal
+  // implementation grade that means nothing to the person configuring a block.
+  $("#inspectorHint").textContent = spec.category;
+  const resolved = node.type === "run.inference" ? inferenceModel(node) : null;
   const configEntries = spec.isModel
     ? modelInspectorEntries(node, spec.modelId, 8)
     : Object.entries(node.config)
       .filter(([key]) => node.type !== "source.parameters" || !["condition_names", "feature_names", "parameter_table", "parameter_dataset"].includes(key))
       .filter(([key]) => !inertGeometryKey(node, key))
+      .filter(([key]) => !inertGeneratorKey(node, key))
+      .filter(([key]) => !isStatementRow(node, key))
+      .filter(([key]) => !resolved || inferenceKeyApplies(node, key, resolved))
       .slice(0, 20);
+  const glance = blockFacts(node, () => {
+    if (state.selectedNode === node.id && !document.getElementById("inspectorContent")?.contains(document.activeElement)) renderInspector();
+  });
   const inspectorChoices = node.type === "prep.geometry"
     ? {
         mode: ["inspect", "ingest"],
@@ -509,11 +606,9 @@ export function renderInspector() {
           // currently unproven HI-MGN forward pass.
           ? { mode: ["sample", "reconstruct", "interpolate", "optimize"],
               opt_analysis: ["fea", "surrogate"] }
-          : {};
-  const ports = [
-    ...spec.inputs.map(port => ({ ...port, direction: "in" })),
-    ...spec.outputs.map(port => ({ ...port, direction: "out" }))
-  ];
+          : node.type === "evaluate.training_metrics"
+            ? { y_scale: ["linear", "log"] }
+            : {};
   const actions = inspectorActions(node, spec);
   $("#inspectorContent").innerHTML = `
     <section class="inspect-hero">
@@ -522,9 +617,10 @@ export function renderInspector() {
       <p>${escapeHtml(spec.description)}</p>
       <div class="inspect-actions"><button class="button primary" id="inspectorRun">${escapeHtml(actions.primary)}</button>${actions.secondary ? `<button class="button" id="inspectorSamples">${escapeHtml(actions.secondary)}</button>` : ""}</div>
     </section>
+    ${glance.length ? `<section class="inspect-section"><div class="section-title">At a glance</div>${factsTable(glance, "inspect-facts")}</section>` : ""}
     <section class="inspect-section">
-      <div class="section-title">${spec.isModel ? "ML configuration" : "Configuration"}</div>
-      ${spec.isModel ? `<div class="config-summary"><span><strong>${escapeHtml(spec.modelId)}</strong><small>${MODEL_CATALOG[spec.modelId].keys.length} keys · ${MODEL_CATALOG[spec.modelId].modes.length} modes · ${escapeHtml(MODEL_CATALOG[spec.modelId].dataset)}${autoFillCount(node) ? ` · ${autoFillCount(node)} graph-filled` : ""}</small></span><button class="button small primary" id="openFullConfig">Full config</button></div>` : ""}
+      <div class="section-title">${spec.isModel ? "Key settings" : "Settings"}</div>
+      ${spec.isModel ? `<div class="config-summary"><span><strong>${escapeHtml(spec.modelId)}</strong><small>${Object.keys(node.config).length} settings in this block · every key in Full config${autoFillCount(node) ? ` · ${autoFillCount(node)} filled from links` : ""}</small></span><button class="button small primary" id="openFullConfig">Full config</button></div>` : ""}
       <div style="margin-top:${spec.isModel ? 9 : 0}px">${configEntries.map(([key, value]) => {
         // Model blocks: reuse the config sheet's own choice table rather than a
         // second hand-written one. Only `mode` used to become a <select> here,
@@ -535,17 +631,17 @@ export function renderInspector() {
         // launcher rejects.
         const modelChoices = spec.isModel ? choicesFor(spec.modelId, key) : null;
         if (modelChoices?.length) {
-          return `<div class="form-row"><label>${escapeHtml(key.replaceAll("_", " "))}</label><select class="field inspector-config" data-key="${key}">${modelChoices.map(choice => `<option value="${escapeHtml(choice)}"${String(value) === String(choice) ? " selected" : ""}>${escapeHtml(choice)}</option>`).join("")}</select></div>`;
+          return `<div class="form-row"><label>${keyLabel(key)}</label><select class="field inspector-config" data-key="${escapeHtml(key)}">${modelChoices.map(choice => `<option value="${escapeHtml(choice)}"${sameChoice(value, choice) ? " selected" : ""}>${escapeHtml(choice)}</option>`).join("")}</select></div>`;
         }
         if (inspectorChoices[key]) {
-          return `<div class="form-row"><label>${escapeHtml(key.replaceAll("_", " "))}</label><select class="field inspector-config" data-key="${key}">${inspectorChoices[key].map(choice => `<option value="${escapeHtml(choice)}"${String(value) === choice ? " selected" : ""}>${escapeHtml(choice)}</option>`).join("")}</select>${rowHelp(node, key)}</div>`;
+          return `<div class="form-row"><label>${keyLabel(key)}</label><select class="field inspector-config" data-key="${escapeHtml(key)}">${inspectorChoices[key].map(choice => `<option value="${escapeHtml(choice)}"${sameChoice(value, choice) ? " selected" : ""}>${escapeHtml(choice)}</option>`).join("")}</select>${rowHelp(node, key)}</div>`;
         }
         if (RUN_EVIDENCE_KEYS.has(key)) {
           // What a run produced, not something to configure. Rendering it as a
           // text input invited edits that change the label without changing
           // anything real -- typing over "results samples" would relabel the
           // canvas while the results on disk stayed exactly as they were.
-          return `<div class="form-row run-evidence"><label>${escapeHtml(key.replaceAll("_", " "))}<small class="inline-auto">from the last run</small></label><output class="field readonly" title="${escapeHtml(value)}">${escapeHtml(value) || "—"}</output></div>`;
+          return `<div class="form-row run-evidence"><label>${keyLabel(key)}<small class="inline-auto">from the last run</small></label><output class="field readonly" title="${escapeHtml(value)}">${escapeHtml(value) || "—"}</output></div>`;
         }
         if (isFixedBehaviour(node, key)) {
           // A fixed row can still be graph-filled (source.checkpoint's
@@ -557,16 +653,16 @@ export function renderInspector() {
           const note = filled
             ? `auto · ${escapeHtml(filled.sourceLabel)}`
             : FIXED_BEHAVIOUR_SOURCE[node.type]?.[key] || "fixed behaviour";
-          return `<div class="form-row run-evidence"><label>${escapeHtml(key.replaceAll("_", " "))}<small class="inline-auto">${note}</small></label><output class="field readonly" title="${escapeHtml(value)}">${escapeHtml(value) || "—"}</output></div>`;
+          return `<div class="form-row run-evidence"><label>${keyLabel(key)}<small class="inline-auto">${note}</small></label><output class="field readonly" title="${escapeHtml(value)}">${escapeHtml(value) || "—"}</output></div>`;
         }
         const automatic = autoFillMeta(node, key);
-        return `<div class="form-row${automatic ? " graph-autofilled" : ""}"><label>${escapeHtml(key.replaceAll("_", " "))}${automatic ? `<small class="inline-auto">auto · ${escapeHtml(automatic.sourceLabel)}</small>` : ""}</label><input class="field inspector-config" data-key="${key}" value="${escapeHtml(value)}">${rowHelp(node, key)}</div>`;
+        return `<div class="form-row${automatic ? " graph-autofilled" : ""}"><label>${keyLabel(key)}${automatic ? `<small class="inline-auto">auto · ${escapeHtml(automatic.sourceLabel)}</small>` : ""}</label><input class="field inspector-config" data-key="${escapeHtml(key)}" value="${escapeHtml(value)}">${rowHelp(node, key)}</div>`;
       }).join("")}</div>
     </section>
     ${node.type === "run.cad_generator"
       && String(node.config.mode || "").toLowerCase() === "optimize"
       && String(node.config.opt_analysis || "fea").toLowerCase() === "surrogate"
-      ? `<section class="inspect-section"><div class="section-title">Surrogate accuracy gate</div><div class="diagnostic warning"><i></i><div><strong>Demonstration path, not verified structural evidence.</strong><br>Add <code>opt_surrogate_checkpoint</code> and <code>opt_surrogate_config</code> in the connected SDFFlow block's Full config. Preflight blocks a missing pair. Use FEA for actionable stress or displacement values until the surrogate is validated on representative held-out designs.</div></div></section>`
+      ? surrogateGateSection(node)
       : ""}
     ${node.type === "prep.geometry" && String(node.config.emit || "").includes("pointcloud") && String(node.config.mode || "").toLowerCase() === "ingest"
       // pipeline.py writes the point cloud to a sidecar next to the graph file
@@ -576,12 +672,8 @@ export function renderInspector() {
       ? `<section class="inspect-section"><div class="section-title">Also written</div><div class="form-row run-evidence"><label>point cloud<small class="inline-auto">sidecar file</small></label><output class="field readonly">${escapeHtml(pointCloudSidecar(node.config.output_dataset))}</output></div><p class="input-source-help">The <code>graph</code> emit writes <code>output_dataset</code>; the <code>pointcloud</code> emit writes this second file beside it. Point an Export or HDF5 Dataset block at it to use it.</p></section>`
       : ""}
     ${inputSourcePanel(node)}
-    ${embeddedInspector(node, spec)}
     ${node.type === "source.parameters" ? parameterTableEditor(node) : ""}
-    <section class="inspect-section"><div class="section-title">Typed ports</div><div class="port-list">
-      ${ports.map(port => `<div class="port-row"><i style="--port:${typeColor(port.type)}"></i><span>${port.direction === "in" ? "←" : "→"} ${escapeHtml(port.label)}${port.required ? " *" : ""}</span><small>${escapeHtml(TYPE_META[port.type]?.label || port.type)}</small></div>`).join("")}
-    </div></section>
-    ${node.type === "source.parameters" ? "" : `<section class="inspect-section"><div class="section-title">Evidence preview</div><article class="artifact-strip"><div class="artifact-strip-visual">${previewGraphic(spec.visual, node.id.length + 3)}</div><footer><span><strong>${escapeHtml(nodeEvidenceLabel(node, spec))}</strong><small>${escapeHtml(spec.workspace ? `${spec.workspace} workspace status` : nodeVisualLabel(spec))}</small></span></footer></article></section>`}
+    ${connectionsSection(node, spec)}
     <section class="inspect-section"><div style="display:grid;grid-template-columns:1fr 1fr;gap:6px"><button class="button" id="duplicateNode">Duplicate</button><button class="button danger" id="deleteNode">Delete block</button></div></section>
   `;
   $$(".inspector-config").forEach(control => control.addEventListener("change", () => {

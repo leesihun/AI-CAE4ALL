@@ -39,6 +39,7 @@ from pathlib import Path
 from typing import Any
 
 from studio_backend.hdf5_preview import (
+    reduce_like_sample,
     _base_payload,
     _finite_list,
     _stats,
@@ -48,6 +49,10 @@ from studio_backend.hdf5_preview import (
     hdf5_samples,
 )
 from studio_backend.paths import SUITE_ROOT, relative
+
+# Rows 0:3 of nodal_data are the reference coordinates (the shared mesh HDF5
+# contract); nodal_field carries only the physical rows that follow them.
+MESH_COORDINATE_ROWS = 3
 
 HDF5_SUFFIXES = {".h5", ".hdf5"}
 
@@ -274,6 +279,10 @@ def rollout_sample(
     raw_names = (hdf5_samples(target, limit=1).get("feature_names") or [])
     channel, role = _resolve_feature(feature, max(1, len(raw_names)))
     payload = hdf5_sample(target, inner, channel, timestep)
+    # hdf5_sample clamps both indices; the comparison must use the same ones.
+    shown_channel = int(payload["feature"])
+    shown_step = int(payload["timestep"])
+    prediction_array = str(payload.get("dataset") or "nodal_data")
     payload["sample"] = target.stem
     payload.setdefault("metadata", {})
     payload["metadata"].update(
@@ -291,28 +300,45 @@ def rollout_sample(
         payload["metadata"]["truth_path"] = relative(truth_path)
         return payload
 
+    def without_truth(reason: str) -> dict[str, Any]:
+        payload["metadata"]["role"] = "predicted"
+        payload["metadata"]["truth_error"] = reason
+        return payload
+
     with h5py.File(truth_path, "r") as truth_handle:
         truth_id = _truth_sample_id(truth_handle, target.stem, inner)
         if truth_id is None:
-            payload["metadata"]["role"] = "predicted"
-            payload["metadata"]["truth_error"] = (
-                f"{relative(truth_path)} has no sample matching {target.stem}"
-            )
-            return payload
-        truth_data = truth_handle[f"data/{truth_id}/nodal_data"]
-        step = max(0, min(int(timestep), int(truth_data.shape[1]) - 1))
-        row = max(0, min(int(channel), int(truth_data.shape[0]) - 1))
-        truth_values = np.asarray(truth_data[row, step, :], dtype=np.float64)
+            return without_truth(f"{relative(truth_path)} has no sample matching {target.stem}")
+        truth_group = truth_handle[f"data/{truth_id}"]
+        # SimulGen-VAE's reconstruct writes nodal_field (physical rows only, no
+        # coordinate rows 0:3), so its row index is offset from nodal_data's.
+        truth_array = "nodal_data" if "nodal_data" in truth_group else "nodal_field" if "nodal_field" in truth_group else None
+        if truth_array is None:
+            raise ValueError(f"Truth sample {truth_id} in {relative(truth_path)} has neither nodal_data nor nodal_field.")
+        truth_data = truth_group[truth_array]
+        if truth_data.ndim != 3:
+            raise ValueError(f"Truth {truth_array} must be rank 3 [F,T,N], got {truth_data.shape}.")
+        offset = 0
+        if prediction_array == "nodal_data" and truth_array == "nodal_field":
+            offset = -MESH_COORDINATE_ROWS
+        elif prediction_array == "nodal_field" and truth_array == "nodal_data":
+            offset = MESH_COORDINATE_ROWS
+        row = shown_channel + offset
+        if not 0 <= row < int(truth_data.shape[0]):
+            return without_truth(f"channel {shown_channel} has no counterpart in the truth {truth_array}")
+        step = max(0, min(shown_step, int(truth_data.shape[1]) - 1))
+        truth_full = np.asarray(truth_data[row, step, :], dtype=np.float64)
 
-    predicted = np.asarray(payload["values"], dtype=np.float64)
-    if truth_values.size != predicted.size:
-        payload["metadata"]["role"] = "predicted"
-        payload["metadata"]["truth_error"] = (
-            f"node count differs: prediction {predicted.size} vs truth {truth_values.size}"
+    with h5py.File(target, "r") as handle:
+        predicted_full = np.asarray(
+            handle[f"data/{inner}/{prediction_array}"][shown_channel, shown_step, :], dtype=np.float64
         )
-        return payload
-
-    values = truth_values if role == "truth" else predicted - truth_values
+    if truth_full.size != predicted_full.size:
+        return without_truth(f"node count differs: prediction {predicted_full.size} vs truth {truth_full.size}")
+    # Reduce at full resolution, then aggregate: a large mesh is previewed on
+    # a vertex-clustered subset and the truth/error must land on those nodes.
+    full = truth_full if role == "truth" else predicted_full - truth_full
+    values = reduce_like_sample(target, inner, full)
     payload["values"] = _finite_list(values)
     payload["stats"] = _stats(values)
     payload["metadata"]["role"] = role

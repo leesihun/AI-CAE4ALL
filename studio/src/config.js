@@ -4,9 +4,9 @@ import { state, snapshot } from "./state.js";
 import {
   ICONS, BLOCK_SPECS, MODEL_CATALOG, REQUIRED, CHOICES, BOOLEAN_KEYS,
   OPERATOR_REMOVED, TRANSOLVER_REJECTED, VARIATIONAL_REMOVED,
-  CHI_FLOW_REMOVED, SIMULGEN_REMOVED_NOOPS, PARALLEL_MODE_CHOICES,
+  CHI_FLOW_REMOVED, SIMULGEN_REMOVED_NOOPS, PARALLEL_MODE_CHOICES, MODEL_CHOICES,
   MGN_NATIVE_REMOVED, MGN_VARIATIONAL_IGNORED,
-  CONFIG_SECTIONS, HELP
+  CONFIG_SECTIONS, HELP, PRESET_SOURCES
 } from "./constants.js";
 import { apiRequest, requireRuntime } from "./api.js";
 import { addBlock, selectNode } from "./graph.js";
@@ -178,7 +178,7 @@ export function choicesFor(modelId, key) {
     // model_split directory is a non-executable variational-MGN copy.
     return PARALLEL_MODE_CHOICES[modelId] || ["ddp"];
   }
-  return CHOICES[key] || null;
+  return MODEL_CHOICES[modelId]?.[key] || CHOICES[key] || null;
 }
 
 function canonicalConfigValue(key, value) {
@@ -225,7 +225,7 @@ export function flatConfigLine(key, value) {
  * is a fixed list rather than a catch-all filter.
  */
 const STUDIO_ONLY_KEYS = new Set([
-  "results_path", "results_samples", "report_path", "evaluated_samples",
+  "results_path", "results_samples", "results_dir", "report_path", "evaluated_samples",
   "export_path", "job_id", "model_id", "dataset_path", "checkpoint_path",
   "parameters_path", "prediction_path", "truth_path", "compatibility", "binding"
 ]);
@@ -272,16 +272,72 @@ export function parseConfig(text) {
   return { values, messages };
 }
 
+// A preset source is a config for one dataset, and the block may be pointed at
+// another, so only the recipe -- architecture, optimizer, precision, memory
+// switches -- travels. These stay the block's own: every path (each path-valued
+// key ends in one of these words), the closed-loop opt_* block, seeds, the
+// epoch budget and its schedules, and the evaluation cadence.
+const PRESET_SKIP = /(^|_)(dataset|modelpath|dir|path|file|mesh|geometry|sidecar|checkpoint|config)$|^opt_|seed$|(^|_)(training|warmup|freeze)_epochs?$|^ae_epochs$|_interval$/;
+// ...and the data contract: which rows are state, conditions and node types,
+// the rollout, what gets plotted, and the values tuned to one dataset
+// (SDFFlow's kl_weight is 1e-6 on ex1 and 1e-10 on ex2-4). Copying input_var
+// from another dataset is how the constant-target class of bug starts.
+const PRESET_SKIP_KEYS = new Set([
+  "model", "mode", "gpu_ids", "parallel_mode",
+  "input_var", "output_var", "cond_var", "num_var", "edge_var", "feature_loss_weights",
+  "use_node_types", "positional_features", "time_integration", "geometry_state_mode",
+  "displacement_state_indices", "periodic_box", "augment_geometry", "std_noise",
+  "infer_timesteps", "test_batch_idx", "plot_feature_idx", "write_preprocessing",
+  "use_world_edges", "operator_dim", "dimension_tolerance", "out_of_bounds_policy",
+  "sdf_source", "global_condition_features", "integration_weight_source", "split_group_attr",
+  "field_start_row", "node_start", "node_end", "timesteps_reduced", "lc_data_type",
+  "split_by_parent", "use_conditions", "condition_names",
+  "kl_weight", "kl_warmup_start_frac", "num_vae_samples"
+]);
+// Sized to one mesh or grid: filled in only when the block has no value yet.
+// FNO's grid and modes need one entry per spatial axis (ex9 is 2-D, ex10 3-D).
+const PRESET_FILL_ONLY = new Set(["voronoi_clusters", "fno_grid_resolution", "fno_modes", "deeponet_sensor_resolution"]);
+// A flat block has no cluster count to keep, and the source's is sized to the
+// source's mesh: MGN-V's smallest config clusters ex1 into 4096 cells, more
+// than ex9 has nodes. The fallback is the HI-MGN / BSMS preset's own ex9 value.
+const PRESET_FALLBACK = { voronoi_clusters: "512, 64" };
+
+// "1e-6" and "0.000001", or "3,4" and "3, 4", are one value; listing them as a
+// change made the diff claim edits the preset does not make.
+const presetTokens = value => String(value ?? "").trim().split(/[\s,]+/).filter(Boolean)
+  .map(token => (Number.isFinite(Number(token)) ? String(Number(token)) : token.toLowerCase()));
+function sameValue(left, right) {
+  const a = presetTokens(left), b = presetTokens(right);
+  return a.length > 0 && a.length === b.length && a.every((token, index) => token === b[index]);
+}
+
+function presetRecipe(sourceValues, current) {
+  const recipe = {};
+  Object.entries(sourceValues).forEach(([key, value]) => {
+    if (PRESET_SKIP.test(key) || PRESET_SKIP_KEYS.has(key)) return;
+    if (PRESET_FILL_ONLY.has(key)) {
+      if (hasValue(current[key])) return;
+      value = PRESET_FALLBACK[key] ?? value;
+    }
+    if (!sameValue(current[key], value)) recipe[key] = value;
+  });
+  return recipe;
+}
+
 export function presetOptions(modelId) {
-  // "repository" applies this Studio's own opinionated defaults for the model;
-  // it does not read any file under configs/. It was labelled "Checked-in
-  // example", which is what loadConfigExample and the sdfflow_optimize preset
-  // actually do.
-  const options = [["repository", "Studio defaults"], ["smoke", "Smoke test"], ["low_vram", "Low VRAM"]];
+  // "High performance" and "Low VRAM" read the largest and the smallest
+  // checked-in train config for the route (PRESET_SOURCES). They used to be
+  // "Studio defaults" -- the block's own starting values, which for MGN was
+  // the flat recipe -- and a generic batch/AMP dict that set the same values
+  // on every route whatever that route's configs actually run. MLP has no
+  // checked-in config, so it keeps the Studio's own defaults.
+  const sources = PRESET_SOURCES[modelId];
+  const options = sources
+    ? [["high_performance", `High performance (${sources.high.note})`], ["smoke", "Smoke test"], ["low_vram", `Low VRAM (${sources.low.note})`]]
+    : [["repository", "Studio defaults"], ["smoke", "Smoke test"]];
   if (modelId === "meshgraphnets") options.push(["mgn_flat", "Flat MGN"], ["mgn_hi", "HI-MGN"], ["mgn_bsms", "BSMS-GNN"]);
-  // Two checked-in optimize configs exist and they are different runs: one
-  // solves each candidate with the exact FEA path, the other with the HI-MGN
-  // surrogate. One entry had to pick silently, so both are offered.
+  // One checked-in optimize config; the two entries differ only in opt_analysis
+  // (the exact FEA solve, or the HI-MGN surrogate forward pass).
   // No "sdfflow_full" / "simulgen_full" entry: both fell through to the same
   // `{...model.defaults}` branch as "Studio defaults", so the menu offered the
   // same action under three names. The staged presets below each change a
@@ -297,10 +353,13 @@ export function openConfig(nodeId) {
   if (!node || !spec?.isModel) return;
   node.config = normalizeConfigValues(node.config);
   applyGraphAutofill();
+  // Reopening the sheet already showing this node (the diagnostics list's
+  // "Show field" does exactly that) must not wipe the preflight verdict the
+  // user is working through; a different node starts from a clean list.
+  if (state.configNode !== nodeId) state.configMessages = [];
   state.configNode = nodeId;
   state.configSection = "Required";
   state.configSearch = "";
-  state.configMessages = [];
   $("#configSearch").value = "";
   $("#changedOnly").checked = false;
   $("#showInactive").checked = true;
@@ -395,8 +454,8 @@ export function renderConfig() {
     const disabled = disposition === "removed" || disposition === "runtime";
     const unsetLabel = hasBackendDefault ? `backend default: ${backendDefault}` : "not set";
     const control = choices
-      ? `<select class="config-control full-config-control" data-key="${key}"${disabled ? " disabled" : ""}><option value="">— ${escapeHtml(unsetLabel)} —</option>${choices.map(choice => `<option value="${escapeHtml(choice)}"${String(value).toLowerCase() === String(choice).toLowerCase() ? " selected" : ""}>${escapeHtml(choice)}</option>`).join("")}</select>`
-      : `<input class="config-control full-config-control" data-key="${key}" value="${escapeHtml(value)}" placeholder="${hasBackendDefault ? `backend default: ${escapeHtml(backendDefault)}` : "manual value"}"${disabled ? " disabled" : ""}>`;
+      ? `<select class="config-control full-config-control" data-key="${escapeHtml(key)}"${disabled ? " disabled" : ""}><option value="">— ${escapeHtml(unsetLabel)} —</option>${choices.map(choice => `<option value="${escapeHtml(choice)}"${String(value).toLowerCase() === String(choice).toLowerCase() ? " selected" : ""}>${escapeHtml(choice)}</option>`).join("")}</select>`
+      : `<input class="config-control full-config-control" data-key="${escapeHtml(key)}" value="${escapeHtml(value)}" placeholder="${hasBackendDefault ? `backend default: ${escapeHtml(backendDefault)}` : "manual value"}"${disabled ? " disabled" : ""}>`;
     // Why a key is dead outranks what the key means: the generic help for
     // message_passing_num reads as though the value still does something, which
     // is the whole reason nobody noticed the trainer ignores it under multiscale.
@@ -414,7 +473,7 @@ export function renderConfig() {
       : hasBackendDefault && disposition === "active"
         ? `${baseHelp} Backend default for ${mode}: ${backendDefault}; leave this unset to use it or enter a value to override it.`
         : baseHelp;
-    return `<article class="config-card ${disposition}${automatic ? " graph-autofilled" : ""}${rejectedByPreflight ? " preflight-rejected" : ""}"><header class="config-card-head"><span class="config-key">${key}</span><span class="config-card-states">${automatic ? `<span class="config-status autofill">auto · ${escapeHtml(automatic.sourceLabel)}</span>` : ""}<span class="config-status ${status}">${status}</span></span></header>${control}<p class="config-help">${escapeHtml(help)}</p></article>`;
+    return `<article class="config-card ${disposition}${automatic ? " graph-autofilled" : ""}${rejectedByPreflight ? " preflight-rejected" : ""}"><header class="config-card-head"><span class="config-key">${escapeHtml(key)}</span><span class="config-card-states">${automatic ? `<span class="config-status autofill">auto · ${escapeHtml(automatic.sourceLabel)}</span>` : ""}<span class="config-status ${status}">${status}</span></span></header>${control}<p class="config-help">${escapeHtml(help)}</p></article>`;
   }).join("") : `<div class="inspect-empty" style="height:auto;grid-column:1/-1"><p>No keys match this filter.</p></div>`;
 
   $$(".full-config-control").forEach(control => control.addEventListener("change", () => {
@@ -493,17 +552,44 @@ export async function applyPreset() {
     return;
   }
   let values = {};
+  let source = null;
+  const overlaid = [];
   if (preset === "repository") values = { ...model.defaults };
   if (preset === "smoke") values = {
     training_epochs: "2", batch_size: "1", vae_training_epochs: "2", lc_training_epochs: "2", fm_training_epochs: "2",
     vae_batch_size: "1", lc_batch_size: "2", fm_batch_size: "2", test_max_batches: "1", num_test_shapes: "2"
   };
-  if (preset === "low_vram") values = {
-    batch_size: "1", vae_batch_size: "1", lc_batch_size: "8", fm_batch_size: "4", grad_accum_steps: "4",
-    use_amp: "True", vae_use_amp: "True", lc_use_amp: "True", use_checkpointing: "True", load_all: "False",
-    chunk_size: "1024", infer_chunk_size: "1024", train_query_chunk_size: "1024", infer_query_chunk_size: "1024"
-  };
-  if (preset === "mgn_flat") values = { use_multiscale: "False", coarsening_type: "none" };
+  if (preset === "high_performance" || preset === "low_vram") {
+    source = PRESET_SOURCES[spec.modelId]?.[preset === "high_performance" ? "high" : "low"];
+    if (!source) return;
+    if (!requireRuntime()) return;
+    try {
+      const payload = await apiRequest(`/api/config?path=${encodeURIComponent(source.path)}`);
+      values = presetRecipe(parseConfig(payload.text).values, node.config);
+    } catch (error) {
+      toast(`Could not load ${source.path}: ${error.message}`, "error");
+      return;
+    }
+    // The smallest checked-in MGN-V and cHI-MGNflow configs still train at
+    // batch 16 and roll out 16 trajectories at once (vae_batch_size, read only
+    // by their rollout, so it changes memory and speed, never the result).
+    // SDFFlow and SimulGen-VAE train their stages with vae_/fm_/lc_batch_size,
+    // taken as the source file has them.
+    if (preset === "low_vram" && !["sdfflow", "simulgenvae"].includes(spec.modelId)) {
+      const floors = ["meshgraphnets-v", "chi-mgnflow"].includes(spec.modelId) ? ["batch_size", "vae_batch_size"] : ["batch_size"];
+      floors.forEach(key => {
+        const current = values[key] ?? node.config[key];
+        if (Number(current) > 1) {
+          values[key] = "1";
+          overlaid.push(`${key} 1`);
+        }
+      });
+    }
+  }
+  // Only the switch: coarsening_type is inert on a flat run, and "none" is not
+  // one of the values the spec accepts, so writing it made the sheet show an
+  // illegal value in a dropdown that cannot represent it.
+  if (preset === "mgn_flat") values = { use_multiscale: "False" };
   // MGN-MULTI-REQ makes voronoi_clusters and mp_per_level mandatory the moment
   // use_multiscale is True -- for bfs as well -- and mp_per_level must hold
   // 2*levels+1 entries. Emitting only the three switches left every multiscale
@@ -512,42 +598,86 @@ export async function applyPreset() {
   // checked-in configs/MeshGraphNets/deterministic/ex9 pair, which are known to run.
   if (preset === "mgn_hi") values = {
     use_multiscale: "True", coarsening_type: "voronoi_seedmean", multiscale_levels: "2",
-    voronoi_clusters: "500, 100", mp_per_level: "4, 6, 8, 6, 4"
+    voronoi_clusters: "512, 64", mp_per_level: "4, 6, 8, 6, 4"
   };
   if (preset === "mgn_bsms") values = {
     use_multiscale: "True", coarsening_type: "bfs", multiscale_levels: "2",
-    voronoi_clusters: "500, 100", mp_per_level: "4, 6, 8, 6, 4"
+    voronoi_clusters: "512, 64", mp_per_level: "4, 6, 8, 6, 4"
   };
   if (preset === "sdfflow_vae") values = { mode: "train_vae" };
   if (preset === "sdfflow_fm") values = { mode: "train_fm" };
   if (preset === "sdfflow_optimize" || preset === "sdfflow_optimize_surrogate") {
     if (!requireRuntime()) return;
-    // configs/Geometry_generation/ was renamed to configs/SDFFlow/; this preset
-    // still asked for the old path, so it could only ever fail with a 400.
-    const file = preset === "sdfflow_optimize_surrogate" ? "config_optimize_surrogate.txt" : "config_optimize.txt";
+    // The flat configs/SDFFlow/config_optimize*.txt roster this used to fetch no
+    // longer exists (the tree is configs/SDFFlow/geometry_generation/<ex>/baseline/),
+    // so both entries could only ever fail with a 400. There is one checked-in
+    // optimize config; the surrogate entry is that same run with the analysis
+    // backend switched, which is the only difference between the two.
+    const file = "configs/SDFFlow/geometry_generation/ex1/baseline/config_optimize_sdfflow.txt";
     try {
-      const payload = await apiRequest(`/api/config?path=configs%2FSDFFlow%2F${file}`);
+      const payload = await apiRequest(`/api/config?path=${encodeURIComponent(file)}`);
       values = parseConfig(payload.text).values;
     } catch (error) {
       toast(`Could not load ${file}: ${error.message}`, "error");
       return;
     }
+    // The surrogate is the ex10 (DeepJEB) HI-MGN arm of the dataset matrix. Its
+    // checkpoint exists only after that arm has trained; until then preflight
+    // names the missing file, which is the true state of the surrogate path.
+    // opt_fea_verify re-solves the result with the real solver at the end, so
+    // the run reports what FEA says about the design the surrogate picked.
+    if (preset === "sdfflow_optimize_surrogate") Object.assign(values, {
+      opt_analysis: "surrogate",
+      opt_surrogate_config: "../../configs/MeshGraphNets/deterministic/ex10/baseline/config_infer_himgn.txt",
+      opt_surrogate_checkpoint: "../../output/dataset_matrix/deterministic/ex10/himgn/model.pth",
+      opt_fea_verify: "True"
+    });
   }
   if (preset === "simulgen_vae") values = { mode: "train_vae", training_epochs: model.defaults.vae_training_epochs, batch_size: model.defaults.vae_batch_size, learningr: model.defaults.vae_learningr };
   if (preset === "simulgen_lc") values = { mode: "train_lc", training_epochs: model.defaults.lc_training_epochs, batch_size: model.defaults.lc_batch_size, learningr: model.defaults.lc_learningr };
   if (preset === "simulgen_reconstruct") values = { mode: "reconstruct", batch_size: "16", output_dir: "../../output/simulgenvae/ex1/reconstruct" };
-  values = Object.fromEntries(Object.entries(values).filter(([key]) => model.keys.includes(key)));
+  // A preset is shared across routes, so it names keys some routes do not own
+  // (vae_batch_size on deterministic MGN) or have retired. Writing those put an
+  // inactive or removed key into the config -- the removed ones are preflight
+  // ERRORS -- so only keys this route actively reads are applied.
+  values = Object.fromEntries(Object.entries(values).filter(([key]) => model.keys.includes(key) && keyDisposition(spec.modelId, key, { ...node.config, ...values }) === "active"));
   const changes = Object.entries(values).filter(([key, value]) => String(node.config[key] ?? "") !== String(value));
-  if (!changes.length) {
+  // A CAD Generator wired to this block runs the pipeline with ITS mode and
+  // opt_analysis -- the run config lays the generator's own values over this
+  // block's -- so an optimize preset applied here alone was undone at Run: the
+  // generator's default `sample` launched a plain candidate batch, and its
+  // default `fea` replaced the surrogate. The two switches the preset is about
+  // are carried to every connected generator, and the dialog names them.
+  const generatorSwitches = ["sdfflow_optimize", "sdfflow_optimize_surrogate"].includes(preset) && values.mode === "optimize"
+    ? { mode: "optimize", opt_analysis: String(values.opt_analysis || "fea") }
+    : {};
+  const generatorChanges = state.edges
+    .filter(edge => edge.fromNode === node.id && edge.toPort === "model")
+    .map(edge => state.nodes.find(candidate => candidate.id === edge.toNode))
+    .filter(candidate => candidate?.type === "run.cad_generator")
+    .flatMap(generator => Object.entries(generatorSwitches)
+      .filter(([key, value]) => String(generator.config[key] ?? "").toLowerCase() !== value)
+      .map(([key, value]) => ({ generator, key, value })));
+  if (!changes.length && !generatorChanges.length) {
     toast("Preset already matches the current configuration.");
     return;
   }
-  const preview = changes.slice(0, 9).map(([key, value]) => `${key} → ${value}`).join("\n");
-  if (!window.confirm(`Apply ${changes.length} preset changes?\n\n${preview}${changes.length > 9 ? "\n…" : ""}\n\nOther manual values are preserved.`)) return;
+  const lines = [
+    ...changes.map(([key, value]) => `${key} → ${value}`),
+    ...generatorChanges.map(({ key, value }) => `CAD Generator ${key} → ${value}`)
+  ];
+  const count = lines.length;
+  const preview = lines.slice(0, 9).join("\n");
+  const origin = source
+    ? `Recipe from ${source.path}${overlaid.length ? `, then ${overlaid.join(", ")}` : ""}. Paths, seeds, epochs, the data contract and mesh-sized values stay as they are.\n\n`
+    : "";
+  if (!window.confirm(`${origin}Apply ${count} preset changes?\n\n${preview}${count > 9 ? "\n…" : ""}\n\nOther manual values are preserved.`)) return;
   snapshot();
   Object.assign(node.config, values);
+  generatorChanges.forEach(({ generator, key, value }) => { generator.config[key] = value; });
   if (values.mode) $("#configMode").value = values.mode;
-  state.configMessages = [{ type: "", text: `Applied ${preset} with ${changes.length} explicit changes.` }];
+  const label = presetOptions(spec.modelId).find(([value]) => value === preset)?.[1] || preset;
+  state.configMessages = [{ type: "", text: `Applied ${label} with ${count} explicit changes${source ? ` from ${source.path}` : ""}${generatorChanges.length ? ` (${generatorChanges.length} on the connected CAD Generator)` : ""}.` }];
   $("#savedState").textContent = "Unsaved changes";
   renderConfig();
 }

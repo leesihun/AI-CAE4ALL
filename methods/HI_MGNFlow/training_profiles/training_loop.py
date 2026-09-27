@@ -54,6 +54,17 @@ from model.flow import loss_weight, resolve_flow_config, sample_path
 
 # ── small helpers ───────────────────────────────────────────────────────────
 
+def _progress_disabled():
+    """Draw progress bars on rank 0 only.
+
+    Under DDP every rank would otherwise paint its own bar on the shared
+    stderr, and those frames interleave with (and glue onto) the rank-0 epoch
+    lines that the Studio's metrics parser reads.
+    """
+    dist = torch.distributed
+    return dist.is_available() and dist.is_initialized() and dist.get_rank() != 0
+
+
 def _unwrap(model):
     """Peel DDP / AveragedModel / torch.compile wrappers off the real module."""
     m = model
@@ -191,7 +202,7 @@ def train_ae_epoch(model, dataloader, optimizer, device, config, epoch, ema_mode
         torch.cuda.reset_peak_memory_stats()
     optimizer.zero_grad(set_to_none=True)
 
-    pbar = tqdm.tqdm(dataloader, total=total_batches)
+    pbar = tqdm.tqdm(dataloader, total=total_batches, disable=_progress_disabled())
     for batch_idx, graph in enumerate(pbar):
         graph = _move(graph, device, config)
         loss, recon, kl = ae_loss(model, graph, loss_weights, use_amp, amp_dtype, kl_weight)
@@ -249,7 +260,7 @@ def validate_ae_epoch(model, dataloader, device, config, epoch=0):
     total_kl = torch.zeros((), device=device, dtype=torch.float32)
     n = 0
     with torch.no_grad():
-        pbar = tqdm.tqdm(dataloader, desc='Validation')
+        pbar = tqdm.tqdm(dataloader, desc='Validation', disable=_progress_disabled())
         for i, graph in enumerate(pbar):
             graph = _move(graph, device, config)
             loss, recon, kl = ae_loss(model, graph, loss_weights, use_amp, amp_dtype, kl_weight)
@@ -312,7 +323,7 @@ def train_prior_epoch(model, dataloader, optimizer, device, config, epoch, ema_m
         torch.cuda.reset_peak_memory_stats()
     optimizer.zero_grad(set_to_none=True)
 
-    pbar = tqdm.tqdm(dataloader, total=total_batches)
+    pbar = tqdm.tqdm(dataloader, total=total_batches, disable=_progress_disabled())
     for batch_idx, graph in enumerate(pbar):
         graph = _move(graph, device, config)
         z1, ctx = _sample_posterior_latent(model, graph)
@@ -361,7 +372,7 @@ def validate_prior_epoch(model, dataloader, device, config, epoch=0):
     total = torch.zeros((), device=device, dtype=torch.float32)
     n = 0
     with torch.no_grad():
-        pbar = tqdm.tqdm(dataloader, desc='Validation')
+        pbar = tqdm.tqdm(dataloader, desc='Validation', disable=_progress_disabled())
         for i, graph in enumerate(pbar):
             graph = _move(graph, device, config)
             z1, ctx = _sample_posterior_latent(model, graph)
@@ -448,7 +459,7 @@ def evaluate_prior_sampling_epoch(model, dataloader, device, config, epoch=0,
 
     crps_sum, recon_sum, spread_sum, det_sum, n = 0.0, 0.0, 0.0, 0.0, 0
     with torch.no_grad():
-        pbar = tqdm.tqdm(dataloader, desc=progress_name)
+        pbar = tqdm.tqdm(dataloader, desc=progress_name, disable=_progress_disabled())
         for graph in pbar:
             graph = _move(graph, device, config)
             samples = _generate_fields(model, graph, flow_cfg, S, use_amp, amp_dtype)
@@ -533,10 +544,14 @@ def log_training_config(config):
 
 # ── periodic visual test ────────────────────────────────────────────────────
 
-def run_periodic_test(model, test_loader, device, config, epoch, train_dataset):
+def run_periodic_test(model, test_loader, device, config, epoch, train_dataset, tag=None):
     start = time.time()
     test_loss = test_model(model, test_loader, device, config, epoch, train_dataset)
-    print(f"  Test loss: {test_loss:.2e} ({time.time() - start:.1f}s)")
+    # `[tag] Epoch N` makes these chartable series in the Studio's Train
+    # Metrics, kept apart per stage; an unanchored line is only readable in
+    # the raw log.
+    anchor = f"[{tag}] Epoch {epoch}" if tag else f"Epoch {epoch}"
+    print(f"  {anchor} Test loss: {test_loss:.2e} ({time.time() - start:.1f}s)")
 
     if config.get('display_trainset', True):
         viz_indices = config.get('test_batch_idx', [0, 1, 2, 3])
@@ -552,7 +567,7 @@ def run_periodic_test(model, test_loader, device, config, epoch, train_dataset):
             viz_config['test_batch_idx'] = list(range(len(viz_indices)))
             viz_loss = test_model(model, viz_loader, device, viz_config, epoch,
                                   train_dataset, output_prefix='train')
-            print(f"  Train-split sample loss: {viz_loss:.2e}")
+            print(f"  {anchor} Train-split sample loss: {viz_loss:.2e}")
     return test_loss
 
 
@@ -608,7 +623,7 @@ def test_model(model, dataloader, device, config, epoch, dataset=None, output_pr
     plot_data_queue = []
 
     with torch.no_grad():
-        pbar = tqdm.tqdm(dataloader, total=effective_total)
+        pbar = tqdm.tqdm(dataloader, total=effective_total, disable=_progress_disabled())
         for batch_idx, graph in enumerate(pbar):
             if batch_idx >= max_test_batches:
                 break

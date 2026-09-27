@@ -40,7 +40,7 @@ num_workers                      2
 prefetch_factor                  2
 grad_accum_steps                 1
 augment_geometry                 False
-std_noise                        0.01
+std_noise                        0.0416
 use_amp                          True
 use_checkpointing                True
 use_ema                          True

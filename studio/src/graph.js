@@ -1,11 +1,12 @@
 import { $, $$, escapeHtml, toast } from "./dom.js";
-import { state, snapshot, nodePortRows, nodeHeight } from "./state.js";
+import { state, snapshot, nodePortRows, nodeHeight, newCanvasId } from "./state.js";
 import {
   ICONS, BLOCK_SPECS, MODEL_CATALOG, TYPE_META, TEMPLATES,
   NODE_WIDTH, PORT_START_Y, PORT_GAP, INPUT_SOURCE_META,
   MIN_ZOOM, MAX_ZOOM, FIT_MIN_ZOOM
 } from "./constants.js";
-import { previewGraphic, nodeVisualLabel, parametersTableGraphic } from "./graphics.js";
+import { parametersTableGraphic } from "./graphics.js";
+import { blockFacts, blockSubtitle, factsTable } from "./cards.js";
 import { typeColor, compatible, portRequiredInMode, validateGraph } from "./validate.js";
 import { openArtifact } from "./viewer.js";
 import { runGraph } from "./run.js";
@@ -89,6 +90,11 @@ export function loadTemplate(name, saveHistory = true) {
   state.selectedNode = null;
   state.selectedEdge = null;
   state.pendingPort = null;
+  // A template instance is a new canvas: it owns none of the jobs launched
+  // from earlier copies of the same template, although it shares their ids.
+  state.canvasId = newCanvasId();
+  state.legacyCanvas = false;
+  state.ownedJobs = new Set();
   layoutGraph(false, false);
   // Frame what was actually laid out. A hardcoded view left the last block of
   // the default 7-node template entirely off-stage at 1366x768 (and the MLP
@@ -139,7 +145,7 @@ export function addBlock(type, position) {
 
 const DUPLICATE_EVIDENCE_KEYS = new Set([
   "job_id", "run_id", "result_id", "results_id", "evidence_id", "artifact_id",
-  "results_path", "results_samples", "report_path", "evaluated_samples",
+  "results_path", "results_samples", "results_dir", "report_path", "evaluated_samples",
   "export_path", "metrics_csv", "output_path", "output_csv", "candidate_csv"
 ]);
 
@@ -225,6 +231,7 @@ export function duplicateNodeRecord(source, copyId, existingNodes = state.nodes)
     : [];
   delete copy.savedConfigPath;
   delete copy.optimizationReport;
+  delete copy.resultsFrom;
   delete copy.jobId;
   delete copy.resultId;
   delete copy.resultsPath;
@@ -455,7 +462,7 @@ function compactPath(value) {
 export function nodeHasEvidence(node) {
   const config = node.config || {};
   return Boolean(
-    config.results_path || config.export_path || config.report_path
+    config.results_path || config.results_dir || config.export_path || config.report_path
     || config.metrics_csv || config.job_id
     || node.optimizationReport || node.savedConfigPath || node.jobId
   );
@@ -470,6 +477,15 @@ export function nodeEvidenceLabel(node, spec) {
   if (node.type === "run.inference" && config.results_path) {
     const count = Number(config.results_samples || 0);
     return count ? `${count} predicted sample${count === 1 ? "" : "s"}` : compactPath(config.results_path);
+  }
+  // A CAD Generator's evidence is what it wrote: designs (optimize) or
+  // candidates (sample). Without this branch a finished generator fell through
+  // to "No run yet" beside its own "complete" status.
+  if (node.type === "run.cad_generator" && (config.results_path || config.results_dir)) {
+    const count = Number(config.results_samples || 0);
+    const noun = String(config.mode || "").toLowerCase() === "optimize" ? "design" : "candidate";
+    const where = compactPath(config.results_dir || config.results_path);
+    return count ? `${count} ${noun}${count === 1 ? "" : "s"} · ${where}` : where;
   }
   const evidence = compactPath(
     config.export_path
@@ -493,6 +509,10 @@ export function nodeEvidenceLabel(node, spec) {
   if (node.type === "deploy.api") return compactPath(config.checkpoint_path) || "Select checkpoint";
   if (node.type === "run.inference") return "No results yet · Run to predict";
   if (node.type.startsWith("run.")) return "No run yet";
+  // The subtitle (datasets) or the facts table (geometry ingest) already name
+  // the file; repeating it here spent the status line on a duplicate.
+  if (node.type === "source.hdf5" && config.path) return "";
+  if (node.type === "prep.geometry") return config.results_path ? compactPath(config.results_path) : node.status === "complete" ? "Dataset written" : "No run yet";
   const path = compactPath(config.path || config.output_dataset);
   if (path) return `path · ${path}`;
   const sourceMeta = INPUT_SOURCE_META[node.type];
@@ -522,47 +542,50 @@ function modeVerb(node) {
 
 export function renderNodes() {
   applyViewTransform();
+  // A dataset's facts arrive asynchronously the first time its path is seen;
+  // redraw the cards (and the inspector unless someone is typing in it).
+  const onFactsReady = () => {
+    renderNodes();
+    if (!document.activeElement?.closest?.("#inspectorContent")) renderInspector();
+  };
   $("#nodeLayer").innerHTML = state.nodes.map(node => {
     const spec = BLOCK_SPECS[node.type];
-    const detailLabel = spec.isModel
-      ? `${spec.label} configuration and training status`
-      : spec.isMetricsViewer
-        ? `${spec.label} plots and metric selection`
-      : spec.workspace
-        ? `${spec.label} ${spec.workspace} workspace`
-      : node.type === "source.parameters"
-        ? `${spec.label} input and output spreadsheet`
-        : `${spec.label} samples`;
-    const openLabel = spec.isModel ? "Open model details" : spec.isMetricsViewer ? "Open training metrics" : spec.workspace ? `Open ${spec.workspace} workspace` : node.type === "source.parameters" ? "Open spreadsheet" : "Open samples";
+    // One "open" destination per block. Inspect, the preview click and the
+    // non-executable "Open" button all used to call openNodeDetails; selecting
+    // the card already shows the inspector, so the card keeps one open button
+    // named after where it goes, plus the run verb when the block executes.
+    const openLabel = spec.isModel ? "Model details" : spec.isMetricsViewer ? "Open metrics" : spec.workspace ? `Open ${spec.workspace}` : node.type === "source.parameters" ? "Open sheet" : node.type === "source.hdf5" ? "Browse samples" : node.type === "source.cad" ? "Open geometry" : "Open results";
     // A model block runs whatever mode it is configured for, so the button has
     // to say which. It read "Train" on every model block -- including the
     // generative template's SDFFlow node, which is set to `sample` and trains
     // nothing.
-    const primaryLabel = spec.isModel ? modeVerb(node) : spec.executable ? "Run" : spec.isMetricsViewer ? "Metrics" : node.type === "source.parameters" ? "Sheet" : "Open";
+    const primaryLabel = spec.isModel ? modeVerb(node) : spec.executable ? "Run" : "";
     const portRows = nodePortRows(node);
-    const inputs = spec.inputs.map((port, index) => `<button class="port input${portStateClass(node.id, port, "input")}" draggable="true" data-node="${node.id}" data-direction="input" data-port="${port.id}" data-port-type="${port.type}" style="top:${portTop(index) - 13}px;--port:${typeColor(port.type)}" aria-label="${escapeHtml(port.label)} input" title="Connect ${escapeHtml(port.label)} input"><span class="port-label">${escapeHtml(port.label)}${portRequiredInMode(node, port) ? " *" : ""}</span></button>`).join("");
-    const outputs = spec.outputs.map((port, index) => `<button class="port output${portStateClass(node.id, port, "output")}" draggable="true" data-node="${node.id}" data-direction="output" data-port="${port.id}" data-port-type="${port.type}" style="top:${portTop(index) - 13}px;--port:${typeColor(port.type)}" aria-label="${escapeHtml(port.label)} output" title="Connect ${escapeHtml(port.label)} output"><span class="port-label">${escapeHtml(port.label)}</span></button>`).join("");
-    return `<article class="node ${node.status}${state.selectedNode === node.id ? " selected" : ""}" data-node-id="${node.id}" style="left:${node.x}px;top:${node.y}px;--node-accent:${spec.accent};--progress:${node.progress}%">
+    const inputs = spec.inputs.map((port, index) => `<button class="port input${portStateClass(node.id, port, "input")}" draggable="true" data-node="${escapeHtml(node.id)}" data-direction="input" data-port="${port.id}" data-port-type="${port.type}" style="top:${portTop(index) - 13}px;--port:${typeColor(port.type)}" aria-label="${escapeHtml(port.label)} input" title="Connect ${escapeHtml(port.label)} input"><span class="port-label">${escapeHtml(port.label)}${portRequiredInMode(node, port) ? " *" : ""}</span></button>`).join("");
+    const outputs = spec.outputs.map((port, index) => `<button class="port output${portStateClass(node.id, port, "output")}" draggable="true" data-node="${escapeHtml(node.id)}" data-direction="output" data-port="${port.id}" data-port-type="${port.type}" style="top:${portTop(index) - 13}px;--port:${typeColor(port.type)}" aria-label="${escapeHtml(port.label)} output" title="Connect ${escapeHtml(port.label)} output"><span class="port-label">${escapeHtml(port.label)}</span></button>`).join("");
+    const subtitle = blockSubtitle(node);
+    const facts = node.type === "source.parameters" ? "" : factsTable(blockFacts(node, onFactsReady));
+    return `<article class="node ${node.status}${state.selectedNode === node.id ? " selected" : ""}" data-node-id="${escapeHtml(node.id)}" style="left:${node.x}px;top:${node.y}px;--node-accent:${spec.accent};--progress:${node.progress}%">
       ${inputs}${outputs}
       <header class="node-head" data-drag-handle>
         <span class="node-icon">${ICONS[spec.icon]}</span>
-        <span><span class="node-title">${escapeHtml(spec.label)}</span><span class="node-kind"${spec.isModel ? ` title="Modes: ${escapeHtml(MODEL_CATALOG[spec.modelId].modes.join(" / "))}"` : ` title="${escapeHtml(MATURITY_HELP[spec.maturity] || spec.maturity)}"`}>${spec.isModel ? `Model · ${escapeHtml(nodeMode(node))}` : `${spec.category} · ${spec.maturity}`}</span></span>
+        <span><span class="node-title">${escapeHtml(spec.label)}</span><span class="node-kind" title="${escapeHtml(subtitle)}">${escapeHtml(subtitle)}</span></span>
         <span class="node-menu-wrap">
-          <button class="node-menu" data-node-menu="${node.id}" aria-label="More actions for ${escapeHtml(spec.label)}" aria-haspopup="menu" aria-expanded="false">•••</button>
+          <button class="node-menu" data-node-menu="${escapeHtml(node.id)}" aria-label="More actions for ${escapeHtml(spec.label)}" aria-haspopup="menu" aria-expanded="false">•••</button>
           <span class="node-menu-popover" role="menu" aria-label="${escapeHtml(spec.label)} actions">
-            <button role="menuitem" data-menu-open="${node.id}">Open details</button>
-            <button role="menuitem" data-menu-duplicate="${node.id}">Duplicate</button>
-            <button role="menuitem" class="danger" data-menu-delete="${node.id}">Delete block</button>
+            <button role="menuitem" data-menu-open="${escapeHtml(node.id)}">${escapeHtml(openLabel)}</button>
+            <button role="menuitem" data-menu-duplicate="${escapeHtml(node.id)}">Duplicate</button>
+            <button role="menuitem" class="danger" data-menu-delete="${escapeHtml(node.id)}">Delete block</button>
           </span>
         </span>
       </header>
-      <div class="node-preview" data-preview="${node.id}" data-open-label="${escapeHtml(openLabel)}" role="button" tabindex="0" aria-label="Open ${escapeHtml(detailLabel)}">${node.type === "source.parameters" ? parametersTableGraphic(node, true) : previewGraphic(spec.visual, node.id.length, false, nodeHasEvidence(node))}<span class="preview-label">${escapeHtml(spec.isModel ? "config + training status" : spec.isMetricsViewer ? "all metrics · selectable plots" : spec.workspace ? `${spec.workspace} evidence + controls` : nodeVisualLabel(spec))}</span></div>
+      <div class="node-preview${facts ? " has-facts" : ""}" data-preview="${escapeHtml(node.id)}">${node.type === "source.parameters" ? parametersTableGraphic(node, true) : facts || `<span class="facts-empty">${escapeHtml(spec.description)}</span>`}</div>
       <div class="node-port-space" style="height:${portRows * PORT_GAP + 6}px" aria-hidden="true"></div>
       <div class="node-summary"><span class="status"><i></i>${node.status === "idle" ? "ready" : node.status}</span><span>${escapeHtml(nodeEvidenceLabel(node, spec))}</span></div>
       <div class="node-progress"><i></i></div>
-      <div class="node-actions">
-        <button class="button" data-inspect="${node.id}">Inspect</button>
-        <button class="button" data-run="${node.id}">${primaryLabel}</button>
+      <div class="node-actions${primaryLabel ? "" : " single"}">
+        <button class="button" data-open-node="${escapeHtml(node.id)}">${escapeHtml(openLabel)}</button>
+        ${primaryLabel ? `<button class="button primary" data-run="${escapeHtml(node.id)}">${primaryLabel}</button>` : ""}
       </div>
     </article>`;
   }).join("");
@@ -570,7 +593,7 @@ export function renderNodes() {
   $$(".node").forEach(element => {
     const id = element.dataset.nodeId;
     element.addEventListener("pointerdown", event => {
-      if (event.target.closest("button,.node-preview")) return;
+      if (event.target.closest("button")) return;
       selectNode(id);
     });
     $("[data-drag-handle]", element).addEventListener("pointerdown", event => {
@@ -634,15 +657,7 @@ export function renderNodes() {
           : (index - 1 + items.length) % items.length;
     items[next]?.focus();
   }));
-  $$("[data-preview]").forEach(element => {
-    element.addEventListener("click", () => openNodeDetails(element.dataset.preview));
-    element.addEventListener("keydown", event => {
-      if (!["Enter", " "].includes(event.key)) return;
-      event.preventDefault();
-      openNodeDetails(element.dataset.preview);
-    });
-  });
-  $$("[data-inspect]").forEach(button => button.addEventListener("click", () => openNodeDetails(button.dataset.inspect)));
+  $$("[data-open-node]").forEach(button => button.addEventListener("click", () => openNodeDetails(button.dataset.openNode)));
   $$("[data-run]").forEach(button => button.addEventListener("click", () => {
     const node = state.nodes.find(item => item.id === button.dataset.run);
     const spec = node && BLOCK_SPECS[node.type];
@@ -777,7 +792,7 @@ export function dragNode(event) {
   }
   node.x = Math.max(10, state.drag.nodeX + deltaX / state.view.scale);
   node.y = Math.max(10, state.drag.nodeY + deltaY / state.view.scale);
-  const element = $(`[data-node-id="${state.drag.id}"]`);
+  const element = $(`[data-node-id="${CSS.escape(state.drag.id)}"]`);
   if (element) {
     element.style.left = `${node.x}px`;
     element.style.top = `${node.y}px`;
@@ -895,12 +910,35 @@ export function renderGraphMeta() {
     <span class="${statusClass}"><i></i>${statusText}</span>`;
 }
 
-export function render() {
+// Set while a background redraw has skipped the inspector (see render).
+let inspectorDeferred = false;
+
+/** `background`: a redraw nobody asked for (job polling, every 900 ms). It
+ * must not rebuild the inspector under someone typing in it -- the rebuild
+ * dropped the focus and the half-typed value -- so the inspector is redrawn
+ * once the focus leaves it instead. */
+export function render({ background = false } = {}) {
   applyGraphAutofill();
   renderNodes();
   renderEdges();
-  renderInspector();
+  if (background && document.activeElement?.closest?.("#inspectorContent")) deferInspector();
+  else renderInspector();
   renderGraphMeta();
+}
+
+function deferInspector() {
+  if (inspectorDeferred) return;
+  inspectorDeferred = true;
+  const container = $("#inspectorContent");
+  // Deferred a tick: removing a focused control fires focusout while
+  // innerHTML is being replaced, and this must not re-enter renderInspector.
+  const onLeave = () => window.setTimeout(() => {
+    if (document.activeElement?.closest?.("#inspectorContent")) return;
+    container.removeEventListener("focusout", onLeave);
+    inspectorDeferred = false;
+    renderInspector();
+  }, 0);
+  container.addEventListener("focusout", onLeave);
 }
 
 export function layoutGraph(saveHistory = true, shouldRender = true) {
@@ -998,7 +1036,7 @@ function freeSlotInView() {
 /** Pan the minimum amount that brings one node fully inside the stage. */
 function panNodeIntoView(nodeId) {
   const node = state.nodes.find(item => item.id === nodeId);
-  const element = $(`[data-node-id="${nodeId}"]`);
+  const element = $(`[data-node-id="${CSS.escape(nodeId)}"]`);
   const stage = $("#stage");
   if (!node || !element || !stage) return;
   const rect = element.getBoundingClientRect();
