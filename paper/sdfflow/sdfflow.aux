@@ -186,12 +186,37 @@
 \@writefile{toc}{\contentsline {paragraph}{결론.}{36}{section*.71}\protected@file@percent }
 \@writefile{lof}{\contentsline {figure}{\numberline {25}{\ignorespaces 실제 점검용 형상 쌍 사이의 섞기. 각 줄의 양 끝(파랑)은 두 실제 형상의 복원, 가운데 셋(주황)은 섞는 비율 0.25, 0.5, 0.75의 결과다. 위 세 줄은 같은 쌍 1을 J3의 코드 직선 섞기, J3의 거꾸로 걷기, J1의 거꾸로 걷기로 섞은 것이고, 아래 두 줄은 쌍 0을 J3와 J0로 거꾸로 걸어 섞은 것이다.}}{37}{figure.caption.68}\protected@file@percent }
 \newlabel{fig:jebstrip}{{25}{37}{실제 점검용 형상 쌍 사이의 섞기. 각 줄의 양 끝(파랑)은 두 실제 형상의 복원, 가운데 셋(주황)은 섞는 비율 0.25, 0.5, 0.75의 결과다. 위 세 줄은 같은 쌍 1을 J3의 코드 직선 섞기, J3의 거꾸로 걷기, J1의 거꾸로 걷기로 섞은 것이고, 아래 두 줄은 쌍 0을 J3와 J0로 거꾸로 걸어 섞은 것이다}{figure.caption.68}{}}
-\@writefile{toc}{\contentsline {section}{\numberline {10}권장 사항 (아직 적용하지 않음)}{38}{section.10}\protected@file@percent }
-\newlabel{sec:recommend}{{10}{38}{권장 사항 (아직 적용하지 않음)}{section.10}{}}
-\@writefile{toc}{\contentsline {section}{\numberline {11}한계}{38}{section.11}\protected@file@percent }
-\newlabel{sec:limits}{{11}{38}{한계}{section.11}{}}
-\@writefile{toc}{\contentsline {section}{\numberline {A}풀어 쓴 말과 흔히 쓰는 용어}{39}{appendix.A}\protected@file@percent }
-\newlabel{app:glossary}{{A}{39}{풀어 쓴 말과 흔히 쓰는 용어}{appendix.A}{}}
-\@writefile{toc}{\contentsline {section}{\numberline {B}ex3 학습 config 원문}{39}{appendix.B}\protected@file@percent }
-\newlabel{app:config}{{B}{39}{ex3 학습 config 원문}{appendix.B}{}}
-\gdef \@abspage@last{41}
+\@writefile{toc}{\contentsline {section}{\numberline {10}대표점 수 다시 보기: 32는 너무 작은가, 512는 안 되는가}{38}{section.10}\protected@file@percent }
+\newlabel{sec:tsize}{{10}{38}{대표점 수 다시 보기: 32는 너무 작은가, 512는 안 되는가}{section.10}{}}
+\@writefile{toc}{\contentsline {paragraph}{질문.}{38}{section*.72}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{논문들과 무엇이 다른가.}{38}{section*.73}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{가설과 처방.}{38}{section*.74}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{흔들림.}{38}{section*.75}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{새 지표: 학습 형상 쪽 쏠림.}{38}{section*.77}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {26}{\ignorespaces 대표점 수 연구의 설정. (a) 형상 코드의 숫자 개수($T\times 32$)와 데이터별 학습 형상 수. $T=512$에서는 숫자가 형상 수보다 10--50배 많다. (b) 돌린 실험. K는 이미 학습한 1단계(J1: 512, J3: 32, J4: 128)에 2단계만 새로 학습한 것, X는 다른 데이터에서 학습한 것이다. 벌점 가중치는 모두 1e-8이고, 1단계 설정은 대표점 수 말고는 같다.}}{39}{figure.caption.76}\protected@file@percent }
+\newlabel{fig:tsizesetup}{{26}{39}{대표점 수 연구의 설정. (a) 형상 코드의 숫자 개수($T\times 32$)와 데이터별 학습 형상 수. $T=512$에서는 숫자가 형상 수보다 10--50배 많다. (b) 돌린 실험. K는 이미 학습한 1단계(J1: 512, J3: 32, J4: 128)에 2단계만 새로 학습한 것, X는 다른 데이터에서 학습한 것이다. 벌점 가중치는 모두 1e-8이고, 1단계 설정은 대표점 수 말고는 같다}{figure.caption.76}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {10.1}DeepJEB 결과}{40}{subsection.10.1}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {17}{\ignorespaces DeepJEB 대표점 수 연구. 조건 없이, 실제 조건, 잡음 쌍 중간, 거꾸로 걷기(실제 형상 쌍, 빈 조건), 코드 직선 섞기는 한 조각 비율(\%)이다. 부피 오차는 실제 조건(강조 배율 1)을 주었을 때 요청한 부피와의 차이 중앙값, 쏠림은 위에서 정의한 값이다(0 근처가 좋다). 실제 형상을 그대로 복원하면 32와 512는 81\%, 128은 94\%가 한 조각이다. 코드 직선 섞기는 2단계를 거치지 않으므로 2단계 처방과 관계없다. 생략한 K7(위치 표식 제거 + 이동)과 K10(이동 + 느린 평균)은 K6보다 낫지 않았다.}}{40}{table.caption.78}\protected@file@percent }
+\newlabel{tab:tsizejeb}{{17}{40}{DeepJEB 대표점 수 연구. 조건 없이, 실제 조건, 잡음 쌍 중간, 거꾸로 걷기(실제 형상 쌍, 빈 조건), 코드 직선 섞기는 한 조각 비율(\%)이다. 부피 오차는 실제 조건(강조 배율 1)을 주었을 때 요청한 부피와의 차이 중앙값, 쏠림은 위에서 정의한 값이다(0 근처가 좋다). 실제 형상을 그대로 복원하면 32와 512는 81\%, 128은 94\%가 한 조각이다. 코드 직선 섞기는 2단계를 거치지 않으므로 2단계 처방과 관계없다. 생략한 K7(위치 표식 제거 + 이동)과 K10(이동 + 느린 평균)은 K6보다 낫지 않았다}{table.caption.78}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {27}{\ignorespaces 대표점 수 연구의 주요 결과. (a) DeepJEB의 주요 실험. 점선은 J3의 값이다. (b) 조건 없이 생성한 형상이 학습 형상 쪽으로 쏠린 정도(0 = 처음 보는 형상만큼 떨어짐). 진한 막대는 기본 설정, 옅은 막대는 처방을 더한 것이다. (c) 1단계 마지막 바퀴의 점검용 복원 오차.}}{40}{figure.caption.79}\protected@file@percent }
+\newlabel{fig:tsizeresults}{{27}{40}{대표점 수 연구의 주요 결과. (a) DeepJEB의 주요 실험. 점선은 J3의 값이다. (b) 조건 없이 생성한 형상이 학습 형상 쪽으로 쏠린 정도(0 = 처음 보는 형상만큼 떨어짐). 진한 막대는 기본 설정, 옅은 막대는 처방을 더한 것이다. (c) 1단계 마지막 바퀴의 점검용 복원 오차}{figure.caption.79}{}}
+\@writefile{toc}{\contentsline {paragraph}{512는 2단계 처방으로 살아난다.}{40}{section*.80}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{32에는 같은 처방이 거의 듣지 않는다.}{41}{section*.81}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{128은 복원 경로가 가장 좋고, 처방을 더하면 균형이 가장 좋다.}{41}{section*.82}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {10.2}다른 데이터에서 확인}{41}{subsection.10.2}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {18}{\ignorespaces 다른 데이터의 대표점 32 대 512. 복원 오차는 1단계 마지막 바퀴의 점검용 오차, 조각 수는 조건 없이 생성한 형상 하나의 평균 조각 수다. 한 조각 비율과 부피 오차의 뜻은 표~\ref {tab:tsizejeb}와 같다. DrivAerML은 여러 부품으로 된 자동차라 한 조각 비율이 뜻이 없고, 조건이 형상 치수가 아니라 부피 오차도 없다. 거꾸로 걷기는 실제 형상 쌍, 빈 조건이다.}}{41}{table.caption.83}\protected@file@percent }
+\newlabel{tab:tsizeother}{{18}{41}{다른 데이터의 대표점 32 대 512. 복원 오차는 1단계 마지막 바퀴의 점검용 오차, 조각 수는 조건 없이 생성한 형상 하나의 평균 조각 수다. 한 조각 비율과 부피 오차의 뜻은 표~\ref {tab:tsizejeb}와 같다. DrivAerML은 여러 부품으로 된 자동차라 한 조각 비율이 뜻이 없고, 조건이 형상 치수가 아니라 부피 오차도 없다. 거꾸로 걷기는 실제 형상 쌍, 빈 조건이다}{table.caption.83}{}}
+\@writefile{toc}{\contentsline {paragraph}{MCB.}{41}{section*.84}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{DrivAerML.}{42}{section*.85}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{비용.}{42}{section*.86}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {10.3}결론: 대표점 수}{42}{subsection.10.3}\protected@file@percent }
+\newlabel{sec:tsizeconclusion}{{10.3}{42}{결론: 대표점 수}{subsection.10.3}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {11}권장 사항 (아직 적용하지 않음)}{42}{section.11}\protected@file@percent }
+\newlabel{sec:recommend}{{11}{42}{권장 사항 (아직 적용하지 않음)}{section.11}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {12}한계}{43}{section.12}\protected@file@percent }
+\newlabel{sec:limits}{{12}{43}{한계}{section.12}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {A}풀어 쓴 말과 흔히 쓰는 용어}{44}{appendix.A}\protected@file@percent }
+\newlabel{app:glossary}{{A}{44}{풀어 쓴 말과 흔히 쓰는 용어}{appendix.A}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {B}ex3 학습 config 원문}{44}{appendix.B}\protected@file@percent }
+\newlabel{app:config}{{B}{44}{ex3 학습 config 원문}{appendix.B}{}}
+\gdef \@abspage@last{46}

@@ -549,7 +549,14 @@ export const BLOCK_SPECS = {
   "run.cad_generator": {
     label: "CAD Generator", category: "Execution", icon: "run", accent: "#817336", visual: "candidates", maturity: "native",
     description: "Conditionally generate, reconstruct, or blend CAD candidates with SDFFlow.",
-    inputs: [{ id: "parameters", type: "parameters", label: "design parameters" }, { id: "model", type: "checkpoint", label: "SDFFlow model", required: true }],
+    inputs: [
+      { id: "parameters", type: "parameters", label: "design parameters" },
+      { id: "model", type: "checkpoint", label: "SDFFlow model", required: true },
+      // Read only in `mode optimize` with opt_analysis surrogate: the wired
+      // HI-MGN checkpoint becomes opt_surrogate_checkpoint (autofill.js), and
+      // validateGraph() rejects the wire in any mode that would ignore it.
+      { id: "surrogate", type: "checkpoint", label: "HI-MGN surrogate" }
+    ],
     outputs: [{ id: "candidates", type: "candidates", label: "CAD candidates" }],
     defaults: {
       mode: "sample", num_samples: "24", cfg_scale: "2.5", ode_steps: "50",

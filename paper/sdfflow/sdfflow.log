@@ -1,4 +1,4 @@
-This is XeTeX, Version 3.141592653-2.6-0.999997 (MiKTeX 25.12) (preloaded format=xelatex 2026.9.18)  26 SEP 2026 18:57
+This is XeTeX, Version 3.141592653-2.6-0.999997 (MiKTeX 25.12) (preloaded format=xelatex 2026.9.18)  28 SEP 2026 02:48
 entering extended mode
  restricted \write18 enabled.
  %&-line parsing enabled.
@@ -1073,11 +1073,11 @@ Package enumitem Warning: Negative labelwidth. This does not make much
 
  [3]
 LaTeX Font Info:    Font shape `TU/lmtt/bx/n' in size <10> not available
-(Font)              Font shape `TU/lmtt/b/n' tried instead on input line 157.
+(Font)              Font shape `TU/lmtt/b/n' tried instead on input line 160.
 LaTeX Font Info:    Font shape `TU/NotoSansKR(1)/bx/n' in size <10> not availab
 le
 (Font)              Font shape `TU/NotoSansKR(1)/b/n' tried instead on input li
-ne 157.
+ne 160.
 File: figures/fig_sdf2d.png Graphic file (type bmp)
 <figures/fig_sdf2d.png>
  [4
@@ -1085,27 +1085,27 @@ File: figures/fig_sdf2d.png Graphic file (type bmp)
 ]
 
 Package hyperref Warning: Token not allowed in a PDF string (Unicode):
-(hyperref)                removing `math shift' on input line 193.
+(hyperref)                removing `math shift' on input line 196.
 
 
 Package hyperref Warning: Token not allowed in a PDF string (Unicode):
-(hyperref)                removing `\rightarrow' on input line 193.
+(hyperref)                removing `\rightarrow' on input line 196.
 
 
 Package hyperref Warning: Token not allowed in a PDF string (Unicode):
-(hyperref)                removing `math shift' on input line 193.
+(hyperref)                removing `math shift' on input line 196.
 
 
 Package hyperref Warning: Token not allowed in a PDF string (Unicode):
-(hyperref)                removing `math shift' on input line 257.
+(hyperref)                removing `math shift' on input line 260.
 
 
 Package hyperref Warning: Token not allowed in a PDF string (Unicode):
-(hyperref)                removing `\times' on input line 257.
+(hyperref)                removing `\times' on input line 260.
 
 
 Package hyperref Warning: Token not allowed in a PDF string (Unicode):
-(hyperref)                removing `math shift' on input line 257.
+(hyperref)                removing `math shift' on input line 260.
 
 [5] [6]
 File: figures/fig_vae_shapes.png Graphic file (type bmp)
@@ -1127,11 +1127,11 @@ File: figures/fig_epochs.png Graphic file (type bmp)
 <figures/fig_epochs.png>
  [17]
 LaTeX Font Info:    Font shape `TU/lmtt/bx/n' in size <10.95> not available
-(Font)              Font shape `TU/lmtt/b/n' tried instead on input line 850.
+(Font)              Font shape `TU/lmtt/b/n' tried instead on input line 854.
 LaTeX Font Info:    Font shape `TU/NotoSansKR(1)/bx/n' in size <10.95> not avai
 lable
 (Font)              Font shape `TU/NotoSansKR(1)/b/n' tried instead on input li
-ne 850.
+ne 854.
 
 [18] [19]
 File: figures/fig_data_ex3.png Graphic file (type bmp)
@@ -1165,21 +1165,28 @@ File: figures/fig_jeb_eval.png Graphic file (type bmp)
  [34] [35]
 File: figures/fig_jeb_interp_strip.png Graphic file (type bmp)
 <figures/fig_jeb_interp_strip.png>
- [36] [37] [38] [39] [40] [41] (sdfflow.aux)
+ [36] [37]
+File: figures/fig_tsize_setup.png Graphic file (type bmp)
+<figures/fig_tsize_setup.png>
+ [38] [39]
+File: figures/fig_tsize_results.png Graphic file (type bmp)
+<figures/fig_tsize_results.png>
+ [40] [41] [42] [43] [44] [45] [46]
+(sdfflow.aux)
  ***********
 LaTeX2e <2025-11-01>
 L3 programming layer <2025-12-24>
  ***********
 Package rerunfilecheck Info: File `sdfflow.out' has not changed.
-(rerunfilecheck)             Checksum: 74071F52D24CDDA399335820FFD1D557;7839.
+(rerunfilecheck)             Checksum: BD943034955F6B884B515A2D2A32E482;8539.
  ) 
 Here is how much of TeX's memory you used:
- 31280 strings out of 402986
- 598118 string characters out of 5448917
- 1400451 words of memory out of 5000000
- 59519 multiletter control sequences out of 15000+600000
+ 31305 strings out of 402986
+ 598810 string characters out of 5448917
+ 1400577 words of memory out of 5000000
+ 59542 multiletter control sequences out of 15000+600000
  637862 words of font info for 122 fonts, out of 8000000 for 9000
  1348 hyphenation exceptions out of 8191
  84i,14n,94p,602b,2826s stack positions out of 10000i,1000n,20000p,200000b,200000s
 
-Output written on sdfflow.xdv (41 pages, 1232980 bytes).
+Output written on sdfflow.pdf (46 pages).

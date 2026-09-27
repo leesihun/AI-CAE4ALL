@@ -255,8 +255,11 @@ export function executableSteps(targetId = null) {
       return;
     }
     if (!["run.inference", "run.cad_generator"].includes(node.type)) return;
+    // Only the `model` port names the runtime. A CAD Generator's `surrogate`
+    // port also takes a trainer's checkpoint, and matching any edge here ran
+    // the HI-MGN trainer's key set as the generator.
     const connected = [...modelNodes].reverse().find(modelNode =>
-      state.edges.some(edge => edge.fromNode === modelNode.id && edge.toNode === node.id)
+      state.edges.some(edge => edge.fromNode === modelNode.id && edge.toNode === node.id && edge.toPort === "model")
     );
     // The fallback to "whatever model is on the canvas" only makes sense when
     // nothing else names one. A block fed by a saved-model source has already
@@ -665,6 +668,16 @@ export function validateGraph(showToast = true) {
     if (generatorMode === "optimize" && !["fea", "surrogate"].includes(analysisBackend)) {
       push(`${label}: analysis backend must be fea or surrogate.`, node.id);
     }
+    const surrogateEdge = state.edges.find(edge => edge.toNode === node.id && edge.toPort === "surrogate");
+    const surrogateNode = surrogateEdge && state.nodes.find(candidate => candidate.id === surrogateEdge.fromNode);
+    if (surrogateNode && !(generatorMode === "optimize" && analysisBackend === "surrogate")) {
+      push(`${label}: the HI-MGN surrogate wire is read only in mode optimize with analysis surrogate. Switch the block, or remove the wire.`, node.id);
+    }
+    const surrogateFamily = BLOCK_SPECS[surrogateNode?.type || ""]?.modelId
+      || (surrogateNode?.type === "source.checkpoint" ? String(surrogateNode.config.model_id || "") : "");
+    if (surrogateFamily && surrogateFamily !== "meshgraphnets") {
+      push(`${label}: the surrogate must be a MeshGraphNets (HI-MGN) model, not ${MODEL_CATALOG[surrogateFamily]?.label || surrogateFamily}.`, node.id);
+    }
     if (generatorMode === "optimize" && analysisBackend === "surrogate") {
       const modelEdge = state.edges.find(edge => edge.toNode === node.id && edge.toPort === "model");
       const modelNode = modelEdge && state.nodes.find(candidate => candidate.id === modelEdge.fromNode);
@@ -672,7 +685,7 @@ export function validateGraph(showToast = true) {
       const missing = ["opt_surrogate_checkpoint", "opt_surrogate_config"]
         .filter(key => !String(merged[key] || "").trim());
       if (missing.length) {
-        push(`${label}: surrogate analysis needs ${missing.join(" and ")} in the connected SDFFlow block's Full config.`, node.id);
+        push(`${label}: surrogate analysis needs ${missing.join(" and ")} (wire an HI-MGN model into "HI-MGN surrogate", or set them in the connected SDFFlow block's Full config).`, node.id);
       }
     }
     const rawConditions = String(node.config.cond_values || "").split(",").map(item => item.trim()).filter(Boolean);

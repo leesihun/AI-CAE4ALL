@@ -440,6 +440,19 @@ function genericAutofill(desired, node) {
         if (paths[key]) put(desired, node, key, candidate(paths[key], model.node, "generator model from graph", model.edge.fromPort));
       }
     }
+    // A trainer block's modelpath is relative to its own method repository;
+    // the SDFFlow run opens it from methods/SDFFlow, so it is re-rooted there.
+    const surrogate = linkedInputs(node, "surrogate")[0];
+    if (surrogate) {
+      const paths = checkpointPaths(surrogate.node);
+      const suitePath = BLOCK_SPECS[surrogate.node.type]?.isModel
+        ? fromMethodPath(paths.checkpoint_path, paths.model_id)
+        : paths.checkpoint_path;
+      if (suitePath) {
+        put(desired, node, "opt_surrogate_checkpoint", candidate(
+          toMethodPath(suitePath, "sdfflow"), surrogate.node, "HI-MGN surrogate from graph", surrogate.edge.fromPort));
+      }
+    }
     const binding = actualBindingPath(parameters?.node);
     if (binding) put(desired, node, "parameter_path", candidate(binding, parameters.node, "generation conditions from graph", parameters.edge.fromPort));
     const selected = selectedParameterCandidate(parameters?.node);

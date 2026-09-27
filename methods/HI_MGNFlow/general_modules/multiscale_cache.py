@@ -38,14 +38,20 @@ Layout (HDF5)
     root[str(sid)]
         .attrs['num_levels']      int  — actual hierarchy depth (<= multiscale_levels)
         ['x_pos']                 f32  [N, P]  (only if positional_features > 0)
-        ['L{l}_ftc']              int  [N_l]
-        ['L{l}_c_ei']             int64 [2, E_l]
-        ['L{l}_seeds']            int64 [n_c]      (only if entry has seeds)
-        ['L{l}_up_ei']            int64 [2, E_up]  (only if entry has up_ei)
+        ['L{l}_ftc']              int32 [N_l]
+        ['L{l}_c_ei']             int32 [2, E_l]
+        ['L{l}_seeds']            int32 [n_c]      (only if entry has seeds)
+        ['L{l}_up_ei']            int32 [2, E_up]  (only if entry has up_ei)
         .attrs['L{l}_n_c']        int
         .attrs['L{l}_mode']       str
         .attrs['L{l}_has_seeds']  bool
         .attrs['L{l}_has_up']     bool
+
+Every dataset is gzip-1 + shuffle compressed, and index arrays are stored as
+int32 (int64 only past 2**31). ``up_ei`` holds ~7 edges per fine node, so the
+raw int64 layout cost ~6.6 MB/sample at 50-70k nodes -- 126 GB for the ex3
+shell set at 2 variants, versus 7.3 GB compressed for ~12 ms more per read.
+:func:`_read_entry` casts indices back to int64, so old int64 caches still load.
 """
 
 import json
@@ -154,6 +160,18 @@ def variant_seed(sid: int, variant: int) -> int:
     return (int(sid) * 1000003 + int(variant) * 9176249) & 0x7FFFFFFF
 
 
+_H5_COMPRESS = {'compression': 'gzip', 'compression_opts': 1, 'shuffle': True}
+
+
+def _index_array(a) -> np.ndarray:
+    """Store node/edge indices as int32 when they fit (they always do below
+    2**31 nodes); the reader widens them back to int64."""
+    a = np.asarray(a, dtype=np.int64)
+    if a.size == 0 or int(a.max()) < np.iinfo(np.int32).max:
+        return a.astype(np.int32)
+    return a
+
+
 def _write_entry(root: h5py.Group, sid: int, hierarchy, x_pos, variant: int = 0) -> None:
     """Write one hierarchy. Variant 0 sits at the sample group (unchanged layout);
     variants >0 go in ``v{k}`` subgroups. ``x_pos`` depends only on the fine mesh,
@@ -162,23 +180,23 @@ def _write_entry(root: h5py.Group, sid: int, hierarchy, x_pos, variant: int = 0)
     if int(variant) == 0:
         g = sample_g
         if x_pos is not None:
-            g.create_dataset('x_pos', data=np.asarray(x_pos, dtype=np.float32))
+            g.create_dataset('x_pos', data=np.asarray(x_pos, dtype=np.float32), **_H5_COMPRESS)
     else:
         g = sample_g.create_group(f'v{int(variant)}')
     g.attrs['num_levels'] = len(hierarchy)
     for l, entry in enumerate(hierarchy):
-        g.create_dataset(f'L{l}_ftc', data=np.asarray(entry['ftc']))
-        g.create_dataset(f'L{l}_c_ei', data=np.asarray(entry['c_ei'], dtype=np.int64))
+        g.create_dataset(f'L{l}_ftc', data=_index_array(entry['ftc']), **_H5_COMPRESS)
+        g.create_dataset(f'L{l}_c_ei', data=_index_array(entry['c_ei']), **_H5_COMPRESS)
         g.attrs[f'L{l}_n_c'] = int(entry['n_c'])
         g.attrs[f'L{l}_mode'] = str(entry.get('mode', 'centroid'))
         seeds = entry.get('seeds')
         g.attrs[f'L{l}_has_seeds'] = seeds is not None
         if seeds is not None:
-            g.create_dataset(f'L{l}_seeds', data=np.asarray(seeds, dtype=np.int64))
+            g.create_dataset(f'L{l}_seeds', data=_index_array(seeds), **_H5_COMPRESS)
         has_up = 'up_ei' in entry
         g.attrs[f'L{l}_has_up'] = has_up
         if has_up:
-            g.create_dataset(f'L{l}_up_ei', data=np.asarray(entry['up_ei'], dtype=np.int64))
+            g.create_dataset(f'L{l}_up_ei', data=_index_array(entry['up_ei']), **_H5_COMPRESS)
 
 
 def _read_entry(g: h5py.Group):
@@ -187,14 +205,15 @@ def _read_entry(g: h5py.Group):
     hierarchy = []
     for l in range(num_levels):
         entry = {
-            'ftc': g[f'L{l}_ftc'][:],
-            'c_ei': g[f'L{l}_c_ei'][:],
+            'ftc': g[f'L{l}_ftc'][:].astype(np.int64, copy=False),
+            'c_ei': g[f'L{l}_c_ei'][:].astype(np.int64, copy=False),
             'n_c': int(g.attrs[f'L{l}_n_c']),
             'mode': str(g.attrs[f'L{l}_mode']),
         }
-        entry['seeds'] = g[f'L{l}_seeds'][:] if g.attrs.get(f'L{l}_has_seeds', False) else None
+        entry['seeds'] = (g[f'L{l}_seeds'][:].astype(np.int64, copy=False)
+                          if g.attrs.get(f'L{l}_has_seeds', False) else None)
         if g.attrs.get(f'L{l}_has_up', False):
-            entry['up_ei'] = g[f'L{l}_up_ei'][:]
+            entry['up_ei'] = g[f'L{l}_up_ei'][:].astype(np.int64, copy=False)
         hierarchy.append(entry)
     x_pos = g['x_pos'][:] if 'x_pos' in g else None
     return hierarchy, x_pos

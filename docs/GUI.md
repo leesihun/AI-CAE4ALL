@@ -233,6 +233,16 @@ closed-loop preset also sets those two on every connected generator, and the
 confirmation dialog lists them. Before this, the generator's defaults
 (`sample`, `fea`) silently undid the preset at Run.
 
+The CAD Generator's optional **HI-MGN surrogate** port takes a MeshGraphNets
+model block or a saved HI-MGN checkpoint and fills the generator's
+`opt_surrogate_checkpoint` from it (re-rooted to `methods/SDFFlow`), so a canvas
+can train HI-MGN and SDFFlow side by side and close the loop on the trained
+surrogate. The trainer runs first because the wire orders it. The wire carries
+only the checkpoint: `opt_surrogate_config`, the matching HI-MGN *inference*
+config, still comes from the SDFFlow block's Full config. Validate rejects the
+wire outside `mode optimize` + `opt_analysis surrogate`, and rejects a non-MGN
+model on it.
+
 `opt_fea_verify` makes a surrogate search honest inside the run: after CMA-ES,
 the optimized design, the best baseline and the typical baseline are re-solved
 with the tet4 FEA solver (`design_loop/verify_with_fea.py`). report.md gains an

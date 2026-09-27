@@ -75,7 +75,22 @@
 \contentsline {paragraph}{잡음 섞기는 J0가 더 높게 나온다.}{36}{section*.69}%
 \contentsline {paragraph}{대표점 512의 생성은 나빠졌다.}{36}{section*.70}%
 \contentsline {paragraph}{결론.}{36}{section*.71}%
-\contentsline {section}{\numberline {10}권장 사항 (아직 적용하지 않음)}{38}{section.10}%
-\contentsline {section}{\numberline {11}한계}{38}{section.11}%
-\contentsline {section}{\numberline {A}풀어 쓴 말과 흔히 쓰는 용어}{39}{appendix.A}%
-\contentsline {section}{\numberline {B}ex3 학습 config 원문}{39}{appendix.B}%
+\contentsline {section}{\numberline {10}대표점 수 다시 보기: 32는 너무 작은가, 512는 안 되는가}{38}{section.10}%
+\contentsline {paragraph}{질문.}{38}{section*.72}%
+\contentsline {paragraph}{논문들과 무엇이 다른가.}{38}{section*.73}%
+\contentsline {paragraph}{가설과 처방.}{38}{section*.74}%
+\contentsline {paragraph}{흔들림.}{38}{section*.75}%
+\contentsline {paragraph}{새 지표: 학습 형상 쪽 쏠림.}{38}{section*.77}%
+\contentsline {subsection}{\numberline {10.1}DeepJEB 결과}{40}{subsection.10.1}%
+\contentsline {paragraph}{512는 2단계 처방으로 살아난다.}{40}{section*.80}%
+\contentsline {paragraph}{32에는 같은 처방이 거의 듣지 않는다.}{41}{section*.81}%
+\contentsline {paragraph}{128은 복원 경로가 가장 좋고, 처방을 더하면 균형이 가장 좋다.}{41}{section*.82}%
+\contentsline {subsection}{\numberline {10.2}다른 데이터에서 확인}{41}{subsection.10.2}%
+\contentsline {paragraph}{MCB.}{41}{section*.84}%
+\contentsline {paragraph}{DrivAerML.}{42}{section*.85}%
+\contentsline {paragraph}{비용.}{42}{section*.86}%
+\contentsline {subsection}{\numberline {10.3}결론: 대표점 수}{42}{subsection.10.3}%
+\contentsline {section}{\numberline {11}권장 사항 (아직 적용하지 않음)}{42}{section.11}%
+\contentsline {section}{\numberline {12}한계}{43}{section.12}%
+\contentsline {section}{\numberline {A}풀어 쓴 말과 흔히 쓰는 용어}{44}{appendix.A}%
+\contentsline {section}{\numberline {B}ex3 학습 config 원문}{44}{appendix.B}%
