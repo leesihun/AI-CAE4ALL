@@ -52,7 +52,7 @@ _FM_COMPATIBILITY_KEYS = (
     'fm_cond_hidden', 'fm_arch', 'fm_heads', 'fm_time_sampling',
     'fm_time_logit_mean', 'fm_time_logit_std', 'training_epochs', 'batch_size',
     'learningr', 'weight_decay', 'warmup_epochs', 'use_amp', 'use_ema', 'ema_decay',
-    'split_by_parent',
+    'split_by_parent', 'fm_latent_draws',
 )
 
 

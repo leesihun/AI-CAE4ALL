@@ -242,7 +242,7 @@ markers refuse to promote or infer from a checkpoint older than its own launch.
 | `batch_size` | `16` | already measured: beat 32 by 0.288 |
 | `learningr` | `0.0001` | the contrast was a 0.083 tie — not worth a card |
 | `flow_time_freqs` | `16` | architecture-defining; a change forces a retrain to compare |
-| `latent_dim`, `voronoi_clusters`, `mp_per_level` | SAOI_run values | changing them changes the compressor, so they belong in Phase A's locked block, not a Phase-B axis — sweep 2 (below) moves the last two |
+| `latent_dim`, `voronoi_clusters`, `mp_per_level` | SAOI_run values | changing them changes the compressor, so they belong in Phase A's locked block, not a Phase-B axis |
 | `flow_steps`, `flow_solver` | `30`, `heun` | sampling-time only — `rollout.py` lets the config win on exactly these two keys, so they can be re-dialled at inference with no retraining |
 
 A full factorial over Phase A × Phase B would be 4 × 4 = 16 models per half and
@@ -334,53 +334,106 @@ breaks — but an uppercase directory introduced into that one key would be
 silently folded and then fail to open on Linux. Keep it lowercase, or add the
 key to both `PATH_KEYS` sets first.
 
-## Sweep 2 — the compressor axes sweep 1 holds fixed
+## Sweep 3 — the KL ladder
 
-Sweep 1 varies only `latent_ch` at a fixed 100-node coarsest level, so it cannot
-tell whether the latent budget `B = coarsest nodes × latent_ch` is better spent
-on **space** or on **channels**, or whether the coarsest stack is deep enough.
-Sweep 2 asks exactly that, with everything else held at sweep 1's c8 recipe:
+**What sweep 1 found.** Both halves picked `p8u`, the AE reconstructions look
+right, and yet every arm came out at an sd ratio of 0.05-0.47. The four prior
+arms were nearly indistinguishable, and the bias flipped sign from part to part.
+A prior that is too weak would show up as a difference between `p4` and `p8`;
+none did. So the bottleneck is upstream, in the latent the prior is asked to
+model.
 
-| Arm | `voronoi_clusters` | `latent_ch` | `mp_per_level` | B | Read against |
-|---|---|---|---|---|---|
-| `n200c4` | `1000, 200` | 4 | `4, 6, 8, 6, 4` | 800 | sweep-1 `c8` (same B) |
-| `n400c4` | `1000, 400` | 4 | `4, 6, 8, 6, 4` | 1600 | sweep-1 `c16` (same B) |
-| `n400c8` | `1000, 400` | 8 | `4, 6, 8, 6, 4` | 3200 | headroom: does recon still improve past c16? |
-| `c8m16` | `1000, 100` | 8 | `4, 6, 16, 6, 4` | 800 | sweep-1 `c8`, depth only |
+**Why the latent.** At `ae_kl_weight 1e-6` the compressor is effectively an
+unregularized autoencoder with an unnormalized z. The decoder already reads the
+geometry through the y-blind skip path, but nothing stops the encoder from also
+writing the geometry-determined mean field into z. The latent's variance is
+then dominated by differences **between** parts, and the 125 realizations of
+one part differ only along small directions. The flow prior's MSE objective
+regresses those to the part mean, so the spread collapses and the bias becomes
+a per-geometry mean error on held-out parts. The earlier field-space flow, which
+had no latent in between, reached sd ratios up to 0.77.
 
-`mp_per_level[L]` sizes both the encoder's coarsest stack and the decoder's
-post-z stack, and the coarsest level is ~0.05% of the compute, so `c8m16` is
-nearly free. There is **no selection step**: every compressor gets its own
-prior at one fixed recipe (`p8u` — prior_blocks 8, since the n400 graphs are 4×
-larger than sweep 1's and 4 blocks reach a smaller fraction of them) and its own
-Phase C, so every arm is measured end to end: 8 AE + 8 prior + 24 inference jobs.
+**The fix under test.** KL makes every bit in z cost something. The cheapest
+bits to drop are the ones the decoder gets for free from the skips, which is
+the mean field. Too much KL drops the realization residual too, so the sweep is
+a ladder over the KL weight rather than a single value. Everything else is
+sweep 1's `c8` + `p8u`:
+
+| Arm | `latent_ch` | `ae_kl_weight` | Role |
+|---|---|---|---|
+| `c8k1e6` | 8 | 1e-6 | **control**: sweep 1 exactly, except the prior's `best_by` (below) |
+| `c8k1e4` | 8 | 1e-4 | sweep 1's `c8kl`, now carried through its own prior |
+| `c8k3e4` | 8 | 3e-4 | |
+| `c8k1e3` | 8 | 1e-3 | the largest value `--check` accepts without a warning |
+| `c8k3e3` | 8 | 3e-3 | `FLOW-AEKL-LARGE` warning expected, and intended |
+| `c8k1e2` | 8 | 1e-2 | strong |
+| `c8k3e2` | 8 | 3e-2 | the collapse bracket, where the residual itself should go |
+| `c16k3e3` | 16 | 3e-3 | capacity at a strong KL: room to keep the residual in its own channels |
+
+KL is a per-element mean over coarse nodes × channels, so these values carry
+across `latent_ch`. Stage 1 still selects on **pure reconstruction**
+(`validate_ae_epoch`'s `mean` excludes the KL term). The recon column therefore
+shows what each KL value costs, and the KL column shows how much the latent
+still carries.
+
+**`best_by recon` on the prior, not `crps`.** In stage 2, `recon` selects on the
+validation flow-matching loss, which is the prior's own training objective.
+CRPS was the wrong selector for this problem. Every validation graph has a
+single truth, so CRPS's accuracy term dominates its spread term, and a
+mean-collapsed checkpoint scores best. The selector was rewarding exactly the
+defect this sweep is trying to fix. CRPS, spread and det are still computed and
+printed at every validation.
+
+**Layout: one arm per card.** Each arm is a lane on its own GPU, running, per
+half: `train_ae` → `train_prior` on that arm's own compressor → 3 inferences.
+Nothing is promoted, lanes never wait on each other, and a failed stage skips
+only the rest of its own chain. With both halves in series, a lane is two full
+AE + prior chains. `PARALLEL_HALVES=1` runs bot and top side by side on the same
+card instead.
 
 ```bash
-./run_sweep2.sh                  # GPUs 0-7, on top of sweep 1, one sweep-2 job per card
-JOBS_PER_GPU=2 ./run_sweep2.sh   # two per card (16 slots)
-GPUS="4 5 6 7" ./run_sweep2.sh   # only these cards
-./run_sweep2.sh A|B|C|report|clean|help
+./run_sweep3.sh                        # 8 arms on GPUs 0-7, busy or not
+HALVES=bot ./run_sweep3.sh             # one half
+PARALLEL_HALVES=1 ./run_sweep3.sh      # both halves at once on each card
+GPUS="4 5 6 7" ./run_sweep3.sh         # fewer cards: arms dealt round-robin
+ARMS="c8k1e6 c8k1e3" GPUS="0 1" ./run_sweep3.sh
+./run_sweep3.sh report|clean|help
 ```
 
-**Running beside sweep 1.** Every config says `gpu_ids 0`; the runner launches
-each job with `CUDA_VISIBLE_DEVICES=<card>` (and `CUDA_DEVICE_ORDER=PCI_BUS_ID`)
-from a pool -- GPUs 0-7 by default, the same cards sweep 1 uses, busy or not,
-`JOBS_PER_GPU` slots each. A job that runs out of VRAM beside sweep 1 fails
-alone and only its own chain is skipped. The
-isolation is in the configs: all artifacts under `output/chi-mgnflow/saoi_sweep2/`,
-one log directory per arm (the dumps are keyed by `gpu_ids`, which is 0
-everywhere), `write_preprocessing False` (sweep 2 never writes the shared HDF5),
-and `hierarchy_cache_dir` pointing at `saoi_sweep2/mscache/<hierarchy>/`, out of
-reach of the same-stem prune next to the dataset. `all` deletes that cache
-directory at the end (`KEEP_CACHE=1` to keep it).
+Git tracks the script as 644, so after a pull, run `chmod +x run_sweep3.sh`
+once or call it as `bash run_sweep3.sh`. It `cd`s to the repo root itself, so
+it can be started from anywhere.
+
+**Preflight.** Before any card is committed, every AE config gets a full
+`--check`. The prior and inference configs read checkpoints that do not exist
+yet, so their filesystem layer is skipped at this point. It runs for real when
+each job launches, because the launcher checks before it starts the native
+process. `check_eval_inputs.py` verifies the `_infer_`/`_compare_` pairs, which
+are sweep 1's.
+
+**Isolation.** Every config says `gpu_ids 0`, and the runner picks the physical
+card with `CUDA_VISIBLE_DEVICES`. The rest of the isolation is in the configs:
+- All artifacts go under `output/chi-mgnflow/saoi_sweep3/`.
+- There is one log directory per arm. This matters because the dumps are keyed
+  by `gpu_ids`, which is 0 everywhere.
+- `write_preprocessing False`, so no run writes to the shared HDF5.
+- One shared `saoi_sweep3/mscache/v1000_100/` hierarchy cache, kept across
+  stages. `all` deletes it at the end; set `KEEP_CACHE=1` to keep it.
 
 | File | Purpose |
 |---|---|
-| `config_train_ae2_<half>_<arm>.txt` | Phase A, 8 = 2 halves × 4 arms |
-| `config_train_prior2_<half>_<arm>.txt` | Phase B, 8; `ae_checkpoint` = that arm's own Phase-A file |
-| `config_infer2_<half>_<arm>_<tag>.txt` | Phase C, 24 |
-| `run_sweep2.sh` | the runner and GPU pool |
-| `report_sweep2.py` | one table per half — B, best recon, ceiling, sd/bias per part, score — with sweep 1's compressors beside it; written to `saoi_sweep2/RESULTS.txt` |
+| `config_train_ae3_<half>_<arm>.txt` | stage 1, 16 = 2 halves × 8 arms |
+| `config_train_prior3_<half>_<arm>.txt` | stage 2, 16; `ae_checkpoint` = that arm's own stage-1 file |
+| `config_infer3_<half>_<arm>_<tag>.txt` | inference, 48 = 16 × 3 evaluation parts |
+| `run_sweep3.sh` | the lane-per-GPU runner |
+| `report_sweep3.py` | one table per half (next section); written to `saoi_sweep3/RESULTS.txt` |
 
-The `2` in the names keeps sweep 1's globs (`select_ae.py`,
-`check_eval_inputs.py`, `rank_arms.py`) from ever picking these files up.
+`report_sweep3.py` prints, for each arm:
+- the kept AE epoch, with its validation recon and its KL
+- the ceiling ratio
+- the kept prior epoch, with its validation spread
+- sd and bias per evaluation part, and the score
+- sweep 1's promoted `p8u`, as a reference row
+
+The `3` in the names keeps sweep 1's globs (`select_ae.py`,
+`check_eval_inputs.py`, `promote_ae.py`) from ever picking these files up.

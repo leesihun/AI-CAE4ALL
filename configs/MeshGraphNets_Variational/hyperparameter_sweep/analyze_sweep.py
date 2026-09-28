@@ -22,20 +22,19 @@ THE THREE QUESTIONS, IN THE ORDER THEY HAVE TO BE ASKED
        in training_seed, so base-vs-seed is a pure replicate. The largest
        base-vs-seed gap across the eval sets is the floor. An arm that moves
        sd_ratio by less than that has shown nothing, however tidy the ordering
-       looks. The retired 8-arm ablation had no such arm, which is why its
-       sub-2% W1/sd result could never be read.
+       looks.
 
     2. Is the defect in the prior or in the decoder?  sd_ratio alone cannot
-       say. The PVP decomposition can: if decoding a posterior SAMPLE already
+       say. The posterior vs. prior decomposition can: if decoding a posterior SAMPLE already
        loses the width, no amount of prior work can put it back, and every
        prior-side arm in this sweep is answering the wrong question. Read
        table 3 before table 2 means anything.
 
     3. How much can post-hoc rescaling buy?  latent_inflation widens the latent
-       cloud around its per-graph center after integration. Prior art on this
-       model: 2.5x on z bought 1.35x on the field -- sub-linear, because the
-       prior puts variance in directions the decoder does not read. The
-       efficiency column is that number per arm, and an arm that raises it has
+       cloud around its per-graph center after integration. If the prior puts
+       variance in directions the decoder does not read, the field widens
+       sub-linearly in lambda. The efficiency column is that ratio per arm
+       (base sets the reference), and an arm that raises it has
        improved the ALIGNMENT of prior and decoder, which is the mechanism this
        sweep is actually hunting.
 
@@ -53,8 +52,8 @@ from pathlib import Path
 
 import numpy as np
 
-DEFAULT_ARMS = ["base", "seed", "zdim8", "zdim4", "pmin15", "pmin30",
-                "g2e", "mmd10", "arecon"]
+DEFAULT_ARMS = ["base", "seed", "zdim4", "pmin30", "arecon", "aux100",
+                "fmmom", "g2e"]
 DEFAULT_TAGS = ["s26fe_main", "s26fe_sec", "sm_l345u_main"]
 BASE, SEED = "base", "seed"
 
@@ -69,13 +68,7 @@ WHAT = {
     "g2e":    "prior_grad_to_encoder 0.0 -> 1.0",
     "mmd10":  "lambda_mmd 1 -> 10",
     "arecon": "alpha_recon 1000 -> 100",
-    # sweep2 (run_sweep2.sh) -- read against sweep1's base/seed
-    "aux0":   "beta_aux 10 -> 0",
-    "aux3":   "beta_aux 10 -> 3",
-    "aux30":  "beta_aux 10 -> 30",
     "aux100": "beta_aux 10 -> 100",
-    "mmd100": "lambda_mmd 1 -> 100",
-    "vel512": "prior_velocity_hidden_dim 256 -> 512",
     "fmmom":  "prior_fm_moments False -> True",
 }
 
@@ -127,7 +120,7 @@ def load_spreads(out_root: Path, arm: str, tag: str):
     return out
 
 
-def load_pvp(out_root: Path, arm: str, tag: str):
+def load_posterior_vs_prior(out_root: Path, arm: str, tag: str):
     path = out_root / "diag" / f"posterior_vs_prior_{arm}_{tag}.json"
     if not path.exists():
         return None
@@ -153,7 +146,7 @@ def load_pvp(out_root: Path, arm: str, tag: str):
 # analysis
 # ---------------------------------------------------------------------------
 
-def classify_pvp(post_mu, post_z, prior):
+def classify_posterior_vs_prior(post_mu, post_z, prior):
     """The same thresholds posterior_vs_prior.py uses, applied to tag means."""
     if not all(np.isfinite([post_mu, post_z, prior])):
         return "n/a"
@@ -202,7 +195,7 @@ def main():
     tags = a.tags.split()
 
     spreads = {arm: {t: load_spreads(out_root, arm, t) for t in tags} for arm in arms}
-    pvps = {arm: {t: load_pvp(out_root, arm, t) for t in tags} for arm in arms}
+    post_vs_prior = {arm: {t: load_posterior_vs_prior(out_root, arm, t) for t in tags} for arm in arms}
 
     print()
     print(rule("="))
@@ -214,12 +207,12 @@ def main():
 
     # ---------------------------------------------------------------- coverage
     missing_s = [(arm, t) for arm in arms for t in tags if spreads[arm][t] is None]
-    missing_p = [(arm, t) for arm in arms for t in tags if pvps[arm][t] is None]
+    missing_p = [(arm, t) for arm in arms for t in tags if post_vs_prior[arm][t] is None]
     print()
     print("1. COVERAGE")
     print(f"   spread_values.npz : {len(arms) * len(tags) - len(missing_s)} / {len(arms) * len(tags)}")
     print(f"   posterior_vs_prior: {len(arms) * len(tags) - len(missing_p)} / {len(arms) * len(tags)}")
-    for label, miss in (("spreads", missing_s), ("pvp", missing_p)):
+    for label, miss in (("spreads", missing_s), ("posterior vs. prior", missing_p)):
         if miss:
             joined = ", ".join(f"{arm}/{t}" for arm, t in miss[:10])
             more = f" (+{len(miss) - 10} more)" if len(miss) > 10 else ""
@@ -270,7 +263,7 @@ def main():
         print("   Without both, table 3 below is still readable but table 4 is not:")
         print("   there is no way to tell a 5% ordering from 5% seed scatter.")
 
-    # ------------------------------------------------------- PVP decomposition
+    # ----------------------------------------- posterior vs. prior decomposition
     print()
     print("3. WHERE THE WIDTH IS LOST  (posterior_vs_prior, mean over eval sets)")
     print("   post_mu / post_z: decode the encoder output. prior: decode p(z|g).")
@@ -280,17 +273,17 @@ def main():
     print(f"   {'arm':<9}{'post_mu':>9}{'post_z':>9}{'prior':>9}{'z sd':>8}"
           f"{'pca p':>7}{'pca q':>7}  verdict")
     print("   " + rule("-", 72))
-    pvp_mean = {}
+    post_vs_prior_mean = {}
     for arm in arms:
-        rows = [pvps[arm][t] for t in tags if pvps[arm][t]]
+        rows = [post_vs_prior[arm][t] for t in tags if post_vs_prior[arm][t]]
         if not rows:
             print(f"   {arm:<9}{'-':>9}{'-':>9}{'-':>9}{'-':>8}{'-':>7}{'-':>7}  (no data)")
             continue
         m = {k: mean_or_nan([r[k] for r in rows])
              for k in ("post_mu", "post_z", "prior", "z_sd_ratio",
                        "pca_post_frac", "pca_prior_frac", "post_sigma")}
-        m["class"] = classify_pvp(m["post_mu"], m["post_z"], m["prior"])
-        pvp_mean[arm] = m
+        m["class"] = classify_posterior_vs_prior(m["post_mu"], m["post_z"], m["prior"])
+        post_vs_prior_mean[arm] = m
         print(f"   {arm:<9}{fmt(m['post_mu'], 9)}{fmt(m['post_z'], 9)}"
               f"{fmt(m['prior'], 9)}{fmt(m['z_sd_ratio'], 8, 2)}"
               f"{fmt(m['pca_post_frac'], 7, 2)}{fmt(m['pca_prior_frac'], 7, 2)}"
@@ -403,13 +396,13 @@ def main():
     print(rule("="))
     print(" READING")
     print(rule("="))
-    base_cls = pvp_mean.get(BASE, {}).get("class", "n/a")
+    base_cls = post_vs_prior_mean.get(BASE, {}).get("class", "n/a")
     if base_cls == "DECODER-BOUND":
         print(" Baseline is DECODER-BOUND: decoding a posterior sample already")
         print(" loses the width, so the prior merely inherits a deficit it did not")
-        print(" create. Every prior-side arm here (g2e, mmd10, and the prior half")
-        print(" of arecon) was aimed at the wrong stage. Weight for the next round:")
-        print(" decoder capacity, a peak-to-valley loss term, spatial latents.")
+        print(" create. The prior-side arms here (fmmom, g2e) were aimed at the")
+        print(" wrong stage; read zdim4, pmin30 and aux100 instead. If none of")
+        print(" them clears the floor, the next lever is a new objective term.")
         print(" Note the objective has NO term penalizing a narrow ensemble --")
         print(" crps is only checkpoint selection and carries no gradient.")
     elif base_cls == "PRIOR-BOUND":
@@ -426,8 +419,9 @@ def main():
         print(" column before reading that as good: a prior that wanders off the")
         print(" conditional mean also widens the histogram.")
     else:
-        print(" No baseline PVP result, so the prior-vs-decoder question is still")
-        print(" open and table 4 cannot be acted on. Run the PVP stage first.")
+        print(" No baseline posterior vs. prior result, so the prior-vs-decoder")
+        print(" question is still open and table 4 cannot be acted on. Run the")
+        print(" posterior vs. prior stage first.")
 
     effects = [arm for arm in arms
                if arm not in (BASE, SEED) and ranking.get(arm, {}).get("note", "").startswith("EFFECT")]
@@ -448,9 +442,9 @@ def main():
     # ------------------------------------------------------------------ dumps
     payload = {"out_root": str(out_root), "arms": arms, "tags": tags,
                "floor": floor, "floor_per_tag": floor_per_tag,
-               "ranking": ranking, "pvp_mean": pvp_mean,
+               "ranking": ranking, "posterior_vs_prior_mean": post_vs_prior_mean,
                "baseline_class": base_cls,
-               "missing": {"spreads": missing_s, "pvp": missing_p}}
+               "missing": {"spreads": missing_s, "posterior_vs_prior": missing_p}}
     if a.json:
         Path(a.json).parent.mkdir(parents=True, exist_ok=True)
         with open(a.json, "w", encoding="utf-8") as fh:
@@ -477,13 +471,13 @@ def main():
             ax1.set_ylabel("sd_ratio (target 1.0)")
             ax1.set_title("Inflation curve")
             ax1.legend(fontsize=8, ncol=2)
-            names = [arm for arm in arms if arm in pvp_mean]
+            names = [arm for arm in arms if arm in post_vs_prior_mean]
             width = 0.27
             xs = np.arange(len(names))
             for off, key, lbl in ((-width, "post_mu", "posterior mean"),
                                   (0.0, "post_z", "posterior sample"),
                                   (width, "prior", "prior")):
-                ax2.bar(xs + off, [pvp_mean[n][key] for n in names], width, label=lbl)
+                ax2.bar(xs + off, [post_vs_prior_mean[n][key] for n in names], width, label=lbl)
             ax2.axhline(1.0, color="k", lw=1, ls=":")
             ax2.set_xticks(xs)
             ax2.set_xticklabels(names, rotation=45, ha="right")

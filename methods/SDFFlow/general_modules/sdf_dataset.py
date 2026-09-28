@@ -78,6 +78,10 @@ class SDFShapeDataset(Dataset):
         # may toggle the attribute (train_fm's latent-cache encode does) and
         # restore it afterwards.
         self.deterministic = bool(deterministic)
+        # Deterministic draw index. 0 keeps the (seed, shape_idx) stream above;
+        # k > 0 seeds from (seed, shape_idx, k), a different but equally fixed
+        # subsample -- train_fm's `fm_latent_draws` cache encodes draws 1..K.
+        self.draw = 0
         self._h5 = None  # opened lazily per worker
 
         with h5py.File(h5_path, 'r') as h5:
@@ -140,6 +144,8 @@ class SDFShapeDataset(Dataset):
 
     def _rng(self, shape_idx):
         if self.deterministic:
+            if self.draw:
+                return np.random.default_rng([int(self.seed), int(shape_idx), int(self.draw)])
             return np.random.default_rng([int(self.seed), int(shape_idx)])
         # Stochastic (train) path. The child seed is drawn from *torch's* RNG,
         # not from OS entropy, so the augmentation stream is reachable from a

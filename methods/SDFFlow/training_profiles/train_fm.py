@@ -18,6 +18,7 @@ pipeline's completeness signal.
 import os
 import time
 
+import numpy as np
 import torch
 from torch.utils.data import DataLoader, TensorDataset
 from torch.utils.data.distributed import DistributedSampler
@@ -79,12 +80,28 @@ def fm_worker(config, config_filename='config.txt'):
     for p in vae.parameters():
         p.requires_grad_(False)
 
-    # ---- Encode all shapes to latents (deterministic: eval + mu) ----
+    # ---- Encode all shapes to latents (deterministic: eval, fixed subsample) ----
+    # `fm_latent_draws` K > 1 replaces each TRAIN shape's single encoder-mean
+    # latent with K posterior samples (a different fixed point subsample + mu +
+    # std * eps, std floored as in VAE training). Val keeps the mean, so ValidFM
+    # stays comparable across K. One epoch then covers K x N latents, i.e. K x
+    # the optimizer steps: lower `training_epochs` to hold the step budget.
+    latent_draws = int(config.get('fm_latent_draws', 1))
+    if latent_draws < 1:
+        raise ValueError(f'fm_latent_draws must be >= 1, got {latent_draws}')
     if rank0:
         print('\nEncoding dataset to latents...')
     train_dataset, val_dataset, _ = build_dataset_splits(config, split_seed)
-    z_train, c_train = _encode_split(vae, train_dataset, device, config)
+    # The draw noise follows the run seed (rank-independent: `run_seed` carries
+    # the rank offset), falling back to split_seed for an unseeded run.
+    raw_seed = config.get('seed')
+    draw_seed = split_seed if raw_seed is None or str(raw_seed).strip() == '' else int(raw_seed)
+    z_train, c_train = _encode_split(vae, train_dataset, device, config,
+                                     draws=latent_draws, draw_seed=draw_seed)
     z_val, c_val = _encode_split(vae, val_dataset, device, config)
+    if rank0 and latent_draws > 1:
+        print(f'FM latent cache: {latent_draws} posterior draws per train shape -> '
+              f'{z_train.shape[0]} train latents ({len(train_dataset)} shapes); val keeps the mean')
 
     latent_mean = z_train.mean(dim=0, keepdim=True)
     latent_std = z_train.std(dim=0, keepdim=True).clamp_min(1e-6)
@@ -382,42 +399,65 @@ def fm_worker(config, config_filename='config.txt'):
 
 
 @torch.no_grad()
-def _encode_split(vae, dataset, device, config):
-    """Encode every shape in a split to (mu latents, conditions).
+def _encode_split(vae, dataset, device, config, draws=1, draw_seed=0):
+    """Encode every shape in a split to (latents, conditions).
 
     The dataset is switched to deterministic subsampling for the duration of
     the pass (and restored afterwards): `SDFShapeDataset.__getitem__` then seeds
     its rng from (split seed, shape index), so every rank -- and every run of
     the same checkpoint and seed -- caches bit-identical latents. Without this,
     each rank would normalize by its own private latent statistics.
+
+    `draws` 1 caches the encoder mean. `draws` K > 1 caches K posterior samples
+    per shape, draw-major (all shapes for draw 1, then draw 2, ...): draw k
+    reads the subsample seeded from (split seed, shape index, k) and adds
+    std * eps with eps from a CPU generator seeded from (draw_seed, k), where
+    std is floored at `posterior_min_std_rel` x mu_spread exactly as in VAE
+    training. Both seeds are rank-independent, so the cache stays identical
+    across ranks.
     """
     latents, conds = [], []
     batch, batch_c = [], []
     batch_size = int(config.get('encode_batch_size', 16))
+    min_std = vae._posterior_min_std(getattr(vae, 'posterior_min_std_rel', 0.0)) if draws > 1 else None
+    generator = None
 
     def flush():
         if not batch:
             return
         pts = torch.stack([b[0] for b in batch]).to(device)
         nrm = torch.stack([b[1] for b in batch]).to(device)
-        mu, _ = vae.encode(pts, nrm)
+        mu, logvar = vae.encode(pts, nrm)
+        if generator is not None:
+            std = torch.exp(0.5 * logvar)
+            if min_std is not None:
+                std = torch.maximum(std, min_std.to(dtype=std.dtype, device=std.device))
+            eps = torch.randn(mu.shape, generator=generator).to(device=mu.device, dtype=mu.dtype)
+            mu = mu + eps * std
         latents.append(mu.flatten(1).cpu())
         conds.extend(batch_c)
         batch.clear()
         batch_c.clear()
 
     previous_deterministic = getattr(dataset, 'deterministic', False)
+    previous_draw = getattr(dataset, 'draw', 0)
     dataset.deterministic = True
     try:
-        for i in range(len(dataset)):
-            item = dataset[i]
-            batch.append((item['surface_points'], item['surface_normals']))
-            batch_c.append(item['cond'])
-            if len(batch) == batch_size:
-                flush()
-        flush()
+        for k in range(1, draws + 1) if draws > 1 else (0,):
+            if k:
+                dataset.draw = k
+                seed = int(np.random.SeedSequence([int(draw_seed), k]).generate_state(1)[0])
+                generator = torch.Generator().manual_seed(seed)
+            for i in range(len(dataset)):
+                item = dataset[i]
+                batch.append((item['surface_points'], item['surface_normals']))
+                batch_c.append(item['cond'])
+                if len(batch) == batch_size:
+                    flush()
+            flush()
     finally:
         dataset.deterministic = previous_deterministic
+        dataset.draw = previous_draw
     return torch.cat(latents, dim=0), torch.stack(conds, dim=0)
 
 

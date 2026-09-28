@@ -69,10 +69,8 @@ from general_modules.data_loader import load_data              # noqa: E402
 from general_modules.mesh_dataset import MeshGraphDataset      # noqa: E402
 from inference_profiles.rollout import (                       # noqa: E402
     _load_model_from_checkpoint, _load_conditional_prior,
-    _spread_max_minus_min, Z_DISP_CHANNEL,
+    _spread_stat, SPREAD_CHANNEL_DEFAULT, SPREAD_STAT_DEFAULT, SPREAD_STATS,
 )
-
-Z_OUT = Z_DISP_CHANNEL - 3      # z_disp is the 3rd output channel
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -324,11 +322,12 @@ def resolve_device(cfg, override=None):
     return torch.device(f'cuda:{gid}')
 
 
-def per_graph_spreads(pred, batch_obj, m, dst, dm):
-    """Physical z_disp peak-to-valley of each graph in a collated prediction."""
-    z = (pred[:, Z_OUT].float() * dst[Z_OUT] + dm[Z_OUT]).detach().cpu().numpy()
+def per_graph_spreads(pred, batch_obj, m, dst, dm, ch, stat):
+    """Physical spread statistic of output channel `ch` for each graph in a
+    collated prediction -- the same channel and reduction rollout.py scores."""
+    z = (pred[:, ch].float() * dst[ch] + dm[ch]).detach().cpu().numpy()
     ptr = batch_obj.ptr.tolist()
-    return [_spread_max_minus_min(z[ptr[i]:ptr[i + 1]]) for i in range(m)]
+    return [_spread_stat(z[ptr[i]:ptr[i + 1]], stat) for i in range(m)]
 
 
 def main():
@@ -354,6 +353,13 @@ def main():
     if a.modelpath:
         cfg['modelpath'] = a.modelpath
     dev = resolve_device(cfg, a.gpu)
+    # Same keys, defaults and validation as rollout.py, so this compares the
+    # statistic the inference run scored: output channel `ch` (nodal_data row
+    # 3 + ch on the truth side), reduced by `stat`.
+    ch = int(cfg.get('spread_channel', SPREAD_CHANNEL_DEFAULT))
+    stat = str(cfg.get('spread_stat', SPREAD_STAT_DEFAULT)).lower()
+    if stat not in SPREAD_STATS:
+        raise SystemExit(f"spread_stat must be one of {SPREAD_STATS}, got {stat!r}")
     torch.manual_seed(1234)
 
     # ---- normalizers from the TRAINING split, exactly as the trainer fit them
@@ -435,7 +441,7 @@ def main():
                     raise SystemExit(f"realization {sid}: node/B.C. types differ from the "
                                      f"infer graph")
             ys.append(nd[3:3 + int(c2['output_var']), 0, :].T.astype(np.float32))
-            truth.append(_spread_max_minus_min(nd[Z_DISP_CHANNEL, 0, :]))
+            truth.append(_spread_stat(nd[3 + ch, 0, :], stat))
     R = len(ys)
     print(f"  geometry: {N} nodes;  realizations: {R};  prior draws: {a.n_prior}")
 
@@ -458,8 +464,8 @@ def main():
             pred_mu, *_ = model(b, add_noise=False, use_posterior=False, fixed_z=mu)
         post_mu.append(mu.float().cpu().numpy())
         post_logvar.append(lv.float().cpu().numpy())
-        sp_z += per_graph_spreads(pred_z, b, m, dst, dm)
-        sp_mu += per_graph_spreads(pred_mu, b, m, dst, dm)
+        sp_z += per_graph_spreads(pred_z, b, m, dst, dm, ch, stat)
+        sp_mu += per_graph_spreads(pred_mu, b, m, dst, dm, ch, stat)
     post_mu = np.concatenate(post_mu)          # [R, S, D]
     post_logvar = np.concatenate(post_logvar)
 
@@ -475,7 +481,7 @@ def main():
         with torch.no_grad():
             pred, *_ = model(b, add_noise=False, use_posterior=False,
                              fixed_z=zp[start:stop])
-        sp_prior += per_graph_spreads(pred, b, m, dst, dm)
+        sp_prior += per_graph_spreads(pred, b, m, dst, dm, ch, stat)
     prior_np = zp.float().cpu().numpy()
 
     # ---- tables

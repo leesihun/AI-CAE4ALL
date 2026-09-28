@@ -1,6 +1,6 @@
 %   ============================================================
 %   SAOI warpage hyperparameter sweep -- arm fmmom -- top half
-%   sweep2: condition-dependent mean/scale base for the FM prior.
+%   condition-dependent mean/scale base for the FM prior.
 %
 %   THE DEFECT THIS SWEEP IS AIMED AT. Posterior reconstruction is excellent
 %   while the generated ensemble is ~2x too narrow (sd_ratio 0.45-0.53 on every
@@ -132,7 +132,7 @@ mmd_gather_ranks	True  # All-gather z over DDP ranks before MMD (no-op on one ca
 
 %   Prior - gnn_e2e joint training; prior_family fm = conditional flow matching.
 %   Every FM-v2 architecture key is at its native default except the one this
-%   arm sweeps (sweep2: no result outside sweep1 is treated as evidence).
+%   arm sweeps.
 %   prior_min_std is deliberately absent: it clamps the mixture prior's log_std
 %   (ConditionalMixturePrior) and does nothing under prior_family fm.
 prior_type	gnn_e2e  # gnn_e2e enables the jointly trained graph-conditional prior
@@ -149,7 +149,7 @@ prior_fm_solver	heun  # 2nd-order trapezoid predictor-corrector. Euler O(dt^2)
 %   Heun at 30 steps is more accurate than Euler at 100 and ~40% cheaper.
 prior_mp_layers	5  # Prior message-passing depth
 prior_hidden_dim	256  # Conditional-prior hidden width
-prior_fm_moments	True  # SWEPT (base False): the flow starts from N(mu(c), s(c)^2) with a learned per-condition diagonal width and fits only the residual, so the ensemble width is an explicit output instead of whatever the ODE integrates to. Zero-initialized (mu 0, s 1), i.e. identical to base at step 0.
+prior_fm_moments	True  # SWEPT (base False): the only prior-side arm. The flow starts from N(mu(c), s(c)^2) with a learned per-condition diagonal width and fits only the residual, so the ensemble width is an explicit output instead of whatever the ODE integrates to. Zero-initialized (mu 0, s 1), i.e. identical to base at step 0.
 prior_temperature	1.0  # Sampling spread control (inference only)
 
 %   Time integration (docs/CONFIGURATION.md sections 3.5 and 6.7)

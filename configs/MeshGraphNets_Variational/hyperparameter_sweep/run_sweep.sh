@@ -4,356 +4,360 @@
 #   nohup bash configs/MeshGraphNets_Variational/hyperparameter_sweep/run_sweep.sh \
 #       > output/meshgraphnets-v/run_sweep.out 2>&1 &
 #
-# Eight arms, each one config key away from `base`, which is itself the
-# SAOI_run recipe verbatim. One of the eight is `seed`, which changes only
-# training_seed: it measures the noise floor, and analyze_sweep.py refuses to
-# call anything an effect unless it clears that floor on all three eval sets.
+# The script also tees everything it prints into
+#   output/meshgraphnets-v/saoi_sweep/run_logs/sweep_<timestamp>.out
+# so the run leaves a log even when it was started without a redirect.
 #
-# One invocation always runs BOTH halves of the SAOI board, one after the
-# other: `bot` then `top`, unconditionally -- there is no switch to run only
-# one. They are two fully independent datasets, checkpoints and reports --
-# nothing is shared between them -- so each half gets its own output root
-# precisely so arm names stay plain (`base`, `seed`, ...) in both and
-# analyze_sweep.py needs no changes:
+# Eight arms, each one config key away from `base` (the SAOI_run recipe
+# verbatim), on BOTH halves of the SAOI board: 16 jobs. `seed` changes only
+# training_seed; it is the noise floor analyze_sweep.py measures every other arm
+# against. Each half keeps its own output root so arm names stay plain:
 #   bot -> output/.../saoi_sweep/       top -> output/.../saoi_sweep_top/
-# They run sequentially, never concurrently, because both default to the same
-# eight cards and each arm needs a card to itself (see SCHEDULING below) --
-# running them at once would silently double up two arms per card. A hard
-# failure in one half (preflight or training) aborts only that half; the run
-# still attempts the other.
 #
-# `mmd10` is benched: its config still exists on both halves and still runs
-# standalone (`ARMS=mmd10`), but it is not in the default roster. `arecon`
-# (alpha_recon 1000 -> 100) took its slot instead -- see "The eight arms" in
-# README.md for why.
+# ORDER OF WORK
+#   1. environment  launcher python imports cae_suite; the MGN-V interpreter
+#                   imports torch / torch_geometric / h5py and sees CUDA; every
+#                   index in GPUS exists on THIS machine.
+#   2. datasets     every dataset_dir / infer_dataset / eval_dataset named by a
+#                   selected config exists, with the case written in the config.
+#   3. eval pairs   SAOI_run/check_eval_inputs.py: each _infer_ file is paired
+#                   with its own _compare_ file.
+#   4. --check      the launcher's full preflight on all 16 train configs.
+#   Any failure in 1-4 aborts before a single GPU-hour is spent, and says why.
+#   5. queue        16 jobs (half x arm) over the GPUs, one job per card at a
+#                   time. A job is the whole chain for one arm on one half:
+#                   train -> 3 inference runs -> 3 posterior_vs_prior dumps. A
+#                   card that finishes early takes the next unclaimed job, so
+#                   4 cards and 8 cards both work without re-dealing anything.
+#   6. report       analyze_sweep.py once per half.
+#   7. summary      one line per job; each failure prints the tail of its log.
 #
-# WHAT IT PRODUCES, in order, per half:
-#   TRAIN     8 checkpoints under that half's $OUT_ROOT
-#   INFER     24 runs (8 arms x 3 eval sets), each writing spread_values.npz
-#             with the whole latent_inflation curve tagged in `gen_lam`
-#   PVP       24 posterior_vs_prior JSON dumps -- the truth / posterior_mean /
-#             posterior_sample / prior decomposition that says whether the
-#             missing width is lost in the prior or in the decoder. This is the
-#             measurement the sweep exists to condition on; an arm ranking
-#             without it cannot tell a better prior from a better decoder.
-#   REPORT    one table, written by analyze_sweep.py
-# Both halves together (the default): 16 checkpoints, 48 infer runs, 48 PVP
-# dumps, 2 reports.
-#
-# SCHEDULING. Eight arms divide evenly across eight cards: round-robin dealing
-# puts exactly one arm per lane, one wave, no idle cards, in EITHER half.
-# CUDA_VISIBLE_DEVICES does the assignment, so every config asks for local
-# device 0 and nothing in the configs has to know about the machine. Running
-# both halves is therefore two such waves back to back, not four.
-# Batch_size 16 is per-rank, so one card per arm is required: two-card DDP
-# would make the global batch 32 and break comparability with base and with
-# SAOI_run.
+# One card per job: Batch_size 16 is per-rank, so two-card DDP would double the
+# global batch and break comparability with base and SAOI_run.
+# CUDA_VISIBLE_DEVICES does the assignment, so every config asks for device 0.
 #
 # Useful overrides:
-#   PYTHON, METHOD_PYTHON, GPUS, ARMS, REPORT_ARMS, INFER_TAGS
-#   EVAL_PREFLIGHT=1, PREFLIGHT=1, STRICT_PREFLIGHT=1, TRAIN=1, INFER=1, PVP=1, REPORT=1
+#   PYTHON, METHOD_PYTHON, GPUS (default: every GPU the MGN-V interpreter sees),
+#   ARMS, REPORT_ARMS, INFER_TAGS,
+#   EVAL_PREFLIGHT=1, PREFLIGHT=1, TRAIN=1, INFER=1, POSTERIOR_VS_PRIOR=1, REPORT=1
+# Report-only rerun:  TRAIN=0 INFER=0 POSTERIOR_VS_PRIOR=0 bash .../run_sweep.sh
 set -uo pipefail
 
 PYTHON="${PYTHON:-python}"
 export PYTHONUNBUFFERED=1
+# GPU numbers mean what nvidia-smi prints.
+export CUDA_DEVICE_ORDER=PCI_BUS_ID
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 cd "$REPO_ROOT" || exit 1
 
 CFG_DIR="$SCRIPT_DIR"
+CFG_REL="configs/MeshGraphNets_Variational/hyperparameter_sweep"
+METHOD_DIR="methods/MeshGraphNets_Variational"
 
-# mmd10 is benched (see README.md, "The eight arms"): its config still runs
-# standalone via ARMS=mmd10 on either half, but is not in the default roster.
-ARMS_DEFAULT="${ARMS:-base seed zdim8 zdim4 pmin15 pmin30 g2e arecon}"
-REPORT_ARMS_DEFAULT="${REPORT_ARMS:-$ARMS_DEFAULT}"
+ARMS="${ARMS:-base seed zdim4 pmin30 arecon aux100 fmmom g2e}"
+REPORT_ARMS="${REPORT_ARMS:-$ARMS}"
 INFER_TAGS="${INFER_TAGS:-s26fe_main s26fe_sec sm_l345u_main}"
-GPUS="${GPUS:-0 1 2 3 4 5 6 7}"
+GPUS="${GPUS:-}"
 EVAL_PREFLIGHT="${EVAL_PREFLIGHT:-1}"
 PREFLIGHT="${PREFLIGHT:-1}"
-STRICT_PREFLIGHT="${STRICT_PREFLIGHT:-1}"
 TRAIN="${TRAIN:-1}"
 INFER="${INFER:-1}"
-PVP="${PVP:-1}"
+POSTERIOR_VS_PRIOR="${POSTERIOR_VS_PRIOR:-1}"
 REPORT="${REPORT:-1}"
+HALVES="bot top"
 
-# posterior_vs_prior.py imports the method package directly, so it needs the
-# MeshGraphNets_Variational interpreter rather than the launcher one. Ask the
-# launcher settings for it; fall back to $PYTHON if that cannot be read.
+out_root() {
+    case "$1" in
+        bot) echo "output/meshgraphnets-v/saoi_sweep" ;;
+        top) echo "output/meshgraphnets-v/saoi_sweep_top" ;;
+    esac
+}
+cfg_suffix() { [ "$1" = "top" ] && echo "_top" || echo ""; }
+
+TS="$(date +%Y%m%d_%H%M%S)"
+MASTER_DIR="$(out_root bot)/run_logs"
+mkdir -p "$MASTER_DIR" "$(out_root top)/run_logs"
+MASTER_LOG="$MASTER_DIR/sweep_$TS.out"
+exec > >(tee -a "$MASTER_LOG") 2>&1
+
+die() {
+    echo
+    echo "ABORT: $*"
+    echo "Nothing was trained. Full log: $MASTER_LOG"
+    exit 1
+}
+
+echo "=================================================================="
+echo " MGN-V SAOI hyperparameter sweep   ($TS, host $(hostname))"
+echo "=================================================================="
+
+# ------------------------------------------------------------ 1. environment
+echo "---- 1. environment ----------------------------------------------"
+"$PYTHON" -c "import cae_suite" 2>/dev/null \
+    || die "launcher python '$PYTHON' cannot import cae_suite. Run from the repo's launcher env or set PYTHON=/path/to/python."
+
 if [ -z "${METHOD_PYTHON:-}" ]; then
     METHOD_PYTHON="$("$PYTHON" -c "
 from pathlib import Path
 from cae_suite.settings import LocalSettings
 print(LocalSettings.load(Path('.')).resolve_python('meshgraphnets-v', 'meshgraphnets-v'))
-" 2>/dev/null)"
-    [ -n "$METHOD_PYTHON" ] || METHOD_PYTHON="$PYTHON"
+")" || die "could not resolve the meshgraphnets-v interpreter from ai_cae4all.local.toml; set METHOD_PYTHON=/path/to/python."
 fi
+[ -x "$METHOD_PYTHON" ] || command -v "$METHOD_PYTHON" >/dev/null 2>&1 \
+    || die "MGN-V interpreter '$METHOD_PYTHON' does not exist."
 
+PROBE_ERR="$MASTER_DIR/env_probe_$TS.err"
+NGPU_SEEN="$(env -u CUDA_VISIBLE_DEVICES "$METHOD_PYTHON" -c "
+import torch, torch_geometric, h5py
+print(torch.cuda.device_count() if torch.cuda.is_available() else 0)
+" 2>"$PROBE_ERR")" || {
+    tail -8 "$PROBE_ERR" | sed 's/^/      /'
+    die "'$METHOD_PYTHON' cannot import torch / torch_geometric / h5py (this is the env the training runs in)."
+}
+[ "${NGPU_SEEN:-0}" -ge 1 ] 2>/dev/null \
+    || die "'$METHOD_PYTHON' sees no CUDA device."
+
+if [ -z "$GPUS" ]; then
+    GPUS="$(seq -s ' ' 0 $(( NGPU_SEEN - 1 )))"
+fi
+for g in $GPUS; do
+    case "$g" in ''|*[!0-9]*) die "GPUS entry '$g' is not a GPU index." ;; esac
+    [ "$g" -lt "$NGPU_SEEN" ] \
+        || die "GPU $g does not exist here: this machine has $NGPU_SEEN GPU(s), indices 0..$(( NGPU_SEEN - 1 )). Fix GPUS=\"...\"."
+done
 GPU_ARR=($GPUS)
 NG=${#GPU_ARR[@]}
 
-echo "=================================================================="
-echo " MGN-V SAOI hyperparameter sweep"
-echo "=================================================================="
-echo "  arms (train)  : $ARMS_DEFAULT"
-echo "  arms (report) : $REPORT_ARMS_DEFAULT"
-echo "  eval sets     : $INFER_TAGS"
-echo "  gpus          : $GPUS  ($NG lanes)"
-echo "  method python : $METHOD_PYTHON"
+echo "  launcher python : $(command -v "$PYTHON" || echo "$PYTHON")"
+echo "  MGN-V python    : $METHOD_PYTHON"
+echo "  GPUs            : $GPUS   ($NG of $NGPU_SEEN on this machine)"
+if command -v nvidia-smi >/dev/null 2>&1; then
+    nvidia-smi --query-gpu=index,name,memory.used,memory.total,utilization.gpu \
+        --format=csv,noheader | sed 's/^/      /'
+fi
+echo "  arms (train)    : $ARMS"
+echo "  arms (report)   : $REPORT_ARMS"
+echo "  halves          : $HALVES"
+echo "  eval sets       : $INFER_TAGS"
 
-# Deal the arms onto lanes. Arms cost within a few percent of each other (same
-# epochs, same data, same architecture bar one key), so round-robin is balanced
-# without needing a work queue.
-deal_lanes() {
-    LANE=()
-    local i=0 a L
-    for a in $1; do
-        L=$(( i % NG ))
-        LANE[$L]="${LANE[$L]:-} $a"
-        i=$(( i + 1 ))
+# --------------------------------------------------------------- 2. datasets
+echo "---- 2. datasets -------------------------------------------------"
+CFG_LIST="$(mktemp)"
+for half in $HALVES; do
+    sfx="$(cfg_suffix "$half")"
+    for arm in $ARMS; do
+        echo "$CFG_REL/config_train_${arm}${sfx}.txt" >> "$CFG_LIST"
+        if [ "$INFER" = "1" ] || [ "$POSTERIOR_VS_PRIOR" = "1" ]; then
+            for tag in $INFER_TAGS; do
+                echo "$CFG_REL/config_infer_${arm}_${tag}${sfx}.txt" >> "$CFG_LIST"
+            done
+        fi
     done
-    for L in $(seq 0 $(( NG - 1 ))); do
-        echo "  lane ${GPU_ARR[$L]} :${LANE[$L]:-  (idle)}"
-    done
-}
+done
+"$PYTHON" - "$CFG_LIST" "$METHOD_DIR" <<'PY' || die "missing configs or dataset files (listed above)."
+import sys
+from pathlib import Path
+from cae_suite.config_parser import parse_config
 
-# ------------------------------------------------------------ eval preflight
+cfg_list, method_dir = Path(sys.argv[1]), Path(sys.argv[2])
+missing_cfg, needed = [], {}
+for line in cfg_list.read_text().splitlines():
+    cfg = Path(line)
+    if not cfg.is_file():
+        missing_cfg.append(cfg)
+        continue
+    values = parse_config(cfg).values
+    for key in ("dataset_dir", "infer_dataset", "eval_dataset"):
+        if values.get(key):
+            needed.setdefault(str(values[key]), cfg.name)
+
+def exists_exact(p):
+    # Exact-case check: Linux opens only the case written in the config.
+    p = p.resolve()
+    return p.is_file() and p.name in {c.name for c in p.parent.iterdir()}
+
+missing = [(v, c) for v, c in sorted(needed.items())
+           if not exists_exact(method_dir / v)]
+for cfg in missing_cfg:
+    print(f"  MISSING CONFIG  {cfg}")
+for v, c in missing:
+    print(f"  MISSING DATA    {(method_dir / v).resolve()}   (first named by {c})")
+if not missing_cfg and not missing:
+    print(f"  {len(needed)} dataset files present")
+sys.exit(1 if (missing_cfg or missing) else 0)
+PY
+rm -f "$CFG_LIST"
+
+# -------------------------------------------------------------- 3. eval pairs
 # The _compare_ file must describe the same part as its _infer_ file, or every
-# sd_ratio in the report is a comparison between two different geometries and
-# reads as a spread defect. SAOI_run owns the checker; it globs config_infer_*
-# out of whatever --config-dir it is given, so it is reused rather than copied.
-# Both halves' infer configs live in this same directory, so one pass here
-# covers both -- run up front: this is a multi-wave training campaign and the
-# failure is silent, so finding it afterwards costs days.
+# sd_ratio is a comparison between two geometries. Silent, so checked up front.
 if [ "$EVAL_PREFLIGHT" = "1" ] && [ "$INFER" = "1" ]; then
-    echo "---- same-condition data preflight -------------------------------"
+    echo "---- 3. infer/compare pairs --------------------------------------"
     CHECKER="$CFG_DIR/../SAOI_run/check_eval_inputs.py"
-    EVAL_CHECK_LOG="$(mktemp)"
-    if [ ! -f "$CHECKER" ]; then
-        echo "  SKIPPED: $CHECKER not found"
-    elif "$METHOD_PYTHON" "$CHECKER" --config-dir "$CFG_DIR" \
-            > "$EVAL_CHECK_LOG" 2>&1; then
-        echo "  infer/compare pairs OK"
+    EVAL_CHECK_LOG="$MASTER_DIR/eval_check_$TS.log"
+    [ -f "$CHECKER" ] || die "$CHECKER not found."
+    if "$METHOD_PYTHON" "$CHECKER" --config-dir "$CFG_DIR" > "$EVAL_CHECK_LOG" 2>&1; then
+        echo "  OK"
     else
-        echo "  FAILED -- $EVAL_CHECK_LOG" >&2
-        tail -12 "$EVAL_CHECK_LOG" | sed 's/^/      /' >&2
-        exit 1
+        tail -15 "$EVAL_CHECK_LOG" | sed 's/^/      /'
+        die "infer/compare pairing check failed -- $EVAL_CHECK_LOG"
     fi
 fi
 
-rc=0
-ALL_SKIPPED=""
+# ----------------------------------------------------------------- 4. --check
+if [ "$PREFLIGHT" = "1" ] && [ "$TRAIN" = "1" ]; then
+    echo "---- 4. launcher preflight (--check) -----------------------------"
+    bad=""
+    for half in $HALVES; do
+        sfx="$(cfg_suffix "$half")"
+        LOG_ROOT="$(out_root "$half")/run_logs"
+        for arm in $ARMS; do
+            log="$LOG_ROOT/${arm}.check.log"
+            if "$PYTHON" AI_CAE4ALL_main.py --config "$CFG_DIR/config_train_${arm}${sfx}.txt" \
+                    --check > "$log" 2>&1; then
+                echo "  $half/$arm  OK"
+            else
+                echo "  $half/$arm  FAILED -- $log"
+                sed -n '/ERRORS/,$p' "$log" | head -8 | sed 's/^/      /'
+                bad="$bad $half/$arm"
+            fi
+        done
+    done
+    [ -z "$bad" ] || die "launcher preflight failed for:$bad"
+fi
 
-# ============================================================= per-half run
-# Everything below is local to one half: reassigning ARMS/REPORT_ARMS here
-# each call means a preflight or training failure on `bot` can never shrink
-# the roster `top` starts from, or vice versa.
-run_half() {
-    local HALF="$1"
-    local OUT_ROOT CFG_SUFFIX LOG_ROOT DIAG_ROOT
-    local ARMS="$ARMS_DEFAULT" REPORT_ARMS="$REPORT_ARMS_DEFAULT"
-    local SKIPPED="" half_rc=0
+# ------------------------------------------------------------------- 5. queue
+# job = "<half>:<arm>". Claimed with mkdir, which is atomic, so two cards can
+# never take the same job.
+JOBS=""
+for half in $HALVES; do
+    for arm in $ARMS; do JOBS="$JOBS $half:$arm"; done
+done
+QUEUE_DIR="$MASTER_DIR/queue_$TS"
+mkdir -p "$QUEUE_DIR"
 
-    case "$HALF" in
-        bot) OUT_ROOT="output/meshgraphnets-v/saoi_sweep";     CFG_SUFFIX="" ;;
-        top) OUT_ROOT="output/meshgraphnets-v/saoi_sweep_top"; CFG_SUFFIX="_top" ;;
-        *)   echo "internal error: bad half '$HALF'" >&2; return 1 ;;
-    esac
+# Writes "$QUEUE_DIR/<half>_<arm>.status" = "ok" | "<stage> FAILED <log>".
+run_job() {
+    local gpu="$1" half="$2" arm="$3"
+    local OUT_ROOT LOG_ROOT DIAG_ROOT sfx st log tag cfg ck
+    OUT_ROOT="$(out_root "$half")"
     LOG_ROOT="$OUT_ROOT/run_logs"
     DIAG_ROOT="$OUT_ROOT/diag"
+    sfx="$(cfg_suffix "$half")"
+    st="$QUEUE_DIR/${half}_${arm}.status"
     mkdir -p "$LOG_ROOT" "$DIAG_ROOT"
+    ck="$OUT_ROOT/${arm}.pth"
 
-    echo "=================================================================="
-    echo " half: $HALF  ->  $OUT_ROOT"
-    echo "=================================================================="
+    fail() {
+        echo "$1 FAILED $2" > "$st"
+        echo "  [gpu $gpu] $half/$arm  $1 FAILED -- $2"
+        tail -20 "$2" 2>/dev/null | sed "s/^/      [$half\/$arm] /"
+    }
 
-    # -------------------------------------------------------------- preflight
-    if [ "$PREFLIGHT" = "1" ]; then
-        echo "---- preflight ---------------------------------------------------"
-        local ok="" arm cfg
-        for arm in $ARMS; do
-            cfg="$CFG_DIR/config_train_${arm}${CFG_SUFFIX}.txt"
-            if [ ! -f "$cfg" ]; then
-                echo "  arm $arm  MISSING CONFIG"
-                SKIPPED="$SKIPPED $arm(config)[$HALF]"
-                continue
-            fi
-            if "$PYTHON" AI_CAE4ALL_main.py --config "$cfg" --check \
-                    > "$LOG_ROOT/${arm}.check.log" 2>&1; then
-                echo "  arm $arm  OK"
-                ok="$ok $arm"
-            else
-                echo "  arm $arm  FAILED -- $LOG_ROOT/${arm}.check.log"
-                sed -n '/ERRORS/,$p' "$LOG_ROOT/${arm}.check.log" | head -6 | sed 's/^/      /'
-                SKIPPED="$SKIPPED $arm(preflight)[$HALF]"
-            fi
-        done
-        if [ -n "$SKIPPED" ] && [ "$STRICT_PREFLIGHT" = "1" ]; then
-            echo "STRICT_PREFLIGHT=1; a partial sweep has no usable baseline." >&2
-            ALL_SKIPPED="$ALL_SKIPPED$SKIPPED"
-            echo "---- half $HALF ABORTED (preflight) -------------------------------"
-            return 1
-        fi
-        ARMS="$(echo "$ok" | xargs)"
-        if [ -z "$ARMS" ]; then
-            echo "Every arm failed preflight." >&2
-            ALL_SKIPPED="$ALL_SKIPPED$SKIPPED"
-            echo "---- half $HALF ABORTED (preflight) -------------------------------"
-            return 1
-        fi
-    fi
-
-    # `base` and `seed` are the measurement, not two of eight results: without both
-    # in the REPORT roster there is no noise floor and every other number is
-    # unreadable. Checked against REPORT_ARMS, not ARMS, so a report-only rerun
-    # (TRAIN=0, REPORT_ARMS trimmed) is still checked against what it will print.
-    case " $REPORT_ARMS " in
-        *" base "*) ;;
-        *) echo "WARNING: arm 'base' is not in this report -- nothing to compare against." >&2 ;;
-    esac
-    case " $REPORT_ARMS " in
-        *" seed "*) ;;
-        *) echo "WARNING: arm 'seed' is not in this report -- no noise floor, so analyze_sweep.py" >&2
-           echo "         cannot separate a real effect from single-seed scatter." >&2 ;;
-    esac
-
-    # -------------------------------------------------------------------- train
     if [ "$TRAIN" = "1" ]; then
-        echo "---- from-scratch training (1000 epochs, freeze at 700) ----------"
-        deal_lanes "$ARMS"
-        local arm
-        for arm in $ARMS; do : > "$LOG_ROOT/${arm}.launch.marker"; done
-        local pids="" L gpu
-        for L in $(seq 0 $(( NG - 1 ))); do
-            [ -n "${LANE[$L]:-}" ] || continue
-            (
-                gpu="${GPU_ARR[$L]}"
-                for arm in ${LANE[$L]}; do
-                    echo "  [gpu $gpu] train $arm"
-                    CUDA_VISIBLE_DEVICES="$gpu" "$PYTHON" AI_CAE4ALL_main.py \
-                        --config "$CFG_DIR/config_train_${arm}${CFG_SUFFIX}.txt" \
-                        > "$OUT_ROOT/${arm}.log" 2>&1 \
-                        || echo "  [gpu $gpu] train $arm FAILED -- $OUT_ROOT/${arm}.log"
-                done
-            ) &
-            pids="$pids $!"
-        done
-        local pid
-        for pid in $pids; do wait "$pid" || half_rc=1; done
-
+        log="$OUT_ROOT/${arm}.log"
+        : > "$LOG_ROOT/${arm}.launch.marker"
+        echo "  [gpu $gpu] $half/$arm  train start  $(date '+%m-%d %H:%M')"
+        if ! CUDA_VISIBLE_DEVICES="$gpu" "$PYTHON" AI_CAE4ALL_main.py \
+                --config "$CFG_DIR/config_train_${arm}${sfx}.txt" > "$log" 2>&1; then
+            fail train "$log"; return
+        fi
         # A stale checkpoint must never flow into inference after a failed run.
-        local completed="" ck
-        for arm in $ARMS; do
-            ck="$OUT_ROOT/${arm}.pth"
-            if [ -f "$ck" ] && [ "$ck" -nt "$LOG_ROOT/${arm}.launch.marker" ]; then
-                completed="$completed $arm"
-                echo "  arm $arm complete -> $ck"
-            else
-                echo "  arm $arm produced NO fresh checkpoint"
-                SKIPPED="$SKIPPED $arm(train)[$HALF]"
-                half_rc=1
-            fi
-        done
-        ARMS="$(echo "$completed" | xargs)"
-        if [ -z "$ARMS" ]; then
-            echo "No fresh checkpoint was produced." >&2
-            ALL_SKIPPED="$ALL_SKIPPED$SKIPPED"
-            echo "---- half $HALF ABORTED (train) ------------------------------------"
-            return 1
+        if [ ! -f "$ck" ] || [ ! "$ck" -nt "$LOG_ROOT/${arm}.launch.marker" ]; then
+            fail "train (no fresh $ck)" "$log"; return
+        fi
+        echo "  [gpu $gpu] $half/$arm  train done   $(date '+%m-%d %H:%M')"
+    elif [ ! -f "$ck" ]; then
+        if [ "$INFER" = "1" ] || [ "$POSTERIOR_VS_PRIOR" = "1" ]; then
+            echo "train SKIPPED, no checkpoint $ck" > "$st"
+            echo "  [gpu $gpu] $half/$arm  TRAIN=0 but $ck does not exist"
+            return
         fi
     fi
 
-    # ---------------------------------------------------------------- inference
-    # One pass per arm per eval set yields the entire inflation curve, because
-    # latent_inflation is a list and rollout.py tags every draw with the lam that
-    # produced it. Do not split this into one run per lam.
+    # One inference pass per eval set yields the whole inflation curve:
+    # latent_inflation is a list and rollout.py tags each draw with its lam.
     if [ "$INFER" = "1" ]; then
-        echo "---- inference + inflation curve ---------------------------------"
-        deal_lanes "$ARMS"
-        local pids="" L gpu arm tag cfg
-        for L in $(seq 0 $(( NG - 1 ))); do
-            [ -n "${LANE[$L]:-}" ] || continue
-            (
-                gpu="${GPU_ARR[$L]}"
-                for arm in ${LANE[$L]}; do
-                    for tag in $INFER_TAGS; do
-                        cfg="$CFG_DIR/config_infer_${arm}_${tag}${CFG_SUFFIX}.txt"
-                        if CUDA_VISIBLE_DEVICES="$gpu" "$PYTHON" AI_CAE4ALL_main.py \
-                                --config "$cfg" \
-                                > "$LOG_ROOT/${arm}.infer_${tag}.log" 2>&1; then
-                            echo "  [gpu $gpu] infer $arm $tag done"
-                        else
-                            echo "  [gpu $gpu] infer $arm $tag FAILED -- $LOG_ROOT/${arm}.infer_${tag}.log"
-                        fi
-                    done
-                done
-            ) &
-            pids="$pids $!"
+        for tag in $INFER_TAGS; do
+            log="$LOG_ROOT/${arm}.infer_${tag}.log"
+            cfg="$CFG_DIR/config_infer_${arm}_${tag}${sfx}.txt"
+            if ! CUDA_VISIBLE_DEVICES="$gpu" "$PYTHON" AI_CAE4ALL_main.py \
+                    --config "$cfg" > "$log" 2>&1; then
+                fail "infer $tag" "$log"; return
+            fi
+            if [ ! -f "$OUT_ROOT/infer/$arm/$tag/spread_values.npz" ]; then
+                fail "infer $tag (no spread_values.npz)" "$log"; return
+            fi
         done
-        local pid
-        for pid in $pids; do wait "$pid" || half_rc=1; done
+        echo "  [gpu $gpu] $half/$arm  infer done"
     fi
 
-    # ---------------------------------------------------------------------- PVP
-    # Nothing is trained here. Each run decodes four ensembles for ONE part --
-    # truth, posterior_mean, posterior_sample, prior -- and dumps both the spread
-    # table and the latent PCA comparison to JSON.
-    if [ "$PVP" = "1" ]; then
-        echo "---- posterior vs prior decomposition ----------------------------"
-        deal_lanes "$ARMS"
-        local pids="" L gpu arm tag
-        for L in $(seq 0 $(( NG - 1 ))); do
-            [ -n "${LANE[$L]:-}" ] || continue
-            (
-                gpu="${GPU_ARR[$L]}"
-                for arm in ${LANE[$L]}; do
-                    for tag in $INFER_TAGS; do
-                        # posterior_vs_prior.py chdirs to the method root at import,
-                        # so --config is resolved from there, exactly like the paths
-                        # inside the config itself.
-                        if CUDA_VISIBLE_DEVICES="$gpu" "$METHOD_PYTHON" \
-                                methods/MeshGraphNets_Variational/misc/posterior_vs_prior.py \
-                                --config "../../configs/MeshGraphNets_Variational/hyperparameter_sweep/config_infer_${arm}_${tag}${CFG_SUFFIX}.txt" \
-                                --tag "${arm}_${tag}" \
-                                --out "../../$DIAG_ROOT" \
-                                --gpu 0 \
-                                > "$LOG_ROOT/${arm}.pvp_${tag}.log" 2>&1; then
-                            echo "  [gpu $gpu] pvp $arm $tag done"
-                        else
-                            echo "  [gpu $gpu] pvp $arm $tag FAILED -- $LOG_ROOT/${arm}.pvp_${tag}.log"
-                        fi
-                    done
-                done
-            ) &
-            pids="$pids $!"
+    # truth / posterior_mean / posterior_sample / prior for one part: says
+    # whether the missing width is lost in the prior or in the decoder.
+    # posterior_vs_prior.py chdirs to the method root, so paths are ../../-relative.
+    if [ "$POSTERIOR_VS_PRIOR" = "1" ]; then
+        for tag in $INFER_TAGS; do
+            log="$LOG_ROOT/${arm}.posterior_vs_prior_${tag}.log"
+            if ! CUDA_VISIBLE_DEVICES="$gpu" "$METHOD_PYTHON" \
+                    "$METHOD_DIR/misc/posterior_vs_prior.py" \
+                    --config "../../$CFG_REL/config_infer_${arm}_${tag}${sfx}.txt" \
+                    --tag "${arm}_${tag}" \
+                    --out "../../$DIAG_ROOT" \
+                    --gpu 0 > "$log" 2>&1; then
+                fail "posterior vs. prior $tag" "$log"; return
+            fi
         done
-        local pid
-        for pid in $pids; do wait "$pid" || half_rc=1; done
+        echo "  [gpu $gpu] $half/$arm  posterior vs. prior done"
     fi
+    echo "ok" > "$st"
+}
 
-    # ------------------------------------------------------------------- report
-    if [ "$REPORT" = "1" ]; then
-        echo "---- report (half: $HALF, arms: $REPORT_ARMS) ---------------------"
+if [ "$TRAIN" = "1" ] || [ "$INFER" = "1" ] || [ "$POSTERIOR_VS_PRIOR" = "1" ]; then
+    echo "---- 5. jobs: $(echo $JOBS | wc -w) over $NG GPU(s) -------------------------"
+    echo "  per-job logs: <out_root>/<arm>.log, <out_root>/run_logs/<arm>.{infer,posterior_vs_prior}_<tag>.log"
+    pids=""
+    for gpu in "${GPU_ARR[@]}"; do
+        (
+            for job in $JOBS; do
+                mkdir "$QUEUE_DIR/claim_${job/:/_}" 2>/dev/null || continue
+                run_job "$gpu" "${job%%:*}" "${job##*:}"
+            done
+        ) &
+        pids="$pids $!"
+    done
+    for pid in $pids; do wait "$pid"; done
+fi
+
+# ------------------------------------------------------------------ 6. report
+if [ "$REPORT" = "1" ]; then
+    for half in $HALVES; do
+        OUT_ROOT="$(out_root "$half")"
+        echo "---- 6. report ($half, arms: $REPORT_ARMS) -----------------------"
         "$PYTHON" "$CFG_DIR/analyze_sweep.py" \
             --out-root "$OUT_ROOT" \
             --arms "$REPORT_ARMS" \
             --tags "$INFER_TAGS" \
-            | tee "$LOG_ROOT/report.txt"
-    fi
-
-    if [ -n "$SKIPPED" ]; then
-        ALL_SKIPPED="$ALL_SKIPPED$SKIPPED"
-    fi
-    echo "---- half $HALF finished (rc=$half_rc) -----------------------------"
-    return "$half_rc"
-}
-
-for h in bot top; do
-    run_half "$h" || rc=1
-done
-
-if [ -n "$ALL_SKIPPED" ]; then
-    echo "SKIPPED -- sweep incomplete:$ALL_SKIPPED" >&2
+            | tee "$OUT_ROOT/run_logs/report.txt"
+    done
 fi
-echo "Finished with rc=$rc"
+
+# ----------------------------------------------------------------- 7. summary
+rc=0
+if [ "$TRAIN" = "1" ] || [ "$INFER" = "1" ] || [ "$POSTERIOR_VS_PRIOR" = "1" ]; then
+    echo "=================================================================="
+    echo " summary"
+    echo "=================================================================="
+    for job in $JOBS; do
+        st="$QUEUE_DIR/${job/:/_}.status"
+        if [ -f "$st" ] && [ "$(cat "$st")" = "ok" ]; then
+            printf '  %-14s ok\n' "$job"
+        else
+            printf '  %-14s %s\n' "$job" "$( [ -f "$st" ] && cat "$st" || echo 'did not finish')"
+            rc=1
+        fi
+    done
+fi
+echo "Finished with rc=$rc   (log: $MASTER_LOG)"
 exit "$rc"

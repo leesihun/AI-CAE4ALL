@@ -31,7 +31,7 @@ SDFFLOW_KEYS = frozenset(
         "condition_names", "condition_clip", "min_condition_std", "cond_dropout",
         "fm_hidden", "fm_blocks", "fm_cond_hidden", "ode_steps",
         "fm_arch", "fm_heads", "fm_time_sampling", "fm_time_logit_mean",
-        "fm_time_logit_std",
+        "fm_time_logit_std", "fm_latent_draws",
         "surface_weight", "normal_weight", "eikonal_weight", "hybrid_grad_points",
         "encoder_self_attention",
         "parallel_mode", "fsdp_min_params", "num_workers",
@@ -412,6 +412,14 @@ def validate_sdfflow(ctx: SpecValidationContext) -> None:
 
     if "fm_time_sampling" in values and str(values["fm_time_sampling"]).lower() not in {"uniform", "logit_normal"}:
         ctx.add("SDF-FMTIME-001", Severity.ERROR, "fm_time_sampling must be 'uniform' or 'logit_normal'.", field_name="fm_time_sampling")
+
+    # train_fm.py raises on < 1 but int()s the value, so 2.5 would silently run as 2.
+    if "fm_latent_draws" in values:
+        draws = integer(values["fm_latent_draws"])
+        if draws is None or draws < 1:
+            ctx.add("SDF-FMDRAWS-001", Severity.ERROR,
+                    f"fm_latent_draws must be an integer >= 1; got {values['fm_latent_draws']!r}.",
+                    field_name="fm_latent_draws")
 
     if ctx.mode in {"train", "train_fm"} and str(values.get("fm_arch", "mlp")).lower() == "dit" \
             and integer(values.get("latent_tokens", 1)) == 1:

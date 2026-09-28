@@ -1,6 +1,6 @@
 %   ============================================================
 %   SAOI warpage hyperparameter sweep -- arm aux100
-%   sweep2: peak-to-valley aux weight 10 -> 100.
+%   peak-to-valley aux weight 10 -> 100.
 %
 %   THE DEFECT THIS SWEEP IS AIMED AT. Posterior reconstruction is excellent
 %   while the generated ensemble is ~2x too narrow (sd_ratio 0.45-0.53 on every
@@ -117,7 +117,7 @@ alpha_recon	1000  # Reconstruction-loss multiplier
 lambda_mmd	1  # Aggregate-posterior MMD loss multiplier
 mmd_bandwidth	median  # MMD bandwidth mode (fixed or median)
 vae_graph_aware	True  # Include graph/input context when encoding the posterior
-beta_aux	100  # SWEPT (base 10): far point of the axis, and the aux half of sweep1's arecon. At prior_grad_to_encoder 0, Adam makes arecon (alpha_recon 1000 -> 100) equivalent to lambda_mmd x10 AND beta_aux x10 together, so base / mmd10 / aux100 / arecon form a 2x2 factorial that splits arecon's effect into its two parts.
+beta_aux	100  # SWEPT (base 10): the aux term is the only one tied to the scored statistic -- it makes each posterior z reproduce its own realization's peak-to-valley, so it forces the decoder to read z in the direction the scored spread lives in. At prior_grad_to_encoder 0, Adam makes arecon (alpha_recon 1000 -> 100) equivalent to beta_aux x10 AND lambda_mmd x10 together, so aux100 vs arecon isolates the MMD share of arecon's effect.
 posterior_min_std	0.05  # Posterior standard-deviation floor
 z_conditioning	adaln  # AdaLN-Zero z modulation (identity at init) instead of the
 %   legacy concat fuser Linear([x, z]). The fuser could only add ONE constant
@@ -130,7 +130,7 @@ mmd_gather_ranks	True  # All-gather z over DDP ranks before MMD (no-op on one ca
 
 %   Prior - gnn_e2e joint training; prior_family fm = conditional flow matching.
 %   Every FM-v2 architecture key is at its native default except the one this
-%   arm sweeps (sweep2: no result outside sweep1 is treated as evidence).
+%   arm sweeps.
 %   prior_min_std is deliberately absent: it clamps the mixture prior's log_std
 %   (ConditionalMixturePrior) and does nothing under prior_family fm.
 prior_type	gnn_e2e  # gnn_e2e enables the jointly trained graph-conditional prior
