@@ -633,7 +633,7 @@ def test_model(model, dataloader, device, config, epoch, dataset=None, output_pr
                     y_hat, _, _ = model('ae', graph)
                 predicted = y_hat.float()
             else:
-                predicted = _generate_fields(model, graph, flow_cfg, 1, use_amp, amp_dtype)[0]
+                predicted = _generate_fields(model, graph, flow_cfg, 1, use_amp, amp_dtype)[0].float()
             target = graph.y.float()
             loss = _weighted_mse(predicted, target, loss_weights)
             total_loss += float(loss)
