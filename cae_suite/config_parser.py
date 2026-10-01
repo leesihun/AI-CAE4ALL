@@ -33,6 +33,7 @@ PATH_KEYS = frozenset({
     "output_dir",
     "opt_surrogate_checkpoint",
     "opt_surrogate_config",
+    "opt_surrogate_python",
     "param_dir",
     "init_vae_modelpath",
     "vae_modelpath",

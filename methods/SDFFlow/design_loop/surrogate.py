@@ -27,7 +27,8 @@ import numpy as np
 
 from design_loop.deepjeb_bridge import (
     DEEPJEB_CENTRE, DEEPJEB_MAX_SIDE, LABEL_SURFACE_FACES, LOAD_CASES, SDF_TARGET_EXTENT,
-    mesh_to_records, serving_surface, write_inference_contract,
+    VER_COND_VAR, VER_FEATURE_NAMES, VER_INPUT_VAR, VER_OUTPUT_VAR,
+    mesh_to_records, mesh_to_ver_record, serving_surface, write_inference_contract,
 )
 from design_loop.loop import rank_failures_last, select_best
 from design_loop.problem import find_interfaces, vertical_displacement
@@ -42,6 +43,30 @@ NO_PREDICTION = 'SurrogateError: surrogate could not bridge or predict this shap
 
 class SurrogateError(RuntimeError):
     pass
+
+
+# Two DeepJEB surrogate layouts exist. 'ex10' (build_deepjeb_mgn): stress,
+# |u|, u_z for four load cases told apart by one-hot condition rows, BCs from
+# `problem.find_interfaces`. 'ver' (ex13, OpenRadioss vertical load): u_x,
+# u_y, u_z, von Mises for the vertical case only, BCs as a node-type row from
+# the bore/lug rule in `design_loop.interfaces`.
+LAYOUTS = ('ex10', 'ver')
+
+
+def layout_from_config(config_path):
+    """The surrogate layout its inference config declares: 'ver' for the ex13
+    contract (output_var 4, cond_var 0), else 'ex10'."""
+    values = {}
+    with open(config_path, encoding='utf-8') as fh:
+        for line in fh:
+            parts = line.split('%')[0].split('#')[0].split()
+            if len(parts) >= 2:
+                values[parts[0].lower()] = parts[1]
+    try:
+        out_var, cond_var = int(values.get('output_var', 0)), int(values.get('cond_var', 0))
+    except ValueError:
+        return 'ex10'
+    return 'ver' if (out_var, cond_var) == (VER_OUTPUT_VAR, VER_COND_VAR) else 'ex10'
 
 
 def gpu_id_from_config(config):
@@ -64,10 +89,21 @@ class HIMGNSurrogate:
     def __init__(self, config_path, checkpoint, python=None, load_cases=('ver', 'dia'),
                  target_nodes=5000, density=4430.0, workdir=None,
                  stress_percentile=STRESS_PERCENTILE, length_scale=None, gpu_id=None,
-                 surface_faces=LABEL_SURFACE_FACES):
+                 surface_faces=None, layout=None):
         self.config_path = os.path.abspath(config_path)
+        if layout is None:
+            layout = (layout_from_config(self.config_path)
+                      if os.path.isfile(self.config_path) else 'ex10')
+        if layout not in LAYOUTS:
+            raise SurrogateError(f'unknown surrogate layout {layout!r}; available {LAYOUTS}')
+        self.layout = layout
         # Face budget of the surface a candidate is bridged from; the labels'
         # own (see deepjeb_bridge.serving_surface). 0 bridges the raw MC mesh.
+        # The 'ver' labels were clustered from a fine tet4 boundary, which the
+        # raw mc_resolution-128 surface matches (graph edge p95 4.88 vs 4.89 mm)
+        # better than a 12000-face re-surfacing does (5.95 mm).
+        if surface_faces is None:
+            surface_faces = LABEL_SURFACE_FACES if layout == 'ex10' else 0
         self.surface_faces = int(surface_faces or 0)
         # Metres per normalized SDF unit, for mass only. The FEA backend's
         # Bracket uses opt_length_scale (0.19/1.8 by default); without it the
@@ -87,6 +123,9 @@ class HIMGNSurrogate:
         if unknown:
             raise SurrogateError(f'unknown load case(s) {sorted(unknown)}; '
                                  f'available {LOAD_CASES}')
+        if layout == 'ver' and self.load_cases != ('ver',):
+            raise SurrogateError('this surrogate was trained on the vertical load case only; '
+                                 f'set opt_load_cases vertical (got {list(self.load_cases)})')
         self.target_nodes = int(target_nodes)
         self.density = float(density)
         self.stress_percentile = float(stress_percentile)
@@ -134,9 +173,14 @@ class HIMGNSurrogate:
         for index, (mesh, name) in enumerate(zip(meshes, names)):
             try:
                 surface = serving_surface(mesh, self.surface_faces)
-                find_interfaces(np.asarray(surface.vertices), np.asarray(surface.faces))
-                recs = mesh_to_records(surface, load_cases=self.load_cases,
-                                       target_nodes=self.target_nodes, name=name)
+                if self.layout == 'ver':
+                    # The bore/lug gates inside node_types are this layout's refusal rule.
+                    recs = [mesh_to_ver_record(surface, target_nodes=self.target_nodes,
+                                               name=name)]
+                else:
+                    find_interfaces(np.asarray(surface.vertices), np.asarray(surface.faces))
+                    recs = mesh_to_records(surface, load_cases=self.load_cases,
+                                           target_nodes=self.target_nodes, name=name)
             except Exception as exc:
                 self.last_errors[index] = f'{type(exc).__name__}: {exc}'
                 continue
@@ -148,7 +192,12 @@ class HIMGNSurrogate:
         call = self.calls
         self.calls += 1
         infer_path = os.path.join(self.workdir, f'batch{call:04d}.h5')
-        write_inference_contract(infer_path, records)
+        if self.layout == 'ver':
+            write_inference_contract(infer_path, records, feature_names=VER_FEATURE_NAMES,
+                                     input_var=VER_INPUT_VAR, output_var=VER_OUTPUT_VAR,
+                                     cond_var=VER_COND_VAR)
+        else:
+            write_inference_contract(infer_path, records)
         rollout_dir = os.path.join(self.workdir, f'batch{call:04d}_rollout')
         predictions = self._run_native(infer_path, rollout_dir, len(records))
         self.predicted += len(records)
@@ -172,15 +221,21 @@ class HIMGNSurrogate:
             # and "disp=213.9mm" for real per-file values of 89 MPa / 0.21 mm,
             # off by the /1e6 and *1e3 the FEA-side print statements apply.
             # Convert once here so nothing downstream has to special-case units.
-            stress_mpa, disp_mm = pred[3, :], pred[4, :]
+            if self.layout == 'ver':
+                # rows u_x, u_y, u_z (mm), von Mises (MPa); |u| is formed here.
+                stress_mpa = pred[6, :]
+                disp_mm = np.linalg.norm(pred[3:6, :], axis=0)
+            else:
+                stress_mpa, disp_mm = pred[3, :], pred[4, :]
             case = {
                 'peak_von_mises': float(np.percentile(np.abs(stress_mpa),
                                                       self.stress_percentile) * 1e6),
                 'max_von_mises': float(np.abs(stress_mpa).max() * 1e6),
                 'max_displacement': float(np.abs(disp_mm).max() * 1e-3),
             }
-            # Row 5 is u_z (FEATURE_NAMES in build_deepjeb_fea); a checkpoint
-            # trained without it simply has no vertical-deflection prediction.
+            # Row 5 is u_z in both layouts (FEATURE_NAMES in build_deepjeb_mgn,
+            # VER_FEATURE_NAMES); a checkpoint trained without it simply has no
+            # vertical-deflection prediction.
             if pred.shape[0] > 5:
                 case['max_vertical_displacement'] = float(np.abs(pred[5, :]).max() * 1e-3)
             entry['cases'][rec['case']] = case
@@ -268,6 +323,7 @@ class HIMGNSurrogate:
     def stats(self):
         return {'native_calls': self.calls, 'graphs_predicted': self.predicted,
                 'load_cases': list(self.load_cases), 'workdir': self.workdir,
+                'layout': self.layout,
                 'mass_length_scale': self.length_scale, 'gpu_id': self.gpu_id,
                 'surface_faces': self.surface_faces}
 

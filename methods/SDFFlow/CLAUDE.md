@@ -697,7 +697,14 @@ its error rather than dropped silently. The change percentages and
 same objective the search used.
 
 With `opt_analysis surrogate`, every number is a HI-MGN prediction, and the
-summary records `surrogate` (stats, checkpoint, label constants). Confirm the
+summary records `surrogate` (stats, checkpoint, label constants).
+The surrogate's layout follows its inference config
+(`surrogate.py::layout_from_config`): `output_var 4, cond_var 0` is the ex13
+vertical-load contract (`ver`: u_x, u_y, u_z, von Mises + a node-type row from
+`design_loop/interfaces.py`'s bore/ear rule, `opt_load_cases vertical` only,
+label length scale 0.184181/1.8, no `opt_fea_verify`); anything else is ex10.
+`opt_surrogate_python` (path key, optional) is the interpreter for the nested
+HI-MGN launch -- set it when the SDFFlow env has no `torch_geometric`. Confirm the
 winner with the real solver before quoting it:
 
 ```bash

@@ -405,10 +405,18 @@ def dense_config(c):
 
 
 # Comment lines rendered just above one key of the SDFFlow train config.
-SDF_KEY_NOTES = {'kl_weight': (
-    '1e-6 from the 2026-09 KL sweep (epoch 500): 1e-4 collapsed the posterior',
-    '(SNR 0, valid 1.98e-2); 1e-6 reached SNR 1024 and valid 7.09e-3, within 4%',
-    'of 1e-8 / 1e-10 at roughly a third of their KL.')}
+SDF_KEY_NOTES = {
+    'latent_tokens': (
+        '128 (was 512) from the 2026-09 token-count study (paper/sdfflow sec:tsize): 512 reconstructs',
+        '1.5x better than 128 but its flow stage makes one-body shapes only 31-38% of the time at',
+        '1,713 training shapes; 128 + the flow-stage prescription below matched or beat 32 tokens.'),
+    'kl_weight': (
+        '1e-8, the value the token-count study trained every arm with. The 2026-09 KL sweep',
+        '(epoch 500) found 1e-4 collapsed the posterior (SNR 0); 1e-6 / 1e-8 / 1e-10 all kept it.'),
+    'fm_hidden': (
+        'Flow-stage prescription from the token-count study: a larger DiT (512 x 12 blocks),',
+        'logit-normal time sampling shifted by -ln(sqrt(tokens/32)) = -0.693 for 128 tokens,',
+        '8 posterior draws per training shape, and 250 epochs (8 draws = 8x the steps per epoch).')}
 
 
 def sdf_config():
@@ -416,24 +424,25 @@ def sdf_config():
     return dict(model='sdfflow', mode='train', gpu_ids=LANE_GPU['sdfflow'], parallel_mode='single', seed=42, split_seed=42,
                 dataset_dir='../../dataset/geometry_generation/ex1_deepjeb.h5', split_by_parent=True,
                 num_encoder_points=6144, num_query_points=8192,
-                # M=512 latent tokens x C0=32 is the 3DShape2VecSet recipe; FPS needs
-                # latent_tokens <= num_encoder_points, which 6144 satisfies.
-                latent_tokens=512, latent_dim=32,
+                # 3DShape2VecSet uses M=512 x C0=32; 128 is the token-count study's pick
+                # (SDF_KEY_NOTES). FPS needs latent_tokens <= num_encoder_points (6144).
+                latent_tokens=128, latent_dim=32,
                 encoder_query_type='fps', encoder_dim=256, encoder_heads=8, encoder_blocks=4,
                 encoder_self_attention=True, decoder_type='attention', decoder_hidden=256,
-                decoder_layers=4, decoder_heads=8, fourier_bands=8, kl_weight=0.000001,
+                decoder_layers=4, decoder_heads=8, fourier_bands=8, kl_weight=0.00000001,
                 clamp_dist=0.1, deterministic_warmup_epochs=50, posterior_noise_warmup_epochs=100,
                 posterior_noise_max_scale=1.0, kl_warmup_epochs=200, posterior_min_std_rel=0.05,
                 surface_weight=1.0, normal_weight=0.1, eikonal_weight=0.1, hybrid_grad_points=1024,
                 use_conditions=True, condition_names=['volume', 'area'], min_condition_std=0.00001,
                 condition_clip=5.0, cond_dropout=0.2, cond_dropout_mode='all',
-                fm_arch='dit', fm_hidden=256, fm_blocks=8, fm_heads=8, fm_cond_hidden=128,
-                fm_time_sampling='uniform', encode_batch_size=8, ode_steps=50,
+                fm_arch='dit', fm_hidden=512, fm_blocks=12, fm_heads=8, fm_cond_hidden=128,
+                fm_time_sampling='logit_normal', fm_time_logit_mean=-0.693, fm_time_logit_std=1.0,
+                fm_latent_draws=8, encode_batch_size=8, ode_steps=50,
                 vae_training_epochs=1500, vae_batch_size=8, vae_learningr=0.0001,
                 vae_weight_decay=0.0001, vae_warmup_epochs=20, vae_num_workers=2,
                 vae_use_amp=False, vae_use_ema=True, vae_ema_decay=0.99,
                 vae_val_interval=5, vae_test_interval=100, vae_num_test_shapes=2, vae_mc_resolution_test=64,
-                fm_training_epochs=500, fm_batch_size=64, fm_learningr=0.0001,
+                fm_training_epochs=250, fm_batch_size=64, fm_learningr=0.0001,
                 fm_weight_decay=0.0001, fm_warmup_epochs=10, fm_num_workers=0,
                 fm_use_amp=True, fm_use_ema=True, fm_ema_decay=0.99,
                 fm_val_interval=5, fm_test_interval=50, fm_num_test_shapes=2, fm_mc_resolution_test=64,

@@ -18,7 +18,10 @@ dataset_dir                      ../../dataset/geometry_generation/ex1_deepjeb.h
 split_by_parent                  True
 num_encoder_points               6144
 num_query_points                 8192
-latent_tokens                    512
+% 128 (was 512) from the 2026-09 token-count study (paper/sdfflow sec:tsize): 512 reconstructs
+% 1.5x better than 128 but its flow stage makes one-body shapes only 31-38% of the time at
+% 1,713 training shapes; 128 + the flow-stage prescription below matched or beat 32 tokens.
+latent_tokens                    128
 latent_dim                       32
 encoder_query_type               fps
 encoder_dim                      256
@@ -30,10 +33,9 @@ decoder_hidden                   256
 decoder_layers                   4
 decoder_heads                    8
 fourier_bands                    8
-% 1e-6 from the 2026-09 KL sweep (epoch 500): 1e-4 collapsed the posterior
-% (SNR 0, valid 1.98e-2); 1e-6 reached SNR 1024 and valid 7.09e-3, within 4%
-% of 1e-8 / 1e-10 at roughly a third of their KL.
-kl_weight                        0.000001
+% 1e-8, the value the token-count study trained every arm with. The 2026-09 KL sweep
+% (epoch 500) found 1e-4 collapsed the posterior (SNR 0); 1e-6 / 1e-8 / 1e-10 all kept it.
+kl_weight                        0.00000001
 clamp_dist                       0.1
 deterministic_warmup_epochs      50
 posterior_noise_warmup_epochs    100
@@ -51,11 +53,17 @@ condition_clip                   5
 cond_dropout                     0.2
 cond_dropout_mode                all
 fm_arch                          dit
-fm_hidden                        256
-fm_blocks                        8
+% Flow-stage prescription from the token-count study: a larger DiT (512 x 12 blocks),
+% logit-normal time sampling shifted by -ln(sqrt(tokens/32)) = -0.693 for 128 tokens,
+% 8 posterior draws per training shape, and 250 epochs (8 draws = 8x the steps per epoch).
+fm_hidden                        512
+fm_blocks                        12
 fm_heads                         8
 fm_cond_hidden                   128
-fm_time_sampling                 uniform
+fm_time_sampling                 logit_normal
+fm_time_logit_mean               -0.693
+fm_time_logit_std                1
+fm_latent_draws                  8
 encode_batch_size                8
 ode_steps                        50
 vae_training_epochs              1500
@@ -71,7 +79,7 @@ vae_val_interval                 5
 vae_test_interval                100
 vae_num_test_shapes              2
 vae_mc_resolution_test           64
-fm_training_epochs               500
+fm_training_epochs               250
 fm_batch_size                    64
 fm_learningr                     0.0001
 fm_weight_decay                  0.0001

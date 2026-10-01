@@ -32,7 +32,8 @@ feature_loss_weights             1, 1, 1
 use_node_types                   True
 positional_features              4
 time_integration                 ar_ot
-training_epochs                  200
+% sized to ~46 h on one 3090 at batch 2 (smoke: ~20 min/AE epoch, ~9 min/prior epoch + 25 min sampled val)
+training_epochs                  120
 % 8 per step exceeds a 24 GB card on ex3; 2 x grad_accum_steps 4 keeps an effective 8
 batch_size                       2
 learningr                        0.0001
@@ -74,7 +75,7 @@ num_vae_samples                  16
 vae_batch_size                   16
 latent_ch                        4
 ae_kl_weight                     0.000001
-ae_epochs                        100
+ae_epochs                        60
 prior_blocks                     4
 flow_time_freqs                  16
 flow_t_sampling                  uniform

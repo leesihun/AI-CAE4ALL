@@ -468,3 +468,77 @@ def test_fea_verify_records_a_failure_instead_of_raising(monkeypatch, tmp_path):
     result = _fea_verify(str(tmp_path))
     assert result["error"] == "SystemExit: 2"
     assert "designs" not in result
+
+
+def _bracket_interface_points(drop=None):
+    """Points on the four bolt bore walls and both lug ear walls (DeepJEB mm frame),
+    plus free points away from every interface."""
+    from design_loop import interfaces as itf
+
+    pts, kinds = [], []
+    ang = np.linspace(0.0, 2 * np.pi, 24, endpoint=False)
+    for name, (cx, cy) in itf.BOLTS.items():
+        if name == drop:
+            continue
+        for z in np.linspace(*itf.BOLT_Z, 5):
+            pts += [(cx + itf.R_BOLT * np.cos(a), cy + itf.R_BOLT * np.sin(a), z) for a in ang]
+            kinds += [itf.NODE_BOLT] * len(ang)
+    for name, (y0, y1) in itf.EARS.items():
+        if name == drop:
+            continue
+        for y in np.linspace(y0, y1, 5):
+            pts += [(itf.LUG_XZ[0] + itf.R_LUG * np.cos(a), y,
+                     itf.LUG_XZ[1] + itf.R_LUG * np.sin(a)) for a in ang]
+            kinds += [itf.NODE_LUG] * len(ang)
+    pts += [(20.0, -70.0, 30.0), (60.0, -100.0, 5.0)]
+    kinds += [itf.NODE_FREE] * 2
+    return np.asarray(pts), np.asarray(kinds)
+
+
+def test_node_types_marks_the_bores_and_ears_and_nothing_else():
+    from design_loop.interfaces import node_types
+
+    points, kinds = _bracket_interface_points()
+    np.testing.assert_array_equal(node_types(points), kinds)
+
+
+def test_node_types_refuses_a_shape_missing_a_bore():
+    import pytest
+    from design_loop.interfaces import InterfaceError, node_types
+
+    points, _ = _bracket_interface_points(drop="bolt3")
+    with pytest.raises(InterfaceError, match="bolt3"):
+        node_types(points)
+
+
+def test_layout_follows_the_inference_config(tmp_path):
+    import pytest
+
+    ver = tmp_path / "ver.txt"
+    ver.write_text("model meshgraphnets\ninput_var 4\noutput_var 4\n% cond_var 2\n")
+    old = tmp_path / "ex10.txt"
+    old.write_text("model meshgraphnets\ninput_var 3\noutput_var 3\ncond_var 4\n")
+    assert surrogate_module.layout_from_config(str(ver)) == "ver"
+    assert surrogate_module.layout_from_config(str(old)) == "ex10"
+
+    model = surrogate_module.HIMGNSurrogate(str(ver), "model.pth", load_cases=("ver",),
+                                            workdir=tmp_path)
+    assert (model.layout, model.surface_faces) == ("ver", 0)
+    with pytest.raises(surrogate_module.SurrogateError, match="vertical load case only"):
+        surrogate_module.HIMGNSurrogate(str(ver), "model.pth", load_cases=("ver", "dia"),
+                                        workdir=tmp_path)
+
+
+def test_ver_layout_refuses_a_shape_without_the_interfaces(monkeypatch, tmp_path):
+    import trimesh
+
+    predicted = []
+    monkeypatch.setattr(surrogate_module, "write_inference_contract", lambda *_, **__: None)
+    model = surrogate_module.HIMGNSurrogate("infer.txt", "model.pth", load_cases=("ver",),
+                                            workdir=tmp_path, layout="ver")
+    model._run_native = lambda *_: predicted.append(True) or {}
+    slab = trimesh.creation.box(extents=(1.0, 1.8, 0.2)).subdivide().subdivide()
+
+    assert model.analyze_batch([slab], names=["slab"]) == [None]
+    assert not predicted
+    assert model.last_errors[0].startswith("InterfaceError: interface gate failed")

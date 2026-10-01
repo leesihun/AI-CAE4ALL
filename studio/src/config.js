@@ -280,7 +280,7 @@ export function parseConfig(text) {
 const PRESET_SKIP = /(^|_)(dataset|modelpath|dir|path|file|mesh|geometry|sidecar|checkpoint|config)$|^opt_|seed$|(^|_)(training|warmup|freeze)_epochs?$|^ae_epochs$|_interval$/;
 // ...and the data contract: which rows are state, conditions and node types,
 // the rollout, what gets plotted, and the values tuned to one dataset
-// (SDFFlow's kl_weight is 1e-6 on ex1 and 1e-10 on ex2-4). Copying input_var
+// (SDFFlow's kl_weight, swept per dataset). Copying input_var
 // from another dataset is how the constant-target class of bug starts.
 const PRESET_SKIP_KEYS = new Set([
   "model", "mode", "gpu_ids", "parallel_mode",

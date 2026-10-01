@@ -1,4 +1,4 @@
-This is XeTeX, Version 3.141592653-2.6-0.999997 (MiKTeX 25.12) (preloaded format=xelatex 2026.9.18)  28 SEP 2026 02:48
+This is XeTeX, Version 3.141592653-2.6-0.999997 (MiKTeX 25.12) (preloaded format=xelatex 2026.9.18)  1 OCT 2026 09:16
 entering extended mode
  restricted \write18 enabled.
  %&-line parsing enabled.
@@ -1067,11 +1067,11 @@ Package enumitem Warning: Negative labelwidth. This does not make much
 
 [1
 
-] (sdfflow.toc [2])
+] (sdfflow.toc [2] [3])
 \tf@toc=\write6
 \openout6 = `sdfflow.toc'.
 
- [3]
+ [4]
 LaTeX Font Info:    Font shape `TU/lmtt/bx/n' in size <10> not available
 (Font)              Font shape `TU/lmtt/b/n' tried instead on input line 160.
 LaTeX Font Info:    Font shape `TU/NotoSansKR(1)/bx/n' in size <10> not availab
@@ -1080,7 +1080,7 @@ le
 ne 160.
 File: figures/fig_sdf2d.png Graphic file (type bmp)
 <figures/fig_sdf2d.png>
- [4
+ [5
 
 ]
 
@@ -1107,25 +1107,25 @@ Package hyperref Warning: Token not allowed in a PDF string (Unicode):
 Package hyperref Warning: Token not allowed in a PDF string (Unicode):
 (hyperref)                removing `math shift' on input line 260.
 
-[5] [6]
+[6] [7]
 File: figures/fig_vae_shapes.png Graphic file (type bmp)
 <figures/fig_vae_shapes.png>
- [7]
+ [8]
 File: figures/fig_vae_points.png Graphic file (type bmp)
 <figures/fig_vae_points.png>
- [8] [9]
+ [9] [10]
 File: figures/fig_schedule.png Graphic file (type bmp)
 <figures/fig_schedule.png>
 File: figures/fig_kl_budget.png Graphic file (type bmp)
 <figures/fig_kl_budget.png>
 File: figures/fig_collapse.png Graphic file (type bmp)
 <figures/fig_collapse.png>
- [10] [11] [12] [13] [14]
-ignored error: Infinite glue shrinkage found in box being split [15]
+ [11] [12] [13] [14] [15]
 ignored error: Infinite glue shrinkage found in box being split [16]
+ignored error: Infinite glue shrinkage found in box being split [17]
 File: figures/fig_epochs.png Graphic file (type bmp)
 <figures/fig_epochs.png>
- [17]
+ [18]
 LaTeX Font Info:    Font shape `TU/lmtt/bx/n' in size <10.95> not available
 (Font)              Font shape `TU/lmtt/b/n' tried instead on input line 854.
 LaTeX Font Info:    Font shape `TU/NotoSansKR(1)/bx/n' in size <10.95> not avai
@@ -1133,60 +1133,96 @@ lable
 (Font)              Font shape `TU/NotoSansKR(1)/b/n' tried instead on input li
 ne 854.
 
-[18] [19]
+[19] [20]
 File: figures/fig_data_ex3.png Graphic file (type bmp)
 <figures/fig_data_ex3.png>
 File: figures/fig_data_jeb.png Graphic file (type bmp)
 <figures/fig_data_jeb.png>
 File: figures/fig_orient.png Graphic file (type bmp)
 <figures/fig_orient.png>
- [20] [21] [22]
+ [21] [22] [23]
 File: figures/fig_interp_kl.png Graphic file (type bmp)
 <figures/fig_interp_kl.png>
- [23] [24] [25]
+ [24] [25] [26]
 File: figures/fig_interp_methods.png Graphic file (type bmp)
 <figures/fig_interp_methods.png>
 File: figures/fig_cross.png Graphic file (type bmp)
 <figures/fig_cross.png>
- [26]
+ [27]
 File: figures/fig_endpoints.png Graphic file (type bmp)
 <figures/fig_endpoints.png>
- [27] [28]
+ [28] [29]
 File: figures/fig_cond_fixed.png Graphic file (type bmp)
 <figures/fig_cond_fixed.png>
 File: figures/fig_csweep.png Graphic file (type bmp)
 <figures/fig_csweep.png>
- [29] [30] [31] [32]
-[33]
+ [30] [31] [32] [33]
+[34]
 File: figures/fig_jeb_eval_setup.png Graphic file (type bmp)
 <figures/fig_jeb_eval_setup.png>
 File: figures/fig_jeb_eval.png Graphic file (type bmp)
 <figures/fig_jeb_eval.png>
- [34] [35]
+ [35] [36]
 File: figures/fig_jeb_interp_strip.png Graphic file (type bmp)
 <figures/fig_jeb_interp_strip.png>
- [36] [37]
+ [37] [38]
 File: figures/fig_tsize_setup.png Graphic file (type bmp)
 <figures/fig_tsize_setup.png>
- [38] [39]
+ [39] [40]
 File: figures/fig_tsize_results.png Graphic file (type bmp)
 <figures/fig_tsize_results.png>
- [40] [41] [42] [43] [44] [45] [46]
-(sdfflow.aux)
+ [41] [42] [43]
+File: figures/fig_default_setup.png Graphic file (type bmp)
+<figures/fig_default_setup.png>
+ [44] [45]
+File: figures/fig_default_interp_inv.png Graphic file (type bmp)
+<figures/fig_default_interp_inv.png>
+
+
+LaTeX Warning: Float too large for page by 43.04184pt on input line 1915.
+
+File: figures/fig_default_interp_d1.png Graphic file (type bmp)
+<figures/fig_default_interp_d1.png>
+
+LaTeX Warning: Float too large for page by 43.04184pt on input line 1924.
+
+File: figures/fig_default_native.png Graphic file (type bmp)
+<figures/fig_default_native.png>
+[46] [47] [48]
+Underfull \hbox (badness 1087) in paragraph at lines 1963--1966
+[]\TU/NotoSansKR(0)/b/n/10.95 DeepJEB config 의 대 표 점 512 / kl 1e-6 은 J0 에 서 붕 괴
+ 가 확 인 된 조 합 이 다. 적 용 함 (9
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 1963--1966
+\TU/NotoSansKR(0)/b/n/10.95 월 29 일): \TU/NotoSansKR(0)/m/n/10.95 ex1 config(\TU
+/lmtt/m/n/10.95 configs/ SDFFlow/ geometry_generation/ ex1/ baseline/ \TU/NotoS
+ansKR(0)/m/n/10.95 의
+ []
+
+
+Underfull \hbox (badness 6675) in paragraph at lines 1963--1966
+\TU/lmtt/m/n/10.95 config_train_sdfflow.txt\TU/NotoSansKR(0)/m/n/10.95 , \TU/lm
+tt/m/n/10.95 dataset_matrix/ generate.py \TU/NotoSansKR(0)/m/n/10.95 가 만 듦) 는 지
+ 금 대 표 점
+ []
+
+[49] [50] [51] [52] [53] (sdfflow.aux)
  ***********
 LaTeX2e <2025-11-01>
 L3 programming layer <2025-12-24>
  ***********
 Package rerunfilecheck Info: File `sdfflow.out' has not changed.
-(rerunfilecheck)             Checksum: BD943034955F6B884B515A2D2A32E482;8539.
+(rerunfilecheck)             Checksum: 677D6A00CAB31A7FE27C55088F7D4ACC;9215.
  ) 
 Here is how much of TeX's memory you used:
- 31305 strings out of 402986
- 598810 string characters out of 5448917
- 1400577 words of memory out of 5000000
- 59542 multiletter control sequences out of 15000+600000
- 637862 words of font info for 122 fonts, out of 8000000 for 9000
+ 31358 strings out of 402986
+ 600628 string characters out of 5448917
+ 1402695 words of memory out of 5000000
+ 59587 multiletter control sequences out of 15000+600000
+ 637894 words of font info for 126 fonts, out of 8000000 for 9000
  1348 hyphenation exceptions out of 8191
- 84i,14n,94p,602b,2826s stack positions out of 10000i,1000n,20000p,200000b,200000s
+ 84i,14n,94p,626b,2826s stack positions out of 10000i,1000n,20000p,200000b,200000s
 
-Output written on sdfflow.pdf (46 pages).
+Output written on sdfflow.pdf (53 pages).

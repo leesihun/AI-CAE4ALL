@@ -21,6 +21,7 @@ PATH_KEYS = frozenset({
     'pipeline_log_file',
     'opt_surrogate_checkpoint',
     'opt_surrogate_config',
+    'opt_surrogate_python',
 })
 
 

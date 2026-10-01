@@ -36,6 +36,15 @@ from design_loop.build_deepjeb_mgn import (
     COND_VAR, FEATURE_NAMES, INPUT_VAR, LOAD_CASES, OUTPUT_VAR,
     decimate, edges_from_faces,
 )
+from design_loop.interfaces import SERVE_TOL, node_types
+
+# The ex13 vertical-load layout (D:/CAE_datasets_raw/deepjeb_ver_fea/src/build_ex13.py):
+# one load case, no condition rows, and the boundary conditions carried as a
+# trailing node-type row (0 free, 1 bolt bore wall, 2 lug ear bore wall).
+VER_FEATURE_NAMES = ['x_coord', 'y_coord', 'z_coord', 'u_x', 'u_y', 'u_z', 'von_mises',
+                     'node_type']
+VER_INPUT_VAR = VER_OUTPUT_VAR = 4
+VER_COND_VAR = 0
 
 # Measured over the fetched DeepJEB brackets; see the module docstring.
 DEEPJEB_CENTRE = np.array([15.789, -71.580, 32.743])
@@ -101,9 +110,31 @@ def mesh_to_records(mesh, load_cases=LOAD_CASES, target_nodes=5000,
     return records
 
 
-def write_inference_contract(out_path, records):
+def mesh_to_ver_record(mesh, target_nodes=5000, already_millimetres=False,
+                       name='generated', tol=SERVE_TOL):
+    """One ex13-layout record: coordinates, a zeroed state block, node types.
+
+    The node types come from the geometric interface rule the labels were made
+    with (`design_loop.interfaces`); a shape that fails its gates raises
+    InterfaceError, the same refusal the labelling run applied.
+    """
+    vertices = np.asarray(mesh.vertices, dtype=np.float64)
+    if not already_millimetres:
+        vertices = normalized_to_millimetres(vertices)
+    small = decimate({'vertices': vertices,
+                      'faces': np.asarray(mesh.faces, dtype=np.int64)}, target_nodes)
+    edges = edges_from_faces(small['faces'])
+    num_nodes = small['vertices'].shape[0]
+    nodal = np.zeros((len(VER_FEATURE_NAMES), 1, num_nodes), dtype=np.float32)
+    nodal[0:3, 0, :] = small['vertices'].T
+    nodal[-1, 0, :] = node_types(small['vertices'], tol)
+    return {'item': name, 'case': 'ver', 'nodal': nodal, 'edges': edges}
+
+
+def write_inference_contract(out_path, records, feature_names=FEATURE_NAMES,
+                             input_var=INPUT_VAR, output_var=OUTPUT_VAR, cond_var=COND_VAR):
     """Write the shared mesh layout with no labels -- inference input only."""
-    n_features = len(FEATURE_NAMES)
+    n_features = len(feature_names)
     os.makedirs(os.path.dirname(os.path.abspath(out_path)) or '.', exist_ok=True)
     tmp = out_path + '.tmp'
     with h5py.File(tmp, 'w') as f:
@@ -116,6 +147,9 @@ def write_inference_contract(out_path, records):
             md = sg.create_group('metadata')
             md.attrs['filename_id'] = f"{rec['item']}_{rec['case']}"
             md.attrs['bracket'] = rec['item']
+            # The ex13 configs split on `split_group_attr parent`; a generated
+            # shape is its own parent.
+            md.attrs['parent'] = rec['item']
             md.attrs['load_case'] = rec['case']
             md.attrs['num_nodes'] = nodal.shape[2]
             md.attrs['num_edges'] = edges.shape[1]
@@ -128,13 +162,13 @@ def write_inference_contract(out_path, records):
         f.attrs['num_samples'] = len(records)
         f.attrs['num_features'] = n_features
         f.attrs['num_timesteps'] = 1
-        f.attrs['builder_input_var'] = INPUT_VAR
-        f.attrs['builder_output_var'] = OUTPUT_VAR
-        f.attrs['builder_cond_var'] = COND_VAR
+        f.attrs['builder_input_var'] = input_var
+        f.attrs['builder_output_var'] = output_var
+        f.attrs['builder_cond_var'] = cond_var
         f.attrs['builder_source'] = 'SDFFlow generated geometry via deepjeb_bridge'
 
         top = f.create_group('metadata')
-        top.create_dataset('feature_names', data=np.array(FEATURE_NAMES, dtype='S12'))
+        top.create_dataset('feature_names', data=np.array(feature_names, dtype='S12'))
         splits = top.create_group('splits')
         ids = np.arange(1, len(records) + 1, dtype=np.int64)
         splits.create_dataset('train', data=np.array([], dtype=np.int64))

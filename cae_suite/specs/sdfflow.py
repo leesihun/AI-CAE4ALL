@@ -1,4 +1,5 @@
 from __future__ import annotations
+from pathlib import Path
 
 from ..diagnostics import Severity
 from .base import (
@@ -68,6 +69,9 @@ SDFFLOW_KEYS = frozenset(
         # optimize: AI-surrogate analysis backend (HI-MGN in place of gmsh + FEA)
         "opt_analysis", "opt_surrogate_checkpoint", "opt_surrogate_config",
         "opt_surrogate_target_nodes",
+        # interpreter for the nested HI-MGN launch, when the SDFFlow env lacks
+        # torch_geometric (default: this process's own Python)
+        "opt_surrogate_python",
         # optimize, surrogate backend: re-solve the result with the real solver
         # (design_loop/verify_with_fea.py, in-process) once the search is done
         "opt_fea_verify",
@@ -190,9 +194,39 @@ SURROGATE_LABEL_CONSTANTS = {
     "opt_material_nu": 0.342,
     "opt_length_scale": 0.19 / 1.8,
 }
+# The ex13 ('ver') surrogate's labels were solved in DeepJEB's own frame
+# (longest side 184.181 mm); mirrors `_SURROGATE_LABEL_CONSTANTS_VER`.
+SURROGATE_LABEL_CONSTANTS_VER = dict(SURROGATE_LABEL_CONSTANTS,
+                                     opt_length_scale=0.184181 / 1.8)
 # Relative, so a value written to config precision (0.10556 for 0.19/1.8)
 # is not mistaken for a different one.
 _LABEL_CONSTANT_RTOL = 1e-3
+
+
+def _surrogate_label_constants(ctx: SpecValidationContext) -> dict:
+    """Label constants for the layout `opt_surrogate_config` declares.
+
+    Mirrors `design_loop/surrogate.py::layout_from_config`: output_var 4 with
+    cond_var 0 is the ex13 vertical-load contract, anything else (or an
+    unreadable file) the ex10 one.
+    """
+    raw = ctx.values.get("opt_surrogate_config")
+    if not isinstance(raw, str) or not raw:
+        return SURROGATE_LABEL_CONSTANTS
+    path = Path(raw)
+    if not path.is_absolute():
+        path = ctx.repository_root / path
+    found = {}
+    try:
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                parts = line.split("%")[0].split("#")[0].split()
+                if len(parts) >= 2:
+                    found[parts[0].lower()] = parts[1]
+    except OSError:
+        return SURROGATE_LABEL_CONSTANTS
+    ver = (found.get("output_var"), found.get("cond_var", "0")) == ("4", "0")
+    return SURROGATE_LABEL_CONSTANTS_VER if ver else SURROGATE_LABEL_CONSTANTS
 
 # Sampling keys `mode optimize` never reads: the search draws its own noise and
 # sets its own conditions, so a value carried over from a sample config would
@@ -202,9 +236,10 @@ OPTIMIZE_INERT_KEYS = ("num_samples", "cfg_scale", "cond_values", "candidate_mul
 
 
 def _warn_surrogate_constants(ctx: SpecValidationContext, keys, context: str, effect: str) -> None:
+    constants = _surrogate_label_constants(ctx)
     for key in keys:
         value = numeric(ctx.values.get(key))
-        label = SURROGATE_LABEL_CONSTANTS[key]
+        label = constants[key]
         if value is None or abs(value - label) <= _LABEL_CONSTANT_RTOL * abs(label):
             continue
         ctx.add(
@@ -1156,6 +1191,8 @@ def build_sdfflow_spec() -> MethodSpec:
             PathRule("opt_surrogate_checkpoint", PathKind.INPUT_FILE,
                      frozenset({"optimize", "sample", "evaluate"})),
             PathRule("opt_surrogate_config", PathKind.INPUT_FILE,
+                     frozenset({"optimize", "sample", "evaluate"})),
+            PathRule("opt_surrogate_python", PathKind.INPUT_FILE,
                      frozenset({"optimize", "sample", "evaluate"})),
             PathRule("output_dir", PathKind.OUTPUT_DIR),
         ),

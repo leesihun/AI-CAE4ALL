@@ -1,0 +1,72 @@
+% deterministic/ex13 - himgn; paper-informed native adaptation, not an exact reproduction.
+% Field storage order (0-based): input -> output -> conditioner -> partNo.
+% input [0:3]: x_coord, y_coord, z_coord
+% output/state [3:]: u_x, u_y, u_z, von_mises
+% conditioner: none
+% partNo: node_type (0 free, 1 bolt bore wall - clamped, 2 lug ear bore wall - RBE3 load)
+% Static state input is zero; temporal input is current state and target is next-state delta.
+% Reference: https://arxiv.org/abs/2608.13827
+% See configs/campaigns/dataset_matrix/README.md for deviations and verification boundaries.
+% ex13 = DeepJEB vertical load (35.6 kN +z) re-solved with OpenRadioss tet4 L0.7 on all
+%   2121 meshable ex1_deepjeb shapes, decimated to ~5000 surface nodes. Split inherited from
+%   ex1_deepjeb (train file = its train shapes, infer file = its 425 held-out shapes); inside
+%   the train file split_group_attr parent keeps every DeepJEB parent in one partition.
+%   Build: D:/CAE_datasets_raw/deepjeb_ver_fea/src/build_ex13.py; report: paper/deepjeb_ver_fea.
+% No source HDF5 writes. Checkpoints are created by the paired training config.
+
+model                            meshgraphnets
+mode                             inference
+gpu_ids                          5
+parallel_mode                    ddp
+split_seed                       42
+dataset_dir                      ../../dataset/deterministic/ex13_deepjeb_ver.h5
+infer_dataset                    ../../dataset/deterministic/ex13_deepjeb_ver_infer.h5
+modelpath                        ../../output/dataset_matrix/deterministic/ex13/himgn/model.pth
+log_file_dir                     ../../output/dataset_matrix/deterministic/ex13/himgn/train.log
+inference_output_dir             ../../output/dataset_matrix/deterministic/ex13/himgn/infer
+infer_timesteps                  1
+input_var                        4
+output_var                       4
+cond_var                         0
+feature_loss_weights             1, 1, 1, 1
+use_node_types                   True
+positional_features              4
+time_integration                 ar_ot
+training_epochs                  500
+batch_size                       1
+learningr                        0.0001
+weight_decay                     0.0
+warmup_epochs                    5
+num_workers                      2
+prefetch_factor                  2
+grad_accum_steps                 1
+augment_geometry                 False
+std_noise                        0.0
+use_amp                          True
+use_checkpointing                True
+use_ema                          True
+ema_decay                        0.99
+use_parallel_stats               False
+val_interval                     5
+test_interval                    50
+test_batch_idx                   0, 1
+plot_feature_idx                 2
+display_trainset                 True
+display_testset                  True
+write_preprocessing              False
+use_world_edges                  False
+use_multiscale                   True
+split_group_attr                 parent
+edge_var                         8
+latent_dim                       128
+message_passing_num              28
+geometry_state_mode              fixed
+coarsening_type                  voronoi_seedmean
+multiscale_levels                2
+voronoi_clusters                 512, 64
+mp_per_level                     4, 6, 8, 6, 4
+pool_type                        mean
+unpool_type                      sum
+learned_interpolation            True
+voronoi_branches                 1, 1
+coarse_world_edges               False

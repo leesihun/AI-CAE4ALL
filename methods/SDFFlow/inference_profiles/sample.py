@@ -917,6 +917,7 @@ def fea_condition_audit(meshes, cond_names, backend, config, workdir=None):
             surrogate = HIMGNSurrogate(
                 config_path=config['opt_surrogate_config'],
                 checkpoint=config['opt_surrogate_checkpoint'],
+                python=config.get('opt_surrogate_python') or None,
                 load_cases=tuple(_SURROGATE_CASE_NAMES[c] for c in needed_cases),
                 target_nodes=int(config.get('opt_surrogate_target_nodes', 5000)),
                 density=density,

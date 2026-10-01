@@ -84,13 +84,20 @@ def _clear_owned_outputs(out_dir):
 # The launcher's SDF-OPT-SURROGATE-002 mirrors this table and tolerance
 # (cae_suite/specs/sdfflow.py::SURROGATE_LABEL_CONSTANTS).
 _SURROGATE_LABEL_CONSTANTS = {'E': 113.8e9, 'nu': 0.342, 'length_scale': 0.19 / 1.8}
+# The ex13 ('ver') labels were solved in DeepJEB's own frame (longest side
+# 184.181 mm), with the paper's Ti-6Al-4V (D:/CAE_datasets_raw/deepjeb_ver_fea).
+_SURROGATE_LABEL_CONSTANTS_VER = {'E': 113.8e9, 'nu': 0.342, 'length_scale': 0.184181 / 1.8}
+
+
+def _label_constants(layout):
+    return _SURROGATE_LABEL_CONSTANTS_VER if layout == 'ver' else _SURROGATE_LABEL_CONSTANTS
 # Relative: the checked-in 0.10556 is 0.19/1.8 written to config precision.
 _LABEL_CONSTANT_RTOL = 1e-3
 
 
-def _warn_surrogate_constants(material, bracket):
+def _warn_surrogate_constants(material, bracket, layout='ex10'):
     used = {'E': material.E, 'nu': material.nu, 'length_scale': bracket.length_scale}
-    moved = [f'{k} {used[k]:g} (labels: {v:g})' for k, v in _SURROGATE_LABEL_CONSTANTS.items()
+    moved = [f'{k} {used[k]:g} (labels: {v:g})' for k, v in _label_constants(layout).items()
              if abs(used[k] - v) > _LABEL_CONSTANT_RTOL * abs(v)]
     if moved:
         print('  WARNING: ' + ', '.join(moved) + ' -- the surrogate cannot honour these; '
@@ -179,6 +186,7 @@ def run_optimize(config, config_filename='config.txt'):
         surrogate = HIMGNSurrogate(
             config_path=config['opt_surrogate_config'],
             checkpoint=config['opt_surrogate_checkpoint'],
+            python=config.get('opt_surrogate_python') or None,
             load_cases=tuple(_SURROGATE_CASE_NAMES[c] for c in load_cases),
             target_nodes=_int(config, 'opt_surrogate_target_nodes', 5000),
             density=material.rho,
@@ -197,7 +205,16 @@ def run_optimize(config, config_filename='config.txt'):
                  if fea_verify else
                  'confirm the winner with design_loop/verify_with_fea.py (or set '
                  'opt_fea_verify) before acting on it.'), flush=True)
-        _warn_surrogate_constants(material, bracket)
+        _warn_surrogate_constants(material, bracket, surrogate.layout)
+        if surrogate.layout == 'ver' and fea_verify:
+            # fea.py's Bracket clamps the pad bottoms and loads the lug crown
+            # (problem.find_interfaces); the ver labels clamp the bolt bores and
+            # load the lug bores through RBE3 in OpenRadioss. Re-solving with the
+            # former would grade the surrogate against a different problem.
+            raise ValueError('opt_fea_verify re-solves with fea.py and its pad/lug-crown '
+                             'boundary conditions, not the bore/lug rule this surrogate '
+                             'was labelled with; set opt_fea_verify False and check the '
+                             'winner with the deepjeb_ver_fea OpenRadioss pipeline')
     else:
         evaluator = Evaluator(generator, bracket,
                               mesh_size_max=_flt(config, 'opt_mesh_size_max', 0.05),
@@ -435,15 +452,20 @@ def run_optimize(config, config_filename='config.txt'):
         _write_screening_table(out_dir, baseline, reference, typical, limits, analysis_backend)
     if analysis_backend == 'surrogate':
         summary['surrogate'] = dict(surrogate.stats(), checkpoint=surrogate.checkpoint,
-                                    label_constants=dict(_SURROGATE_LABEL_CONSTANTS),
+                                    label_constants=dict(_label_constants(surrogate.layout)),
                                     # How the training labels were produced, which is
                                     # the resolution verify_with_fea.py must solve at
                                     # for the surrogate's numbers to be comparable.
-                                    label_resolution={
+                                    label_resolution=({
                                         'target_faces': LABEL_SURFACE_FACES,
                                         'mesh_size_max': LABEL_MESH_SIZE_MAX,
                                         'target_nodes': 5000,
-                                    })
+                                    } if surrogate.layout == 'ex10' else {
+                                        # Not reproducible with fea.py: see the
+                                        # opt_fea_verify refusal above.
+                                        'solver': 'OpenRadioss implicit, tet4 L0.7 mm',
+                                        'target_nodes': 5000,
+                                    }))
     summary['design_space'] = {
         'noise_param': generator.noise_param,
         'latent_flat_dim': generator.latent_flat_dim,
