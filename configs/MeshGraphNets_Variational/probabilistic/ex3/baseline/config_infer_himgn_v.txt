@@ -10,7 +10,8 @@
 % No source HDF5 writes. Checkpoints are created by the paired training config.
 % num_vae_samples is draws PER held-out scene. Set to 64 = the imperfection draws per geometry,
 % so each scene's ensemble is as large as the ground-truth set of its geometry.
-% spread_stat range on ux: the rim-to-rim axial shortening spread separates buckled from unbuckled draws.
+% spread_stat mag_max on ux,uy,uz: the max total displacement max|u| (= attr max_deform) separates
+% buckled from unbuckled draws; one component alone moves with the buckle's orientation.
 
 model                            meshgraphnets-v
 mode                             inference
@@ -72,7 +73,8 @@ hierarchy_cache_keep             True
 training_seed                    42
 best_by                          crps
 num_vae_samples                  64
-vae_batch_size                   16
+% 16 z-samples per forward OOMs a 24 GB card on ex3's 46-72k-node graphs; auto probes one and halves on OOM
+vae_batch_size                   auto
 use_vae                          True
 vae_latent_dim                   32
 vae_mp_layers                    3
@@ -95,9 +97,9 @@ prior_fm_steps                   30
 prior_fm_solver                  heun
 prior_freeze_epoch               80
 eval_dataset                     ../../dataset/probabilistic/ex3_shell_buckling_infer.h5
-spread_channel                   0
-spread_label                     ux
-spread_stat                      range
+spread_channel                   0, 1, 2
+spread_label                     u
+spread_stat                      mag_max
 make_histogram                   True
 show_histogram                   False
 histogram_bins                   30

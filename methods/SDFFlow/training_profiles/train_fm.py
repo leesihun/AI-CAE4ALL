@@ -485,8 +485,13 @@ def run_generation_test(model, vae, device, config, epoch, latent_flat_dim,
     resolution = int(config.get('mc_resolution_test', 96))
 
     cond = torch.zeros(num_samples, cond_dim, device=device) if cond_dim > 0 else None
+    # The same starting noise every epoch (drawn on the CPU so it does not
+    # depend on the device): panels then change only because the network did,
+    # and one epoch's picture can be compared with the next.
+    noise = torch.randn(num_samples, latent_flat_dim,
+                        generator=torch.Generator().manual_seed(int(config.get('seed', 0))))
     z_n = sample_latents(model, num_samples, latent_flat_dim, device, cond=cond,
-                         ode_steps=int(config.get('ode_steps', 50)))
+                         ode_steps=int(config.get('ode_steps', 50)), noise=noise.to(device))
     z = z_n * latent_std.to(device) + latent_mean.to(device)
     # Collected for one strip figure: a row of samples on shared axes shows
     # mode collapse (every panel the same shape) at a glance, which per-shape
@@ -513,6 +518,7 @@ def run_generation_test(model, vae, device, config, epoch, latent_flat_dim,
             dpi=int(config.get('plot_dpi', 180)),
             max_faces=int(config.get('plot_max_faces', 0)),
             title=f'SDFFlow samples -- epoch {epoch}',
+            ncols=4,
         )
         if written:
             print(f'  [viz] {written}')

@@ -69,7 +69,7 @@ from general_modules.data_loader import load_data              # noqa: E402
 from general_modules.mesh_dataset import MeshGraphDataset      # noqa: E402
 from inference_profiles.rollout import (                       # noqa: E402
     _load_model_from_checkpoint, _load_conditional_prior,
-    _spread_stat, SPREAD_CHANNEL_DEFAULT, SPREAD_STAT_DEFAULT, SPREAD_STATS,
+    _spread_index, _spread_stat,
 )
 
 
@@ -323,8 +323,9 @@ def resolve_device(cfg, override=None):
 
 
 def per_graph_spreads(pred, batch_obj, m, dst, dm, ch, stat):
-    """Physical spread statistic of output channel `ch` for each graph in a
-    collated prediction -- the same channel and reduction rollout.py scores."""
+    """Physical spread statistic of output channel `ch` (or channels, for a
+    vector stat) for each graph in a collated prediction -- the same channel
+    and reduction rollout.py scores."""
     z = (pred[:, ch].float() * dst[ch] + dm[ch]).detach().cpu().numpy()
     ptr = batch_obj.ptr.tolist()
     return [_spread_stat(z[ptr[i]:ptr[i + 1]], stat) for i in range(m)]
@@ -355,11 +356,12 @@ def main():
     dev = resolve_device(cfg, a.gpu)
     # Same keys, defaults and validation as rollout.py, so this compares the
     # statistic the inference run scored: output channel `ch` (nodal_data row
-    # 3 + ch on the truth side), reduced by `stat`.
-    ch = int(cfg.get('spread_channel', SPREAD_CHANNEL_DEFAULT))
-    stat = str(cfg.get('spread_stat', SPREAD_STAT_DEFAULT)).lower()
-    if stat not in SPREAD_STATS:
-        raise SystemExit(f"spread_stat must be one of {SPREAD_STATS}, got {stat!r}")
+    # 3 + ch on the truth side), reduced by `stat`. `ch` is a list for a
+    # vector stat (mag_max over ux, uy, uz).
+    try:
+        ch, stat = _spread_index(cfg)
+    except ValueError as exc:
+        raise SystemExit(str(exc))
     torch.manual_seed(1234)
 
     # ---- normalizers from the TRAINING split, exactly as the trainer fit them
@@ -441,7 +443,7 @@ def main():
                     raise SystemExit(f"realization {sid}: node/B.C. types differ from the "
                                      f"infer graph")
             ys.append(nd[3:3 + int(c2['output_var']), 0, :].T.astype(np.float32))
-            truth.append(_spread_stat(nd[3 + ch, 0, :], stat))
+            truth.append(_spread_stat(nd[3 + np.asarray(ch), 0, :].T, stat))
     R = len(ys)
     print(f"  geometry: {N} nodes;  realizations: {R};  prior draws: {a.n_prior}")
 

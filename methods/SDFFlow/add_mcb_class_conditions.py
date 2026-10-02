@@ -6,6 +6,12 @@ Append a one-hot MCB nut-family class label to an SDFFlow HDF5 as the
     python add_mcb_class_conditions.py \
         --h5 ../../dataset/geometry_generation/ex3_mcb_nuts.h5 --dry_run
     python add_mcb_class_conditions.py --list_classes
+    python add_mcb_class_conditions.py --h5 ../../dataset/geometry_generation/ex3_mcb.h5 --hole_count
+
+``--hole_count`` appends one more column, ``hole_count``: the genus of each
+shape's processed surface, read from the per-shape ``genus`` attr that
+``build_dataset.py`` records (2 * bodies - Euler characteristic, halved). A
+build that predates that attr is refused rather than given a guessed column.
 
 Unlike ``add_fea_conditions.py``/``add_drivaerml_conditions.py`` (CSV-join by
 an id), MCB carries its only label as the immediate parent directory name of
@@ -23,6 +29,7 @@ of the three identically.
 What is written (root of the HDF5, append-only):
 
     cond_extra                 float32 [num_shapes, 5]   one-hot row per shape
+                               (or [num_shapes, 6] with --hole_count, last column hole_count)
     cond_extra_names           attr: ('class_hexagonal_nuts', ..., 'class_locknuts')
     cond_extra_source          attr: "MCB dataset_org_norm parent-directory name"
     cond_extra_transforms      attr: JSON {name: 'identity'}
@@ -59,6 +66,7 @@ MCB_CLASSES = {
     'Locknuts': 'class_locknuts',
 }
 STORED_NAMES = list(MCB_CLASSES.values())
+HOLE_COUNT_NAME = 'hole_count'
 
 
 class Refusal(Exception):
@@ -88,15 +96,16 @@ def read_h5_shapes(h5_path):
         shapes = h5['shapes']
         num_shapes = int(h5.attrs.get('num_shapes', len(shapes)))
         base_names = [str(n) for n in h5.attrs.get('cond_names', [])]
-        entries = []
+        entries, genus = [], []
         for idx in range(num_shapes):
             grp = shapes.get(f'{idx:05d}')
             if grp is None:
                 raise Refusal(f'shape group {idx:05d} is missing although num_shapes={num_shapes}')
             source = grp.attrs.get('source')
             entries.append((idx, source, class_from_source(source)))
+            genus.append(int(grp.attrs['genus']) if 'genus' in grp.attrs else None)
         exists = SIDECAR_DATASET in h5
-    return num_shapes, base_names, entries, exists
+    return num_shapes, base_names, entries, exists, genus
 
 
 def build_matrix(entries):
@@ -126,17 +135,34 @@ def print_table(counts, num_shapes):
         print(f'{folder:<{name_w}}  {stored:<24}  {counts[folder]:>6d}')
 
 
-def write_sidecar(h5_path, matrix, overwrite, missing_count):
-    transforms = {name: 'identity' for name in STORED_NAMES}
+def hole_count_column(genus):
+    """Per-shape ``genus`` attrs -> float32 [num_shapes, 1]; refuses a pre-genus build."""
+    missing = [i for i, g in enumerate(genus) if g is None]
+    if missing:
+        raise Refusal(f'{len(missing)} shape(s) have no "genus" attr (first: {missing[0]:05d}); '
+                      'rebuild with the current build_dataset.py before using --hole_count')
+    column = np.clip(np.asarray(genus, dtype=np.float32), 0, None)[:, None]
+    values, counts = np.unique(column, return_counts=True)
+    print('hole_count distribution: ' + ', '.join(
+        f'{int(v)}: {int(c)}' for v, c in zip(values, counts)))
+    return column
+
+
+def write_sidecar(h5_path, matrix, overwrite, missing_count, names=None):
+    names = list(names or STORED_NAMES)
+    transforms = {name: 'identity' for name in names}
     csv_columns = dict(zip(STORED_NAMES, MCB_CLASSES.keys()))
+    if HOLE_COUNT_NAME in names:
+        csv_columns[HOLE_COUNT_NAME] = 'build_dataset.py per-shape genus attr'
     with h5py.File(h5_path, 'r+') as h5:
         if SIDECAR_DATASET in h5:
             if not overwrite:
                 raise Refusal(f'{h5_path} already has {SIDECAR_DATASET!r}; pass --overwrite to replace it')
             del h5[SIDECAR_DATASET]
         h5.create_dataset(SIDECAR_DATASET, data=matrix.astype(np.float32))
-        h5.attrs[SIDECAR_NAMES_ATTR] = np.array(STORED_NAMES, dtype=h5py.string_dtype(encoding='utf-8'))
-        h5.attrs[SIDECAR_SOURCE_ATTR] = 'MCB dataset_org_norm parent-directory name'
+        h5.attrs[SIDECAR_NAMES_ATTR] = np.array(names, dtype=h5py.string_dtype(encoding='utf-8'))
+        h5.attrs[SIDECAR_SOURCE_ATTR] = 'MCB dataset_org_norm parent-directory name' + (
+            ' + build genus' if HOLE_COUNT_NAME in names else '')
         h5.attrs[SIDECAR_TRANSFORMS_ATTR] = json.dumps(transforms)
         h5.attrs[SIDECAR_CREATED_ATTR] = datetime.datetime.now().isoformat(timespec='seconds')
         h5.attrs[SIDECAR_CSV_COLUMNS_ATTR] = json.dumps(csv_columns)
@@ -145,13 +171,14 @@ def write_sidecar(h5_path, matrix, overwrite, missing_count):
         h5.attrs[SIDECAR_MISSING_ROWS_ATTR] = missing_rows[:MISSING_ROWS_ATTR_CAP].astype(np.int32)
 
 
-def verify(h5_path, matrix):
+def verify(h5_path, matrix, names=None):
     from general_modules.sdf_dataset import SDFShapeDataset, read_cond_extra
 
+    names = list(names or STORED_NAMES)
     with h5py.File(h5_path, 'r') as h5:
         stored_names, stored = read_cond_extra(h5)
-    if stored_names != STORED_NAMES:
-        raise RuntimeError(f'verify: names round-trip mismatch {stored_names} != {STORED_NAMES}')
+    if stored_names != names:
+        raise RuntimeError(f'verify: names round-trip mismatch {stored_names} != {names}')
     if stored.shape != matrix.shape or not np.array_equal(
             np.isfinite(stored), np.isfinite(matrix)) or not np.allclose(
             np.nan_to_num(stored), np.nan_to_num(matrix), rtol=0, atol=0):
@@ -159,10 +186,10 @@ def verify(h5_path, matrix):
     ds = SDFShapeDataset(h5_path, [0], num_encoder_points=1, num_query_points=1, deterministic=True)
     try:
         cond = ds.get_cond(0)
-        if ds.cond_names != ds.base_cond_names + STORED_NAMES or cond.shape[0] != ds.cond_dim:
+        if ds.cond_names != ds.base_cond_names + names or cond.shape[0] != ds.cond_dim:
             raise RuntimeError(f'verify: dataset merge failed: cond_names={ds.cond_names}')
         print(f'Verified: SDFShapeDataset reports cond_dim={ds.cond_dim} '
-              f'({len(ds.base_cond_names)} geometric + {len(STORED_NAMES)} MCB class)')
+              f'({len(ds.base_cond_names)} geometric + {len(names)} MCB)')
     finally:
         ds.close()
 
@@ -176,6 +203,8 @@ def build_parser():
     p.add_argument('--overwrite', action='store_true')
     p.add_argument('--allow_missing', action='store_true')
     p.add_argument('--list_classes', action='store_true')
+    p.add_argument('--hole_count', action='store_true',
+                   help='also append hole_count (per-shape genus attr from the build)')
     return p
 
 
@@ -188,7 +217,7 @@ def run(args):
     if not args.h5:
         raise Refusal('--h5 is required (or use --list_classes)')
 
-    num_shapes, base_names, entries, exists = read_h5_shapes(args.h5)
+    num_shapes, base_names, entries, exists, genus = read_h5_shapes(args.h5)
     print(f'HDF5: {args.h5} -> {num_shapes} shapes, geometric cond_names={base_names}, '
           f'{SIDECAR_DATASET} {"present" if exists else "absent"}')
     if exists and not args.overwrite:
@@ -216,6 +245,10 @@ def run(args):
         print(f'WARNING: --allow_missing: {len(unmatched)} shape(s) written as NaN rows')
 
     print_table(counts, num_shapes)
+    names = list(STORED_NAMES)
+    if getattr(args, 'hole_count', False):
+        matrix = np.concatenate([matrix, hole_count_column(genus)], axis=1)
+        names.append(HOLE_COUNT_NAME)
     missing_count = int((~np.isfinite(matrix)).any(axis=1).sum())
 
     if args.dry_run:
@@ -224,9 +257,9 @@ def run(args):
                                                        if exists else ''))
         return EXIT_OK
 
-    write_sidecar(args.h5, matrix, args.overwrite, missing_count)
+    write_sidecar(args.h5, matrix, args.overwrite, missing_count, names)
     print(f'Wrote {SIDECAR_DATASET} float32 {tuple(matrix.shape)} to {args.h5}')
-    verify(args.h5, matrix)
+    verify(args.h5, matrix, names)
     return EXIT_OK
 
 

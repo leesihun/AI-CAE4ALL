@@ -140,18 +140,26 @@ class HIMGNSurrogate:
         self.predicted = 0
         # Why each None of the last analyze_batch call is None, by batch index.
         self.last_errors = {}
+        # 'ver' layout: every registration scale found, and how many shapes
+        # could not be registered (the summary's frame record).
+        self.frame_scales = []
+        self.frame_failures = 0
 
     # ------------------------------------------------------------------ #
 
-    def mass_of(self, mesh):
+    def mass_of(self, mesh, frame_scale=1.0):
         """Exact mass in kg from the generated geometry.
 
         At `length_scale` when one was given (the FEA backend's frame), else in
-        the DeepJEB frame.
+        the DeepJEB frame. `frame_scale` is the shape's own registration scale
+        (`deepjeb_bridge.registered_millimetres`; 'ver' layout): the frame its
+        predicted fields are in, so mass and fields describe one part. Without
+        it, ex1 samples' masses were off by up to ~10% (scale^3, 0.968-1.005).
         """
         if self.length_scale is not None:
-            return abs(float(mesh.volume)) * self.length_scale ** 3 * self.density
-        scale = DEEPJEB_MAX_SIDE / SDF_TARGET_EXTENT       # normalized -> mm
+            unit = self.length_scale * frame_scale            # metres per unit
+            return abs(float(mesh.volume)) * unit ** 3 * self.density
+        scale = DEEPJEB_MAX_SIDE / SDF_TARGET_EXTENT * frame_scale   # normalized -> mm
         volume_mm3 = abs(float(mesh.volume)) * scale ** 3
         return volume_mm3 * 1e-9 * self.density            # mm^3 -> m^3 -> kg
 
@@ -183,7 +191,10 @@ class HIMGNSurrogate:
                                            target_nodes=self.target_nodes, name=name)
             except Exception as exc:
                 self.last_errors[index] = f'{type(exc).__name__}: {exc}'
+                self.frame_failures += 'frame registration failed' in str(exc)
                 continue
+            if recs[0].get('frame'):
+                self.frame_scales.append(recs[0]['frame']['scale'])
             records += recs
             owner += [index] * len(recs)
         if not records:
@@ -208,7 +219,15 @@ class HIMGNSurrogate:
             if pred is None:
                 continue
             index = owner[sample_id - 1]
-            entry = results[index] or {'cases': {}, 'mass': self.mass_of(meshes[index])}
+            if results[index] is None:
+                frame = rec.get('frame')
+                results[index] = {
+                    'cases': {},
+                    'mass': self.mass_of(meshes[index],
+                                         frame['scale'] if frame else 1.0),
+                    'frame': frame,
+                }
+            entry = results[index]
             # Each generated candidate is sampled independently and may land a
             # few nodes either side of target_nodes. Preserve this record's
             # actual graph size; using records[0] mislabeled every later design
@@ -325,7 +344,17 @@ class HIMGNSurrogate:
                 'load_cases': list(self.load_cases), 'workdir': self.workdir,
                 'layout': self.layout,
                 'mass_length_scale': self.length_scale, 'gpu_id': self.gpu_id,
-                'surface_faces': self.surface_faces}
+                'surface_faces': self.surface_faces, 'frame': self.frame_stats()}
+
+    def frame_stats(self):
+        """Per-shape registration over every candidate bridged ('ver' layout only)."""
+        if self.layout != 'ver':
+            return None
+        scales = np.asarray(self.frame_scales, dtype=float)
+        return {'registered': int(scales.size), 'failed': int(self.frame_failures),
+                'scale_min': float(scales.min()) if scales.size else None,
+                'scale_max': float(scales.max()) if scales.size else None,
+                'scale_median': float(np.median(scales)) if scales.size else None}
 
 
 class SurrogateEvaluator:
@@ -383,6 +412,7 @@ class SurrogateEvaluator:
                 'max_von_mises': result['max_von_mises'],
                 'max_displacement': result['max_displacement'],
                 'vertical_displacement': result.get('vertical_displacement'),
+                'frame': result.get('frame'),
             }
             record['mesh'] = {'num_nodes': result['num_nodes'], 'surrogate': True}
             record['ok'] = True
@@ -431,6 +461,7 @@ def _result_record(x, mesh, gen_info, result, reason=None):
         'max_von_mises': result['max_von_mises'],
         'max_displacement': result['max_displacement'],
         'vertical_displacement': result.get('vertical_displacement'),
+        'frame': result.get('frame'),
     }
     record['mesh'] = {'num_nodes': result['num_nodes'], 'surrogate': True}
     return record

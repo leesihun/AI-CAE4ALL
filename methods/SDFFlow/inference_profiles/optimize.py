@@ -12,7 +12,7 @@ import time
 import numpy as np
 
 from design_loop import fea
-from design_loop.deepjeb_bridge import LABEL_MESH_SIZE_MAX, LABEL_SURFACE_FACES
+from design_loop.deepjeb_bridge import LABEL_MESH_SIZE_MAX, LABEL_SURFACE_FACES, apply_frame
 from design_loop.generator import NOISE_PARAM_DEFAULT, SDFFlowGenerator
 from design_loop.loop import (
     Evaluator, baseline_population, calibrate, run, save_history, select_best,
@@ -63,7 +63,8 @@ def _flag(config, key, default=False):
 # it describes the STLs it was solved on, which a re-run replaces.
 _OWNED_OUTPUTS = ('summary.json', 'history.json', 'convergence.png',
                   'stress_comparison.png', 'report.md', 'screening.csv',
-                  'optimized.stl', 'baseline.stl', 'typical.stl', 'fea_verified.json')
+                  'optimized.stl', 'baseline.stl', 'typical.stl', 'fea_verified.json',
+                  'optimized_mm.stl', 'baseline_mm.stl', 'typical_mm.stl')
 
 SCREENING_TABLE_NAME = 'screening.csv'
 
@@ -409,6 +410,14 @@ def run_optimize(config, config_filename='config.txt'):
             f = record['fea']
             if mesh is not None:
                 mesh.export(os.path.join(out_dir, f'{tag}.stl'))
+                if f.get('frame'):
+                    # The 'ver' surrogate's frame (bores registered, DeepJEB mm):
+                    # the part its numbers describe, and the input the
+                    # OpenRadioss check (deepjeb_ver_fea, mm STLs) solves.
+                    import trimesh
+                    trimesh.Trimesh(apply_frame(mesh.vertices, f['frame']), mesh.faces,
+                                    process=False).export(
+                        os.path.join(out_dir, f'{tag}_mm.stl'))
             mesh_note = (f"{f['num_tets']} tets" if analysis_backend == 'fea'
                          else f"{f['num_nodes']} surface nodes (surrogate)")
             uz = f.get('vertical_displacement')

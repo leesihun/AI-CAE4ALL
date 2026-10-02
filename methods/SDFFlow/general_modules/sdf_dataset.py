@@ -235,12 +235,22 @@ def _own_parent(shape_idx):
 
 
 def _read_parent_keys(h5_path, num_shapes):
-    """One parent key per shape index, read from the per-shape 'source' attrs."""
+    """One parent key per shape index.
+
+    A per-shape 'group' attr (``build_dataset.py --split_groups``, e.g. the
+    Thingi10K Thing ID) wins; otherwise the key comes from the 'source' attr.
+    """
     keys = []
     with h5py.File(h5_path, 'r') as h5:
         shapes = h5['shapes']
         for idx in range(num_shapes):
             grp = shapes.get(f'{idx:05d}')
+            group = grp.attrs.get('group') if grp is not None else None
+            if isinstance(group, bytes):
+                group = group.decode('utf-8', 'replace')
+            if group is not None and str(group).strip():
+                keys.append(f'group:{str(group).strip()}')
+                continue
             source = grp.attrs.get('source') if grp is not None else None
             key = parent_key_from_source(source)
             keys.append(key if key is not None else _own_parent(idx))

@@ -77,6 +77,43 @@ def normalize_mesh(mesh, target_half_extent=0.9):
     return mesh, center, scale
 
 
+def canonical_rotation(mesh, num_points=20000, seed=0):
+    """Proper rotation R that puts a part's symmetry axis on z (``R @ v``).
+
+    For MCB nuts: the hole axis is the inertia axis whose eigenvalue stands
+    apart from the other two (any n >= 3-fold symmetric part has an isotropic
+    in-plane tensor, so the two in-plane eigenvalues coincide and the axis is
+    the isolated one, largest for a flat nut and smallest for a tall one).
+    The in-plane eigenvectors are then arbitrary, so x is fixed by geometry
+    instead: the direction of the outermost surface points (a corner of a hex
+    or square nut; all corners are equivalent under the part's own symmetry).
+    The sign of z makes the area-weighted third moment along z positive, so
+    a castle nut's slots always point the same way. Returns (R, info).
+    """
+    w, vecs = np.linalg.eigh(np.asarray(mesh.moment_inertia, dtype=np.float64))
+    gap_hi, gap_lo = w[2] - w[1], w[1] - w[0]
+    z = vecs[:, 2] if gap_hi >= gap_lo else vecs[:, 0]
+    pts, _ = trimesh.sample.sample_surface(mesh, num_points, seed=seed)
+    pts = np.asarray(pts, dtype=np.float64) - np.asarray(mesh.center_mass, dtype=np.float64)
+    h = pts @ z
+    if np.mean(h ** 3) < 0:
+        z, h = -z, -h
+    radial = pts - np.outer(h, z)
+    r = np.linalg.norm(radial, axis=1)
+    # Average the outermost points around the single farthest one only: several
+    # corners at once would cancel each other out.
+    far = radial[np.argmax(r)] / max(r.max(), 1e-12)
+    near_far = (r >= 0.99 * r.max()) & (radial @ far > 0.966 * r)
+    x = radial[near_far].sum(axis=0)
+    x = x - (x @ z) * z
+    x = x / max(np.linalg.norm(x), 1e-12)
+    y = np.cross(z, x)
+    R = np.stack([x, y, z])
+    spread = max(w[2] - w[0], 1e-30)
+    return R, {'inertia_eigenvalues': w.tolist(),
+               'axis_isolation': float(max(gap_hi, gap_lo) / spread)}
+
+
 def _signed_distance_igl(mesh, points):
     import igl
     sd, _, _ = igl.signed_distance(

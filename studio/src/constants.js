@@ -68,7 +68,7 @@ KEY_CATALOGS.sdfflow = [...new Set([
   // per-dimension condition dropout, sample-time descriptor guidance (C2) and
   // Newton correction (E2) with their shared calibration artifact, the FEA
   // condition audit, the fixed-noise condition sweep, and the evaluate tasks.
-  ...keys(`cond_dropout_mode guidance_enabled guidance_t_start guidance_eta guidance_step_mode guidance_targets soft_descriptor_resolution soft_descriptor_tau descriptor_calibration_path newton_rounds newton_step_cap_rms newton_line_search_tries newton_measure_resolution condition_audit cond_values_a cond_values_b sweep_steps eval_task eval_methods calibration_num_shapes calibration_samples_per_shape cond_dropout_all_prob calibration_min_r2 eval_exclude_shapes`)
+  ...keys(`cond_dropout_mode guidance_enabled guidance_t_start guidance_eta guidance_step_mode guidance_targets soft_descriptor_resolution soft_descriptor_tau descriptor_calibration_path newton_rounds newton_step_cap_rms newton_line_search_tries newton_measure_resolution condition_audit cond_values_a cond_values_b sweep_steps interpolation_steps eval_task eval_methods calibration_num_shapes calibration_samples_per_shape cond_dropout_all_prob calibration_min_r2 eval_exclude_shapes`)
 ])].sort();
 
 // cHI-MGNflow deliberately shares the complete MeshGraphNets-V diagnostic
@@ -273,7 +273,7 @@ export const MODEL_CATALOG = {
  *    4 hierarchy variants, the larger prior) against the probabilistic ex1
  *    baseline (2,3,5,3,2).
  *  - transolver: ex3_full, 24 layers in full precision, against ex9, 8 under AMP.
- *  - fno / deeponet: ex9 against ex10 (batch 1; FNO width 20 instead of 32).
+ *  - fno / deeponet: ex9 against ex13 (batch 1; FNO width 20 instead of 32).
  *  - point_deeponet: ex9 reads every node (point_sensor_count 0); ex1 5000 at batch 1.
  *  - sdfflow: ex1's 512 latent tokens against ex2's 32.
  *  - simulgenvae: ex9 against ex3_full, the same network at vae_batch_size 2.
@@ -298,19 +298,19 @@ export const PRESET_SOURCES = {
   },
   fno: {
     high: { path: "configs/Neural_Operator/deterministic/ex9/baseline/config_train_fno.txt", note: "ex9" },
-    low: { path: "configs/Neural_Operator/deterministic/ex10/baseline/config_train_fno.txt", note: "ex10" }
+    low: { path: "configs/Neural_Operator/deterministic/ex13/baseline/config_train_fno.txt", note: "ex13" }
   },
   deeponet: {
     high: { path: "configs/Neural_Operator/deterministic/ex9/baseline/config_train_deeponet.txt", note: "ex9" },
-    low: { path: "configs/Neural_Operator/deterministic/ex10/baseline/config_train_deeponet.txt", note: "ex10" }
+    low: { path: "configs/Neural_Operator/deterministic/ex13/baseline/config_train_deeponet.txt", note: "ex13" }
   },
   point_deeponet: {
     high: { path: "configs/Neural_Operator/deterministic/ex9/baseline/config_train_point_deeponet.txt", note: "ex9, all nodes" },
     low: { path: "configs/Neural_Operator/deterministic/ex1/baseline/config_train_point_deeponet.txt", note: "ex1, 5000 sensors" }
   },
   sdfflow: {
-    high: { path: "configs/SDFFlow/geometry_generation/ex1/baseline/config_train_sdfflow.txt", note: "ex1, 512 tokens" },
-    low: { path: "configs/SDFFlow/geometry_generation/ex2/baseline/config_train_sdfflow.txt", note: "ex2, 32 tokens" }
+    high: { path: "configs/SDFFlow/geometry_generation/ex3/tokens512/config_train_sdfflow.txt", note: "ex3 T512 arm, 512 tokens" },
+    low: { path: "configs/SDFFlow/geometry_generation/ex2/baseline/config_train_sdfflow.txt", note: "ex2, 128 tokens" }
   },
   simulgenvae: {
     high: { path: "configs/SimulGenVAE/deterministic/ex9/baseline/config_train_lsh_vae.txt", note: "ex9" },
@@ -440,7 +440,7 @@ export const CHOICES = {
   prior_family: ["fm", "gmm"],
   prior_fm_solver: ["heun", "euler"],
   z_conditioning: ["concat", "adaln"],
-  spread_stat: ["range", "mean", "std"]
+  spread_stat: ["range", "mean", "std", "mag_max"]
 };
 
 // Per-route narrowing of a shared key's choices. MeshGraphNets-V has no
@@ -1165,7 +1165,7 @@ export const STUDIO_SECTIONS = {
     label: "Campaigns", icon: "evaluate", color: "#8a613b", note: "Checked-in configs and preflight",
     title: "Benchmark campaign workspace", description: "Inspect, preflight, and load the checked-in cross-method campaign roster. A present or passing config is not evidence that its dataset was staged, training ran, or a published result was reproduced.",
     cards: [
-      ["Cross-method roster", "evaluate", "adapter", "Browse every train/infer config pair named by configs/campaigns/dataset_matrix/manifest.json.", ["manifest", "ex1-ex10", "config"]],
+      ["Cross-method roster", "evaluate", "adapter", "Browse every train/infer config pair named by configs/campaigns/dataset_matrix/manifest.json.", ["manifest", "ex1-ex9", "config"]],
       ["Native preflight", "evaluate", "native", "Run the launcher contract checks for one checked-in config before loading it into the graph.", ["validation", "warnings", "errors"]],
       ["Evidence boundary", "output", "adapter", "Campaign membership and preflight status do not create a score or validate a scientific claim.", ["not executed", "no score", "lineage"]]
     ]
@@ -1242,7 +1242,7 @@ export const HELP = {
   prior_family: "Conditional prior over the latent: fm (flow matching) or gmm (Gaussian mixture).",
   prior_fm_solver: "ODE solver for the flow-matching prior: heun (2nd order, default) or euler.",
   z_conditioning: "How the latent enters the processor: concat (legacy fuser) or adaln (AdaLN-Zero modulation).",
-  spread_stat: "How spread_channel is reduced to one number per realization for the spread histogram: range (max - min), mean or std. range is degenerate on displacement-driven fields.",
+  spread_stat: "How spread_channel is reduced to one number per realization for the spread histogram: range (max - min), mean or std of one channel, or mag_max — the largest per-node vector magnitude over a list of channels (spread_channel 0, 1, 2 = max total displacement). range is degenerate on displacement-driven fields.",
   kl_weight: "SDFFlow VAE KL weight. Too high collapses the posterior toward the prior (reconstructions lose detail); too low makes the latent space hard for the flow model to cover.",
   fm_arch: "Flow-matching trunk: mlp or dit. dit attends across latent tokens, so it needs latent_tokens > 1.",
   gpu_ids: "CUDA device index, or a comma-separated list to train on several GPUs where the method supports it (see parallel_mode). Indices are physical: nothing in the suite remaps CUDA_VISIBLE_DEVICES.",
@@ -1459,12 +1459,13 @@ export const HELP = {
   latent_refine_steps: "Adam steps that optimize the latent against the shape's stored SDF labels with the decoder frozen. 0 reports the encoder mean only; above 0 the stored query points are halved -- refinement fits one half and BOTH the encoder (enc_*) and refined (ref_*) metrics are scored on the other -- so the gap separates encoder error from decoder capacity without measuring fit. Expect near-zero movement on an undertrained checkpoint, whose decoder is barely z-sensitive.",
   latent_refine_lr: "Adam learning rate for that latent refinement.",
   latent_refine_prior_weight: "Weight on ||z - z_encoder||^2 during refinement -- summed over the latent scalars and averaged over the batch, so it keeps its meaning as the latent grows. Keeps the refined latent near the encoder's estimate; calibrate against latent_shift_l2 in the per-shape rows. 0 lets the latent drift freely.",
-  interpolation_space: "slerp_noise interpolates the FM source noise spherically, so the endpoints reproduce the original samples. lerp_latent is the legacy straight line in normalized latent space. cond_sweep keeps ONE noise row (sample_index_a) fixed and integrates it under sweep_steps conditions lerped from cond_values_a to cond_values_b -- the controllable morph a designer asks for (lighter, stiffer, ...), scored per panel by the geometric audit.",
+  interpolation_space: "slerp_noise interpolates the FM source noise spherically, so the endpoints reproduce the original samples. With cond_values, every slerp row is integrated under that ONE condition request, so the endpoints are the conditional samples mode sample would draw -- pick two indices of the same class. lerp_latent is the legacy straight line in normalized latent space and refuses cond_values. cond_sweep keeps ONE noise row (sample_index_a) fixed and integrates it under sweep_steps conditions lerped from cond_values_a to cond_values_b -- the controllable morph a designer asks for (lighter, stiffer, ...), scored per panel by the geometric audit.",
 
   // --- SDFFlow conditional generation ---------------------------------------
   cond_dropout_mode: "all (legacy): one Bernoulli mask per sample and a learned null embedding -- every condition must be given at inference. per_dim: an independent mask per condition entry with a learned null value and the mask fed to the network, so a sample request may leave entries 'nan' (unspecified) and the model fills them in from the ones given. Stored in the FM checkpoint; the two modes do not share parameters.",
   cond_values_a: "Condition vector at the START of a cond_sweep, in the FM checkpoint's cond_names order and stored space (natural log for log_* FEA names). 'nan' = unspecified (per_dim checkpoints only).",
   cond_values_b: "Condition vector at the END of a cond_sweep; same order and length as cond_values_a. The sweep is a straight line between the two in normalized condition space.",
+  interpolation_steps: "slerp_noise / lerp_latent only: render a strip of alphas linspace(0, 1, interpolation_steps) instead of the three-panel (0, alpha, 1) figure; alpha is then not read. Must be >= 3 (both endpoints are always included). Files are sample_<seed>_<a>_<b>_step<k>.stl plus one strip PNG. Leave empty for the three-panel figure.",
   sweep_steps: "Panels in a cond_sweep: alphas linspace(0, 1, sweep_steps); each is integrated from the same noise row and written as sample_<seed>_sweep_<k>.stl plus one strip PNG. Fewer than 2 shows no morph.",
   guidance_enabled: "C2: calibrated endpoint-prediction guidance during the FM ODE. After each Euler step the one-step endpoint x1_hat is decoded through the soft SDF proxy and the latent is nudged toward the requested volume/area (in calibrated proxy units). Needs descriptor_calibration_path and a conditional request (cond_values). Off by default; measured on the ex1 pilot only.",
   guidance_t_start: "Guidance acts on Euler states with t_start <= t < 1; the endpoint estimate is unreliable at small t, so the early trajectory is left alone. Pilot value 0.3.",

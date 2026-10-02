@@ -644,6 +644,7 @@ def run_reconstruction_test(model, test_dataset, device, config, epoch):
             dpi=int(config.get('plot_dpi', 180)),
             max_faces=int(config.get('plot_max_faces', 0)),
             title=f'SDFFlow VAE reconstruction -- epoch {epoch}',
+            ncols=4,
         )
         if written:
             print(f'  [viz] {written}')

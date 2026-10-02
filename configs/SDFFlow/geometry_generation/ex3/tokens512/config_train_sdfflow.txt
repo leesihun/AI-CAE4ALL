@@ -1,3 +1,9 @@
+% T512 COMPARISON ARM (configs only; baseline/ stays the default at 128 tokens). Same
+%   recipe as ../baseline/config_train_sdfflow.txt except latent_tokens 512, the matching
+%   time shift fm_time_logit_mean = -ln(sqrt(512/32)) = -1.386, and its own output
+%   directory. The 2026-09 token-count study found 512 tokens need far more than 10^3
+%   training shapes; this arm tests that on the rebuilt ex3 set for fine detail (slots,
+%   threads). The VAE stage is ~4x the 128-token compute and memory.
 % geometry_generation/ex3 - sdfflow on MCB (5-class nut subset; 1320 train / 330 infer, 8:2 split).
 % Logical order: input -> output -> conditioner -> partNo (named HDF5 arrays, not nodal rows).
 % Train input: surface_points, surface_normals, query_xyz; generation input: latent noise and query_xyz.
@@ -34,10 +40,7 @@ dataset_dir                      ../../dataset/geometry_generation/ex3_mcb.h5
 split_by_parent                  False
 num_encoder_points               6144
 num_query_points                 8192
-% 128 (was 32) from the 2026-09 token-count study (paper/sdfflow sec:tsize): 2.2x better
-% reconstruction on MCB and, with the flow-stage prescription below, generation that matched
-% or beat 32 tokens on DeepJEB and MCB. 512 needs far more than 10^3 training shapes.
-latent_tokens                    128
+latent_tokens                    512
 latent_dim                       32
 encoder_query_type               fps
 encoder_dim                      256
@@ -70,14 +73,14 @@ cond_dropout                     0.2
 cond_dropout_mode                per_dim
 fm_arch                          dit
 % Flow-stage prescription from the token-count study: a larger DiT (512 x 12 blocks),
-% logit-normal time sampling shifted by -ln(sqrt(tokens/32)) = -0.693 for 128 tokens,
+% logit-normal time sampling shifted by -ln(sqrt(tokens/32)) = -1.386 for 512 tokens,
 % 8 posterior draws per training shape, and 250 epochs (8 draws = 8x the steps per epoch).
 fm_hidden                        512
 fm_blocks                        12
 fm_heads                         8
 fm_cond_hidden                   128
 fm_time_sampling                 logit_normal
-fm_time_logit_mean               -0.693
+fm_time_logit_mean               -1.386
 fm_time_logit_std                1
 fm_latent_draws                  8
 encode_batch_size                8
@@ -110,10 +113,10 @@ fm_num_test_shapes               8
 fm_mc_resolution_test            128
 display_testset                  True
 skip_completed_stages            True
-output_dir                       ../../output/geometry_generation/ex3_mcb/sdfflow/samples
-vae_modelpath                    ../../output/geometry_generation/ex3_mcb/sdfflow/vae.pth
-fm_modelpath                     ../../output/geometry_generation/ex3_mcb/sdfflow/fm.pth
-fm_best_modelpath                ../../output/geometry_generation/ex3_mcb/sdfflow/fm_best.pth
-pipeline_log_file                ../../output/geometry_generation/ex3_mcb/sdfflow/pipeline.log
-vae_log_file_dir                 ../../output/geometry_generation/ex3_mcb/sdfflow/vae.log
-fm_log_file_dir                  ../../output/geometry_generation/ex3_mcb/sdfflow/fm.log
+output_dir                       ../../output/geometry_generation/ex3_mcb/sdfflow_t512/samples
+vae_modelpath                    ../../output/geometry_generation/ex3_mcb/sdfflow_t512/vae.pth
+fm_modelpath                     ../../output/geometry_generation/ex3_mcb/sdfflow_t512/fm.pth
+fm_best_modelpath                ../../output/geometry_generation/ex3_mcb/sdfflow_t512/fm_best.pth
+pipeline_log_file                ../../output/geometry_generation/ex3_mcb/sdfflow_t512/pipeline.log
+vae_log_file_dir                 ../../output/geometry_generation/ex3_mcb/sdfflow_t512/vae.log
+fm_log_file_dir                  ../../output/geometry_generation/ex3_mcb/sdfflow_t512/fm.log

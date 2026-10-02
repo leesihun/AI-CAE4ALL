@@ -1,3 +1,5 @@
+% T512 COMPARISON ARM: samples the 512-token checkpoints of ./config_train_sdfflow.txt;
+%   otherwise identical to ../baseline/config_infer_sdfflow.txt.
 % geometry_generation/ex3 - sdfflow on MCB (5-class nut subset); sampling from the checkpoints
 %   trained by the paired config_train_sdfflow.txt.
 % Logical order: input -> output -> conditioner -> partNo (named HDF5 arrays, not nodal rows).
@@ -18,9 +20,9 @@ mode                             sample
 gpu_ids                          1
 parallel_mode                    single
 seed                             42
-vae_modelpath                    ../../output/geometry_generation/ex3_mcb/sdfflow/vae.pth
-fm_modelpath                     ../../output/geometry_generation/ex3_mcb/sdfflow/fm_best.pth
-output_dir                       ../../output/geometry_generation/ex3_mcb/sdfflow/samples
+vae_modelpath                    ../../output/geometry_generation/ex3_mcb/sdfflow_t512/vae.pth
+fm_modelpath                     ../../output/geometry_generation/ex3_mcb/sdfflow_t512/fm_best.pth
+output_dir                       ../../output/geometry_generation/ex3_mcb/sdfflow_t512/samples
 num_samples                      16
 mc_resolution                    128
 ode_steps                        50

@@ -61,7 +61,6 @@ def case(key, file, fields, conditions=(), part=False, steps=1, dim=2,
 #   ex6   80 x 400   313 x b1 = 10.02M MGN FlagSimple 10M steps x batch 1
 #   ex8  800 x 1     625 x b1 = 500k   Transolver elasticity 500 epochs x batch 1
 #                                      x its 1000 train files, on our 800
-#   ex10 952 x 1     500 x b1 = 476k   no published budget; batch 1 like ex7/ex8
 # Transolver-3 always trains at batch 1 (its paper's recipe), so on ex4/ex5 it
 # gets 2x the updates at equal sample presentations, and it keeps 500 epochs on
 # ex6 (16.0M). ex2 keeps 500 epochs for every method but MGN/HI-MGN (100, their
@@ -113,9 +112,6 @@ CASES = [
     case('ex9', 'ex9_plasticity', ['ux', 'uy'], ['uz_zero', 'die_profil'], steps=19,
          clusters=(512, 64), geometry='displacement', indices=[0, 1, -1], batch=8, std_noise=0.01,
          dense=True),
-    case('ex10', 'ex10_deepjeb_mgn', ['stress', 'displacement_magnitude', 'z_disp'],
-         ['lc_ver', 'lc_hor', 'lc_dia', 'lc_tor'], dim=3, clusters=(512, 64), batch=1,
-         split_group_attr='bracket'),
     # spread=(output channel, plot label, statistic) drives the generated-vs-GT
     # distribution comparison the two probabilistic routes write at the end of
     # inference. Both were chosen by measuring the GT statistic over the eval
@@ -140,11 +136,11 @@ CASES = [
 # Held-out scenes in each probabilistic infer file (len(data) of the *_infer.h5).
 # The probabilistic infer configs draw this many samples per scene.
 TEST_SCENES = {'ex1': 18, 'ex2': 250}
-# Training samples of each slot under the seed-42 split (0.8 of the train file;
-# ex10 splits by bracket, 952/116/124). Only for the manifest's `updates` field.
+# Training samples of each slot under the seed-42 split (0.8 of the train file).
+# Only for the manifest's `updates` field.
 TRAIN_COUNTS = {(DET, 'ex1'): 80, (DET, 'ex2'): 40, (DET, 'ex3_full'): 84, (DET, 'ex3_mid'): 84,
                 (DET, 'ex4'): 80, (DET, 'ex5'): 80, (DET, 'ex6'): 80, (DET, 'ex7'): 643,
-                (DET, 'ex8'): 800, (DET, 'ex9'): 720, (DET, 'ex10'): 952,
+                (DET, 'ex8'): 800, (DET, 'ex9'): 720,
                 (PROB, 'ex1'): 57, (PROB, 'ex2'): 1400}
 # (epochs, batch) of the three HI-MGN paper cases (arXiv:2608.13827), which trains
 # HI-MGN and its MGN baseline on the same budget: 2D static thermoelastic 5000
@@ -312,18 +308,18 @@ def mesh_config(c, method):
         # The grid spans each axis of the train bbox, so its shape follows the
         # domain's aspect at ~4k (2D) / ~16k (3D) points: x:y ex4 3.9, ex9 3.3,
         # ex7 2.0, ex6 1.5, ex1/ex8 square; x:y:z ex2 1:0.96:1, ex3 1:0.92:0.1
-        # (z floored at 8), ex5 0.74:1:0.6, ex10 0.59:1:0.35. Modes and width are
+        # (z floored at 8), ex5 0.74:1:0.6. Modes and width are
         # the FNO paper's (arXiv:2010.08895): 2D 12 x 12 at width 32 (its Darcy /
         # 2D Navier-Stokes models, 2.4M parameters), 3D 8 per axis at width 20
         # (its 3D Navier-Stokes model, 6.6M), capped at 3 / 7 / 6 on the thin
-        # final axes of ex3 / ex5 / ex10 (the earlier 0.375 x grid). Every entry
+        # final axes of ex3 / ex5 (the earlier 0.375 x grid). Every entry
         # is inside its grid's Nyquist limit (res//2, res//2 + 1 on the last axis).
         resolution, modes = {
             'ex4': ([128, 32], [12, 12]), 'ex9': ([128, 32], [12, 12]),
             'ex7': ([96, 48], [12, 12]), 'ex6': ([78, 52], [12, 12]),
             'ex2': ([26, 26, 26], [8, 8, 8]),
             'ex3_full': ([48, 44, 8], [8, 8, 3]), 'ex3_mid': ([48, 44, 8], [8, 8, 3]),
-            'ex5': ([24, 32, 20], [8, 8, 7]), 'ex10': ([26, 44, 16], [8, 8, 6]),
+            'ex5': ([24, 32, 20], [8, 8, 7]),
         }.get(c['key'], ([64, 64], [12, 12]))
         assert len(resolution) == dim, (c['key'], resolution)
         cfg.update(coordinate_normalization='centered_isotropic', operator_dim=dim,
@@ -351,12 +347,10 @@ def mesh_config(c, method):
         elif method == 'point_deeponet':
             # 5000 resampled sensors is the paper's recipe, but it samples with
             # replacement below 5000 nodes: ex4/5/6/8/9 meshes (727-3131 nodes)
-            # see 80-99% of their nodes, and the 35% of ex10 samples just under
-            # 5000 see ~63% while the rest see all. Those slots take every node
-            # (point_sensor_count 0, the runtime's all-points path; no mesh there
-            # exceeds 5014 nodes). omega0 10 and weight decay 1e-5 are the official
+            # see 80-99% of their nodes. Those slots take every node
+            # (point_sensor_count 0, the runtime's all-points path). omega0 10 and weight decay 1e-5 are the official
             # Point-DeepONet code's values; the paper states neither.
-            full = c['key'] in ('ex4', 'ex5', 'ex6', 'ex8', 'ex9', 'ex10')
+            full = c['key'] in ('ex4', 'ex5', 'ex6', 'ex8', 'ex9')
             cfg.update(point_variant='mesh_state', point_sensor_count=0 if full else 5000,
                        point_sampling='random',
                        point_resample_each_epoch=True, point_hidden_channels=128,

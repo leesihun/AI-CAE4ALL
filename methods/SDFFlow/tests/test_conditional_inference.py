@@ -580,13 +580,63 @@ def test_cond_sweep_rejects_mismatched_masks_and_legacy_partial(world, tmp_path)
                                              cond_values_b=['0.3', '5.0', '6.0']))
 
 
-def test_legacy_interpolation_spaces_still_reject_conditions(world, tmp_path):
+def test_lerp_latent_still_rejects_conditions(world, tmp_path):
     base = {'fm_modelpath': world['fm_all'], 'output_dir': str(tmp_path / 'legacy'), 'seed': 0,
             'source_num_samples': 2, 'sample_index_a': 0, 'sample_index_b': 1,
             'ode_steps': 2, 'mc_resolution': 8, 'gpu_ids': 0, 'cond_values': ['0.2', '5.0']}
-    for space in ('slerp_noise', 'lerp_latent'):
-        with pytest.raises(ValueError, match='unconditional samples only'):
-            interpolate_mod.run_interpolate(dict(base, interpolation_space=space))
+    with pytest.raises(ValueError, match='unconditional samples only'):
+        interpolate_mod.run_interpolate(dict(base, interpolation_space='lerp_latent'))
+
+
+def test_interpolation_alphas_legacy_and_strip():
+    assert interpolate_mod.interpolation_alphas(0.3).tolist() == [0.0, 0.3, 1.0]
+    assert interpolate_mod.interpolation_alphas(0.3, 5).tolist() == [0.0, 0.25, 0.5, 0.75, 1.0]
+    with pytest.raises(ValueError, match='interpolation_steps'):
+        interpolate_mod.interpolation_alphas(0.5, 2)
+
+
+def test_conditional_slerp_strip_endpoints_match_conditional_samples(world, tmp_path):
+    out_dir = tmp_path / 'cslerp'
+    ckpt = _load_fm(world['fm_all'])
+    mean = ckpt['cond_mean'].squeeze(0).tolist()
+    values = [f'{v:.6f}' for v in mean]
+    config = {'fm_modelpath': world['fm_all'], 'output_dir': str(out_dir), 'seed': 5,
+              'source_num_samples': 3, 'sample_index_a': 2, 'sample_index_b': 0,
+              'interpolation_space': 'slerp_noise', 'interpolation_steps': 4,
+              'ode_steps': ODE_STEPS, 'mc_resolution': MC_RES, 'plot_dpi': 40, 'gpu_ids': 0,
+              'cond_values': values}
+    meta = interpolate_mod.run_interpolate(config)
+    assert meta['interpolation_steps'] == 4 and meta['alpha'] is None
+    assert meta['alphas'] == pytest.approx([0.0, 1 / 3, 2 / 3, 1.0])
+    assert meta['condition_request'] is not None and meta['cfg_scale'] == 1.0
+    assert len(meta['results']) == 4 and len(meta['latent_distances']['consecutive_l2']) == 3
+    assert os.path.basename(meta['plot_path']) == 'interpolation_002_000_steps4.png'
+    assert os.path.exists(out_dir / 'interpolation_002_000_steps4_meta.json')
+    # slerp moves the norm monotonically between the endpoints' (no lerp dip)
+    norms = meta['noise_distances']['row_norms']
+    lo, hi = sorted((norms[0], norms[-1]))
+    assert all(lo - 1e-4 <= n <= hi + 1e-4 for n in norms[1:-1])
+
+    # Endpoint a reproduces a conditional sample drawn from the same noise row.
+    D = world['latent_flat_dim']
+    model = VelocityNet(ckpt['config'], D, cond_dim=ckpt['cond_dim'])
+    model.load_state_dict(ckpt['model_state'])
+    model.eval()
+    eps = torch.randn(3, D, generator=torch.Generator().manual_seed(5))
+    raw = sample_mod.parse_condition_values(values, ckpt['cond_names'])
+    cond_n, _, _ = sample_mod.normalize_condition_request(raw, ckpt, {})
+    z_full = sample_latents(model, 3, D, 'cpu', cond=cond_n[None].repeat(3, 1),
+                            ode_steps=ODE_STEPS, noise=eps)
+    vae, _ = sample_mod.load_vae(world['vae_path'], 'cpu')
+    from general_modules.mesh_extraction import decode_sdf_grid, sdf_grid_to_mesh
+    grid = decode_sdf_grid(vae, z_full[2:3] * ckpt['latent_std'] + ckpt['latent_mean'],
+                           resolution=MC_RES)
+    mesh = sdf_grid_to_mesh(grid)
+    first = meta['results'][0]
+    if first['valid'] and mesh is not None:
+        exported = trimesh.load(first['path'], force='mesh')
+        assert exported.volume == pytest.approx(mesh.volume, abs=1e-4)
+
 
 
 # ---------------------------------------------------------------------------

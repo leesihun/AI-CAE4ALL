@@ -130,7 +130,7 @@ LAUNCHER_PYTHON = (3, 10)  # pyproject.toml: requires-python >= 3.10
 MACHINES = {
     "135": (
         "deterministic/ex1", "deterministic/ex2", "deterministic/ex3_full",
-        "deterministic/ex5", "deterministic/ex8", "deterministic/ex10",
+        "deterministic/ex5", "deterministic/ex8",
         "probabilistic/ex1", "geometry_generation/ex2", "geometry_generation/ex4",
     ),
     "136": (

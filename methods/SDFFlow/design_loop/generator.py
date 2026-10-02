@@ -207,7 +207,7 @@ class SDFFlowGenerator:
         volume = decode_sdf_grid(self.vae, z,
                                  resolution=mc_resolution or self.mc_resolution,
                                  device=self.device)
-        mesh = sdf_grid_to_mesh(volume)
+        mesh = sdf_grid_to_mesh(volume, keep_largest=True)
         info = {
             'latent_norm': float(torch.linalg.norm(z_n).item()),
             'requested_conditions': dict(zip(self.cond_dims, x_cond.tolist())),

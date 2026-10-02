@@ -71,7 +71,8 @@ VAR_KEYS = frozenset(
         # a key because max - min is degenerate on a saturating or
         # displacement-driven field, where it reports the boundary condition
         # rather than the solution and every calibration score built on it is
-        # noise.
+        # noise. 'mag_max' is the vector stat: max over nodes of |u| across a
+        # LIST of channels (`spread_channel 0, 1, 2` = total displacement).
         "spread_channel", "spread_label", "spread_stat",
         # VAE / conditional-prior branch
         "use_vae", "vae_latent_dim", "vae_mp_layers", "vae_graph_aware",
@@ -302,6 +303,12 @@ def validate_variational(ctx: SpecValidationContext) -> None:
     validate_spread_keys(ctx)
 
 
+# Mirror of SPREAD_STATS / VECTOR_SPREAD_STATS in both trees'
+# inference_profiles/rollout.py (the launcher imports no method code).
+SPREAD_STATS = ("range", "mean", "std", "mag_max")
+VECTOR_SPREAD_STATS = ("mag_max",)
+
+
 def validate_spread_keys(ctx: SpecValidationContext) -> None:
     """Shared checks for the spread-histogram keys.
 
@@ -314,26 +321,38 @@ def validate_spread_keys(ctx: SpecValidationContext) -> None:
     values = ctx.values
     if ctx.mode == "inference":
         stat = values.get("spread_stat")
-        if stat is not None and str(stat).lower() not in {"range", "mean", "std"}:
+        stat = None if stat is None else str(stat).lower()
+        if stat is not None and stat not in SPREAD_STATS:
             ctx.add(
                 "MGNV-SPREAD-STAT",
                 Severity.ERROR,
-                "spread_stat must be 'range' (max - min), 'mean' or 'std'.",
+                "spread_stat must be 'range' (max - min), 'mean', 'std', or 'mag_max' "
+                "(max |u| over the spread_channel list).",
                 field_name="spread_stat",
             )
-        channel = integer(values.get("spread_channel")) if "spread_channel" in values else None
+        raw = values.get("spread_channel")
+        listed = isinstance(raw, (list, tuple))
+        channels = ([integer(c) for c in raw] if listed
+                    else [integer(raw)] if "spread_channel" in values else [])
         out_var = integer(values.get("output_var"))
-        if channel is not None and channel < 0:
+        if listed and stat not in VECTOR_SPREAD_STATS:
+            # rollout.py raises on this too, but only after the model has loaded.
             ctx.add("MGNV-SPREAD-CHANNEL", Severity.ERROR,
-                    "spread_channel is an index into the output block and cannot be negative.",
+                    f"spread_channel lists {len(raw)} channels, but spread_stat "
+                    f"{stat or 'range'} reduces one; only 'mag_max' takes a list.",
                     field_name="spread_channel")
-        elif channel is not None and out_var is not None and channel >= out_var:
+        elif any(c is None or c < 0 for c in channels):
+            ctx.add("MGNV-SPREAD-CHANNEL", Severity.ERROR,
+                    "spread_channel is an index into the output block and must be a "
+                    "non-negative integer (or a list of them for mag_max).",
+                    field_name="spread_channel")
+        elif channels and out_var is not None and max(channels) >= out_var:
             # Silently out of range means the histogram block is skipped after
             # the whole rollout has run; catching it here costs nothing.
             ctx.add(
                 "MGNV-SPREAD-CHANNEL",
                 Severity.ERROR,
-                f"spread_channel {channel} is outside the output block "
+                f"spread_channel {raw} is outside the output block "
                 f"(output_var={out_var}); no spread histogram would be produced.",
                 field_name="spread_channel",
             )

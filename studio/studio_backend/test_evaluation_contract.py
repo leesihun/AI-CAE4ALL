@@ -300,7 +300,7 @@ class EvaluationContractTests(unittest.TestCase):
 
         Against the single-frame truth it was inferred from, the schema used to
         report "incompatible timestep/node counts" and the Studio's evaluate
-        step failed on every sample of the ex10 DeepJEB HI-MGN run. Only frame
+        step failed on every sample of a static DeepJEB HI-MGN run. Only frame
         1 is a prediction; the zero seed at frame 0 must never reach the score.
         Any other timestep mismatch is still rejected.
         """
@@ -312,7 +312,7 @@ class EvaluationContractTests(unittest.TestCase):
             prediction = root / "rollout_sample2_steps1.h5"
             truth = root / "truth.h5"
             nodes = 5
-            # ex10 layout: 3 coordinates, 3 state rows, 4 input-only condition rows.
+            # 3 coordinates, 3 state rows, 4 input-only condition rows.
             truth_names = ["x_coord", "y_coord", "z_coord", "ux", "uy", "uz", "c0", "c1", "c2", "c3"]
             truth_values = np.arange(10 * 1 * nodes, dtype=np.float32).reshape(10, 1, nodes) + 1.0
             self._mesh(truth, {"2": truth_values}, truth_names, 3, 4, 3)

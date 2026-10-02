@@ -495,6 +495,81 @@ def _bracket_interface_points(drop=None):
     return np.asarray(pts), np.asarray(kinds)
 
 
+def _bore_walls_with_normals(drop=()):
+    """Bolt and lug bore walls (DeepJEB mm frame) with their inward wall normals."""
+    from design_loop import interfaces as itf
+
+    pts, nrm = [], []
+    ang = np.linspace(0.0, 2 * np.pi, 36, endpoint=False)
+    for name, (cx, cy) in itf.BOLTS.items():
+        if name in drop:
+            continue
+        for z in np.linspace(*itf.BOLT_Z, 9):
+            pts += [(cx + itf.R_BOLT * np.cos(a), cy + itf.R_BOLT * np.sin(a), z) for a in ang]
+            nrm += [(-np.cos(a), -np.sin(a), 0.0) for a in ang]
+    for name, (y0, y1) in itf.EARS.items():
+        if "lug" in drop:
+            continue
+        for y in np.linspace(y0, y1, 7):
+            pts += [(itf.LUG_XZ[0] + itf.R_LUG * np.cos(a), y,
+                     itf.LUG_XZ[1] + itf.R_LUG * np.sin(a)) for a in ang]
+            nrm += [(-np.cos(a), 0.0, -np.sin(a)) for a in ang]
+    return np.asarray(pts), np.asarray(nrm)
+
+
+def test_registration_recovers_a_shapes_own_frame():
+    """A bracket the population map left 2% small and shifted ~2 mm is put back on its bores."""
+    from design_loop.deepjeb_bridge import (
+        DEEPJEB_CENTRE, DEEPJEB_MAX_SIDE, SDF_TARGET_EXTENT, apply_frame,
+    )
+    from design_loop.interfaces import register_to_interfaces
+
+    true_pts, normals = _bore_walls_with_normals()
+    scale, shift = 1.02, np.array([1.2, -2.0, 1.5])
+    population = (true_pts - shift) / scale
+    registered, frame = register_to_interfaces(population, normals)
+
+    assert frame["ok"], frame["reason"]
+    assert frame["bolts_fitted"] == 4
+    assert abs(frame["scale"] - scale) < 1e-6
+    np.testing.assert_allclose(frame["shift"], shift, atol=1e-5)
+    np.testing.assert_allclose(registered, true_pts, atol=1e-5)
+    # The STL export path reproduces the same frame from the normalized vertices.
+    normalized = (population - np.asarray(DEEPJEB_CENTRE)) * SDF_TARGET_EXTENT / DEEPJEB_MAX_SIDE
+    np.testing.assert_allclose(apply_frame(normalized, frame), true_pts, atol=1e-5)
+
+
+def test_registration_needs_three_bores_and_the_lug():
+    from design_loop.interfaces import register_to_interfaces
+
+    pts, nrm = _bore_walls_with_normals(drop=("bolt2",))
+    assert register_to_interfaces(pts, nrm)[1]["ok"]          # three bores fix a similarity
+
+    pts, nrm = _bore_walls_with_normals(drop=("bolt2", "bolt3"))
+    X, frame = register_to_interfaces(pts, nrm)
+    assert not frame["ok"] and "only 2 bolt bore(s)" in frame["reason"]
+    assert X is not None and np.array_equal(X, pts)          # unchanged on failure
+
+    pts, nrm = _bore_walls_with_normals(drop=("lug",))
+    assert "lug bore not found" in register_to_interfaces(pts, nrm)[1]["reason"]
+
+
+def test_ver_mass_follows_the_registered_frame(tmp_path):
+    import trimesh
+
+    model = surrogate_module.HIMGNSurrogate("infer.txt", "model.pth", load_cases=("ver",),
+                                            workdir=tmp_path, layout="ver",
+                                            length_scale=0.184181 / 1.8)
+    box = trimesh.creation.box(extents=(1.0, 1.8, 0.2))
+    assert model.mass_of(box, 0.97) == pytest_approx(model.mass_of(box) * 0.97 ** 3)
+
+
+def pytest_approx(value):
+    import pytest
+
+    return pytest.approx(value, rel=1e-12)
+
+
 def test_node_types_marks_the_bores_and_ears_and_nothing_else():
     from design_loop.interfaces import node_types
 
@@ -541,4 +616,5 @@ def test_ver_layout_refuses_a_shape_without_the_interfaces(monkeypatch, tmp_path
 
     assert model.analyze_batch([slab], names=["slab"]) == [None]
     assert not predicted
-    assert model.last_errors[0].startswith("InterfaceError: interface gate failed")
+    assert model.last_errors[0].startswith("InterfaceError: frame registration failed")
+    assert model.frame_stats()["failed"] == 1

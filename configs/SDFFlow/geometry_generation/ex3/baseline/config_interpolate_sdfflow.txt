@@ -1,22 +1,22 @@
-% geometry_generation/ex3 - sdfflow on MCB (5-class nut subset); INTERPOLATION between two
-%   generated shapes, from the checkpoints trained by the paired config_train_sdfflow.txt. Like
-%   mode sample this produces NEW geometry -- it never opens the dataset; both endpoints are
-%   drawn from noise.
+% geometry_generation/ex3 - sdfflow; CONDITIONAL INTERPOLATION between two generated nuts,
+%   from the checkpoints trained by the paired config_train_sdfflow.txt. Like mode sample this
+%   produces NEW geometry -- it never opens the dataset; both endpoints are drawn from noise.
 % interpolation_space slerp_noise: the two endpoints are FM noise rows, spherically
 %   interpolated and then integrated through the ODE, so every intermediate is a real sample of
-%   the generator rather than a latent-space blend the decoder was never trained on.
-% Unconditional: slerp_noise integrates the null-condition branch (interpolate.py refuses
-%   cond_values here), i.e. the dropout-trained unconditional branch of the 5-name checkpoint --
-%   the same branch config_infer_sdfflow.txt samples. A sweep ACROSS conditions is
-%   interpolation_space cond_sweep with cond_values_a / cond_values_b (5 entries each: bbox_x,
-%   bbox_y, bbox_z, volume, area; no nan: the checkpoint is cond_dropout_mode all).
-% seed 42 + source_num_samples 16 draw the SAME noise batch as config_infer_sdfflow.txt
-%   (seed 42, num_samples 16, same device generator), so endpoints 0 and 1 here are the shapes of
-%   sample_42_000.stl and sample_42_001.stl from that run -- the interpolation is auditable
-%   against them.
-% alpha 0.5 writes the midpoint; the run also writes both endpoints and a comparison figure.
-% cfg_scale is not written: only cond_sweep reads it; slerp_noise has no condition to guide to.
-% Writes .stl per shape under output_dir.
+%   the generator rather than a latent-space blend the decoder was never trained on. lerp_latent
+%   (a straight line in latent space) is not used: on MCB half of its midpoints fell outside the
+%   training distribution.
+% cond_values: ONE request shared by every row of the strip (11 entries in checkpoint order:
+%   bbox_x, bbox_y, bbox_z, volume, area, class_hexagonal_nuts, class_slotted_nuts, class_square_nuts, class_castle_nuts, class_locknuts, hole_count). Only the one-hot entries are given; the rest are 'nan'
+%   (unspecified, allowed because the checkpoint is cond_dropout_mode per_dim). Both endpoints
+%   are therefore the same nut class, and the strip morphs within it.
+% seed 42 + source_num_samples 16 draw the SAME noise batch as config_infer_sdfflow.txt would
+%   with these cond_values and num_samples 16, so endpoint i is that run's sample i.
+% interpolation_steps 7: alphas linspace(0, 1, 7), both endpoints included, so a sudden flip
+%   (an orientation change, a hole opening) shows where it happens instead of hiding between
+%   alpha 0 and 0.5. alpha is not read when interpolation_steps is set.
+% max_condition_z 10: a rare class one-hot normalizes up to condition_clip (10) sigma.
+% Writes .stl per panel plus one strip PNG under output_dir.
 % Reference: https://doi.org/10.1007/978-3-030-58523-5_11 ; https://arxiv.org/abs/2301.11445 ; https://arxiv.org/abs/2210.02747
 % No source HDF5 writes. Checkpoints are created by the paired training config.
 
@@ -32,7 +32,11 @@ interpolation_space              slerp_noise
 source_num_samples               16
 sample_index_a                   0
 sample_index_b                   1
-alpha                            0.5
+interpolation_steps              7
+cond_values                      nan, nan, nan, nan, nan, 1, 0, 0, 0, 0, nan
+cfg_scale                        1
+condition_ood_policy             error
+max_condition_z                  10
 ode_steps                        50
 mc_resolution                    128
 plot_dpi                         180

@@ -223,9 +223,12 @@ The other presets apply a fixed set of values or a checked-in config. Both SDFFl
 presets load the one checked-in optimize config,
 `configs/SDFFlow/geometry_generation/ex1/baseline/config_optimize_sdfflow.txt`;
 the surrogate preset then switches `opt_analysis surrogate`, points
-`opt_surrogate_config`/`opt_surrogate_checkpoint` at the ex10 (DeepJEB) HI-MGN
-arm of the dataset matrix, and sets `opt_fea_verify True`. Until that arm has
-trained, preflight names the missing checkpoint.
+`opt_surrogate_config`/`opt_surrogate_checkpoint` at the ex13 (DeepJEB vertical
+load) HI-MGN, and sets the values its labels fix: `opt_load_cases vertical`,
+`opt_length_scale 0.102323`, `opt_material_rho 4470`, `opt_vertical_disp_max
+0.36` (the ex13 median), and `opt_fea_verify False` (fea.py does not model the
+bolt-bore/lug-bore boundary conditions, so optimize refuses it on this layout).
+Until that model has trained, preflight names the missing checkpoint.
 
 A CAD Generator wired to the SDFFlow block runs with **its own** `mode` and
 `opt_analysis` (they are laid over the model block's), so applying either

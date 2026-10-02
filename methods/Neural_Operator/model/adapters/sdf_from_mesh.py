@@ -49,7 +49,7 @@ much they *assume*:
 What the routes pick on the shipped arms (first sample of each):
 
     ex1 ex4 ex6 ex7 ex9   planar, Euler exact, 670/234/128/2,536/260 segments
-    ex3_full ex3_mid ex10 faces (3-D shell), 0.03-0.6% non-manifold
+    ex3_full ex3_mid      faces (3-D shell), 0.03-0.6% non-manifold
     ex8                   alpha 2-D: k=6 neighbour graph, no planar embedding
     ex2 ex5               alpha 3-D: volume meshes, 93%/68% non-manifold
 
@@ -57,8 +57,8 @@ The reconstruction depends only on the reference coordinates (`nodal_data`
 rows 0:3), which are static for the whole trajectory, so the result is computed
 once per sample and cached rather than per epoch or per timestep.
 
-Sign convention: **negative inside the meshed domain**. On a shell (ex3_full,
-ex10) the meshed domain is the solid body, so this matches the paper, where the
+Sign convention: **negative inside the meshed domain**. On a shell (ex3_full)
+the meshed domain is the solid body, so this matches the paper, where the
 SDF is negative inside the car. On a 2-D flow mesh the meshed domain is the
 *fluid* and the obstacle is a hole in it, so the values there are the negation
 of the paper's body-centred convention -- ex7_airfrans reads negative

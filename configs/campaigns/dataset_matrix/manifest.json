@@ -364,40 +364,6 @@
       "dense": true
     },
     {
-      "key": "ex10",
-      "category": "deterministic",
-      "train": "deterministic/ex10_deepjeb_mgn.h5",
-      "infer": "deterministic/ex10_deepjeb_mgn_infer.h5",
-      "input": [
-        "x_coord",
-        "y_coord",
-        "z_coord"
-      ],
-      "output": [
-        "stress",
-        "displacement_magnitude",
-        "z_disp"
-      ],
-      "conditioner": [
-        "lc_ver",
-        "lc_hor",
-        "lc_dia",
-        "lc_tor"
-      ],
-      "partNo": [],
-      "steps": 1,
-      "dim": 3,
-      "clusters": [
-        512,
-        64
-      ],
-      "geometry": "fixed",
-      "indices": null,
-      "epochs": 500,
-      "batch": 1,
-      "split_group_attr": "bracket"
-    },
-    {
       "key": "ex1",
       "category": "probabilistic",
       "train": "probabilistic/ex1_turbulent_radiative_layer.h5",
@@ -992,54 +958,6 @@
       "infer": "configs/SimulGenVAE/deterministic/ex9/baseline/config_infer_lsh_vae.txt",
       "updates": 675000,
       "updates_note": "VAE 450k + LC 225k"
-    },
-    {
-      "category": "deterministic",
-      "example": "ex10",
-      "method": "deeponet",
-      "train": "configs/Neural_Operator/deterministic/ex10/baseline/config_train_deeponet.txt",
-      "infer": "configs/Neural_Operator/deterministic/ex10/baseline/config_infer_deeponet.txt",
-      "updates": 476000
-    },
-    {
-      "category": "deterministic",
-      "example": "ex10",
-      "method": "point_deeponet",
-      "train": "configs/Neural_Operator/deterministic/ex10/baseline/config_train_point_deeponet.txt",
-      "infer": "configs/Neural_Operator/deterministic/ex10/baseline/config_infer_point_deeponet.txt",
-      "updates": 476000
-    },
-    {
-      "category": "deterministic",
-      "example": "ex10",
-      "method": "fno",
-      "train": "configs/Neural_Operator/deterministic/ex10/baseline/config_train_fno.txt",
-      "infer": "configs/Neural_Operator/deterministic/ex10/baseline/config_infer_fno.txt",
-      "updates": 476000
-    },
-    {
-      "category": "deterministic",
-      "example": "ex10",
-      "method": "transolver3",
-      "train": "configs/Transolver/deterministic/ex10/baseline/config_train_transolver3.txt",
-      "infer": "configs/Transolver/deterministic/ex10/baseline/config_infer_transolver3.txt",
-      "updates": 476000
-    },
-    {
-      "category": "deterministic",
-      "example": "ex10",
-      "method": "meshgraphnets",
-      "train": "configs/MeshGraphNets/deterministic/ex10/baseline/config_train_meshgraphnets.txt",
-      "infer": "configs/MeshGraphNets/deterministic/ex10/baseline/config_infer_meshgraphnets.txt",
-      "updates": 476000
-    },
-    {
-      "category": "deterministic",
-      "example": "ex10",
-      "method": "himgn",
-      "train": "configs/MeshGraphNets/deterministic/ex10/baseline/config_train_himgn.txt",
-      "infer": "configs/MeshGraphNets/deterministic/ex10/baseline/config_infer_himgn.txt",
-      "updates": 476000
     },
     {
       "category": "probabilistic",

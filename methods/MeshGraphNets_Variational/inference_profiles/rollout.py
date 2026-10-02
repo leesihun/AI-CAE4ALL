@@ -51,7 +51,16 @@ SPREAD_CHANNEL_DEFAULT = 2
 # calibration score computed from it would be noise. `mean` and `std` summarise
 # the field itself; on a 0/1 damage field `mean` is the damaged-node fraction
 # (cv=0.047 there), which is what the stochastic crack path actually moves.
-SPREAD_STATS = ('range', 'mean', 'std')
+#
+# `mag_max` is the one VECTOR statistic: the largest Euclidean norm over nodes
+# of several output channels, listed in spread_channel (`spread_channel 0, 1, 2`
+# on [ux, uy, uz] is max |u|, the total displacement). One component's range
+# mixes the amplitude with the orientation: on ex3 shell buckling
+# max(ux) - min(ux) moves with where around the circumference the dimple forms
+# (it spans 1-2x max |u| across draws of one shell), while max |u| is the
+# dataset's own max_deform attribute. The scalar stats take exactly one channel.
+SPREAD_STATS = ('range', 'mean', 'std', 'mag_max')
+VECTOR_SPREAD_STATS = ('mag_max',)
 SPREAD_STAT_DEFAULT = 'range'
 
 
@@ -70,14 +79,19 @@ def _is_cuda_oom(exc):
     return "out of memory" in str(exc).lower() and "cuda" in str(exc).lower()
 
 
-def _spread_stat(field_1d, stat=SPREAD_STAT_DEFAULT):
-    """Reduce a 1-D node field to the one scalar summarising a realization.
+def _spread_stat(field, stat=SPREAD_STAT_DEFAULT):
+    """Reduce a node field to the one scalar summarising a realization.
 
+    `field` is [nodes] for one channel, or [nodes, k] for a vector stat.
     See SPREAD_STATS for why the choice is a config key and not just max - min.
     """
-    v = np.asarray(field_1d, dtype=np.float64)
+    v = np.asarray(field, dtype=np.float64)
     if v.size == 0:
         return float('nan')
+    if stat == 'mag_max':
+        return float(np.linalg.norm(v.reshape(v.shape[0], -1), axis=1).max())
+    if v.ndim != 1:
+        raise ValueError(f"spread_stat {stat!r} reduces one channel, got a {v.shape} field")
     if stat == 'range':
         return float(v.max() - v.min())
     if stat == 'mean':
@@ -91,7 +105,30 @@ def _spread_stat_expr(label, stat):
     """Axis text for the statistic, e.g. 'max(damage) - min(damage)'."""
     if stat == 'range':
         return f"max({label}) - min({label})"
+    if stat == 'mag_max':
+        return f"max |{label}|"
     return f"{stat}({label})"
+
+
+def _spread_index(config):
+    """(channel index, stat) from spread_channel / spread_stat, validated.
+
+    The index is an int for a scalar stat and a list for a vector stat: the
+    config parser returns a bare scalar for `spread_channel 0` and a list for
+    `spread_channel 0, 1, 2`. Either form indexes the output axis of a numpy
+    state array directly ([nodes] or [nodes, k]).
+    """
+    raw = config.get('spread_channel', SPREAD_CHANNEL_DEFAULT)
+    stat = str(config.get('spread_stat', SPREAD_STAT_DEFAULT)).lower()
+    if stat not in SPREAD_STATS:
+        raise ValueError(f"spread_stat must be one of {SPREAD_STATS}, got {stat!r}")
+    if isinstance(raw, (list, tuple)):
+        idx = [int(c) for c in raw]
+        if stat not in VECTOR_SPREAD_STATS:
+            raise ValueError(f"spread_stat {stat!r} reduces one channel, but spread_channel "
+                             f"lists {idx}; only {VECTOR_SPREAD_STATS} take several")
+        return idx, stat
+    return int(raw), stat
 
 
 def _eval_dataset_spreads(h5_path, out_channel=SPREAD_CHANNEL_DEFAULT,
@@ -99,25 +136,30 @@ def _eval_dataset_spreads(h5_path, out_channel=SPREAD_CHANNEL_DEFAULT,
     """(spreads, scene_ids): one ground-truth spread per sample in the eval HDF5.
 
     `out_channel` indexes the OUTPUT block, so the ground-truth row is
-    3 + out_channel -- the same channel the rollout side reads.
+    3 + out_channel -- the same channel the rollout side reads. A list of
+    channels (vector stat) reads those rows as one [nodes, k] field.
 
     The ids are returned so the scorer can pair each truth with the ensemble
     generated for that same scene. Without them the generated side is a pooled
     marginal, and a model that ignores geometry entirely scores as well as one
     that conditions correctly.
     """
-    row = 3 + int(out_channel)
+    rows = 3 + np.asarray(out_channel, dtype=np.int64)
     spreads, ids = [], []
     with h5py.File(h5_path, 'r') as f:
         if 'data' not in f:
             raise RuntimeError(f"No /data group in {h5_path}")
         for sample_id in f['data'].keys():
             nodal = f[f'data/{sample_id}/nodal_data']
-            if row >= nodal.shape[0]:
+            if int(rows.max()) >= nodal.shape[0]:
                 raise RuntimeError(
-                    f"spread_channel {out_channel} needs nodal_data row {row}, but "
+                    f"spread_channel {out_channel} needs nodal_data row {int(rows.max())}, but "
                     f"{h5_path} sample {sample_id} has only {nodal.shape[0]} rows")
-            spreads.append(_spread_stat(nodal[row, -1, :], stat))
+            if rows.ndim == 0:
+                field = nodal[int(rows), -1, :]
+            else:
+                field = nodal[:, -1, :][rows].T
+            spreads.append(_spread_stat(field, stat))
             ids.append(str(sample_id))
     return np.asarray(spreads, dtype=np.float64), np.asarray(ids, dtype=object)
 
@@ -843,13 +885,10 @@ def run_rollout(config, config_filename='config.txt'):
     histogram_clip_quantile = float(config.get('histogram_clip_quantile', 0.0))
     show_histogram = bool(config.get('show_histogram', True))
     # Output-channel index the spread statistic is taken over; the ground-truth
-    # side reads nodal_data row 3 + this. See SPREAD_CHANNEL_DEFAULT.
-    z_gen_idx = int(config.get('spread_channel', SPREAD_CHANNEL_DEFAULT))
+    # side reads nodal_data row 3 + this. See SPREAD_CHANNEL_DEFAULT; a list of
+    # channels goes with a vector stat (SPREAD_STATS).
+    z_gen_idx, spread_stat = _spread_index(config)
     spread_label = str(config.get('spread_label', f'channel {z_gen_idx}'))
-    spread_stat = str(config.get('spread_stat', SPREAD_STAT_DEFAULT)).lower()
-    if spread_stat not in SPREAD_STATS:
-        raise ValueError(f"spread_stat must be one of {SPREAD_STATS}, "
-                         f"got {spread_stat!r}")
     generated_spreads = []  # one spread scalar per generated rollout trajectory
     # Which scene each of those came from, same order. This is what lets
     # the scorer split within-scene ensemble width from between-scene
@@ -982,9 +1021,12 @@ def run_rollout(config, config_filename='config.txt'):
             for b in range(B):
                 vae_idx = batch_start + b
 
-                if make_histogram and output_dim > z_gen_idx:
+                if make_histogram and output_dim > np.max(z_gen_idx):
                     generated_spreads.append(
-                        _spread_stat(all_states[b, -1, :, z_gen_idx], spread_stat)
+                        # [b, -1] first: one index expression mixing scalars,
+                        # a slice and a channel LIST moves the list axis to
+                        # the front ([C, N]), which mag_max would misread.
+                        _spread_stat(all_states[b, -1][:, z_gen_idx], spread_stat)
                     )
                     generated_scene_ids.append(str(sample_id))
                     generated_lams.append(float(batch_index['lam']))
@@ -1149,7 +1191,7 @@ def run_rollout(config, config_filename='config.txt'):
                 # values so a campaign can tabulate every arm without rerunning
                 # inference; the headline four are stamped onto the figure.
                 scores = _spread_scores(gt, gt_scene, gen, generated_scene_ids)
-                scores['channel'] = int(z_gen_idx)
+                scores['channel'] = z_gen_idx
                 scores['label'] = spread_label
                 scores['stat'] = spread_stat
                 scores['eval_dataset'] = str(eval_dataset)

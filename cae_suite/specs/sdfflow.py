@@ -92,6 +92,8 @@ SDFFLOW_KEYS = frozenset(
         # mode `interpolate`: slerp in FM noise space (default), lerp in latent space,
         # or a fixed-noise condition sweep (`cond_sweep`)
         "interpolation_space", "cond_values_a", "cond_values_b", "sweep_steps",
+        # slerp_noise / lerp_latent: a K-panel alpha strip instead of (0, alpha, 1)
+        "interpolation_steps",
         # Conditional generation (CONDITIONAL_GENERATION_DESIGN_2026-09.md):
         # per-dimension condition dropout so a request may leave entries 'nan',
         # plus the explicit drop-all term that keeps the CFG branch trained
@@ -754,6 +756,45 @@ def validate_sdfflow(ctx: SpecValidationContext) -> None:
                 f"sweep_steps is read only by interpolation_space cond_sweep; ignored for "
                 f"{space}.",
                 field_name="sweep_steps",
+            )
+        if "interpolation_steps" in values:
+            if space == "cond_sweep":
+                ctx.add(
+                    "SDF-INTERP-009",
+                    Severity.NOTICE,
+                    "interpolation_steps is read by slerp_noise / lerp_latent only; cond_sweep "
+                    "uses sweep_steps, so it is ignored here.",
+                    field_name="interpolation_steps",
+                )
+            else:
+                # Native precondition: interpolate.py::interpolation_alphas raises
+                # below 3 (both endpoints plus at least one interior panel).
+                k = integer(values.get("interpolation_steps"))
+                if k is None or k < 3:
+                    ctx.add(
+                        "SDF-INTERP-008",
+                        Severity.ERROR,
+                        f"interpolation_steps must be an integer >= 3 (got "
+                        f"{values.get('interpolation_steps')!r}); the strip always includes both "
+                        "endpoints. Omit it for the three-panel (0, alpha, 1) figure.",
+                        field_name="interpolation_steps",
+                    )
+                elif "alpha" in values:
+                    ctx.add(
+                        "SDF-INTERP-009",
+                        Severity.NOTICE,
+                        f"alpha is not read when interpolation_steps is set; the strip uses "
+                        f"linspace(0, 1, {k}).",
+                        field_name="alpha",
+                    )
+        if space == "lerp_latent" and "cond_values" in values:
+            ctx.add(
+                "SDF-INTERP-010",
+                Severity.ERROR,
+                "lerp_latent reproduces unconditional samples only; a conditional "
+                "interpolation (cond_values, the same request on every row) needs "
+                "interpolation_space slerp_noise.",
+                field_name="cond_values",
             )
         index_a = integer(values.get("sample_index_a"))
         index_b = integer(values.get("sample_index_b"))

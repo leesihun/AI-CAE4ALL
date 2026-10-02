@@ -264,7 +264,7 @@ class TrainingStepAttributionTests(unittest.TestCase):
     rollouts a concurrent job put into output/, and its output edge carried them.
     """
 
-    UNRELATED = {"path": "output/dataset_matrix/deterministic/ex10/himgn/inference",
+    UNRELATED = {"path": "output/dataset_matrix/deterministic/ex13/himgn/inference",
                  "samples": 480, "modified": 2.0}
     OWN = {"path": "output/geometry_generation/studio/vae_recon/epoch00499",
            "samples": 2, "modified": 1.0}

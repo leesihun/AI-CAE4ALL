@@ -24,6 +24,18 @@
     -- the two endpoint keys are.
 
 The `slerp_noise` / `lerp_latent` code paths are unchanged by the sweep.
+
+Two options apply to `slerp_noise` / `lerp_latent`:
+
+  * `interpolation_steps K` (K >= 3) integrates `linspace(0, 1, K)` instead of
+    `(0, alpha, 1)` and writes a K-panel strip; `alpha` is then not read.
+    Absent, the run is the three-panel figure with its legacy file names.
+  * `cond_values` (`slerp_noise` only, conditional FM): every row is integrated
+    under the SAME condition request, so a pair drawn with one class's
+    condition interpolates within that class. The endpoints reproduce
+    `mode sample` rows drawn under those cond_values with the same seed and
+    batch size (`source_num_samples` = num_samples x candidate_multiplier).
+    `lerp_latent` stays unconditional.
 """
 
 import json
@@ -93,6 +105,22 @@ def _plot_triptych(meshes, labels, reports, path, dpi=180, max_faces=0, title=No
     slerp_noise / lerp_latent figure; a 3-panel `_plot_strip`)."""
     _plot_strip(meshes, labels, reports, path, dpi=dpi, max_faces=max_faces, title=title,
                 colors=(_ENDPOINT_COLOR, _MIDDLE_COLOR, _ENDPOINT_COLOR))
+
+
+def interpolation_alphas(alpha, steps=None):
+    """The alphas a slerp_noise / lerp_latent run integrates.
+
+    `steps` None is the legacy three-panel figure, `(0, alpha, 1)`. An integer
+    `steps >= 3` is an equally spaced strip `linspace(0, 1, steps)` with both
+    endpoints included, and `alpha` is not read.
+    """
+    if steps is None:
+        return np.array([0.0, float(alpha), 1.0])
+    steps = int(steps)
+    if steps < 3:
+        raise ValueError(f'interpolation_steps must be an integer >= 3 (both endpoints are '
+                         f'always included), got {steps}')
+    return np.linspace(0.0, 1.0, steps)
 
 
 def _l2(x):
@@ -390,31 +418,66 @@ def run_interpolate(config, config_filename='config.txt'):
         raise ValueError('source_num_samples must exceed both endpoint indices')
     if not 0.0 <= alpha <= 1.0:
         raise ValueError('alpha must be within [0, 1]')
-    if config.get('cond_values') is not None:
-        raise ValueError('This interpolation mode currently reproduces unconditional samples only')
+    steps = config.get('interpolation_steps')
+    steps = None if steps is None else int(steps)
+    alphas = interpolation_alphas(alpha, steps)
+
+    # ---- Optional condition: ONE request shared by every row ----
+    cond_values = config.get('cond_values')
+    cond_names = [str(n) for n in fm_ckpt.get('cond_names', [])]
+    cfg_scale = float(config.get('cfg_scale', 1.0))
+    cond_row = cond_mask_row = condition_request = None
+    if cond_values is not None:
+        if space != 'slerp_noise':
+            raise ValueError('lerp_latent reproduces unconditional samples only; use '
+                             'interpolation_space slerp_noise with cond_values for a '
+                             'conditional interpolation')
+        if cond_dim == 0:
+            raise ValueError('cond_values was given but this FM checkpoint is unconditional '
+                             '(cond_dim 0); remove cond_values')
+        if cfg_scale < 0:
+            raise ValueError('cfg_scale must be a nonnegative number')
+        raw = parse_condition_values(cond_values, cond_names)
+        cond_row, cond_mask_row, condition_request = normalize_condition_request(
+            raw, fm_ckpt, config)
+        shown = {name: ('unspecified' if not condition_request['specified'][name]
+                        else condition_request['raw'][name]) for name in cond_names}
+        print(f'Conditional interpolation: every row integrated under {shown} '
+              f'(cfg_scale={cfg_scale:g})')
 
     os.makedirs(out_dir, exist_ok=True)
     generator = torch.Generator(device=device).manual_seed(seed)
     t0 = time.time()
     noise_distances = None
+    k = len(alphas)
+    mid = 1 if steps is None else k // 2
     if space == 'slerp_noise':
         # Bit-identical to the draw sample_latents() makes for the seeded batch.
         eps = torch.randn(source_num_samples, latent_flat_dim, device=device, generator=generator)
         eps_a = eps[index_a]
         eps_b = eps[index_b]
-        eps_mid = slerp(eps_a, eps_b, alpha)
-        selected_noise = torch.stack((eps_a, eps_mid, eps_b))
+        rows = [eps_a if a == 0.0 else eps_b if a == 1.0 else slerp(eps_a, eps_b, a)
+                for a in alphas]
+        selected_noise = torch.stack(rows)
+        kwargs = {}
+        if cond_row is not None:
+            # The endpoints then reproduce `mode sample` rows drawn under the
+            # same cond_values, seed and batch size.
+            kwargs['cond'] = cond_row.unsqueeze(0).repeat(k, 1).to(device)
+            kwargs['cfg_scale'] = cfg_scale
+            if condition_request['partial']:
+                kwargs['cond_mask'] = cond_mask_row.unsqueeze(0).repeat(k, 1).to(device)
         selected_z_n = sample_latents(
-            model, 3, latent_flat_dim, device, ode_steps=ode_steps, noise=selected_noise)
-        z_a_n, z_mid_n, z_b_n = selected_z_n[0], selected_z_n[1], selected_z_n[2]
+            model, k, latent_flat_dim, device, ode_steps=ode_steps, noise=selected_noise, **kwargs)
         noise_distances = {
             'endpoint_l2': _l2(eps_b - eps_a),
-            'a_to_interpolation_l2': _l2(eps_mid - eps_a),
-            'interpolation_to_b_l2': _l2(eps_b - eps_mid),
-            'norms': {'a': _l2(eps_a), 'interpolation': _l2(eps_mid), 'b': _l2(eps_b)},
+            'a_to_interpolation_l2': _l2(selected_noise[mid] - eps_a),
+            'interpolation_to_b_l2': _l2(eps_b - selected_noise[mid]),
+            'norms': {'a': _l2(eps_a), 'interpolation': _l2(selected_noise[mid]), 'b': _l2(eps_b)},
+            'row_norms': [_l2(r) for r in selected_noise],
         }
         print(f'Re-drew the {source_num_samples}-row seed-{seed} noise batch, slerp-mixed rows '
-              f'{index_a}/{index_b} at alpha={alpha:g}, and integrated the 3-row stack '
+              f'{index_a}/{index_b} at {k} alphas, and integrated the {k}-row stack '
               f'in {time.time() - t0:.2f}s')
     else:
         source_z_n = sample_latents(
@@ -422,25 +485,36 @@ def run_interpolate(config, config_filename='config.txt'):
             ode_steps=ode_steps, generator=generator)
         z_a_n = source_z_n[index_a]
         z_b_n = source_z_n[index_b]
-        z_mid_n = torch.lerp(z_a_n, z_b_n, alpha)
-        selected_z_n = torch.stack((z_a_n, z_mid_n, z_b_n))
-        print(f'Reproduced {source_num_samples} source latents and lerped alpha={alpha:g} '
+        selected_z_n = torch.stack([z_a_n if a == 0.0 else z_b_n if a == 1.0
+                                    else torch.lerp(z_a_n, z_b_n, float(a)) for a in alphas])
+        print(f'Reproduced {source_num_samples} source latents and lerped {k} alphas '
               f'in {time.time() - t0:.2f}s')
+    z_a_n, z_mid_n, z_b_n = selected_z_n[0], selected_z_n[mid], selected_z_n[-1]
     selected_z = (selected_z_n * fm_ckpt['latent_std'].to(device)
                   + fm_ckpt['latent_mean'].to(device))
 
-    alpha_tag = f'{alpha:.3f}'.rstrip('0').rstrip('.').replace('.', 'p')
-    names = (
-        f'sample_{seed}_{index_a:03d}',
-        f'sample_{seed}_{index_a:03d}_{index_b:03d}_alpha{alpha_tag}',
-        f'sample_{seed}_{index_b:03d}',
-    )
     mid_label = ('Noise slerp' if space == 'slerp_noise' else 'Latent midpoint')
-    labels = (
-        f'Sample {index_a} (alpha=0.0)',
-        f'{mid_label} (alpha={alpha:g})',
-        f'Sample {index_b} (alpha=1.0)',
-    )
+    if steps is None:
+        # The legacy three-panel figure: names, labels and files unchanged.
+        alpha_tag = f'{alpha:.3f}'.rstrip('0').rstrip('.').replace('.', 'p')
+        names = (
+            f'sample_{seed}_{index_a:03d}',
+            f'sample_{seed}_{index_a:03d}_{index_b:03d}_alpha{alpha_tag}',
+            f'sample_{seed}_{index_b:03d}',
+        )
+        labels = (
+            f'Sample {index_a} (alpha=0.0)',
+            f'{mid_label} (alpha={alpha:g})',
+            f'Sample {index_b} (alpha=1.0)',
+        )
+        stem = f'interpolation_{index_a:03d}_{index_b:03d}_alpha{alpha_tag}'
+    else:
+        names = tuple(f'sample_{seed}_{index_a:03d}_{index_b:03d}_step{i}' for i in range(k))
+        labels = tuple(
+            f'Sample {index_a} (alpha=0.0)' if i == 0 else
+            f'Sample {index_b} (alpha=1.0)' if i == k - 1 else
+            f'{mid_label} (alpha={float(a):.3f})' for i, a in enumerate(alphas))
+        stem = f'interpolation_{index_a:03d}_{index_b:03d}_steps{k}'
 
     meshes = []
     reports = []
@@ -449,15 +523,24 @@ def run_interpolate(config, config_filename='config.txt'):
             vae, selected_z[i:i + 1], resolution=resolution, device=device)
         mesh = sdf_grid_to_mesh(volume)
         report = mesh_report(mesh)
+        report['label'] = labels[i]
+        report['alpha'] = float(alphas[i])
+        # Raw component count before the floater filter (set by sdf_grid_to_mesh
+        # on mesh.metadata and surfaced by mesh_report); None on older builds.
+        report.setdefault('body_count_raw', None)
         if not report['valid']:
-            raise RuntimeError(f'Interpolation decode failed for {labels[i]}: no zero crossing')
+            # The endpoints are the comparison and stay a hard failure; an
+            # interior panel of a multi-step strip is drawn empty instead.
+            if steps is None or i in (0, k - 1):
+                raise RuntimeError(f'Interpolation decode failed for {labels[i]}: no zero crossing')
+            report['path'] = None
+            print(f'  {labels[i]}: NO ZERO CROSSING')
+            meshes.append(None)
+            reports.append(report)
+            continue
         mesh_path = os.path.join(out_dir, f'{name}.stl')
         mesh.export(mesh_path)
-        report['label'] = labels[i]
         report['path'] = mesh_path
-        # Raw component count before keep_largest (set by sdf_grid_to_mesh on
-        # mesh.metadata and surfaced by mesh_report); None on older builds.
-        report.setdefault('body_count_raw', None)
         meshes.append(mesh)
         reports.append(report)
         volume_text = (f'{report["volume"]:.6f}' if report.get('volume') is not None else 'n/a')
@@ -465,13 +548,21 @@ def run_interpolate(config, config_filename='config.txt'):
               f'faces={report["faces"]} volume={volume_text} '
               f'body_count_raw={report["body_count_raw"]} -> {mesh_path}')
 
-    plot_path = os.path.join(
-        out_dir, f'interpolation_{index_a:03d}_{index_b:03d}_alpha{alpha_tag}.png')
-    _plot_triptych(
-        meshes, labels, reports, plot_path,
-        dpi=int(config.get('plot_dpi', 180)),
-        max_faces=int(config.get('plot_max_faces', 0)),
-        title=(f'SDFFlow interpolation ({space}): sample {index_a} to sample {index_b}'))
+    plot_path = os.path.join(out_dir, f'{stem}.png')
+    title = f'SDFFlow interpolation ({space}): sample {index_a} to sample {index_b}'
+    if condition_request is not None:
+        title += f', conditioned (cfg_scale={cfg_scale:g})'
+    if steps is None:
+        _plot_triptych(
+            meshes, labels, reports, plot_path,
+            dpi=int(config.get('plot_dpi', 180)),
+            max_faces=int(config.get('plot_max_faces', 0)),
+            title=title)
+    else:
+        _plot_strip(meshes, labels, reports, plot_path,
+                    dpi=int(config.get('plot_dpi', 180)),
+                    max_faces=int(config.get('plot_max_faces', 0)),
+                    title=title, ncols=min(k, 5))
 
     metadata = {
         'fm_modelpath': fm_path,
@@ -480,24 +571,31 @@ def run_interpolate(config, config_filename='config.txt'):
         'source_num_samples': source_num_samples,
         'sample_index_a': index_a,
         'sample_index_b': index_b,
-        'alpha': alpha,
+        'alpha': alpha if steps is None else None,
+        'interpolation_steps': steps,
+        'alphas': [float(a) for a in alphas],
         'interpolation_space': space,
         'ode_steps': ode_steps,
         'mc_resolution': resolution,
+        'cond_names': cond_names,
+        'cond_values': cond_values,
+        'condition_request': condition_request,
+        'cfg_scale': cfg_scale if condition_request is not None else None,
         'noise_distances': noise_distances,
         'latent_distances': {
             'endpoint_l2': _l2(z_b_n - z_a_n),
             'a_to_interpolation_l2': _l2(z_mid_n - z_a_n),
             'interpolation_to_b_l2': _l2(z_b_n - z_mid_n),
+            'consecutive_l2': [_l2(selected_z_n[i + 1] - selected_z_n[i]) for i in range(k - 1)],
         },
         'body_count_raw': [r['body_count_raw'] for r in reports],
+        'valid': [bool(r['valid']) for r in reports],
         'results': reports,
         'plot_path': plot_path,
     }
-    metadata_path = os.path.join(
-        out_dir, f'interpolation_{index_a:03d}_{index_b:03d}_alpha{alpha_tag}_meta.json')
+    metadata_path = os.path.join(out_dir, f'{stem}_meta.json')
     with open(metadata_path, 'w') as f:
-        json.dump(metadata, f, indent=2)
+        json.dump(_jsonable(metadata), f, indent=2)
 
     print(f'Plot: {plot_path}')
     print(f'Metadata: {metadata_path}')

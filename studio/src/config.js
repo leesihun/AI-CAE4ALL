@@ -621,16 +621,22 @@ export async function applyPreset() {
       toast(`Could not load ${file}: ${error.message}`, "error");
       return;
     }
-    // The surrogate is the ex10 (DeepJEB) HI-MGN arm of the dataset matrix. Its
-    // checkpoint exists only after that arm has trained; until then preflight
-    // names the missing file, which is the true state of the surrogate path.
-    // opt_fea_verify re-solves the result with the real solver at the end, so
-    // the run reports what FEA says about the design the surrogate picked.
+    // The surrogate is the ex13 (DeepJEB vertical load) HI-MGN. Its checkpoint
+    // exists only after that run has trained; until then preflight names the
+    // missing file, which is the true state of the surrogate path. Its labels
+    // fix the problem: vertical load only, DeepJEB's own frame (184.181 mm
+    // longest side), Ti-6Al-4V at 4470 kg/m^3, and bolt-bore/lug-bore boundary
+    // conditions that fea.py does not model -- so opt_fea_verify stays off
+    // (optimize refuses it on this layout) and 0.36 mm is the ex13 median u_z.
     if (preset === "sdfflow_optimize_surrogate") Object.assign(values, {
       opt_analysis: "surrogate",
-      opt_surrogate_config: "../../configs/MeshGraphNets/deterministic/ex10/baseline/config_infer_himgn.txt",
-      opt_surrogate_checkpoint: "../../output/dataset_matrix/deterministic/ex10/himgn/model.pth",
-      opt_fea_verify: "True"
+      opt_surrogate_config: "../../configs/MeshGraphNets/deterministic/ex13/baseline/config_infer_himgn.txt",
+      opt_surrogate_checkpoint: "../../output/dataset_matrix/deterministic/ex13/himgn/model.pth",
+      opt_load_cases: "vertical",
+      opt_length_scale: "0.102323",
+      opt_material_rho: "4470",
+      opt_vertical_disp_max: "0.36",
+      opt_fea_verify: "False"
     });
   }
   if (preset === "simulgen_vae") values = { mode: "train_vae", training_epochs: model.defaults.vae_training_epochs, batch_size: model.defaults.vae_batch_size, learningr: model.defaults.vae_learningr };

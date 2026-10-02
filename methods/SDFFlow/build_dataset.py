@@ -12,12 +12,28 @@ HDF5 layout (one group per shape):
     shapes/00000/sdf_points       (Q, 3) float32   near-surface + uniform queries
     shapes/00000/sdf_values       (Q,)   float32   negative inside, positive outside
     shapes/00000/cond             (C,)   float32   geometric descriptors
-    shapes/00000 attrs: source (+ center, scale, original_faces, processed_faces
-                        for real meshes)
+    shapes/00000 attrs: source (+ center, scale, original_faces, processed_faces,
+                        repair_path, area_retention, added_area,
+                        body_count, genus, and
+                        canonical_rotation / group when requested, for real
+                        meshes)
     root attrs: num_shapes, cond_names, num_near, num_uniform, and builder
                 provenance num_surface, max_faces, sharp_edge_fraction,
                 sharp_edge_angle, near_sigmas (float array), seed, sdf_backend
-                ('igl' | 'open3d' | 'trimesh' | 'analytic' for --synthetic)
+                ('igl' | 'open3d' | 'trimesh' | 'analytic' for --synthetic),
+                plus repair, min_area_retention, repair_fallback,
+                winding_resolution, canonicalize, include_list, split_groups
+                for --mesh_dir builds
+
+Repair (--repair) runs trimesh's cheap tier, then MeshFix. MeshFix closes a
+mesh by keeping only what it can stitch and capping what it cannot, so its
+output is checked against the surface it was given, point by point: it is
+rejected when less than --min_area_retention of the input surface lies on it,
+or when more than --max_added_area of its own surface lies on no input face,
+and --repair_fallback winding then rebuilds the surface from the generalized
+winding number (general_modules/winding_remesh.py) instead of skipping it.
+The per-shape repair_path attr records which tier produced each shape:
+none | trimesh | meshfix | winding.
 """
 
 import os
@@ -35,6 +51,7 @@ from tqdm import tqdm
 
 from general_modules.sdf_sampling import (
     COND_NAMES,
+    canonical_rotation,
     mesh_descriptors,
     normalize_mesh,
     sample_mesh_sdf,
@@ -46,13 +63,32 @@ MESH_EXTENSIONS = ('*.stl', '*.obj', '*.ply', '*.off')
 
 MESHFIX_TIMEOUT_S = 45
 
+# Fraction of the pre-MeshFix surface area MeshFix must keep. On the raw MCB
+# castle nuts (seams that share no vertices) it kept a median 24% of the faces,
+# and normalize_mesh then scaled the fragment to fill the box: 270 of the 1263
+# ex3 train labels built without this check were such fragments.
+DEFAULT_MIN_AREA_RETENTION = 0.8
+# Fraction of the MeshFix surface allowed to lie on no input face. A total-area
+# ratio cannot see a capped bore -- the cap replaces the area MeshFix dropped --
+# and 77 of the 1650 MCB nuts came out of MeshFix with genus 0 while passing an
+# 80% area-ratio check: sampled ones lay 12-43% off the input surface and kept
+# only 51-98% of it, against 0-0.8% off for a clean MeshFix close.
+DEFAULT_MAX_ADDED_AREA = 0.05
+# A surface point "lies on" the other surface within this fraction of the input
+# bounding-box diagonal.
+SURFACE_MATCH_TOL = 0.005
+SURFACE_MATCH_POINTS = 20000
+
 
 def _meshfix_worker_target(vertices, faces, queue):
     import pymeshfix
 
-    meshfix = pymeshfix.MeshFix(vertices, faces)
-    meshfix.repair(joincomp=True, remove_smallest_components=False)
-    queue.put((meshfix.points, meshfix.faces))
+    try:
+        meshfix = pymeshfix.MeshFix(vertices, faces)
+        meshfix.repair(joincomp=True, remove_smallest_components=False)
+        queue.put((meshfix.points, meshfix.faces))
+    except Exception:
+        queue.put(None)
 
 
 def _meshfix_repair_with_timeout(vertices, faces, timeout_s=MESHFIX_TIMEOUT_S):
@@ -63,19 +99,27 @@ def _meshfix_repair_with_timeout(vertices, faces, timeout_s=MESHFIX_TIMEOUT_S):
     pathological nut mesh); it isn't interruptible from Python once inside the
     C call, so the only way to reclaim a wedged repair is to kill the process
     running it. Returns (points, faces) or None if it timed out or errored.
+
+    The result is read BEFORE the join: a child blocks in ``queue.put`` until
+    the parent drains the pipe, so joining first deadlocked every repair whose
+    output exceeded the pipe buffer (~64 kB, a few thousand faces) and turned
+    a 0.1 s MeshFix success into a 45 s timeout and a skipped mesh.
     """
+    import queue as queue_module
+
     ctx = mp.get_context('spawn')
     queue = ctx.Queue()
     proc = ctx.Process(target=_meshfix_worker_target, args=(vertices, faces, queue))
     proc.start()
-    proc.join(timeout_s)
+    try:
+        result = queue.get(timeout=timeout_s)
+    except queue_module.Empty:
+        result = None
+    proc.join(5)
     if proc.is_alive():
         proc.terminate()
         proc.join()
-        return None
-    if proc.exitcode != 0 or queue.empty():
-        return None
-    return queue.get()
+    return result
 DEFAULT_NEAR_SIGMAS = '0.01,0.05'
 
 
@@ -118,6 +162,32 @@ def main():
     parser.add_argument('--sharp_edge_angle', type=float, default=0.5236,
                         help='Dihedral angle (radians) above which an edge is '
                              'treated as sharp (default 30 deg)')
+    parser.add_argument('--min_area_retention', type=float, default=DEFAULT_MIN_AREA_RETENTION,
+                        help='With --repair: reject a MeshFix result on which less than this '
+                             'fraction of the input surface lies (0 disables; default '
+                             f'{DEFAULT_MIN_AREA_RETENTION})')
+    parser.add_argument('--max_added_area', type=float, default=DEFAULT_MAX_ADDED_AREA,
+                        help='With --repair: reject a MeshFix result when more than this fraction '
+                             'of its surface lies on no input face, e.g. a capped bore (1 '
+                             f'disables; default {DEFAULT_MAX_ADDED_AREA})')
+    parser.add_argument('--repair_fallback', choices=('none', 'winding'), default='none',
+                        help='With --repair: what to do when MeshFix fails, times out or is '
+                             'rejected by --min_area_retention or --max_added_area. none skips '
+                             'the mesh; winding '
+                             'rebuilds it from the generalized winding number')
+    parser.add_argument('--winding_resolution', type=int, default=192,
+                        help='Grid resolution of the winding fallback along the longest side')
+    parser.add_argument('--canonicalize', choices=('none', 'inertia'), default='none',
+                        help='inertia: rotate each shape so its symmetry axis is z and its '
+                             'outermost corner is +x before normalization (MCB nuts); none '
+                             'keeps the file orientation')
+    parser.add_argument('--include_list', type=str, default=None,
+                        help='Text file of mesh stems (file names without extension), one per '
+                             'line; only these meshes are built')
+    parser.add_argument('--split_groups', type=str, default=None,
+                        help='CSV of stem,group (header row allowed). With --infer_output, whole '
+                             'groups go to one side of the split; the group is also stored as '
+                             'the per-shape "group" attr, which split_by_parent reads')
     parser.add_argument('--workers', type=int, default=0,
                         help='Parallel real-mesh workers (0 or 1 runs sequentially)')
     parser.add_argument('--append_missing', action='store_true',
@@ -162,6 +232,15 @@ def main():
     sdf_backend = 'analytic' if args.synthetic > 0 else sdf_backend_name()
     print(f'near_sigmas: {list(near_sigmas)}  sdf_backend: {sdf_backend}')
 
+    groups = _read_split_groups(args.split_groups) if args.split_groups else {}
+    if groups and args.infer_output is None:
+        print('NOTE: --split_groups without --infer_output only records the per-shape group attr')
+    if args.repair_fallback == 'winding' and args.workers > 1:
+        # The winding number runs in torch: one thread per worker, or N workers
+        # x all cores oversubscribe the machine. Spawned workers read this when
+        # they first import torch.
+        os.environ.setdefault('OMP_NUM_THREADS', '1')
+
     def write_root_attrs(h5, written, split_role=None, split_sibling=None):
         h5.attrs['num_shapes'] = written
         h5.attrs['cond_names'] = COND_NAMES
@@ -181,6 +260,16 @@ def main():
             h5.attrs['split_fraction'] = float(args.infer_fraction)
             h5.attrs['split_seed'] = int(args.seed)
             h5.attrs['split_sibling'] = os.path.abspath(split_sibling)
+            h5.attrs['split_by'] = 'group' if groups else 'mesh'
+        if args.mesh_dir is not None:
+            h5.attrs['repair'] = bool(args.repair)
+            h5.attrs['min_area_retention'] = float(args.min_area_retention)
+            h5.attrs['max_added_area'] = float(args.max_added_area)
+            h5.attrs['repair_fallback'] = str(args.repair_fallback)
+            h5.attrs['winding_resolution'] = int(args.winding_resolution)
+            h5.attrs['canonicalize'] = str(args.canonicalize)
+            h5.attrs['include_list'] = os.path.abspath(args.include_list) if args.include_list else ''
+            h5.attrs['split_groups'] = os.path.abspath(args.split_groups) if args.split_groups else ''
 
     if args.synthetic > 0:
         with h5py.File(args.output, 'w') as h5:
@@ -203,6 +292,18 @@ def main():
     if not paths:
         raise SystemExit(f'No meshes found under {args.mesh_dir}')
     print(f'Found {len(paths)} meshes')
+    if args.include_list:
+        with open(args.include_list, encoding='utf-8') as handle:
+            include = {line.strip() for line in handle if line.strip()}
+        paths = [p for p in paths if _stem(p) in include]
+        print(f'--include_list keeps {len(paths)} meshes ({len(include)} stems listed)')
+        if not paths:
+            raise SystemExit('No mesh matches --include_list')
+    if groups:
+        missing = [p for p in paths if _stem(p) not in groups]
+        if missing:
+            raise SystemExit(f'{len(missing)} meshes have no group in --split_groups, '
+                             f'e.g. {missing[0]}')
 
     h5_mode = 'a' if args.append_missing and os.path.exists(args.output) else 'w'
     with h5py.File(args.output, h5_mode) as h5:
@@ -220,7 +321,14 @@ def main():
             print(f'Processing {len(paths)} sources missing from the existing dataset')
 
         infer_paths = set()
-        if args.infer_output is not None:
+        if args.infer_output is not None and groups:
+            infer_paths = _group_split(paths, groups, args.infer_fraction, rng)
+            n_groups = len({groups[_stem(p)] for p in paths})
+            n_infer_groups = len({groups[_stem(p)] for p in infer_paths})
+            print(f'Split by group: {len(paths) - len(infer_paths)} train / {len(infer_paths)} '
+                  f'infer meshes, {n_groups - n_infer_groups} / {n_infer_groups} groups '
+                  f'(seed {args.seed}, infer_fraction {args.infer_fraction})')
+        elif args.infer_output is not None:
             shuffled = rng.permutation(len(paths))
             n_infer = round(len(paths) * args.infer_fraction)
             infer_paths = {paths[i] for i in shuffled[:n_infer]}
@@ -230,7 +338,13 @@ def main():
         tasks = [
             (path, args.num_surface, args.num_near, args.num_uniform,
              args.seed + i, args.repair, args.max_faces,
-             args.sharp_edge_fraction, args.sharp_edge_angle, near_sigmas)
+             args.sharp_edge_fraction, args.sharp_edge_angle, near_sigmas,
+             {'min_area_retention': args.min_area_retention,
+              'max_added_area': args.max_added_area,
+              'repair_fallback': args.repair_fallback,
+              'winding_resolution': args.winding_resolution,
+              'canonicalize': args.canonicalize,
+              'group': groups.get(_stem(path))})
             for i, path in enumerate(paths)
         ]
 
@@ -246,6 +360,13 @@ def main():
                 else:
                     written += _consume_mesh_result(shapes_grp, written, result)
 
+            repair_paths = {}
+
+            def consume_counted(result):
+                key = result.get('repair_path', 'error' if 'error' in result else 'none')
+                repair_paths[key] = repair_paths.get(key, 0) + 1
+                consume(result)
+
             if args.workers > 1:
                 # 'spawn', not the platform default 'fork': sdf_sampling imports
                 # open3d at module scope (for the banner below) before any pool
@@ -260,10 +381,11 @@ def main():
                                           mp_context=mp.get_context('spawn')) as executor:
                     for result in tqdm(executor.map(_process_mesh, tasks, chunksize=1),
                                         total=len(tasks), desc='Meshes'):
-                        consume(result)
+                        consume_counted(result)
             else:
                 for task in tqdm(tasks, desc='Meshes'):
-                    consume(_process_mesh(task))
+                    consume_counted(_process_mesh(task))
+            print(f'Repair paths: {repair_paths}')
 
             write_root_attrs(h5, written,
                               split_role='train' if infer_h5 is not None else None,
@@ -291,14 +413,20 @@ def _process_mesh(task):
     import trimesh
 
     (path, num_surface, num_near, num_uniform, seed, repair, max_faces,
-     sharp_edge_fraction, sharp_edge_angle, near_sigmas) = task
+     sharp_edge_fraction, sharp_edge_angle, near_sigmas) = task[:10]
+    opts = task[10] if len(task) > 10 else {}
+    min_area_retention = float(opts.get('min_area_retention', 0.0))
+    max_added_area = float(opts.get('max_added_area', 1.0))
     try:
         mesh = trimesh.load(path, force='mesh')
         if repair and mesh.is_empty:
             mesh = _load_partial_ascii_stl(path, trimesh)
         original_faces = len(mesh.faces)
+        repair_path = 'none'
+        area_retention, added_area = 1.0, 0.0
 
         if repair and not mesh.is_watertight:
+            repair_path = 'trimesh'
             mesh.remove_unreferenced_vertices()
             mesh.merge_vertices()
             mesh.update_faces(mesh.unique_faces())
@@ -307,17 +435,45 @@ def _process_mesh(task):
             trimesh.repair.fill_holes(mesh)
 
         if repair and not mesh.is_watertight:
+            before = mesh
+            reason = 'MeshFix failed or timed out'
             try:
                 fixed = _meshfix_repair_with_timeout(mesh.vertices, mesh.faces)
-                if fixed is not None:
-                    points, faces = fixed
-                    mesh = trimesh.Trimesh(vertices=points, faces=faces, process=True)
-                    trimesh.repair.fix_normals(mesh, multibody=True)
             except (ImportError, RuntimeError, ValueError):
-                pass
+                fixed = None
+            if fixed is not None:
+                points, faces = fixed
+                candidate = trimesh.Trimesh(vertices=points, faces=faces, process=True)
+                trimesh.repair.fix_normals(candidate, multibody=True)
+                if not candidate.is_watertight:
+                    reason = 'MeshFix output is not watertight'
+                else:
+                    retention, added = _surface_match(before, candidate, seed)
+                    if retention < min_area_retention:
+                        reason = (f'MeshFix kept {retention:.0%} of the surface '
+                                  f'(< --min_area_retention {min_area_retention:g})')
+                    elif added > max_added_area:
+                        reason = (f'{added:.0%} of the MeshFix surface lies on no input face '
+                                  f'(> --max_added_area {max_added_area:g})')
+                    else:
+                        mesh, repair_path = candidate, 'meshfix'
+                        area_retention, added_area = retention, added
+                        reason = None
+            if reason is not None:
+                if opts.get('repair_fallback', 'none') != 'winding':
+                    return {'path': path, 'error': reason, 'repair_path': 'rejected'}
+                mesh = _winding_fallback(before, int(opts.get('winding_resolution', 192)))
+                if mesh is None:
+                    return {'path': path, 'error': f'{reason}; winding fallback found no solid',
+                            'repair_path': 'rejected'}
+                repair_path = 'winding'
+                # Recorded, not gated: winding is the last tier, so the numbers
+                # say how far it moved the surface rather than decide anything.
+                area_retention, added_area = _surface_match(before, mesh, seed)
 
         if not mesh.is_watertight:
-            return {'path': path, 'error': 'not watertight after preprocessing'}
+            return {'path': path, 'error': 'not watertight after preprocessing',
+                    'repair_path': 'rejected'}
 
         if max_faces > 0 and len(mesh.faces) > max_faces:
             simplified = mesh.simplify_quadric_decimation(face_count=max_faces)
@@ -325,6 +481,14 @@ def _process_mesh(task):
             # decimation. Keep the repaired full-resolution mesh in that case.
             if simplified.is_watertight:
                 mesh = simplified
+
+        rotation = None
+        if opts.get('canonicalize', 'none') == 'inertia':
+            rotation, _ = canonical_rotation(mesh, seed=seed)
+            transform = np.eye(4)
+            transform[:3, :3] = rotation
+            mesh = mesh.copy()
+            mesh.apply_transform(transform)
 
         processed_faces = len(mesh.faces)
         mesh, center, scale = normalize_mesh(mesh)
@@ -335,7 +499,8 @@ def _process_mesh(task):
             sharp_edge_fraction=sharp_edge_fraction,
             sharp_edge_angle=sharp_edge_angle)
         cond = mesh_descriptors(mesh)
-        return {
+        body_count = int(mesh.body_count)
+        result = {
             'path': path,
             'sample': sample,
             'cond': cond,
@@ -343,9 +508,94 @@ def _process_mesh(task):
             'scale': scale,
             'original_faces': original_faces,
             'processed_faces': processed_faces,
+            'repair_path': repair_path,
+            'area_retention': area_retention,
+            'added_area': added_area,
+            'body_count': body_count,
+            # Watertight here, so Euler's formula gives the total genus.
+            'genus': int(round((2 * body_count - int(mesh.euler_number)) / 2)),
+            'group': opts.get('group'),
         }
+        if rotation is not None:
+            result['canonical_rotation'] = rotation
+        return result
     except Exception as exc:
         return {'path': path, 'error': str(exc)}
+
+
+def _surface_match(before, after, seed):
+    """(kept, added) between a mesh and its repaired version, by surface sampling.
+
+    kept is the fraction of ``before``'s area within SURFACE_MATCH_TOL of
+    ``after``; added is the fraction of ``after``'s area farther than that from
+    every face of ``before`` (caps, bridges, invented walls). Both are area
+    weighted because sample_surface draws points uniformly by area.
+    """
+    import trimesh
+
+    from general_modules.winding_remesh import _unsigned_distance
+
+    tol = SURFACE_MATCH_TOL * float(np.linalg.norm(before.extents))
+    p_before, _ = trimesh.sample.sample_surface(before, SURFACE_MATCH_POINTS, seed=seed)
+    p_after, _ = trimesh.sample.sample_surface(after, SURFACE_MATCH_POINTS, seed=seed)
+    kept = float((_unsigned_distance(after.vertices, after.faces, p_before) <= tol).mean())
+    added = float((_unsigned_distance(before.vertices, before.faces, p_after) > tol).mean())
+    return kept, added
+
+
+def _winding_fallback(mesh, resolution):
+    """Winding-number remesh, then drop floaters below MIN_BODY_FRACTION."""
+    import trimesh
+
+    from general_modules.mesh_extraction import MIN_BODY_FRACTION
+    from general_modules.winding_remesh import winding_remesh
+
+    out, _ = winding_remesh(mesh, resolution=resolution)
+    if out is None:
+        return None
+    if out.body_count > 1:
+        bodies = out.split(only_watertight=False)
+        floor = MIN_BODY_FRACTION * len(out.faces)
+        largest = max(len(b.faces) for b in bodies)
+        kept = [b for b in bodies if len(b.faces) >= floor or len(b.faces) == largest]
+        out = trimesh.util.concatenate(kept) if len(kept) > 1 else kept[0]
+    return out
+
+
+def _stem(path):
+    return os.path.splitext(os.path.basename(path))[0]
+
+
+def _read_split_groups(csv_path):
+    """{stem: group} from a stem,group CSV; a header row is skipped."""
+    import csv
+
+    groups = {}
+    with open(csv_path, newline='', encoding='utf-8') as handle:
+        for row in csv.reader(handle):
+            if len(row) < 2 or not row[0].strip():
+                continue
+            if not groups and row[0].strip().lower() in ('stem', 'file_id', 'id', 'name'):
+                continue
+            groups[row[0].strip()] = row[1].strip()
+    if not groups:
+        raise SystemExit(f'--split_groups {csv_path} has no stem,group rows')
+    return groups
+
+
+def _group_split(paths, groups, infer_fraction, rng):
+    """Whole groups go to infer, in seeded random order, until infer_fraction of the meshes."""
+    members = {}
+    for p in paths:
+        members.setdefault(groups[_stem(p)], []).append(p)
+    names = sorted(members)
+    target = round(len(paths) * infer_fraction)
+    infer = set()
+    for i in rng.permutation(len(names)):
+        if len(infer) >= target:
+            break
+        infer.update(members[names[i]])
+    return infer
 
 
 def _load_partial_ascii_stl(path, trimesh_module):
@@ -385,6 +635,13 @@ def _consume_mesh_result(shapes_grp, written, result):
     grp.attrs['scale'] = result['scale']
     grp.attrs['original_faces'] = result['original_faces']
     grp.attrs['processed_faces'] = result['processed_faces']
+    for key in ('repair_path', 'area_retention', 'added_area', 'body_count', 'genus'):
+        if key in result:
+            grp.attrs[key] = result[key]
+    if result.get('canonical_rotation') is not None:
+        grp.attrs['canonical_rotation'] = np.asarray(result['canonical_rotation'], dtype=np.float64)
+    if result.get('group') is not None:
+        grp.attrs['group'] = str(result['group'])
     return 1
 
 

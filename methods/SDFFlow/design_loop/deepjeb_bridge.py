@@ -15,11 +15,16 @@ so a generated bracket is discretized by the identical procedure the labels were
 produced under. A second implementation here would be a train/serve skew waiting
 to happen.
 
-**The frame map is measured, not assumed.** Every DeepJEB bracket occupies the
-same envelope (centre 15.79, -71.58, 32.74 mm and longest side 184.18 mm,
+**The frame map is measured, not assumed.** DeepJEB brackets occupy nearly
+the same envelope (centre 15.79, -71.58, 32.74 mm and longest side 184.18 mm,
 measured across the fetched brackets with standard deviations of 0.24 and 0.71
-mm), and `normalize_mesh` scales that longest side to 1.8. Inverting it is
-therefore exact to about 0.4%.
+mm), and `normalize_mesh` scales each one's longest side to 1.8.
+`normalized_to_millimetres` inverts that with the population numbers. The ex10
+labels were written through that same map, so the ex10 layout keeps it (train
+and serve share one frame). The ex13 ('ver') labels were solved on the CAD
+brackets in their true frames, and a generated shape's own length is not the
+population's (ex1 samples come out scaled 0.97-1.01, shifted up to ~3 mm), so
+that layout registers each shape on its bores first (`registered_millimetres`).
 
   python dataset/deepjeb_bridge.py --stl-dir output/.../samples --out infer.h5
 """
@@ -36,7 +41,9 @@ from design_loop.build_deepjeb_mgn import (
     COND_VAR, FEATURE_NAMES, INPUT_VAR, LOAD_CASES, OUTPUT_VAR,
     decimate, edges_from_faces,
 )
-from design_loop.interfaces import SERVE_TOL, node_types
+from design_loop.interfaces import (
+    SERVE_TOL, InterfaceError, node_types, register_to_interfaces, vertex_normals,
+)
 
 # The ex13 vertical-load layout (D:/CAE_datasets_raw/deepjeb_ver_fea/src/build_ex13.py):
 # one load case, no condition rows, and the boundary conditions carried as a
@@ -110,25 +117,66 @@ def mesh_to_records(mesh, load_cases=LOAD_CASES, target_nodes=5000,
     return records
 
 
+def registered_millimetres(mesh):
+    """A generated surface's vertices in its own DeepJEB frame, and that frame.
+
+    The population map (`normalized_to_millimetres`) is exact only for a
+    bracket whose longest side is the population's 184.18 mm; `normalize_mesh`
+    gave every training bracket the same normalized length whatever its true
+    one. `interfaces.register_to_interfaces` recovers the per-shape scale and
+    shift from the bores every DeepJEB bracket shares. Raises InterfaceError
+    when they cannot be fitted: a shape without the canonical interface pattern
+    is not one the ex13 labels describe.
+
+    frame['mm_per_unit'] is the shape's millimetres per normalized SDF unit
+    (DEEPJEB_MAX_SIDE / SDF_TARGET_EXTENT x frame['scale']).
+    """
+    faces = np.asarray(mesh.faces, dtype=np.int64)
+    population = normalized_to_millimetres(mesh.vertices)
+    registered, frame = register_to_interfaces(population, vertex_normals(population, faces))
+    if not frame['ok']:
+        raise InterfaceError(f"frame registration failed: {frame['reason']}")
+    frame['mm_per_unit'] = DEEPJEB_MAX_SIDE / SDF_TARGET_EXTENT * frame['scale']
+    return registered, frame
+
+
+def apply_frame(vertices, frame):
+    """Normalized vertices -> the registered DeepJEB mm frame `registered_millimetres` found."""
+    return (normalized_to_millimetres(vertices) * frame['scale']
+            + np.asarray(frame['shift'], dtype=np.float64))
+
+
 def mesh_to_ver_record(mesh, target_nodes=5000, already_millimetres=False,
                        name='generated', tol=SERVE_TOL):
     """One ex13-layout record: coordinates, a zeroed state block, node types.
 
+    A generated (normalized) shape is first registered to its own frame
+    (`registered_millimetres`); the ex13 labels were solved on the exact CAD
+    brackets in theirs, so this is the frame the surrogate was trained in.
     The node types come from the geometric interface rule the labels were made
-    with (`design_loop.interfaces`); a shape that fails its gates raises
-    InterfaceError, the same refusal the labelling run applied.
+    with (`design_loop.interfaces`), applied to the full surface and carried
+    through `decimate` -- as the labels' types were carried from the tet4
+    boundary. The gates are judged there too: on the 5000-node graph a 6.5 mm
+    lug ear wall can keep only one ring of nodes inside its band, which refused
+    4 of 64 ex1 samples whose full surface has the whole bore (span >= 0.74,
+    coverage >= 334 deg). A shape that fails raises InterfaceError, the same
+    refusal the labelling run applied.
+
+    The record carries `frame` (None for `already_millimetres` input).
     """
-    vertices = np.asarray(mesh.vertices, dtype=np.float64)
-    if not already_millimetres:
-        vertices = normalized_to_millimetres(vertices)
+    if already_millimetres:
+        vertices, frame = np.asarray(mesh.vertices, dtype=np.float64), None
+    else:
+        vertices, frame = registered_millimetres(mesh)
     small = decimate({'vertices': vertices,
-                      'faces': np.asarray(mesh.faces, dtype=np.int64)}, target_nodes)
+                      'faces': np.asarray(mesh.faces, dtype=np.int64),
+                      'constrained': node_types(vertices, tol)}, target_nodes)
     edges = edges_from_faces(small['faces'])
     num_nodes = small['vertices'].shape[0]
     nodal = np.zeros((len(VER_FEATURE_NAMES), 1, num_nodes), dtype=np.float32)
     nodal[0:3, 0, :] = small['vertices'].T
-    nodal[-1, 0, :] = node_types(small['vertices'], tol)
-    return {'item': name, 'case': 'ver', 'nodal': nodal, 'edges': edges}
+    nodal[-1, 0, :] = small['constrained']
+    return {'item': name, 'case': 'ver', 'nodal': nodal, 'edges': edges, 'frame': frame}
 
 
 def write_inference_contract(out_path, records, feature_names=FEATURE_NAMES,

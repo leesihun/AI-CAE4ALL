@@ -677,7 +677,9 @@ search-phase feasibility flag as relative only.
 Artifacts in `output_dir`:
 
 - `optimized.stl`, `baseline.stl` and `typical.stl` (the median-mass population
-  member);
+  member), in the normalized SDF frame; with the `ver` surrogate also
+  `optimized_mm.stl` etc. in the shape's registered DeepJEB mm frame (the input
+  the OpenRadioss `deepjeb_ver_fea` check solves);
 - `summary.json`;
 - `history.json` (every evaluation, including failures and timings);
 - `convergence.png`;
@@ -703,6 +705,18 @@ The surrogate's layout follows its inference config
 vertical-load contract (`ver`: u_x, u_y, u_z, von Mises + a node-type row from
 `design_loop/interfaces.py`'s bore/ear rule, `opt_load_cases vertical` only,
 label length scale 0.184181/1.8, no `opt_fea_verify`); anything else is ex10.
+The `ver` layout **registers each candidate to its own frame** first
+(`deepjeb_bridge.registered_millimetres` → `interfaces.register_to_interfaces`):
+the population map (`normalized_to_millimetres`) assumes every bracket is
+184.18 mm long, so ex1 samples came out scaled 0.96-1.01 and shifted up to
+~3 mm, the bores missed the rule, and ~1/3 were refused. A similarity fit on
+the four bolt bores (scale, x-y) plus the lug bore (z) fixes it; coordinates,
+node types and mass (`mass_of(..., frame_scale)`, up to ~10% heavier before)
+all use that frame, and `summary['surrogate']['frame']` counts registrations.
+The interface gates are judged on the full MC surface, the types carried
+through `decimate` as the labels' were. **ex10 is deliberately not
+registered**: its labels were written through the population map, so that is
+its train/serve-consistent frame.
 `opt_surrogate_python` (path key, optional) is the interpreter for the nested
 HI-MGN launch -- set it when the SDFFlow env has no `torch_geometric`. Confirm the
 winner with the real solver before quoting it:

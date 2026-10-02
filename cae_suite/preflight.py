@@ -300,9 +300,10 @@ def _validate_sdf_against_config(result: PreflightResult, field_name: str) -> No
             f"condition_names {unknown} are not in the dataset: it carries {available}.",
             field_name="condition_names",
             location=result.parsed.location("condition_names"),
-            hint="FEA-named conditions live in the 'cond_extra' sidecar. Write it first: "
-            "python methods/SDFFlow/add_fea_conditions.py --h5 <dataset.h5> "
-            "--csv <bracket_labels.csv>",
+            hint="Non-geometric conditions live in the 'cond_extra' sidecar. Write it first "
+            "with methods/SDFFlow/add_fea_conditions.py (FEA labels), "
+            "add_mcb_class_conditions.py (MCB class_* / --hole_count) or "
+            "add_thingi_category_conditions.py (Thingi10K cat_*).",
         )
 
 
