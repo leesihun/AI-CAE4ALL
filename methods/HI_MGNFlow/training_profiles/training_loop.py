@@ -524,6 +524,7 @@ def log_training_config(config):
         flow_cfg = resolve_flow_config(config)
         print(f"Stage 2 (prior): {config.get('prior_blocks', 4)} AdaLN-Zero GnBlocks, "
               f"conditional flow matching on FROZEN coarse latents")
+        print(f"  global coupling:       {config.get('prior_global', 'none')}")
         print(f"  parameterization:      {flow_cfg['weighting']}"
               + ("  (velocity prediction)" if flow_cfg['weighting'] == 'uniform'
                  else "  (data prediction -- (1-s*t)^2 weight, favours the deterministic end)"))

@@ -261,5 +261,78 @@ def test_flow_smoke(tmp_path=None):
     print("SMOKE TEST PASSED")
 
 
+def test_prior_global_token(tmp_path=None):
+    """prior_global token: starts as the local prior, couples a whole graph,
+    never leaks across graphs in a batch, and survives the model's global init."""
+    import tempfile
+    from model.autoencoder import LatentFlowPrior
+    from model.blocks import AdaLNZero
+    from model.CHiMGNFlow import CHiMGNFlow
+
+    torch.manual_seed(0)
+    C, D, n = 4, 16, 12
+    # two disjoint 12-node paths: node 11 is 11 hops from node 0, far past the
+    # 2-block trunk's receptive field
+    s = torch.arange(n - 1)
+    path = torch.cat([torch.stack([s, s + 1]), torch.stack([s + 1, s])], dim=1)
+    edge_index = torch.cat([path, path + n], dim=1)
+    batch = torch.cat([torch.zeros(n, dtype=torch.long), torch.ones(n, dtype=torch.long)])
+    edge_attr = torch.randn(edge_index.shape[1], D)
+    cond_x = torch.randn(2 * n, D)
+    z_t = torch.randn(2 * n, C)
+    t = torch.rand(2, 1)
+
+    local = LatentFlowPrior(C, D, 8, 2)
+    token = LatentFlowPrior(C, D, 8, 2, global_mode='token')
+    token.reset_global_token()
+    missing, unexpected = token.load_state_dict(local.state_dict(), strict=False)
+    assert not unexpected and all(k.startswith(('g_update.', 'g_out.')) for k in missing)
+
+    def v(prior, z):
+        return prior(z, t, cond_x, edge_attr, edge_index, batch)
+
+    # 1. zero-initialised token -> node projection: exactly the local network
+    with torch.no_grad():
+        assert torch.allclose(v(local, z_t), v(token, z_t))
+
+    # 2. with the token switched on, a node 11 hops away feels a perturbation
+    #    the local trunk cannot reach, and the other graph in the batch does not
+    with torch.no_grad():
+        for lin in token.g_out:
+            lin.weight.normal_(0.0, 0.1)
+        z_pert = z_t.clone()
+        z_pert[0] += 1.0
+        for prior, reaches in ((local, False), (token, True)):
+            d = (v(prior, z_pert) - v(prior, z_t)).abs().sum(-1)
+            assert bool(d[n - 1] > 1e-6) == reaches, (prior.global_mode, float(d[n - 1]))
+            assert torch.count_nonzero(d[n:]) == 0, "global token leaked across graphs"
+
+    # 3. gradient checkpointing gives the same velocity and the same gradients
+    token.train()
+    names, params = zip(*token.named_parameters())
+    runs = []
+    for ckpt in (False, True):
+        token.use_checkpointing = ckpt
+        out = v(token, z_t)
+        runs.append((out, torch.autograd.grad(out.square().sum(), params, allow_unused=True)))
+    assert torch.allclose(runs[0][0], runs[1][0], atol=1e-6)
+    for name, a, b in zip(names, runs[0][1], runs[1][1]):
+        assert (a is None) == (b is None), name
+        assert a is None or torch.allclose(a, b, atol=1e-5), name
+        if name.startswith(('g_update.', 'g_out.')):
+            assert a is not None and torch.count_nonzero(a) > 0, f"{name} gets no gradient"
+
+    # 4. the full model: init_weights would kaiming-fill the projection, and
+    #    reset_zero_init_heads must zero it again; AdaLN count is unchanged
+    out_dir = str(tmp_path) if tmp_path is not None else tempfile.mkdtemp()
+    config = make_config(build_synthetic_h5(os.path.join(out_dir, 'tok.h5')), out_dir)
+    config['prior_global'] = 'token'
+    model = CHiMGNFlow(config, 'cpu')
+    for lin in model.model.prior.g_out:
+        assert torch.count_nonzero(lin.weight) == 0 and torch.count_nonzero(lin.bias) == 0
+    assert sum(isinstance(m, AdaLNZero) for m in model.modules()) == config['prior_blocks']
+
+
 if __name__ == '__main__':
     test_flow_smoke()
+    test_prior_global_token()

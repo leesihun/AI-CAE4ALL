@@ -83,7 +83,7 @@ KEY_CATALOGS.chiMgnflow = [...new Set([
   // 1, latent_ch/ae_kl_weight/ae_epochs) feeding a coarse-latent flow prior
   // (stage 2, prior_blocks), with ae_checkpoint loading a frozen stage-1
   // checkpoint for a standalone 'train_prior' run.
-  ...keys(`ae_checkpoint ae_epochs ae_kl_weight latent_ch prior_blocks`)
+  ...keys(`ae_checkpoint ae_epochs ae_kl_weight latent_ch prior_blocks prior_global`)
 ])].sort();
 
 export const MODEL_CATALOG = {
@@ -156,7 +156,7 @@ export const MODEL_CATALOG = {
       // cae_suite/specs/chi_mgnflow.py's own defaults. The 200:500 split of
       // ae_epochs to training_epochs is a Studio default, not a checked-in
       // config's value.
-      ae_epochs: "200", latent_ch: "4", ae_kl_weight: "1e-6", prior_blocks: "4",
+      ae_epochs: "200", latent_ch: "4", ae_kl_weight: "1e-6", prior_blocks: "4", prior_global: "none",
       flow_steps: "30", flow_solver: "heun", flow_time_freqs: "16",
       flow_t_sampling: "uniform", flow_loss_weighting: "uniform", flow_det_prob: "0",
       flow_predict: "sample", val_flow_steps: "10", val_num_samples: "8", best_by: "crps",
@@ -433,6 +433,8 @@ export const CHOICES = {
   flow_t_sampling: ["uniform", "logitnormal"],
   flow_loss_weighting: ["uniform", "x0"],
   flow_predict: ["sample", "mean", "ensemble_mean"],
+  // FLOW-PRIORGLOBAL: cHI-MGNflow's stage-2 prior trunk coupling.
+  prior_global: ["none", "token"],
   // cHI-MGNflow's list; MeshGraphNets-V narrows it (MODEL_CHOICES below).
   best_by: ["recon", "crps", "det"],
   // MeshGraphNets-V enums, each a spec validator: MGNV-PRIOR-FAMILY, the
@@ -1291,6 +1293,7 @@ export const HELP = {
   flow_loss_weighting: "uniform predicts velocity uniformly; x0 emphasizes the deterministic path endpoint.",
   flow_det_prob: "Fraction of training graphs pinned to t=0. Must be in [0, 1).",
   flow_predict: "sample integrates one trajectory; mean is the deterministic t=0 readout; ensemble_mean averages generated draws.",
+  prior_global: "Global coupling in the stage-2 latent prior. none uses local message passing only; token adds one per-graph global token that every coarse node reads and writes before each block, so draws can vary coherently across the whole part. Checkpoint architecture: a train_prior run can switch it on top of an existing ae_checkpoint.",
   num_vae_samples: "Number of stochastic field trajectories. Used by MeshGraphNets-V and cHI-MGNflow inference.",
   vae_batch_size: "How many stochastic trajectories are evaluated together; lower it to reduce inference memory.",
   infer_chunk_size: "Transolver inference chunk size. Leave blank to use the checkpoint/model configuration.",

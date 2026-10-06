@@ -26,7 +26,7 @@ from torch.utils.data.distributed import DistributedSampler
 from general_modules import distributed as D
 from general_modules.sdf_dataset import build_dataset_splits
 from general_modules.mesh_extraction import decode_sdf_grid, sdf_grid_to_mesh, mesh_report
-from general_modules.mesh_render import plot_mesh_strip
+from general_modules.mesh_render import ENDPOINT_COLOR, MIDDLE_COLOR, plot_mesh_strip
 from model.sdf_vae import SDFVAE
 from model.velocity_net import VelocityNet, flow_matching_loss, sample_latents
 from training_profiles.setup import (
@@ -186,6 +186,20 @@ def fm_worker(config, config_filename='config.txt'):
     latent_flat_dim = z_train.shape[1]
     if rank0:
         print(f'Latents: train {z_train.shape}, val {z_val.shape}')
+
+    # Real shapes whose TRUE conditions the periodic generation picture samples
+    # from (val; train's first posterior draw only when val is empty).
+    generation_reference = None
+    if rank0 and cond_dim > 0:
+        binary = ((c_train == 0) | (c_train == 1)).all(dim=0).tolist()
+        if len(z_val_n):
+            generation_reference = _pick_generation_shapes(
+                config, 'val', z_val_n, c_val, c_val_n, val_dataset.indices, cond_names, binary)
+        else:
+            n_shapes = len(train_dataset)
+            generation_reference = _pick_generation_shapes(
+                config, 'train', z_train_n[:n_shapes], c_train[:n_shapes], c_train_n[:n_shapes],
+                train_dataset.indices, cond_names, binary)
 
     batch_size = int(config.get('batch_size', 64))
     train_ds = TensorDataset(z_train_n, c_train_n)
@@ -383,7 +397,7 @@ def fm_worker(config, config_filename='config.txt'):
                 if rank0:
                     run_generation_test(eval_model, vae, device, config, epoch,
                                         latent_flat_dim, latent_mean, latent_std,
-                                        cond_dim=cond_dim)
+                                        cond_dim=cond_dim, reference=generation_reference)
                 maybe_save(epoch)
                 D.barrier()
 
@@ -474,17 +488,57 @@ def _validate(model, z_val_n, c_val_n, device, cond_dim):
     return (v_pred - (z - noise)).pow(2).mean().item()
 
 
+def _pick_generation_shapes(config, split, z_n, c_raw, c_n, shape_ids, cond_names, binary):
+    """Evenly spaced shapes of one split for the periodic generation picture.
+
+    Returns (normalized latents [n, D], normalized TRUE condition rows [n, C],
+    panel labels). A label names the h5 shape and its active one-hot columns
+    (`binary`: columns that hold only 0/1 in the training set), prefix dropped:
+    cat_household -> household, class_locknuts -> locknuts. Above four shapes
+    the count is rounded down to even, so the source/generated row pairs of the
+    picture stay column-aligned.
+    """
+    n = min(int(config.get('num_test_shapes', 2)), 8, len(shape_ids))
+    if n > 4:
+        n -= n % 2
+    positions = np.unique(np.linspace(0, len(shape_ids) - 1, n).round().astype(np.int64))
+    labels = []
+    for p in positions:
+        tags = [cond_names[j].split('_', 1)[-1] for j in range(len(cond_names))
+                if binary[j] and float(c_raw[p, j]) > 0.5]
+        labels.append(f'{split} shape {int(shape_ids[p])}' + (f' ({", ".join(tags)})' if tags else ''))
+    index = torch.as_tensor(positions)
+    return z_n[index], c_n[index], labels
+
+
 @torch.no_grad()
 def run_generation_test(model, vae, device, config, epoch, latent_flat_dim,
-                        latent_mean, latent_std, cond_dim=0):
-    """Sample mean-conditioned latents (or unconditional latents) for a smoke test."""
+                        latent_mean, latent_std, cond_dim=0, reference=None):
+    """Periodic generation picture (and STLs) for the FM stage.
+
+    A conditional FM samples from the TRUE conditions of a few real shapes
+    (`reference` from `_pick_generation_shapes`), and each sample is drawn
+    directly under the VAE reconstruction of the shape it took its conditions
+    from, so the picture shows whether the generator follows its conditions.
+    The all-zeros "mean condition" used before is a request no real shape
+    makes -- with one-hot class columns it is a fractional member of every
+    class at once -- and drew the same blob in every panel. An unconditional FM
+    (or no reference) draws plain samples.
+    """
     model.eval()
     out_dir = os.path.join(config.get('output_dir', './outputs'), 'fm_samples')
     os.makedirs(out_dir, exist_ok=True)
-    num_samples = min(int(config.get('num_test_shapes', 2)), 8)
     resolution = int(config.get('mc_resolution_test', 96))
+    latent_std, latent_mean = latent_std.to(device), latent_mean.to(device)
 
-    cond = torch.zeros(num_samples, cond_dim, device=device) if cond_dim > 0 else None
+    if cond_dim > 0 and reference is not None:
+        z_ref_n, cond, sample_labels = reference
+        cond = cond.to(device)
+        num_samples = len(cond)
+    else:
+        z_ref_n = cond = None
+        num_samples = min(int(config.get('num_test_shapes', 2)), 8)
+        sample_labels = [f'sample {i}' for i in range(num_samples)]
     # The same starting noise every epoch (drawn on the CPU so it does not
     # depend on the device): panels then change only because the network did,
     # and one epoch's picture can be compared with the next.
@@ -492,33 +546,63 @@ def run_generation_test(model, vae, device, config, epoch, latent_flat_dim,
                         generator=torch.Generator().manual_seed(int(config.get('seed', 0))))
     z_n = sample_latents(model, num_samples, latent_flat_dim, device, cond=cond,
                          ode_steps=int(config.get('ode_steps', 50)), noise=noise.to(device))
-    z = z_n * latent_std.to(device) + latent_mean.to(device)
-    # Collected for one strip figure: a row of samples on shared axes shows
-    # mode collapse (every panel the same shape) at a glance, which per-shape
-    # STL files do not.
-    meshes, labels, reports = [], [], []
-    for i in range(num_samples):
-        volume = decode_sdf_grid(vae, z[i:i + 1], resolution=resolution, device=device)
-        mesh = sdf_grid_to_mesh(volume)
+    z = z_n * latent_std + latent_mean
+
+    def decode(z_row):
+        mesh = sdf_grid_to_mesh(decode_sdf_grid(vae, z_row, resolution=resolution, device=device))
         report = mesh_report(mesh)
-        if report['valid']:
+        return (mesh if report['valid'] else None), report
+
+    # Collected for one figure: samples on shared axes show mode collapse
+    # (every panel the same shape) at a glance, which per-shape STL files do not.
+    source = ([f' [{label}]' for label in sample_labels] if z_ref_n is not None
+              else [''] * num_samples)
+    samples, sample_reports = [], []
+    for i in range(num_samples):
+        mesh, report = decode(z[i:i + 1])
+        if mesh is not None:
             path = os.path.join(out_dir, f'epoch{epoch:05d}_sample{i}.stl')
             mesh.export(path)
-            print(f'  [test] sample {i}: watertight={report["watertight"]} faces={report["faces"]} -> {path}')
+            print(f'  [test] sample {i}{source[i]}: watertight={report["watertight"]} '
+                  f'faces={report["faces"]} -> {path}')
         else:
-            print(f'  [test] sample {i}: NO ZERO CROSSING')
-        meshes.append(mesh if report['valid'] else None)
-        labels.append(f'sample {i}')
-        reports.append(report)
+            print(f'  [test] sample {i}{source[i]}: NO ZERO CROSSING')
+        samples.append(mesh)
+        sample_reports.append(report)
 
-    if config.get('display_testset', True) and meshes:
-        written = plot_mesh_strip(
-            meshes, labels, reports,
-            os.path.join(out_dir, f'epoch{epoch:05d}_samples.png'),
-            dpi=int(config.get('plot_dpi', 180)),
-            max_faces=int(config.get('plot_max_faces', 0)),
-            title=f'SDFFlow samples -- epoch {epoch}',
-            ncols=4,
-        )
-        if written:
-            print(f'  [viz] {written}')
+    if not (config.get('display_testset', True) and samples):
+        return
+    if z_ref_n is None:
+        meshes, labels, reports, colors = samples, sample_labels, sample_reports, None
+        ncols = 4
+        title = f'SDFFlow samples -- epoch {epoch}'
+    else:
+        # Row pairs: the source shapes' reconstructions (blue), then the samples
+        # generated from their conditions (orange) directly below them.
+        z_ref = z_ref_n.to(device) * latent_std + latent_mean
+        refs = [decode(z_ref[i:i + 1]) for i in range(num_samples)]
+        ncols = num_samples if num_samples <= 4 else num_samples // 2
+        meshes, labels, reports, colors = [], [], [], []
+        for start in range(0, num_samples, ncols):
+            chunk = range(start, start + ncols)
+            for i in chunk:
+                meshes.append(refs[i][0])
+                reports.append(refs[i][1])
+                labels.append(f'{sample_labels[i]}: reconstruction')
+                colors.append(ENDPOINT_COLOR)
+            for i in chunk:
+                meshes.append(samples[i])
+                reports.append(sample_reports[i])
+                labels.append('generated from its conditions')
+                colors.append(MIDDLE_COLOR)
+        title = (f'SDFFlow samples from real shape conditions -- epoch {epoch} '
+                 '(blue: source shape reconstruction, orange: generated)')
+    written = plot_mesh_strip(
+        meshes, labels, reports,
+        os.path.join(out_dir, f'epoch{epoch:05d}_samples.png'),
+        dpi=int(config.get('plot_dpi', 180)),
+        max_faces=int(config.get('plot_max_faces', 0)),
+        title=title, colors=colors, ncols=ncols,
+    )
+    if written:
+        print(f'  [viz] {written}')

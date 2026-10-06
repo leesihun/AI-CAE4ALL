@@ -160,6 +160,9 @@ def build_model_config(config) -> dict:
         'latent_ch':         config.get('latent_ch', 4),
         'ae_kl_weight':      config.get('ae_kl_weight', 1e-6),
         'prior_blocks':      config.get('prior_blocks', 4),
+        # Architecture-defining: 'token' adds the per-graph global token's
+        # weights, so an inference config must rebuild the prior the same way.
+        'prior_global':      config.get('prior_global', 'none'),
         'input_var':         config.get('input_var'),
         'output_var':        config.get('output_var'),
         'cond_var':          config.get('cond_var', 0),

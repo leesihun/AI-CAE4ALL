@@ -33,6 +33,11 @@ AE_PRIOR_KEYS = frozenset(
         "ae_kl_weight",
         # AdaLN-Zero GnBlocks in the stage-2 LatentFlowPrior's trunk.
         "prior_blocks",
+        # Global coupling in that trunk: 'none' (local GnBlocks only) or
+        # 'token' (one per-graph virtual node read from and broadcast back to
+        # every coarse node before each block). ARCHITECTURE-DEFINING for the
+        # prior only -- the frozen compressor loads either way.
+        "prior_global",
         # mode 'train_prior' only: path to a checkpoint saved by a completed
         # 'train_ae' run. Loaded once at construction and frozen; the
         # compressor never receives gradient during stage 2.
@@ -42,6 +47,9 @@ AE_PRIOR_KEYS = frozenset(
         "ae_epochs",
     }
 )
+
+# Mirrors model/autoencoder.py::PRIOR_GLOBAL_MODES.
+PRIOR_GLOBAL_CHOICES = ("none", "token")
 
 FLOW_ONLY_KEYS = frozenset(
     {
@@ -305,6 +313,13 @@ def validate_chi_mgnflow(ctx: SpecValidationContext) -> None:
             ctx.add("FLOW-PRIORBLOCKS", Severity.ERROR,
                     "prior_blocks must be an integer >= 1.", field_name="prior_blocks")
 
+    if "prior_global" in values:
+        v = str(values["prior_global"]).strip().lower()
+        if v not in PRIOR_GLOBAL_CHOICES:
+            ctx.add("FLOW-PRIORGLOBAL", Severity.ERROR,
+                    f"prior_global must be one of {', '.join(PRIOR_GLOBAL_CHOICES)}; "
+                    f"got '{values['prior_global']}'.", field_name="prior_global")
+
     if "ae_kl_weight" in values:
         v = numeric(values["ae_kl_weight"])
         if v is None or v < 0:
@@ -357,6 +372,7 @@ def build_chi_mgnflow_spec() -> MethodSpec:
             "latent_ch": 4,
             "ae_kl_weight": 1e-6,
             "prior_blocks": 4,
+            "prior_global": "none",
             "flow_steps": 30,
             "flow_solver": "heun",
             "flow_time_freqs": 16,

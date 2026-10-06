@@ -218,6 +218,7 @@ python AI_CAE4ALL_main.py --config configs/HI_MGNFlow/SAOI_all_input/config_trai
 | `latent_ch` | 4 | coarse 메시 노드 1개당 압축 잠재 채널 수 (풀링된 벡터 1개가 아님). **아키텍처를 결정** — 체크포인트는 학습 당시 값에서만 로드됨 |
 | `ae_kl_weight` | 1e-6 | stage 1의 `KL(q(z\|y)‖N(0,I))` 가중치. 논문 기준 ~1e-6으로 아주 작게 — near-lossless 압축기가 목적이며 생성적 병목이 아니다 |
 | `prior_blocks` | 4 | stage 2 `LatentFlowPrior` 트렁크의 AdaLN-Zero GnBlock 개수 |
+| `prior_global` | `none` | prior 트렁크의 전역 결합. `none` = 국소 GnBlock만, `token` = 그래프당 전역 토큰 하나가 매 블록 앞에서 coarse 노드 평균을 읽고 모든 노드에 다시 더해짐(출력 사영 zero-init이라 시작점은 `none`과 동일). 국소 트렁크는 노드별 주변분포는 맞추지만 전체 형상에 걸친 일관된 큰 모드의 산포를 과소추정한다. prior만의 아키텍처 키 — 같은 `ae_checkpoint` 위에 `train_prior`로 켤 수 있음 |
 | `ae_checkpoint` | — | `train_prior` 전용. 완료된 `train_ae` 체크포인트 경로 |
 | `ae_epochs` | — | `train`(결합) 전용. stage 1 에폭 수 (stage 2는 `training_epochs`만큼) |
 

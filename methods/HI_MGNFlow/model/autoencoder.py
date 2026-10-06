@@ -47,7 +47,7 @@ from torch_geometric.data import Data
 from torch_geometric.utils import scatter
 
 from model.blocks import AdaLNZero, UnpoolBlock, apply_adaln
-from model.checkpointing import process_with_checkpointing
+from model.checkpointing import checkpoint_adaln_block, process_with_checkpointing
 from model.coarsening import pool_features
 from model.encoder_decoder import Decoder, Encoder, GnBlock
 from model.flow import TimeEmbedding
@@ -233,6 +233,9 @@ class MultiscaleDecoder(nn.Module):
         return self.decoder(current_graph)
 
 
+PRIOR_GLOBAL_MODES = ('none', 'token')
+
+
 class LatentFlowPrior(nn.Module):
     """Flow-matching velocity field over the coarsest-level latent z ONLY.
 
@@ -241,13 +244,28 @@ class LatentFlowPrior(nn.Module):
     makes the K-step ODE integration at generation time nearly free compared
     to the per-step full-mesh V-cycle the previous field-space flow model
     paid at every one of its K steps.
+
+    `global_mode='token'` threads one per-graph global token (a virtual node)
+    through the trunk: before every block it reads the mean of the node
+    features, updates its own residual stream, and is added back to every node
+    through a zero-initialised projection. The GnBlocks alone only see k-hop
+    neighbourhoods, while the exact flow-matching velocity at a node depends on
+    the WHOLE z_t (which buckling branch a draw is heading for is a property of
+    the entire latent). A local trunk therefore fits the per-node marginals but
+    under-spreads the coherent large-scale modes, and adding blocks (4 -> 16 on
+    ex3) barely widened it. The zero init makes 'token' start out as exactly
+    the 'none' network.
     """
 
     def __init__(self, latent_ch, latent_dim, time_freqs, prior_blocks,
-                 use_checkpointing=False):
+                 use_checkpointing=False, global_mode='none'):
         super().__init__()
+        if global_mode not in PRIOR_GLOBAL_MODES:
+            raise ValueError(f"prior_global must be one of {PRIOR_GLOBAL_MODES}, "
+                             f"got '{global_mode}'")
         self.latent_ch = latent_ch
         self.use_checkpointing = use_checkpointing
+        self.global_mode = global_mode
         self.in_proj = nn.Linear(latent_ch + latent_dim, latent_dim)
         self.blocks = nn.ModuleList([GnBlock(latent_dim) for _ in range(prior_blocks)])
         self.time_embed = TimeEmbedding(time_freqs)
@@ -255,16 +273,53 @@ class LatentFlowPrior(nn.Module):
             AdaLNZero(latent_dim, self.time_embed.dim) for _ in range(prior_blocks)
         ])
         self.out_head = nn.Linear(latent_dim, latent_ch)
+        if global_mode == 'token':
+            # token update reads [token, mean of node features, t embedding]
+            self.g_update = nn.ModuleList([
+                build_mlp(2 * latent_dim + self.time_embed.dim, latent_dim, latent_dim)
+                for _ in range(prior_blocks)
+            ])
+            self.g_out = nn.ModuleList([
+                nn.Linear(latent_dim, latent_dim) for _ in range(prior_blocks)
+            ])
 
     def reset_time_conditioning(self):
         for m in self.modules():
             if isinstance(m, AdaLNZero):
                 m.reset_identity()
 
+    def reset_global_token(self):
+        """Zero the token -> node projections so 'token' starts as 'none'."""
+        if self.global_mode != 'token':
+            return
+        with torch.no_grad():
+            for lin in self.g_out:
+                lin.weight.zero_()
+                lin.bias.zero_()
+
+    def _token_trunk(self, x, edge_attr, edge_index, t_emb, t_per_node, coarse_batch):
+        g = x.new_zeros(t_emb.shape[0], x.shape[1])
+        ckpt = self.use_checkpointing and self.training
+        for j, block in enumerate(self.blocks):
+            pooled = scatter(x, coarse_batch, dim=0, dim_size=g.shape[0], reduce='mean')
+            g = g + self.g_update[j](torch.cat([g, pooled, t_emb], dim=-1))
+            x = x + self.g_out[j](g)[coarse_batch]
+            if ckpt:
+                x, edge_attr, _, _ = checkpoint_adaln_block(
+                    block, self.t_mod[j], x, t_per_node, edge_attr, edge_index)
+            else:
+                out = apply_adaln(block, Data(x=x, edge_attr=edge_attr, edge_index=edge_index),
+                                  self.t_mod[j], t_per_node)
+                x, edge_attr = out.x, out.edge_attr
+        return x
+
     def forward(self, z_t, t, cond_x, edge_attr, edge_index, coarse_batch):
         t_emb = self.time_embed(t).to(z_t.dtype)
         t_per_node = t_emb[coarse_batch]
         x_in = self.in_proj(torch.cat([z_t, cond_x], dim=-1))
+        if self.global_mode == 'token':
+            return self.out_head(self._token_trunk(
+                x_in, edge_attr, edge_index, t_emb, t_per_node, coarse_batch))
         graph = Data(x=x_in, edge_attr=edge_attr, edge_index=edge_index)
         if self.use_checkpointing and self.training:
             graph = process_with_checkpointing(

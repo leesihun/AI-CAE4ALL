@@ -234,12 +234,14 @@ class LatentDiffusionGraphNet(nn.Module):
         flow_cfg = resolve_flow_config(config)
         self.flow_cfg = flow_cfg
         prior_blocks = int(config.get('prior_blocks', 4))
+        prior_global = str(config.get('prior_global', 'none')).lower().strip()
         self.prior = LatentFlowPrior(
             self.latent_ch, self.latent_dim, flow_cfg['time_freqs'], prior_blocks,
-            use_checkpointing=self.use_checkpointing,
+            use_checkpointing=self.use_checkpointing, global_mode=prior_global,
         )
         print(f"  Latent flow prior: {prior_blocks} AdaLN-Zero GnBlocks over the "
-              f"coarsest level only")
+              f"coarsest level only"
+              + (", plus a per-graph global token" if prior_global == 'token' else ""))
 
         self._ae_frozen = False
 
@@ -263,6 +265,7 @@ class LatentDiffusionGraphNet(nn.Module):
             last.weight.mul_(0.01)
             self.prior.out_head.weight.mul_(0.01)
         self.prior.reset_time_conditioning()
+        self.prior.reset_global_token()
 
     def freeze_ae(self):
         """Freeze every submodule except `prior` (mode == 'train_prior')."""
