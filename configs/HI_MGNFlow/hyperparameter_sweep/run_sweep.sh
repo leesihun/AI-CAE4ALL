@@ -51,6 +51,7 @@
 #
 # Useful overrides:
 #   PYTHON, METHOD_PYTHON, GPUS (default: every GPU the interpreter sees), ARMS,
+#   PROBE_TIMEOUT=900 (seconds the stage-1 environment probe may take),
 #   HALVES, INFER_TAGS, PARALLEL_HALVES=1, KEEP_CACHE=0,
 #   PREFLIGHT=1, EVAL_PREFLIGHT=1, TRAIN=1, INFER=1, REPORT=1
 # Report-only rerun:   TRAIN=0 INFER=0 bash .../run_sweep.sh
@@ -105,10 +106,13 @@ echo "=================================================================="
 
 # ------------------------------------------------------------ 1. environment
 echo "---- 1. environment ----------------------------------------------"
+# Every step prints its name before it starts, so a stall names itself.
+echo "  [$(date +%T)] launcher python '$PYTHON': import cae_suite"
 "$PYTHON" -c "import cae_suite" 2>/dev/null \
     || die "launcher python '$PYTHON' cannot import cae_suite. Run from the repo's launcher env or set PYTHON=/path/to/python."
 
 if [ -z "${METHOD_PYTHON:-}" ]; then
+    echo "  [$(date +%T)] resolve the chi-mgnflow interpreter from ai_cae4all.local.toml"
     METHOD_PYTHON="$("$PYTHON" -c "
 from pathlib import Path
 from cae_suite.settings import LocalSettings
@@ -118,28 +122,54 @@ fi
 [ -x "$METHOD_PYTHON" ] || command -v "$METHOD_PYTHON" >/dev/null 2>&1 \
     || die "cHI-MGNflow interpreter '$METHOD_PYTHON' does not exist."
 
-PROBE_ERR="$LOG_ROOT/env_probe_$TS.err"
-PROBE_OUT="$(env -u CUDA_VISIBLE_DEVICES "$METHOD_PYTHON" -c "
-import torch, torch_geometric, h5py
+# The probe's step lines and any traceback go straight into this log as they
+# happen (stderr); only its two result lines are captured (stdout).
+PROBE_TIMEOUT="${PROBE_TIMEOUT:-900}"
+echo "  [$(date +%T)] probe '$METHOD_PYTHON' (gives up after ${PROBE_TIMEOUT}s):"
+PROBE_OUT="$(env -u CUDA_VISIBLE_DEVICES timeout -k 30 "$PROBE_TIMEOUT" "$METHOD_PYTHON" -c "
+import sys, time
+t0 = time.time()
+def step(what):
+    print(f'      [{time.time() - t0:6.1f}s] {what}', file=sys.stderr, flush=True)
+step('import torch')
+import torch
+step('import torch_geometric, h5py')
+import torch_geometric, h5py
 from torch_geometric.utils import scatter
+step('CUDA init: count the GPUs')
 n = torch.cuda.device_count() if torch.cuda.is_available() else 0
 info = f'torch {torch.__version__} (CUDA {torch.version.cuda}), torch_geometric {torch_geometric.__version__}'
 if n:
+    major, minor = torch.cuda.get_device_capability(0)
+    archs = ' '.join(torch.cuda.get_arch_list())
+    step(f'{n} x {torch.cuda.get_device_name(0)} (sm_{major}{minor}); this torch has kernels for: {archs}')
     # A torch wheel built without this card's arch imports fine and counts the
-    # card, then dies on the first kernel ('no kernel image is available').
+    # card, then either dies on the first kernel ('no kernel image is
+    # available') or, when it ships PTX, JIT-compiles every kernel it touches.
     # Run the ops the trainer leans on: a bf16 matmul (use_amp) and a scatter.
+    step('bf16 matmul on GPU 0')
     x = torch.randn(64, 64, device='cuda', dtype=torch.bfloat16)
     (x @ x).float().sum().item()
+    step('scatter on GPU 0')
     idx = torch.tensor([0, 0, 1, 1], device='cuda')
     scatter(torch.ones(4, 2, device='cuda'), idx, dim=0, reduce='sum').sum().item()
-    major, minor = torch.cuda.get_device_capability(0)
     info += f' | {torch.cuda.get_device_name(0)} sm_{major}{minor}, kernels run'
+step('done')
 print(n)
 print(info)
-" 2>"$PROBE_ERR")" || {
-    tail -8 "$PROBE_ERR" | sed 's/^/      /'
-    die "'$METHOD_PYTHON' cannot import torch / torch_geometric / h5py, or cannot run a CUDA kernel on this GPU (this is the env the training runs in)."
-}
+")" && probe_rc=0 || probe_rc=$?
+case "$probe_rc" in
+    0) ;;
+    124|137)
+        die "the probe was still running after ${PROBE_TIMEOUT}s and was stopped. It hung in the last step printed above:
+       import torch / torch_geometric -> the env sits on a slow (network) filesystem; PROBE_TIMEOUT=1800 waits longer.
+       CUDA init                      -> driver side: nvidia-smi, persistence mode, and on NVSwitch nodes
+                                         'systemctl status nvidia-fabricmanager'.
+       bf16 matmul, and the kernel list has no sm_100 / sm_103 -> this torch has no Blackwell kernels and is
+                                         JIT-compiling PTX; install a CUDA 12.8+ build of torch and matching PyG wheels." ;;
+    *)
+        die "'$METHOD_PYTHON' cannot import torch / torch_geometric / h5py, or cannot run a CUDA kernel on this GPU (traceback above; this is the env the training runs in)." ;;
+esac
 NGPU_SEEN="$(printf '%s\n' "$PROBE_OUT" | sed -n 1p)"
 TORCH_INFO="$(printf '%s\n' "$PROBE_OUT" | sed -n 2p)"
 [ "${NGPU_SEEN:-0}" -ge 1 ] 2>/dev/null \
@@ -165,8 +195,9 @@ echo "                    $TORCH_INFO"
 echo "  commit          : $(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
 echo "  GPUs            : $GPUS   ($NG of $NGPU_SEEN on this machine)"
 if command -v nvidia-smi >/dev/null 2>&1; then
-    nvidia-smi --query-gpu=index,name,memory.used,memory.total,utilization.gpu \
-        --format=csv,noheader | sed 's/^/      /'
+    timeout -k 5 60 nvidia-smi --query-gpu=index,name,memory.used,memory.total,utilization.gpu \
+        --format=csv,noheader | sed 's/^/      /' \
+        || echo "      (nvidia-smi failed or did not answer within 60 s; skipped)"
 fi
 echo "  arms            : $ARMS"
 echo "  halves          : $HALVES   (side by side on the arm's card: PARALLEL_HALVES=$PARALLEL_HALVES)"

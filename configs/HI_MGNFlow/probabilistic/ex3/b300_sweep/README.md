@@ -65,6 +65,8 @@ Overrides:
 - `ARMS="tok ctrl"`
 - `PYTHON=` (the launcher interpreter)
 - `METHOD_PYTHON=`
+- `PROBE_TIMEOUT=900`: how many seconds the environment probe may take. Its
+  steps print as they run, so a stall shows the step it is stuck in.
 - `PREFLIGHT=0`, `TRAIN=0`, `INFER=0` or `REPORT=0` to skip a stage
 
 To rebuild the report without running anything, use

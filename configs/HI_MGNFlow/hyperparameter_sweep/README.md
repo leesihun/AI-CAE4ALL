@@ -95,6 +95,8 @@ Overrides:
 - `PYTHON=`: the launcher interpreter.
 - `METHOD_PYTHON=`: the cHI-MGNflow interpreter, instead of the one
   `ai_cae4all.local.toml` names.
+- `PROBE_TIMEOUT=900`: how many seconds the environment probe may take. Its
+  steps print as they run, so a stall shows the step it is stuck in.
 - `PREFLIGHT=0`, `EVAL_PREFLIGHT=0`, `TRAIN=0`, `INFER=0` or `REPORT=0` skips
   that stage.
 
