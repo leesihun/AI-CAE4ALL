@@ -559,9 +559,12 @@ export const BLOCK_SPECS = {
     inputs: [
       { id: "parameters", type: "parameters", label: "design parameters" },
       { id: "model", type: "checkpoint", label: "SDFFlow model", required: true },
-      // Read only in `mode optimize` with opt_analysis surrogate: the wired
-      // HI-MGN checkpoint becomes opt_surrogate_checkpoint (autofill.js), and
-      // validateGraph() rejects the wire in any mode that would ignore it.
+      // Read only in `mode optimize` with opt_analysis surrogate. Wiring it
+      // switches the block there (graph.js); the wired HI-MGN checkpoint
+      // becomes opt_surrogate_checkpoint (autofill.js), and a wired HI-MGN
+      // model block also supplies opt_surrogate_config, written from its own
+      // config at Validate/Run (validate.js materializeStepConfigs). In any
+      // other mode the wire is shown as unused in the inspector.
       { id: "surrogate", type: "checkpoint", label: "HI-MGN surrogate" }
     ],
     outputs: [{ id: "candidates", type: "candidates", label: "CAD candidates" }],
@@ -574,7 +577,15 @@ export const BLOCK_SPECS = {
       // generator model's own full-config panel since it is the one switch
       // that decides whether "analyze" is the exact FEA solve or the faster,
       // currently unproven HI-MGN surrogate -- see that model's own notes.
-      opt_analysis: "fea"
+      opt_analysis: "fea",
+      // `mode interpolate` blends two drawn samples; these mirror the checked-in
+      // configs/SDFFlow/geometry_generation/ex1/baseline/config_interpolate_sdfflow.txt.
+      // source_num_samples and sample_index_a have no launcher default, so the
+      // block has to carry them for interpolate to pass preflight at all.
+      interpolation_space: "slerp_noise", source_num_samples: "16",
+      sample_index_a: "0", sample_index_b: "1", alpha: "0.5", interpolation_steps: "",
+      // `mode reconstruct` encodes and re-decodes one mesh file.
+      input_mesh: ""
     }, sampleLabel: "24 CAD candidates", executable: true
   },
   "optimize.design": {

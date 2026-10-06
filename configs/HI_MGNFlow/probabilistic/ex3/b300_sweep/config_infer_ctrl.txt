@@ -1,0 +1,102 @@
+% ex3 B300 sweep (8 GPUs, one arm per card) arm ctrl: prior_global none (the current ex3 recipe).
+% Question: reference: the local-only prior that was 0.5x too narrow.
+% Scores ctrl/model.pth on the 8 held-out geometries x 64 draws.
+% Otherwise the ex3 baseline (infer) verbatim, with the B300 layout shared by every arm:
+% batch_size 8 x grad_accum_steps 1 (same effective 8 as 2 x 4), num_workers 8,
+% gpu_ids 0 (run_sweep.sh assigns the card through CUDA_VISIBLE_DEVICES), and
+% hierarchy_cache_keep False (the cache is deleted once no job is reading it).
+%
+% probabilistic/ex3 - chi_mgnflow; paper-informed native adaptation, not an exact reproduction.
+% Dataset: shell buckling; held-out file = 8 unseen geometries x 64 imperfection draws (ex3_shell_buckling_infer.h5).
+% Field storage order (0-based): input -> output -> conditioner -> partNo.
+% input [0:3]: x_coord, y_coord, z_coord (nominal, pre-imperfection)
+% output/state [3:6]: ux, uy, uz
+% conditioner [6:8]: thickness, delta (applied end shortening)
+% partNo [8]: node type (0 interior, 1 clamped rim, 2 loaded rim) -> use_node_types
+% Static (T=1) problem: the state input is zero and the model predicts the field in one step.
+% Reference: https://arxiv.org/abs/2504.02843
+% No source HDF5 writes. Checkpoints are created by the paired training config.
+% num_vae_samples is draws PER held-out scene. Set to 64 = the imperfection draws per geometry,
+% so each scene's ensemble is as large as the ground-truth set of its geometry.
+% spread_stat mag_max on ux,uy,uz: the max total displacement max|u| (= attr max_deform) separates
+% buckled from unbuckled draws; one component alone moves with the buckle's orientation.
+
+model                            chi-mgnflow
+mode                             inference
+gpu_ids                          0
+parallel_mode                    ddp
+split_seed                       42
+split_group_attr                 shape_idx
+dataset_dir                      ../../dataset/probabilistic/ex3_shell_buckling.h5
+infer_dataset                    ../../dataset/probabilistic/ex3_shell_buckling_infer.h5
+modelpath                        ../../output/chi-mgnflow/ex3_b300_sweep/ctrl/model.pth
+log_file_dir                     ../../output/chi-mgnflow/ex3_b300_sweep/ctrl/train.log
+inference_output_dir             ../../output/chi-mgnflow/ex3_b300_sweep/ctrl/infer
+infer_timesteps                  1
+input_var                        3
+output_var                       3
+cond_var                         2
+feature_loss_weights             1, 1, 1
+use_node_types                   True
+positional_features              4
+time_integration                 ar_ot
+training_epochs                  120
+batch_size                       8
+learningr                        0.0001
+weight_decay                     0.0001
+warmup_epochs                    5
+num_workers                      8
+prefetch_factor                  2
+grad_accum_steps                 1
+augment_geometry                 True
+use_amp                          True
+use_checkpointing                True
+use_ema                          True
+ema_decay                        0.99
+use_parallel_stats               False
+val_interval                     10
+test_interval                    50
+test_batch_idx                   0, 1
+plot_feature_idx                 2
+display_trainset                 True
+display_testset                  True
+write_preprocessing              False
+use_world_edges                  False
+use_multiscale                   True
+edge_var                         8
+latent_dim                       128
+message_passing_num              15
+geometry_state_mode              displacement
+displacement_state_indices       0, 1, 2
+coarsening_type                  voronoi_seedmean
+multiscale_levels                2
+voronoi_clusters                 4096, 256
+mp_per_level                     2, 3, 5, 3, 2
+hierarchy_variants               2
+hierarchy_seed                   42
+hierarchy_cache_keep             False
+training_seed                    42
+best_by                          crps
+num_vae_samples                  64
+vae_batch_size                   auto
+latent_ch                        4
+ae_kl_weight                     0.000001
+ae_epochs                        60
+prior_blocks                     4
+flow_time_freqs                  16
+flow_t_sampling                  uniform
+flow_loss_weighting              uniform
+flow_steps                       30
+flow_solver                      heun
+flow_predict                     sample
+val_flow_steps                   30
+val_num_samples                  8
+eval_dataset                     ../../dataset/probabilistic/ex3_shell_buckling_infer.h5
+spread_channel                   0, 1, 2
+spread_label                     u
+spread_stat                      mag_max
+make_histogram                   True
+show_histogram                   False
+histogram_bins                   30
+save_rollouts                    False
+prior_global                     none

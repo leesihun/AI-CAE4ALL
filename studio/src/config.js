@@ -621,6 +621,15 @@ export async function applyPreset() {
       toast(`Could not load ${file}: ${error.message}`, "error");
       return;
     }
+    // That file is the dataset_matrix run's: its generator checkpoints, its
+    // device (gpu_ids 7, an 8-GPU host) and its output tree. Applied whole, it
+    // pointed a Studio-trained block at someone else's model and a GPU this
+    // machine may not have. The preset is the optimization recipe; the block
+    // keeps its own generator, device and seed, and the search writes beside
+    // its own outputs.
+    ["vae_modelpath", "fm_modelpath", "gpu_ids", "parallel_mode", "seed"].forEach(key => delete values[key]);
+    const ownDir = String(node.config.output_dir || "").trim().replace(/\/+$/, "");
+    if (ownDir) values.output_dir = /\/optimize$/i.test(ownDir) ? ownDir : `${ownDir}/optimize`;
     // The surrogate is the ex13 (DeepJEB vertical load) HI-MGN. Its checkpoint
     // exists only after that run has trained; until then preflight names the
     // missing file, which is the true state of the surrogate path. Its labels
@@ -796,6 +805,28 @@ export function jumpToFailingField(nodeId, field) {
   if (!node) return;
   selectNode(nodeId);
   const spec = BLOCK_SPECS[node.type];
+  if (!spec?.isModel && field) {
+    // An execution block (CAD Generator, Inference) runs its model block's
+    // config with its own rows laid over it. A failing key it shows is fixed
+    // in its inspector row; one it does not show lives in that model block.
+    const key = String(field).toLowerCase();
+    const control = document.querySelector(`#inspectorContent .inspector-config[data-key="${CSS.escape(key)}"]`);
+    const row = control?.closest(".form-row");
+    if (row) {
+      row.scrollIntoView({ block: "center", behavior: "smooth" });
+      row.classList.add("field-flash");
+      control.focus();
+      setTimeout(() => row.classList.remove("field-flash"), 1800);
+      return;
+    }
+    const modelEdge = state.edges.find(edge => edge.toNode === nodeId && edge.toPort === "model");
+    const modelNode = modelEdge && state.nodes.find(item => item.id === modelEdge.fromNode);
+    const modelSpec = modelNode && BLOCK_SPECS[modelNode.type];
+    if (modelSpec?.isModel && MODEL_CATALOG[modelSpec.modelId]?.keys.includes(key)) {
+      jumpToFailingField(modelNode.id, key);
+      return;
+    }
+  }
   if (!spec?.isModel || !field) {
     toast(field ? `Selected the failing block for "${field}".` : "Selected the failing block.", "warn");
     return;

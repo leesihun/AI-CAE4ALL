@@ -1,466 +1,595 @@
 #!/usr/bin/env bash
-# cHI-MGNflow SAOI hyperparameter sweep -- runs the whole campaign unattended.
+# cHI-MGNflow SAOI parametric study for one 8-GPU B300 node:
+# 8 arms x 2 board halves, one GPU per arm, train -> infer (3 eval sets) -> report.
 #
-#   bash configs/HI_MGNFlow/hyperparameter_sweep/run_sweep.sh
-#   bash configs/HI_MGNFlow/hyperparameter_sweep/run_sweep.sh all
+#   nohup bash configs/HI_MGNFlow/hyperparameter_sweep/run_sweep.sh \
+#       > output/chi-mgnflow/saoi_b300_sweep.out 2>&1 &
 #
-# With no argument (or `all`), this runs Phase A, selects and promotes ONE
-# compressor per half automatically (select_ae.py), then Phase B and Phase C
-# for whichever halves came out ready, then prints ae_report.py and
-# rank_arms.py at the end. No human step in between.
+# The script also tees everything it prints into
+#   output/chi-mgnflow/saoi_b300_sweep/run_logs/sweep_<timestamp>.out
+# so the run leaves a log even when it was started without a redirect.
 #
-# SELECTION IS NOT "TAKE THE BEST RECON". Phase B fans four prior arms out
-# from ONE frozen compressor per half, so something has to decide which
-# Phase-A arm that is. That decision is not a minimum over a column: the four
-# compressors differ in latent_ch, so the best reconstruction loss belongs to
-# the largest one almost by definition, and picking it blindly buys capacity
-# the prior then has to model for no reason. select_ae.py applies a knee +
-# ceiling-gate policy instead -- see its own docstring for the exact rule, and
-# `PROMOTE_BOT=<arm>` / `PROMOTE_TOP=<arm>` below to override it.
+# THE ARMS (README.md says what each one asks; each config's header names its change)
+#   ctrl       prior_global none                           the SAOI_run recipe
+#   tok        prior_global token                          the global-token prior
+#   tok_seed   tok repeated unchanged                      run-to-run noise floor
+#   tok_recon  tok + best_by recon                         checkpoint selection
+#   tok_kl     tok + ae_kl_weight 1e-3                     smoother latent
+#   tok_c8     tok + latent_ch 8                           wider latent
+#   tok_g50    tok + voronoi_clusters 1000, 50 + latent_ch 8
+#                                                          same latent, half the coarse nodes
+#   tok_w256   tok + latent_dim 256                        wider compressor and prior
 #
-# Each phase runs eight jobs on eight cards, bot on 0-3 and top on 4-7; the
-# assignment lives in each config's gpu_ids and this script only reports it.
+# ORDER OF WORK
+#   1. environment  launcher python imports cae_suite; the cHI-MGNflow interpreter
+#                   imports torch / torch_geometric / h5py and runs a CUDA kernel;
+#                   every index in GPUS exists on THIS machine; this checkout knows
+#                   prior_global (an older one would warn and then silently
+#                   train every token arm as ctrl).
+#   2. datasets     every dataset_dir / infer_dataset / eval_dataset named by a
+#                   selected config exists, with the case written in the config;
+#                   then SAOI_run/check_eval_inputs.py proves each _infer_ file
+#                   and its _compare_ file describe the same part.
+#   3. --check      the launcher's full preflight on every train config, and on
+#                   every infer config without the path layer (its checkpoint
+#                   does not exist until training ends). One arm per process,
+#                   all arms at once.
+#   Any failure in 1-3 aborts before a single GPU-hour is spent, and says why.
+#   4. jobs         one card per arm. A card takes the next unclaimed arm in
+#                   ARMS order and runs its two halves side by side
+#                   (PARALLEL_HALVES=1). Each half is one lane: train, then the
+#                   three eval sets in series. Fewer than 8 GPUs also works.
+#   5. report       per arm x half x eval set: the GT-vs-generated spread scores
+#                   from spread_values.npz, then one ranked row per arm, plus
+#                   one histogram grid over every cell.
+#   6. summary      ok or the failed stage per lane; a failure prints its log
+#                   tail. The sweep's own hierarchy caches are removed.
 #
-# Phase A and Phase B reuse the same cards, which is why their log_file_dir
-# values sit in different subdirectories: the periodic dumps land under
-# <log_dir>/test/<gpu_ids>/<epoch>/, so a shared log_dir would have Phase B
-# overwriting Phase A's reconstructions on every card.
-#
-# There is no resume anywhere: build_optimizer_scheduler sets cosine_T0 to
-# training_epochs - warmup_epochs, so a killed job restarts from zero and one
-# launch is one complete model. The marker check below refuses to promote or
-# infer from a checkpoint older than its own launch.
-#
-# To run one phase by hand instead (e.g. to inspect ae_report.py's numbers
-# yourself before committing to a compressor):
-#
-#   bash configs/HI_MGNFlow/hyperparameter_sweep/run_sweep.sh A
-#   python configs/HI_MGNFlow/hyperparameter_sweep/ae_report.py
-#   python configs/HI_MGNFlow/hyperparameter_sweep/ae_ceiling_check.py --half bot --arm c8
-#   PROMOTE_BOT=c8 PROMOTE_TOP=c8 bash .../run_sweep.sh promote
-#   bash configs/HI_MGNFlow/hyperparameter_sweep/run_sweep.sh B
-#   bash configs/HI_MGNFlow/hyperparameter_sweep/run_sweep.sh C
-#   python configs/HI_MGNFlow/hyperparameter_sweep/rank_arms.py
+# One card per arm keeps the two halves of an arm on the same hardware, so a
+# timing difference between arms is the arm's. bot and top are separate
+# datasets and separate models; they share nothing but the card.
 #
 # Useful overrides:
-#   PYTHON, HALVES, AE_ARMS, PRIOR_ARMS, INFER_TAGS, STAGGER
-#   PREFLIGHT=1, STRICT_PREFLIGHT=1, EVAL_PREFLIGHT=1
-#   PROMOTE_BOT=<arm>, PROMOTE_TOP=<arm>   (phase `promote`, and `all`'s
-#                                           auto-selection, which else runs
-#                                           select_ae.py's own policy)
+#   PYTHON, METHOD_PYTHON, GPUS (default: every GPU the interpreter sees), ARMS,
+#   HALVES, INFER_TAGS, PARALLEL_HALVES=1, KEEP_CACHE=0,
+#   PREFLIGHT=1, EVAL_PREFLIGHT=1, TRAIN=1, INFER=1, REPORT=1
+# Report-only rerun:   TRAIN=0 INFER=0 bash .../run_sweep.sh
+# Re-score one arm:    ARMS=tok TRAIN=0 bash .../run_sweep.sh
 set -uo pipefail
-
-PHASE="${1:-all}"
 
 PYTHON="${PYTHON:-python}"
 export PYTHONUNBUFFERED=1
+# GPU numbers mean what nvidia-smi prints.
+export CUDA_DEVICE_ORDER=PCI_BUS_ID
+export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 cd "$REPO_ROOT" || exit 1
 
 CFG_DIR="$SCRIPT_DIR"
-OUT_ROOT="output/chi-mgnflow/saoi_sweep"
-LOG_ROOT="${LOG_ROOT:-$OUT_ROOT/run_logs}"
+CFG_REL="configs/HI_MGNFlow/hyperparameter_sweep"
+METHOD_DIR="methods/HI_MGNFlow"
+EVAL_CHECK="configs/HI_MGNFlow/SAOI_run/check_eval_inputs.py"
+# Must match the configs' ../../output/chi-mgnflow/saoi_b300_sweep (cwd = METHOD_DIR).
+OUT_ROOT="output/chi-mgnflow/saoi_b300_sweep"
+LOG_ROOT="$OUT_ROOT/run_logs"
 
+ARMS="${ARMS:-tok_w256 tok_c8 tok_g50 ctrl tok tok_seed tok_recon tok_kl}"
 HALVES="${HALVES:-bot top}"
-AE_ARMS="${AE_ARMS:-c4 c8 c16 c8kl}"
-PRIOR_ARMS="${PRIOR_ARMS:-p4u p8u p4x p8x}"
 INFER_TAGS="${INFER_TAGS:-s26fe_main s26fe_sec sm_l345u_main}"
+GPUS="${GPUS:-}"
+PARALLEL_HALVES="${PARALLEL_HALVES:-1}"
+KEEP_CACHE="${KEEP_CACHE:-0}"
 PREFLIGHT="${PREFLIGHT:-1}"
-STRICT_PREFLIGHT="${STRICT_PREFLIGHT:-1}"
 EVAL_PREFLIGHT="${EVAL_PREFLIGHT:-1}"
-# Four arms of a half share one multiscale cache; the first to arrive builds it
-# under an exclusive lock while the rest block. Staggering only keeps them from
-# piling onto the lock at once -- correctness does not depend on it.
-STAGGER="${STAGGER:-20}"
+TRAIN="${TRAIN:-1}"
+INFER="${INFER:-1}"
+REPORT="${REPORT:-1}"
 
-rc=0
-SKIPPED=""
+TS="$(date +%Y%m%d_%H%M%S)"
+mkdir -p "$LOG_ROOT"
+MASTER_LOG="$LOG_ROOT/sweep_$TS.out"
+exec > >(tee -a "$MASTER_LOG") 2>&1
 
-usage() {
-    cat >&2 <<'USAGE'
-usage: run_sweep.sh [all|A|promote|B|C]
-
-  all      (default, i.e. no argument) The whole campaign, unattended:
-           A -> auto-select+promote per half -> B -> C -> reports. A half
-           that select_ae.py cannot clear the ceiling gate for is promoted
-           anyway (least-bad arm) but skipped for B/C; see NEEDS_ATTENTION
-           in its output. Override the pick with PROMOTE_BOT=<arm> and/or
-           PROMOTE_TOP=<arm>.
-  A        Phase A only -- train 8 compressors (mode train_ae), 4 per half.
-           Arms c4 / c8 / c16 vary latent_ch; c8kl raises ae_kl_weight.
-  promote  Run select_ae.py's auto-selection for each half by hand (or force
-           one arm via PROMOTE_BOT=<arm> / PROMOTE_TOP=<arm>), without also
-           running B/C.
-  B        Phase B only -- train 8 flow priors (mode train_prior) against the
-           frozen promoted compressors. Arms vary prior_blocks (4/8) and
-           flow_loss_weighting (uniform/x0).
-  C        Phase C only -- 24 inference runs (8 arms x 3 eval parts). Each
-           one writes its own spread histogram and spread_values.npz.
-
-`all` prints ae_report.py and rank_arms.py itself; after a manual A or C you
-can run them yourself (ae_ceiling_check.py too, after A).
-USAGE
+die() {
+    echo
+    echo "ABORT: $*"
+    echo "Nothing was trained. Full log: $MASTER_LOG"
+    exit 1
 }
 
-# --- shared helpers ------------------------------------------------------
+echo "=================================================================="
+echo " cHI-MGNflow SAOI B300 sweep   ($TS, host $(hostname))"
+echo "=================================================================="
 
-gpu_of() {
-    # Reported only; the config is what actually selects the card.
-    awk '$1 == "gpu_ids" { print $2; exit }' "$1" 2>/dev/null || echo "?"
+# ------------------------------------------------------------ 1. environment
+echo "---- 1. environment ----------------------------------------------"
+"$PYTHON" -c "import cae_suite" 2>/dev/null \
+    || die "launcher python '$PYTHON' cannot import cae_suite. Run from the repo's launcher env or set PYTHON=/path/to/python."
+
+if [ -z "${METHOD_PYTHON:-}" ]; then
+    METHOD_PYTHON="$("$PYTHON" -c "
+from pathlib import Path
+from cae_suite.settings import LocalSettings
+print(LocalSettings.load(Path('.')).resolve_python('chi-mgnflow', 'chi-mgnflow'))
+")" || die "could not resolve the chi-mgnflow interpreter from ai_cae4all.local.toml; set METHOD_PYTHON=/path/to/python."
+fi
+[ -x "$METHOD_PYTHON" ] || command -v "$METHOD_PYTHON" >/dev/null 2>&1 \
+    || die "cHI-MGNflow interpreter '$METHOD_PYTHON' does not exist."
+
+PROBE_ERR="$LOG_ROOT/env_probe_$TS.err"
+PROBE_OUT="$(env -u CUDA_VISIBLE_DEVICES "$METHOD_PYTHON" -c "
+import torch, torch_geometric, h5py
+from torch_geometric.utils import scatter
+n = torch.cuda.device_count() if torch.cuda.is_available() else 0
+info = f'torch {torch.__version__} (CUDA {torch.version.cuda}), torch_geometric {torch_geometric.__version__}'
+if n:
+    # A torch wheel built without this card's arch imports fine and counts the
+    # card, then dies on the first kernel ('no kernel image is available').
+    # Run the ops the trainer leans on: a bf16 matmul (use_amp) and a scatter.
+    x = torch.randn(64, 64, device='cuda', dtype=torch.bfloat16)
+    (x @ x).float().sum().item()
+    idx = torch.tensor([0, 0, 1, 1], device='cuda')
+    scatter(torch.ones(4, 2, device='cuda'), idx, dim=0, reduce='sum').sum().item()
+    major, minor = torch.cuda.get_device_capability(0)
+    info += f' | {torch.cuda.get_device_name(0)} sm_{major}{minor}, kernels run'
+print(n)
+print(info)
+" 2>"$PROBE_ERR")" || {
+    tail -8 "$PROBE_ERR" | sed 's/^/      /'
+    die "'$METHOD_PYTHON' cannot import torch / torch_geometric / h5py, or cannot run a CUDA kernel on this GPU (this is the env the training runs in)."
 }
+NGPU_SEEN="$(printf '%s\n' "$PROBE_OUT" | sed -n 1p)"
+TORCH_INFO="$(printf '%s\n' "$PROBE_OUT" | sed -n 2p)"
+[ "${NGPU_SEEN:-0}" -ge 1 ] 2>/dev/null \
+    || die "'$METHOD_PYTHON' sees no CUDA device."
 
-preflight_one() {
-    # preflight_one <config> <label> -> 0 if the launcher validates it
-    cfg="$1"
-    label="$2"
-    if [ ! -f "$cfg" ]; then
-        echo "  $label  MISSING CONFIG ($cfg)"
-        SKIPPED="$SKIPPED $label(config)"
-        return 1
-    fi
-    if "$PYTHON" AI_CAE4ALL_main.py --config "$cfg" --check \
-            > "$LOG_ROOT/${label}.check.log" 2>&1; then
-        echo "  $label  OK  (gpu $(gpu_of "$cfg"))"
-        return 0
-    fi
-    echo "  $label  FAILED -- $LOG_ROOT/${label}.check.log"
-    sed -n '/ERRORS/,$p' "$LOG_ROOT/${label}.check.log" | head -8 | sed 's/^/      /'
-    SKIPPED="$SKIPPED $label(preflight)"
-    return 1
-}
+if [ -z "$GPUS" ]; then
+    GPUS="$(seq -s ' ' 0 $(( NGPU_SEEN - 1 )))"
+fi
+for g in $GPUS; do
+    case "$g" in ''|*[!0-9]*) die "GPUS entry '$g' is not a GPU index." ;; esac
+    [ "$g" -lt "$NGPU_SEEN" ] \
+        || die "GPU $g does not exist here: this machine has $NGPU_SEEN GPU(s), indices 0..$(( NGPU_SEEN - 1 )). Fix GPUS=\"...\"."
+done
+GPU_ARR=($GPUS)
+NG=${#GPU_ARR[@]}
 
-# --- phase A / B ---------------------------------------------------------
+grep -q "PRIOR_GLOBAL_MODES" "$METHOD_DIR/model/autoencoder.py" \
+    || die "this checkout has no prior_global (methods/HI_MGNFlow/model/autoencoder.py); pull the commit that adds it, or every tok arm trains the ctrl prior."
 
-run_train_phase() {
-    # run_train_phase <kind: ae|prior> <arms>
-    kind="$1"
-    arms="$2"
+echo "  launcher python : $(command -v "$PYTHON" || echo "$PYTHON")"
+echo "  method python   : $METHOD_PYTHON"
+echo "                    $TORCH_INFO"
+echo "  commit          : $(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+echo "  GPUs            : $GPUS   ($NG of $NGPU_SEEN on this machine)"
+if command -v nvidia-smi >/dev/null 2>&1; then
+    nvidia-smi --query-gpu=index,name,memory.used,memory.total,utilization.gpu \
+        --format=csv,noheader | sed 's/^/      /'
+fi
+echo "  arms            : $ARMS"
+echo "  halves          : $HALVES   (side by side on the arm's card: PARALLEL_HALVES=$PARALLEL_HALVES)"
+echo "  eval sets       : $INFER_TAGS"
+echo "  output          : $OUT_ROOT/<arm>/<half>/{model.pth,train.log,infer/<eval set>/}"
 
-    if [ "$kind" = "prior" ]; then
-        # A missing ae.pth fails preflight anyway, but the reason is worth
-        # spelling out before eight cards are committed.
-        for half in $HALVES; do
-            frozen="$OUT_ROOT/${half}.ae.pth"
-            if [ ! -f "$frozen" ]; then
-                echo "No promoted compressor for '$half': $frozen" >&2
-                echo "Run phase A, read ae_report.py, then:" >&2
-                echo "  PROMOTE_$(echo "$half" | tr '[:lower:]' '[:upper:]')=<arm> \\" >&2
-                echo "  bash configs/HI_MGNFlow/hyperparameter_sweep/run_sweep.sh promote" >&2
-                return 1
-            fi
-            echo "  $half frozen compressor: $frozen ($(date -r "$frozen" '+%Y-%m-%d %H:%M' 2>/dev/null || echo 'mtime?'))"
-        done
-    fi
-
-    selected=""
-    if [ "$PREFLIGHT" = "1" ]; then
-        echo "---- preflight ---------------------------------------------------"
-        for half in $HALVES; do
-            for arm in $arms; do
-                label="${half}.${kind}_${arm}"
-                if preflight_one "$CFG_DIR/config_train_${kind}_${half}_${arm}.txt" "$label"; then
-                    selected="$selected ${half}:${arm}"
-                fi
-            done
-        done
-        if [ -n "$SKIPPED" ] && [ "$STRICT_PREFLIGHT" = "1" ]; then
-            echo "STRICT_PREFLIGHT=1; no partial phase will be launched." >&2
-            return 1
-        fi
-    else
-        for half in $HALVES; do
-            for arm in $arms; do selected="$selected ${half}:${arm}"; done
-        done
-    fi
-    [ -n "$selected" ] || { echo "Every arm failed preflight." >&2; return 1; }
-
-    echo "---- launching ---------------------------------------------------"
-    pids=""
-    for pair in $selected; do
-        half="${pair%%:*}"
-        arm="${pair##*:}"
-        label="${half}.${kind}_${arm}"
-        marker="$LOG_ROOT/${label}.launch.marker"
-        : > "$marker"
-        # stdout goes somewhere OTHER than log_file_dir: the trainer owns
-        # $OUT_ROOT/$kind/$label.log and would interleave with the shell's
-        # redirect if both pointed at one file.
-        "$PYTHON" AI_CAE4ALL_main.py --config "$CFG_DIR/config_train_${kind}_${half}_${arm}.txt" \
-            > "$LOG_ROOT/${label}.out" 2>&1 &
-        pid=$!
-        pids="$pids $pid"
-        echo "  $label launched (pid $pid)"
-        sleep "$STAGGER"
-    done
-    for pid in $pids; do
-        wait "$pid" || rc=1
-    done
-
-    echo "---- results -----------------------------------------------------"
-    for pair in $selected; do
-        half="${pair%%:*}"
-        arm="${pair##*:}"
-        label="${half}.${kind}_${arm}"
-        checkpoint="$OUT_ROOT/${label}.pth"
-        marker="$LOG_ROOT/${label}.launch.marker"
-        if [ -f "$checkpoint" ] && [ "$checkpoint" -nt "$marker" ]; then
-            echo "  $label complete -> $checkpoint"
-        else
-            echo "  $label FAILED to produce a fresh checkpoint -- $LOG_ROOT/${label}.out"
-            SKIPPED="$SKIPPED $label(train)"
-            rc=1
-        fi
-    done
-    return 0
-}
-
-# --- promote (auto-select, or a forced arm via PROMOTE_BOT/PROMOTE_TOP) --
-
-select_and_promote_half() {
-    # select_and_promote_half <half> -> select_ae.py's own exit code:
-    # 0 promoted and clear to proceed; 3 promoted but NEEDS_ATTENTION (skip
-    # B/C for this half); 1 could not decide or promote_ae.py rejected it.
-    half="$1"
-    case "$half" in
-        bot) force_arm="${PROMOTE_BOT:-}" ;;
-        top) force_arm="${PROMOTE_TOP:-}" ;;
-        *)   force_arm="" ;;
-    esac
-    if [ -n "$force_arm" ]; then
-        checkpoint="$OUT_ROOT/${half}.ae_${force_arm}.pth"
-        marker="$LOG_ROOT/${half}.ae_${force_arm}.launch.marker"
-        if [ -f "$marker" ] && [ ! "$checkpoint" -nt "$marker" ]; then
-            echo "  $half: $checkpoint is older than its own launch marker -- that" >&2
-            echo "         run did not finish. Not promoting." >&2
-            return 1
-        fi
-    fi
-    if [ -n "$force_arm" ]; then
-        echo "---- select_ae $half (forced: $force_arm) ----"
-    else
-        echo "---- select_ae $half (auto) ----"
-    fi
-    args=(--half "$half" --out-root "$OUT_ROOT" --config-dir "$CFG_DIR")
-    [ -n "$force_arm" ] && args+=(--force-arm "$force_arm")
-    "$PYTHON" "$CFG_DIR/select_ae.py" "${args[@]}"
-}
-
-run_promote() {
-    any=0
+# --------------------------------------------------------------- 2. datasets
+echo "---- 2. datasets -------------------------------------------------"
+CFG_LIST="$(mktemp)"
+for arm in $ARMS; do
     for half in $HALVES; do
-        any=1
-        if select_and_promote_half "$half"; then
-            :
-        else
-            code=$?
-            if [ "$code" = "3" ]; then
-                echo "  $half: NEEDS_ATTENTION -- promoted the least-bad arm anyway (see above)." >&2
-            else
-                SKIPPED="$SKIPPED ${half}.promote"
-                rc=1
-            fi
-        fi
+        echo "$CFG_REL/config_train_${arm}_${half}.txt" >> "$CFG_LIST"
+        for tag in $INFER_TAGS; do
+            echo "$CFG_REL/config_infer_${arm}_${half}_${tag}.txt" >> "$CFG_LIST"
+        done
     done
-    if [ "$any" = "0" ]; then
-        echo "HALVES is empty; nothing to promote." >&2
-        return 1
-    fi
-    return 0
-}
+done
+"$PYTHON" - "$CFG_LIST" "$METHOD_DIR" <<'PY' || die "missing configs or dataset files (listed above)."
+import sys
+from pathlib import Path
+from cae_suite.config_parser import parse_config
 
-# --- phase C -------------------------------------------------------------
+cfg_list, method_dir = Path(sys.argv[1]), Path(sys.argv[2])
+missing_cfg, needed = [], {}
+for line in cfg_list.read_text().splitlines():
+    cfg = Path(line)
+    if not cfg.is_file():
+        missing_cfg.append(cfg)
+        continue
+    values = parse_config(cfg).values
+    for key in ("dataset_dir", "infer_dataset", "eval_dataset"):
+        if values.get(key):
+            needed.setdefault(str(values[key]), cfg.name)
 
-run_infer_arm() {
-    half="$1"
-    arm="$2"
-    arm_rc=0
-    for tag in $INFER_TAGS; do
-        label="${half}.prior_${arm}.infer_${tag}"
-        cfg="$CFG_DIR/config_infer_${half}_${arm}_${tag}.txt"
-        if "$PYTHON" AI_CAE4ALL_main.py --config "$cfg" \
-                > "$LOG_ROOT/${label}.out" 2>&1; then
-            echo "  $label done"
-        else
-            echo "  $label FAILED -- $LOG_ROOT/${label}.out"
-            arm_rc=1
-        fi
-    done
-    return "$arm_rc"
-}
+def exists_exact(p):
+    # Exact-case check: Linux opens only the case written in the config.
+    p = p.resolve()
+    return p.is_file() and p.name in {c.name for c in p.parent.iterdir()}
 
-run_phase_c() {
-    # An _infer_/_compare_ mismatch compares two different parts and reads as
-    # a spread defect, so the pairing is verified before any GPU work.
-    if [ "$EVAL_PREFLIGHT" = "1" ]; then
-        echo "---- same-condition data preflight -------------------------------"
-        if ! "$PYTHON" "$CFG_DIR/check_eval_inputs.py" --config-dir "$CFG_DIR" \
-                > "$LOG_ROOT/eval_inputs.check.log" 2>&1; then
-            echo "Inference data preflight FAILED -- $LOG_ROOT/eval_inputs.check.log" >&2
-            return 1
-        fi
+missing = [(v, c) for v, c in sorted(needed.items())
+           if not exists_exact(method_dir / v)]
+for cfg in missing_cfg:
+    print(f"  MISSING CONFIG  {cfg}")
+for v, c in missing:
+    print(f"  MISSING DATA    {(method_dir / v).resolve()}   (first named by {c})")
+if not missing_cfg and not missing:
+    print(f"  {len(needed)} dataset files present")
+sys.exit(1 if (missing_cfg or missing) else 0)
+PY
+rm -f "$CFG_LIST"
+
+# The _compare_ file must describe the same part as its _infer_ file, or the
+# histogram compares two different parts and reads as a spread defect. The
+# check reads every config_infer_*.txt here; the 48 share 6 distinct pairs.
+if [ "$EVAL_PREFLIGHT" = "1" ] && [ "$INFER" = "1" ]; then
+    if "$METHOD_PYTHON" "$EVAL_CHECK" --config-dir "$CFG_DIR" \
+            > "$LOG_ROOT/eval_inputs.check.log" 2>&1; then
         echo "  infer/compare pairs OK"
-    fi
-
-    selected=""
-    if [ "$PREFLIGHT" = "1" ]; then
-        echo "---- preflight ---------------------------------------------------"
-        for half in $HALVES; do
-            for arm in $PRIOR_ARMS; do
-                ok=1
-                for tag in $INFER_TAGS; do
-                    label="${half}.prior_${arm}.infer_${tag}"
-                    preflight_one "$CFG_DIR/config_infer_${half}_${arm}_${tag}.txt" \
-                        "$label" || ok=0
-                done
-                [ "$ok" = "1" ] && selected="$selected ${half}:${arm}"
-            done
-        done
-        if [ -n "$SKIPPED" ] && [ "$STRICT_PREFLIGHT" = "1" ]; then
-            echo "STRICT_PREFLIGHT=1; no partial phase will be launched." >&2
-            return 1
-        fi
     else
-        for half in $HALVES; do
-            for arm in $PRIOR_ARMS; do selected="$selected ${half}:${arm}"; done
-        done
+        grep -E "FAIL|^ +- " "$LOG_ROOT/eval_inputs.check.log" | head -12 | sed 's/^/      /'
+        die "inference data preflight failed -- $LOG_ROOT/eval_inputs.check.log"
     fi
-    [ -n "$selected" ] || { echo "Every arm failed preflight." >&2; return 1; }
+fi
 
-    # One card per (half, arm); that arm's three eval parts run in series on it.
-    echo "---- inference + spread histograms -------------------------------"
+# ----------------------------------------------------------------- 3. --check
+if [ "$PREFLIGHT" = "1" ] && { [ "$TRAIN" = "1" ] || [ "$INFER" = "1" ]; }; then
+    echo "---- 3. launcher preflight (--check) -----------------------------"
+    CHECK_DIR="$LOG_ROOT/checks"
+    mkdir -p "$CHECK_DIR"
+    # The config stems one arm launches, e.g. train_tok_bot, infer_tok_bot_s26fe_main.
+    stems_for() {
+        local arm="$1" half tag
+        for half in $HALVES; do
+            if [ "$TRAIN" = "1" ]; then echo "train_${arm}_${half}"; fi
+            if [ "$INFER" = "1" ]; then
+                for tag in $INFER_TAGS; do echo "infer_${arm}_${half}_${tag}"; done
+            fi
+        done
+    }
+    # One subshell per arm, so 8 arms cost about the time of one.
+    check_arm() {
+        local stem extra
+        for stem in $(stems_for "$1"); do
+            rm -f "$CHECK_DIR/${stem}.rc"
+            extra=""
+            # Checkpoint is produced by the train step; the real launch
+            # re-runs the full preflight including the path layer.
+            case "$stem" in infer_*) [ "$TRAIN" = "1" ] && extra="--skip-filesystem-check" ;; esac
+            "$PYTHON" AI_CAE4ALL_main.py --config "$CFG_DIR/config_${stem}.txt" \
+                --python "$METHOD_PYTHON" --check $extra > "$CHECK_DIR/${stem}.log" 2>&1
+            echo $? > "$CHECK_DIR/${stem}.rc"
+        done
+    }
     pids=""
-    for pair in $selected; do
-        run_infer_arm "${pair%%:*}" "${pair##*:}" &
+    for arm in $ARMS; do
+        check_arm "$arm" &
         pids="$pids $!"
     done
-    for pid in $pids; do
-        wait "$pid" || rc=1
+    for pid in $pids; do wait "$pid"; done
+
+    bad=""
+    for arm in $ARMS; do
+        nok=0
+        for stem in $(stems_for "$arm"); do
+            if [ "$(cat "$CHECK_DIR/${stem}.rc" 2>/dev/null)" = "0" ]; then
+                nok=$(( nok + 1 ))
+            else
+                echo "  $stem  FAILED -- $CHECK_DIR/${stem}.log"
+                sed -n '/ERRORS/,$p' "$CHECK_DIR/${stem}.log" | head -8 | sed 's/^/      /'
+                bad="$bad $stem"
+            fi
+        done
+        echo "  $arm  $nok config(s) OK"
     done
-    echo "  histograms and spread_values.npz under $OUT_ROOT/infer"
-    return 0
+    [ -z "$bad" ] || die "launcher preflight failed for:$bad"
+fi
+
+# -------------------------------------------------------------------- 4. jobs
+# Claimed with mkdir, which is atomic, so two cards never take the same arm.
+QUEUE_DIR="$LOG_ROOT/queue_$TS"
+mkdir -p "$QUEUE_DIR"
+
+# One lane = one board half of one arm: train, then every eval set.
+# Writes "$QUEUE_DIR/<arm>_<half>.status" = "ok" | "<stage> FAILED <log>; ...".
+run_lane() {
+    local gpu="$1" arm="$2" half="$3"
+    local lane="${arm}_${half}" dir="$OUT_ROOT/$arm/$half"
+    local st="$QUEUE_DIR/${arm}_${half}.status" ck="$dir/model.pth"
+    local log marker metrics tag t0 failed=""
+    mkdir -p "$dir"
+
+    note_fail() {
+        failed="$failed${failed:+; }$1 FAILED $2"
+        echo "  [gpu $gpu] $lane  $1 FAILED -- $2"
+        tail -20 "$2" 2>/dev/null | sed "s/^/      [$lane] /"
+    }
+
+    if [ "$TRAIN" = "1" ]; then
+        log="$LOG_ROOT/${lane}.train.out"
+        marker="$LOG_ROOT/${lane}.train.marker"
+        : > "$marker"
+        t0=$(date +%s)
+        echo "  [gpu $gpu] $lane  train start  $(date '+%m-%d %H:%M')"
+        if ! CUDA_VISIBLE_DEVICES="$gpu" "$PYTHON" AI_CAE4ALL_main.py --python "$METHOD_PYTHON" \
+                --config "$CFG_DIR/config_train_${lane}.txt" > "$log" 2>&1; then
+            note_fail train "$log"; echo "$failed" > "$st"; return
+        fi
+        # A stale checkpoint must never flow into inference after a failed run.
+        if [ ! -f "$ck" ] || [ ! "$ck" -nt "$marker" ]; then
+            note_fail "train (no fresh $ck)" "$log"; echo "$failed" > "$st"; return
+        fi
+        echo $(( $(date +%s) - t0 )) > "$LOG_ROOT/${lane}.train.seconds"
+        echo "  [gpu $gpu] $lane  train done   $(date '+%m-%d %H:%M')"
+    elif [ "$INFER" = "1" ] && [ ! -f "$ck" ]; then
+        echo "train SKIPPED, no checkpoint $ck" > "$st"
+        echo "  [gpu $gpu] $lane  TRAIN=0 but $ck does not exist"
+        return
+    fi
+
+    if [ "$INFER" = "1" ]; then
+        for tag in $INFER_TAGS; do
+            log="$LOG_ROOT/${lane}.infer_${tag}.out"
+            marker="$LOG_ROOT/${lane}.infer_${tag}.marker"
+            metrics="$dir/infer/$tag/spread_values.npz"
+            : > "$marker"
+            echo "  [gpu $gpu] $lane  infer $tag start  $(date '+%m-%d %H:%M')"
+            if ! CUDA_VISIBLE_DEVICES="$gpu" "$PYTHON" AI_CAE4ALL_main.py --python "$METHOD_PYTHON" \
+                    --config "$CFG_DIR/config_infer_${lane}_${tag}.txt" > "$log" 2>&1; then
+                note_fail "infer $tag" "$log"; continue
+            fi
+            # rollout.py catches a histogram error and still exits 0.
+            if [ ! -f "$metrics" ] || [ ! "$metrics" -nt "$marker" ]; then
+                note_fail "infer $tag (no fresh spread_values.npz)" "$log"; continue
+            fi
+            echo "  [gpu $gpu] $lane  infer $tag done   $(date '+%m-%d %H:%M')"
+        done
+    fi
+    echo "${failed:-ok}" > "$st"
 }
 
-# --- all (the default: unattended end to end) -----------------------------
-
-run_all() {
-    echo "==== Phase A: train compressors ($HALVES) =========================="
-    run_train_phase ae "$AE_ARMS" || rc=1
-
-    echo
-    echo "==== auto-select + promote (per half) ==============================="
-    READY=""
+run_arm() {
+    local gpu="$1" arm="$2" half lpids=""
     for half in $HALVES; do
-        select_log="$LOG_ROOT/${half}.select_ae.log"
-        if select_and_promote_half "$half" 2>&1 | tee "$select_log"; then
-            READY="$READY $half"
+        if [ "$PARALLEL_HALVES" = "1" ]; then
+            run_lane "$gpu" "$arm" "$half" &
+            lpids="$lpids $!"
         else
-            code=$?
-            if [ "$code" = "3" ]; then
-                echo "  $half: NEEDS_ATTENTION -- promoted the least-bad arm, but" >&2
-                echo "        Phase B/C will be SKIPPED for $half (see $select_log)" >&2
-                SKIPPED="$SKIPPED ${half}(needs_attention)"
-            else
-                echo "  $half: select_ae.py failed (rc=$code) -- Phase B/C will be" >&2
-                echo "        SKIPPED for $half (see $select_log)" >&2
-                SKIPPED="$SKIPPED ${half}(select_ae)"
-                rc=1
-            fi
+            run_lane "$gpu" "$arm" "$half"
         fi
     done
-
-    if [ -z "$READY" ]; then
-        echo
-        echo "No half is ready for Phase B/C -- stopping here." >&2
-        return 1
-    fi
-    if [ "$READY" != "$HALVES" ]; then
-        echo "  proceeding to Phase B/C with:$READY"
-    fi
-
-    echo
-    echo "==== Phase B: train flow priors ($READY) ============================"
-    HALVES="$READY" run_train_phase prior "$PRIOR_ARMS" || rc=1
-
-    echo
-    echo "==== Phase C: inference + spread histograms ($READY) ================"
-    HALVES="$READY" run_phase_c || rc=1
-
-    echo
-    echo "==== Phase A convergence report ======================================"
-    "$PYTHON" "$CFG_DIR/ae_report.py" --out-root "$OUT_ROOT" 2>&1 \
-        | tee "$LOG_ROOT/ae_report.txt"
-
-    echo
-    echo "==== Phase C ranking =================================================="
-    "$PYTHON" "$CFG_DIR/rank_arms.py" --out-root "$OUT_ROOT" 2>&1 \
-        | tee "$OUT_ROOT/RESULTS.txt"
-    echo
-    echo "Full results also saved to $OUT_ROOT/RESULTS.txt"
-
-    return 0
+    for pid in $lpids; do wait "$pid"; done
 }
 
-# --- dispatch ------------------------------------------------------------
-
-case "$PHASE" in
-    all|ALL) ;;
-    A|a) ;;
-    B|b) ;;
-    C|c) ;;
-    promote|PROMOTE) ;;
-    -h|--help|help) usage; exit 2 ;;
-    *) echo "unknown phase: $PHASE" >&2; usage; exit 2 ;;
-esac
-
-mkdir -p "$LOG_ROOT" "$OUT_ROOT/ae" "$OUT_ROOT/prior" "$OUT_ROOT/infer"
-
-echo "=================================================================="
-echo " cHI-MGNflow SAOI sweep -- phase $PHASE"
-echo "=================================================================="
-echo "  halves : $HALVES"
-echo "  output : $OUT_ROOT"
-
-case "$PHASE" in
-    all|ALL)
-        run_all || rc=1
-        ;;
-    A|a)
-        echo "  arms   : $AE_ARMS   (stage 1, the compressor/VAE)"
-        run_train_phase ae "$AE_ARMS" || rc=1
-        echo
-        echo "Next: read the curves, then choose ONE compressor per half."
-        echo "  python configs/HI_MGNFlow/hyperparameter_sweep/ae_report.py"
-        echo "  python configs/HI_MGNFlow/hyperparameter_sweep/ae_ceiling_check.py --half bot --arm <arm>"
-        ;;
-    promote|PROMOTE)
-        run_promote || rc=1
-        ;;
-    B|b)
-        echo "  arms   : $PRIOR_ARMS   (stage 2, the flow prior)"
-        run_train_phase prior "$PRIOR_ARMS" || rc=1
-        ;;
-    C|c)
-        echo "  arms   : $PRIOR_ARMS"
-        echo "  parts  : $INFER_TAGS"
-        run_phase_c || rc=1
-        echo
-        echo "Next: python configs/HI_MGNFlow/hyperparameter_sweep/rank_arms.py"
-        ;;
-esac
-
-# hierarchy_cache_keep True leaves each half's multiscale cache beside its
-# training HDF5 so the next phase does not rebuild it. Nothing deletes it for
-# you, and it is worth keeping until Phase B is done.
-case "$PHASE" in
-    all|ALL|A|a|B|b)
-        echo "  hierarchy caches kept: rm -f dataset/SAOI/saoi_train_*.mscache.*.h5"
-        ;;
-esac
-
-if [ -n "$SKIPPED" ]; then
-    echo "SKIPPED -- phase incomplete:$SKIPPED" >&2
+if [ "$TRAIN" = "1" ] || [ "$INFER" = "1" ]; then
+    echo "---- 4. jobs: $(echo $ARMS | wc -w) arms x $(echo $HALVES | wc -w) halves over $NG GPU(s) ------------"
+    echo "  stdout per lane: $LOG_ROOT/<arm>_<half>.{train,infer_<eval set>}.out"
+    echo "  trainer log:     $OUT_ROOT/<arm>/<half>/train.log"
+    pids=""
+    for gpu in "${GPU_ARR[@]}"; do
+        (
+            for arm in $ARMS; do
+                mkdir "$QUEUE_DIR/claim_$arm" 2>/dev/null || continue
+                run_arm "$gpu" "$arm"
+            done
+        ) &
+        pids="$pids $!"
+    done
+    for pid in $pids; do wait "$pid"; done
 fi
-echo "Finished phase $PHASE with rc=$rc"
+
+# ------------------------------------------------------------------ 5. report
+# Each eval set is one part (the _infer_ file) against its 125 simulated
+# realizations (the _compare_ file). Their sample IDs differ, so rollout.py
+# pairs no scenes and writes only the pooled scores; the calibration of the
+# draws is computed here from spread_values.npz instead. Every draw and every
+# truth describe the same part, so the pooled ranks ARE the calibration.
+if [ "$REPORT" = "1" ]; then
+    echo "---- 5. report ---------------------------------------------------"
+    "$METHOD_PYTHON" - "$OUT_ROOT" "$HALVES" "$INFER_TAGS" $ARMS <<'PY' | tee "$LOG_ROOT/report.txt"
+import math
+import re
+import sys
+from pathlib import Path
+
+import numpy as np
+
+out_root = Path(sys.argv[1])
+halves, tags, arms = sys.argv[2].split(), sys.argv[3].split(), sys.argv[4:]
+logs = out_root / 'run_logs'
+EPOCH = re.compile(r'\[Prior\] Elapsed: ([\d.]+)s Epoch (\d+) .*?'
+                   r'CRPS ([\d.e+-]+) spread ([\d.]+)')
+KEPT = re.compile(r'\[Prior\] stage \w+\. Kept checkpoint: epoch (\d+)')
+
+
+def scores(gt, gen):
+    """Pooled scores of the generated spread values against the realizations."""
+    sd = float(gt.std()) or 1.0
+    q = np.linspace(0.0, 1.0, 1001)
+    s = {'sd_ratio': float(gen.std()) / sd,
+         'w1': float(np.abs(np.quantile(gen, q) - np.quantile(gt, q)).mean()) / sd,
+         'dmean': (float(gen.mean()) - float(gt.mean())) / sd}
+    g = np.sort(gen)
+    n = g.size
+    # CRPS of each truth against the full ensemble: E|X-y| - E|X-X'|/2,
+    # the second term from the sorted draws in O(n).
+    pair = float(np.sum((2 * np.arange(1, n + 1) - n - 1) * g)) / (n * n)
+    s['crps'] = float(np.mean([np.abs(g - y).mean() for y in gt]) - pair) / sd
+    # Rank of each truth among the draws, ties split evenly.
+    r = np.sort((np.searchsorted(g, gt, 'left') + np.searchsorted(g, gt, 'right')) / (2.0 * n))
+    m = r.size
+    s['pit_ks'] = float(np.max(np.abs(np.arange(1, m + 1) / m - r)))
+    s['tails'] = float(((r < 0.02) | (r > 0.98)).mean())
+    return s
+
+
+def num(v, w, p=3):
+    return f'{v:>{w}.{p}f}' if isinstance(v, float) and math.isfinite(v) else f'{"-":>{w}}'
+
+
+cells, values = {}, {}
+for arm in arms:
+    for half in halves:
+        for tag in tags:
+            npz = out_root / arm / half / 'infer' / tag / 'spread_values.npz'
+            if npz.is_file():
+                with np.load(npz) as z:
+                    gt, gen = np.asarray(z['gt'], float), np.asarray(z['gen'], float)
+                values[arm, half, tag] = (gt, gen)
+                cells[arm, half, tag] = scores(gt, gen)
+
+print('SAOI: one part per eval set, 2000 generated draws vs 125 simulated realizations;')
+print('statistic = z_disp peak-to-valley at the final step, every score divided by sd(truth).')
+print('targets: sd_ratio 1, W1 0, dmean 0, CRPS low, PIT tails 0.04, pit_ks 0.')
+print()
+head = (f"{'arm':<10}{'half':<5}{'eval set':<15}{'sd_ratio':>9}{'W1':>7}"
+        f"{'dmean':>8}{'CRPS':>7}{'tails':>7}{'pit_ks':>8}")
+print(head)
+print('-' * len(head))
+for arm in arms:
+    for half in halves:
+        for tag in tags:
+            s = cells.get((arm, half, tag), {})
+            print(f'{arm:<10}{half:<5}{tag:<15}{num(s.get("sd_ratio"), 9)}{num(s.get("w1"), 7)}'
+                  f'{num(s.get("dmean"), 8)}{num(s.get("crps"), 7)}{num(s.get("tails"), 7, 2)}'
+                  f'{num(s.get("pit_ks"), 8)}')
+    print()
+
+
+def train_info(arm, half):
+    """Kept prior epoch, its validation CRPS/spread, and training hours."""
+    kept, crps, spread, hours = '-', None, None, None
+    out = logs / f'{arm}_{half}.train.out'
+    if out.is_file():
+        k = KEPT.findall(out.read_text(errors='replace'))
+        kept = k[-1] if k else '-'
+    log = out_root / arm / half / 'train.log'
+    if log.is_file() and kept != '-':
+        rows = {int(e): (float(c), float(s)) for _, e, c, s in EPOCH.findall(log.read_text(errors='replace'))}
+        crps, spread = rows.get(int(kept), (None, None))
+    sec = logs / f'{arm}_{half}.train.seconds'
+    if sec.is_file():
+        hours = int(sec.read_text().strip() or 0) / 3600
+    return kept, crps, spread, hours
+
+
+n_cells = len(halves) * len(tags)
+rank = []
+for arm in arms:
+    got = [cells[arm, h, t] for h in halves for t in tags if (arm, h, t) in cells]
+    if not got:
+        rank.append((math.inf, arm, None))
+        continue
+    agg = {k: float(np.mean([g[k] for g in got])) for k in ('w1', 'crps', 'tails')}
+    agg['logsd'] = float(np.mean([abs(math.log(max(g['sd_ratio'], 1e-12))) for g in got]))
+    agg['absmean'] = float(np.mean([abs(g['dmean']) for g in got]))
+    agg['n'] = len(got)
+    rank.append((agg['w1'], arm, agg))
+# An arm missing cells averages over different eval sets; it ranks after the
+# complete ones instead of beside them.
+rank.sort(key=lambda r: (r[2] is None or r[2]['n'] < n_cells, r[0]))
+
+print(f'ARMS, ranked by mean W1 over the {n_cells} cells (lower is better; incomplete arms last)')
+print('|log sd|: 0 = right width; |dmean|: bias magnitude. kept/val CRPS/spread per half.')
+head = (f"{'arm':<10}{'cells':>6}{'W1':>7}{'|log sd|':>9}{'|dmean|':>8}{'CRPS':>7}{'tails':>7}"
+        + ''.join(f"  {h + ' kept':>8}{'valCRPS':>9}{'sprd':>6}{'h':>5}" for h in halves))
+print(head)
+print('-' * len(head))
+for _, arm, a in rank:
+    row = f'{arm:<10}'
+    if a is None:
+        row += f'{0:>6}' + f'{"-":>7}{"-":>9}{"-":>8}{"-":>7}{"-":>7}'
+    else:
+        row += (f'{a["n"]:>6}{num(a["w1"], 7)}{num(a["logsd"], 9)}{num(a["absmean"], 8)}'
+                f'{num(a["crps"], 7)}{num(a["tails"], 7, 2)}')
+    for h in halves:
+        kept, c, s, hrs = train_info(arm, h)
+        row += (f'  {kept:>8}' + (f'{c:>9.2e}' if c is not None else f'{"-":>9}')
+                + (f'{s:>6.2f}' if s is not None else f'{"-":>6}')
+                + (f'{hrs:>5.1f}' if hrs is not None else f'{"-":>5}'))
+    print(row)
+by = {arm: a for _, arm, a in rank}
+if by.get('tok') and by.get('tok_seed'):
+    print()
+    print(f'noise floor: |tok - tok_seed| = {abs(by["tok"]["w1"] - by["tok_seed"]["w1"]):.3f} in mean W1; '
+          'a smaller gap between two arms is not a result.')
+
+# One grid: arms down, cells across; truth vs generated on each cell's own axis.
+try:
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+except Exception as exc:  # the table above stands without the picture
+    print(f'\n(no histogram grid: matplotlib unavailable: {exc})')
+    sys.exit(0)
+if not values:
+    sys.exit(0)
+cols = [(h, t) for h in halves for t in tags]
+fig, axes = plt.subplots(len(arms), len(cols), figsize=(2.6 * len(cols), 1.7 * len(arms) + 0.6),
+                         squeeze=False, sharex='col')
+for j, (h, t) in enumerate(cols):
+    pooled = [v for (a, hh, tt), (g, x) in values.items() if (hh, tt) == (h, t) for v in (g, x)]
+    if pooled:
+        lo, hi = np.quantile(np.concatenate(pooled), [0.005, 0.995])
+        bins = np.linspace(lo, hi, 41)
+    for i, arm in enumerate(arms):
+        ax = axes[i, j]
+        ax.set_yticks([])
+        for side in ('top', 'right', 'left'):
+            ax.spines[side].set_visible(False)
+        if (arm, h, t) in values:
+            gt, gen = values[arm, h, t]
+            ax.hist(gt, bins=bins, density=True, color='#9aa3ad', label='FEA truth (125)')
+            ax.hist(gen, bins=bins, density=True, histtype='step', linewidth=1.6,
+                    color='#1f6fd1', label='generated (2000)')
+            s = cells[arm, h, t]
+            ax.text(0.98, 0.95, f'sd {s["sd_ratio"]:.2f}\nW1 {s["w1"]:.2f}', transform=ax.transAxes,
+                    ha='right', va='top', fontsize=7, color='#333333')
+        else:
+            ax.text(0.5, 0.5, 'no result', transform=ax.transAxes, ha='center', va='center',
+                    fontsize=8, color='#888888')
+        if i == 0:
+            ax.set_title(f'{h} / {t}', fontsize=9)
+        if j == 0:
+            ax.set_ylabel(arm, fontsize=9, rotation=0, ha='right', va='center')
+handles = next((ax.get_legend_handles_labels() for ax in axes.flat
+                if ax.get_legend_handles_labels()[0]), ([], []))
+fig.legend(*handles, loc='upper right', ncol=2, fontsize=8, frameon=False)
+fig.suptitle('SAOI z_disp peak-to-valley: FEA realizations vs generated draws',
+             fontsize=11, x=0.01, ha='left')
+fig.tight_layout(rect=(0, 0, 1, 0.97))
+png = logs / 'histograms.png'
+fig.savefig(png, dpi=130)
+print(f'\nhistogram grid: {png}')
+print(f'per cell:       {out_root}/<arm>/<half>/infer/<eval set>/histogram_compare.png')
+PY
+fi
+
+# ----------------------------------------------------------------- 6. summary
+rc=0
+if [ "$TRAIN" = "1" ] || [ "$INFER" = "1" ]; then
+    echo "=================================================================="
+    echo " summary"
+    echo "=================================================================="
+    for arm in $ARMS; do
+        for half in $HALVES; do
+            st="$QUEUE_DIR/${arm}_${half}.status"
+            if [ -f "$st" ] && [ "$(cat "$st")" = "ok" ]; then
+                printf '  %-14s ok\n' "${arm}_${half}"
+            else
+                printf '  %-14s %s\n' "${arm}_${half}" "$( [ -f "$st" ] && cat "$st" || echo 'did not finish')"
+                rc=1
+            fi
+        done
+    done
+fi
+
+# The hierarchy cache is derived data, rebuilt in minutes by the next run.
+# hierarchy_cache_keep False already deletes it when the last reader closes;
+# this sweeps what a killed job left behind. Results are never touched.
+if [ "$TRAIN" = "1" ] && [ "$KEEP_CACHE" != "1" ] && [ -d "$OUT_ROOT/mscache" ]; then
+    rm -f "$OUT_ROOT"/mscache/*/*.mscache.*.h5 "$OUT_ROOT"/mscache/*/*.mscache.*.h5.tmp.*
+    rmdir "$OUT_ROOT"/mscache/* "$OUT_ROOT/mscache" 2>/dev/null
+    echo "  hierarchy caches removed ($OUT_ROOT/mscache; KEEP_CACHE=1 keeps them)"
+fi
+echo "Finished with rc=$rc   (log: $MASTER_LOG)"
 exit "$rc"

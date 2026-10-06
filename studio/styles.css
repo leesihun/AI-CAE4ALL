@@ -601,6 +601,7 @@ body.workspace-overlay #studioOverlay.open { top: var(--topbar-height, 66px); }
 .config-card.inactive { border-style: dashed; background: #f5f4ef; }
 .config-card.removed { border-color: #e2c5c1; background: var(--red-soft); }
 .config-card.field-flash { border-color: var(--red); box-shadow: 0 0 0 4px rgb(207 60 47 / .16); }
+.form-row.field-flash .field { border-color: var(--red); box-shadow: 0 0 0 4px rgb(207 60 47 / .16); }
 .config-card.unknown,
 .config-card.preflight-rejected { border-color: var(--red); background: var(--red-soft); box-shadow: 0 0 0 3px rgb(207 60 47 / .12); }
 .config-card.graph-autofilled { border-color: #9fc5d4; background: #f7fbfd; }

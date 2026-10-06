@@ -2,7 +2,7 @@ import { $, $$, escapeHtml, toast } from "./dom.js";
 import { state } from "./state.js";
 import { BLOCK_SPECS } from "./constants.js";
 import { apiRequest, requireRuntime, refreshNavCounts } from "./api.js";
-import { graphErrorNodes, validateGraph, executableSteps, preflightConfigText, preflightMessages, inferenceDatasetWarnings } from "./validate.js";
+import { graphErrorNodes, validateGraph, executableSteps, materializeStepConfigs, preflightConfigText, preflightMessages, inferenceDatasetWarnings } from "./validate.js";
 import { render } from "./graph.js";
 import { jumpToFailingField } from "./config.js";
 import { schedulePipelineSave, pipelineDocument } from "./persistence.js";
@@ -544,6 +544,15 @@ export async function validatePipeline(targetId = null) {
   // log to work out which of seven blocks to fix.
   const diagnostics = [];
   let passed = true;
+  try {
+    // A wired HI-MGN surrogate's inference config is written now, so the
+    // check below reads the exact file the run will.
+    await materializeStepConfigs(steps);
+  } catch (error) {
+    $("#runBanner").classList.remove("show");
+    toast(`Could not write the HI-MGN surrogate config: ${error.message}`, "error");
+    return false;
+  }
   for (let index = 0; index < steps.length; index += 1) {
     const step = steps[index];
     $("#runDetail").textContent = `Checking ${index + 1}/${steps.length} · ${step.label}`;
@@ -630,6 +639,8 @@ export async function runGraph(targetId = null) {
     // request is in flight, and the run belongs to the one it was launched from.
     const pipeline = pipelineDocument();
     const launchCanvas = pipeline.canvas_id;
+    $("#runDetail").textContent = "writing generated configs → submission checks → per-step launch gate";
+    await materializeStepConfigs(steps);
     const job = await apiRequest("/api/pipeline/run", {
       method: "POST",
       allowError: true,

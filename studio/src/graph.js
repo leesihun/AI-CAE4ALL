@@ -7,7 +7,7 @@ import {
 } from "./constants.js";
 import { parametersTableGraphic } from "./graphics.js";
 import { blockFacts, blockSubtitle, factsTable } from "./cards.js";
-import { typeColor, compatible, portRequiredInMode, validateGraph } from "./validate.js";
+import { typeColor, compatible, portRequiredInMode, validateGraph, cadUsesSurrogate } from "./validate.js";
 import { openArtifact } from "./viewer.js";
 import { runGraph } from "./run.js";
 import { renderInspector } from "./inspector.js";
@@ -419,8 +419,16 @@ export function connectPortDetails(first, second) {
     toPort: input.portId
   });
   state.pendingPort = null;
+  // An HI-MGN wired into a CAD Generator's surrogate port has one use: ranking
+  // designs in the optimization loop. Switch the block there, so drawing the
+  // wire is the whole setup (the inference config is written at Validate/Run).
+  const ranks = inputNode?.type === "run.cad_generator" && input.portId === "surrogate"
+    && !cadUsesSurrogate(inputNode);
+  if (ranks) Object.assign(inputNode.config, { mode: "optimize", opt_analysis: "surrogate" });
   render();
-  toast("Blocks linked.");
+  toast(ranks
+    ? "Blocks linked. CAD Generator switched to optimize with the HI-MGN surrogate (undo with Ctrl+Z)."
+    : "Blocks linked.");
   return true;
 }
 

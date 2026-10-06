@@ -1,0 +1,94 @@
+% ex3 B300 sweep (8 GPUs, one arm per card) arm tok_seed: tok repeated unchanged.
+% Question: run-to-run noise floor (HI_MGNFlow sets no seed, so every launch differs); a gap to tok smaller than tok vs tok_seed is noise.
+% Trains the AE, then the prior, in one run (mode train).
+% Otherwise the ex3 baseline (train) verbatim, with the B300 layout shared by every arm:
+% batch_size 8 x grad_accum_steps 1 (same effective 8 as 2 x 4), num_workers 8,
+% gpu_ids 0 (run_sweep.sh assigns the card through CUDA_VISIBLE_DEVICES), and
+% hierarchy_cache_keep False (the cache is deleted once no job is reading it).
+%
+% probabilistic/ex3 - chi_mgnflow; paper-informed native adaptation, not an exact reproduction.
+% Dataset: shell buckling, 150 geometries x 64 imperfection draws (ex3_shell_buckling.h5).
+% Field storage order (0-based): input -> output -> conditioner -> partNo.
+% input [0:3]: x_coord, y_coord, z_coord (nominal, pre-imperfection)
+% output/state [3:6]: ux, uy, uz
+% conditioner [6:8]: thickness, delta (applied end shortening)
+% partNo [8]: node type (0 interior, 1 clamped rim, 2 loaded rim) -> use_node_types
+% Static (T=1) problem: the state input is zero and the model predicts the field in one step.
+% The one-to-many spread comes from the imperfection draw, which the model never sees.
+% Reference: https://arxiv.org/abs/2504.02843
+% split_group_attr keeps all 64 draws of a geometry in one split (no sibling leakage).
+% Risk: the whole field is compressed onto 256 coarse nodes x latent_ch 4; watch stage-1
+% reconstruction error, it is the ceiling for buckling-lobe detail.
+% No source HDF5 writes. Checkpoints are created by this training config.
+
+model                            chi-mgnflow
+mode                             train
+gpu_ids                          0
+parallel_mode                    ddp
+split_seed                       42
+split_group_attr                 shape_idx
+dataset_dir                      ../../dataset/probabilistic/ex3_shell_buckling.h5
+infer_dataset                    ../../dataset/probabilistic/ex3_shell_buckling_infer.h5
+modelpath                        ../../output/chi-mgnflow/ex3_b300_sweep/tok_seed/model.pth
+log_file_dir                     ../../output/chi-mgnflow/ex3_b300_sweep/tok_seed/train.log
+inference_output_dir             ../../output/chi-mgnflow/ex3_b300_sweep/tok_seed/infer
+infer_timesteps                  1
+input_var                        3
+output_var                       3
+cond_var                         2
+feature_loss_weights             1, 1, 1
+use_node_types                   True
+positional_features              4
+time_integration                 ar_ot
+training_epochs                  120
+batch_size                       8
+learningr                        0.0001
+weight_decay                     0.0001
+warmup_epochs                    5
+num_workers                      8
+prefetch_factor                  2
+grad_accum_steps                 1
+augment_geometry                 True
+use_amp                          True
+use_checkpointing                True
+use_ema                          True
+ema_decay                        0.99
+use_parallel_stats               False
+val_interval                     10
+test_interval                    50
+test_batch_idx                   0, 1
+plot_feature_idx                 2
+display_trainset                 True
+display_testset                  True
+write_preprocessing              False
+use_world_edges                  False
+use_multiscale                   True
+edge_var                         8
+latent_dim                       128
+message_passing_num              15
+geometry_state_mode              displacement
+displacement_state_indices       0, 1, 2
+coarsening_type                  voronoi_seedmean
+multiscale_levels                2
+voronoi_clusters                 4096, 256
+mp_per_level                     2, 3, 5, 3, 2
+hierarchy_variants               2
+hierarchy_seed                   42
+hierarchy_cache_keep             False
+training_seed                    42
+best_by                          crps
+num_vae_samples                  16
+vae_batch_size                   16
+latent_ch                        4
+ae_kl_weight                     0.000001
+ae_epochs                        60
+prior_blocks                     4
+flow_time_freqs                  16
+flow_t_sampling                  uniform
+flow_loss_weighting              uniform
+flow_steps                       30
+flow_solver                      heun
+flow_predict                     sample
+val_flow_steps                   30
+val_num_samples                  8
+prior_global                     token

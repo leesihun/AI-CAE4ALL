@@ -3,7 +3,10 @@ import { state, snapshot } from "./state.js";
 import { savePipelineState } from "./persistence.js";
 import { BLOCK_SPECS, MODEL_CATALOG, TYPE_META, INPUT_SOURCE_META, HELP } from "./constants.js";
 import { apiRequest, requireRuntime } from "./api.js";
-import { typeColor, STANDALONE_INFERENCE_MODEL_IDS, SDFFLOW_OPTIMIZE_INERT_KEYS, inferenceModel } from "./validate.js";
+import {
+  typeColor, STANDALONE_INFERENCE_MODEL_IDS, SDFFLOW_OPTIMIZE_INERT_KEYS, CAD_GENERATOR_ROW_MODES, VER_SURROGATE_SETTINGS,
+  inferenceModel, cadGeneratorMode, cadGeneratorValue, cadRowActive, cadSurrogate, cadUsesSurrogate
+} from "./validate.js";
 import { blockFacts, factsTable } from "./cards.js";
 import { duplicateNode, deleteSelected, render } from "./graph.js";
 import { openConfig, choicesFor, requiredFor } from "./config.js";
@@ -22,6 +25,12 @@ import { applyGraphAutofill, autoFillCount, autoFillMeta, markManualConfigValue,
  */
 function sameChoice(value, choice) {
   return String(value ?? "").toLowerCase() === String(choice ?? "").toLowerCase();
+}
+
+/** A choice list that still offers (and so selects) a configured value outside it. */
+function withCurrent(choices, current) {
+  const value = String(current ?? "").trim();
+  return value && !choices.some(choice => sameChoice(value, choice)) ? [...choices, value] : choices;
 }
 
 function parameterNames(node, key) {
@@ -267,29 +276,71 @@ function inertGeometryKey(node, key) {
   return false;
 }
 
+// `label` is markup (keyLabel output or a literal); `value` and `note` are text.
+const readonlyRow = (label, value, note) => `<div class="form-row run-evidence"><label>${label}${note ? `<small class="inline-auto">${escapeHtml(note)}</small>` : ""}</label><output class="field readonly" title="${escapeHtml(value)}">${escapeHtml(value) || "—"}</output></div>`;
+
 /**
- * The surrogate search's honesty statement. opt_fea_verify lives in the
- * connected SDFFlow block's Full config (the generator block does not carry
- * it, so it cannot shadow that value), and it is read from the same merge the
- * run config is built from: model block first, generator block over it.
+ * What the "HI-MGN surrogate" wire does to this CAD Generator, and the
+ * surrogate search's honesty statement.
+ *
+ * Every value here is read from what the run config is built from
+ * (executableSteps): the wired block, the generator's own rows, and the
+ * connected SDFFlow block under them. A wire the current mode ignores says so
+ * instead of blocking the run.
  */
-function surrogateGateSection(node) {
+function surrogateSection(node) {
+  const surrogate = cadSurrogate(node);
+  const active = cadUsesSurrogate(node);
+  if (!surrogate && !active) return "";
+  const mode = cadGeneratorMode(node);
+  const sourceLabel = surrogate ? (BLOCK_SPECS[surrogate.source.type]?.label || surrogate.source.id) : "";
+  if (!active) {
+    const next = mode === "optimize"
+      ? "Set <strong>opt analysis</strong> to <code>surrogate</code> to rank designs with it."
+      : `Switch <strong>mode</strong> to <code>optimize</code> to search designs with it; this ${escapeHtml(mode)} run ignores it.`;
+    return `<section class="inspect-section"><div class="section-title">HI-MGN surrogate</div><div class="diagnostic"><i></i><div><strong>${escapeHtml(sourceLabel)} is wired but unused in this mode.</strong><br>It is read only by <code>mode optimize</code> with <code>opt_analysis surrogate</code>. ${next}</div></div></section>`;
+  }
   const modelEdge = state.edges.find(edge => edge.toNode === node.id && edge.toPort === "model");
   const modelNode = modelEdge && state.nodes.find(candidate => candidate.id === modelEdge.fromNode);
   const merged = { ...(modelNode?.config || {}), ...node.config };
-  const verified = ["true", "1", "yes", "on"].includes(String(merged.opt_fea_verify ?? "").trim().toLowerCase());
-  const pair = "Needs <code>opt_surrogate_checkpoint</code> (filled by an HI-MGN model wired into the <em>HI-MGN surrogate</em> port, or set in the connected SDFFlow block's Full config) and <code>opt_surrogate_config</code> (the matching HI-MGN inference config, Full config); preflight blocks a missing pair.";
-  return verified
-    ? `<section class="inspect-section"><div class="section-title">Surrogate accuracy gate</div><div class="diagnostic"><i></i><div><strong>FEA verification on (<code>opt_fea_verify</code>).</strong><br>The search ranks with HI-MGN; afterwards the optimized design, the best baseline, and the typical baseline are re-solved with the tet4 FEA solver. report.md and the <code>fea_*</code> columns of the optimization table carry the solver's numbers: judge the design on those. ${pair}</div></div></section>`
-    : `<section class="inspect-section"><div class="section-title">Surrogate accuracy gate</div><div class="diagnostic warning"><i></i><div><strong>Demonstration path, not verified structural evidence.</strong><br>Every number this run reports is a HI-MGN prediction. Set <code>opt_fea_verify</code> True in the connected SDFFlow block's Full config to re-solve the result with the real solver at the end, or use FEA analysis. ${pair}</div></div></section>`;
+  const ver = surrogate?.layout === "ver";
+  const rows = [
+    readonlyRow("surrogate model", surrogate ? `${sourceLabel} (${surrogate.source.id})` : "", surrogate ? "wired" : "wire an HI-MGN model block in"),
+    readonlyRow("checkpoint", String(merged.opt_surrogate_checkpoint || ""), surrogate ? "from the wire" : "SDFFlow Full config"),
+    surrogate?.block
+      ? readonlyRow("inference config", `written from ${surrogate.block.id} at Validate / Run`, "automatic")
+      : readonlyRow("inference config", String(merged.opt_surrogate_config || ""), "SDFFlow Full config"),
+    ...(ver ? Object.entries(VER_SURROGATE_SETTINGS).map(([key, value]) => readonlyRow(keyLabel(key), value, "fixed by the ex13 labels")) : [])
+  ].join("");
+  const verified = !ver && ["true", "1", "yes", "on"].includes(String(merged.opt_fea_verify ?? "").trim().toLowerCase());
+  const layoutNote = ver
+    ? "This surrogate was trained on the ex13 vertical-load labels (output_var 4, cond_var 0), so the run is set to the vertical load case in DeepJEB's frame at 4470 kg/m³. FEA re-verification stays off: <code>opt_fea_verify</code> re-solves with fea.py's pad / lug-crown boundary conditions, not the bolt-bore / lug-bore rule these labels used, so it would grade the surrogate against a different problem."
+    : "";
+  const gate = verified
+    ? `<div class="diagnostic"><i></i><div><strong>FEA verification on (<code>opt_fea_verify</code>).</strong><br>The search ranks with HI-MGN; afterwards the optimized design, the best baseline, and the typical baseline are re-solved with the tet4 FEA solver. report.md and the <code>fea_*</code> columns of the optimization table carry the solver's numbers: judge the design on those.</div></div>`
+    : `<div class="diagnostic warning"><i></i><div><strong>Demonstration path, not verified structural evidence.</strong><br>Every number this run reports is a HI-MGN prediction. ${ver ? layoutNote + " Check the winner with an independent analysis before acting on it." : "Set <code>opt_fea_verify</code> True in the connected SDFFlow block's Full config to re-solve the result with the real solver at the end, or use FEA analysis."}</div></div>`;
+  return `<section class="inspect-section"><div class="section-title">HI-MGN surrogate</div>${rows}${gate}</section>`;
 }
 
-/** A CAD Generator sampling row that `mode optimize` never reads (the run
- * config drops them too), so it is not offered as a control there. */
-function inertGeneratorKey(node, key) {
-  return node.type === "run.cad_generator"
-    && String(node.config.mode || "").toLowerCase() === "optimize"
-    && (SDFFLOW_OPTIMIZE_INERT_KEYS.has(key) || ["candidates", "guidance"].includes(key));
+/**
+ * The CAD Generator's rows for its current mode: mode first, then the rows
+ * only this mode reads (interpolate's endpoints, reconstruct's mesh), then the
+ * rest. A row the mode does not read is not offered (the run config blanks it
+ * too), and a row a saved graph predates is shown at the value it runs with.
+ */
+function cadGeneratorEntries(node) {
+  const mode = cadGeneratorMode(node);
+  const rank = key => key === "mode" ? 0 : CAD_GENERATOR_ROW_MODES[key]?.length === 1 && CAD_GENERATOR_ROW_MODES[key][0] === mode ? 1 : 2;
+  return [...new Set([...Object.keys(BLOCK_SPECS[node.type].defaults), ...Object.keys(node.config)])]
+    // Pre-rename names; their values run (and show) as num_samples / cfg_scale.
+    .filter(key => !["candidates", "guidance"].includes(key))
+    // Shown, with what it is used for, in the HI-MGN surrogate section.
+    .filter(key => key !== "opt_surrogate_checkpoint")
+    .filter(key => cadRowActive(mode, key))
+    .filter(key => !(mode === "optimize" && SDFFLOW_OPTIMIZE_INERT_KEYS.has(key)))
+    .map((key, index) => ({ key, index }))
+    .sort((a, b) => rank(a.key) - rank(b.key) || a.index - b.index)
+    .map(({ key }) => [key, cadGeneratorValue(node, key)]);
 }
 
 function isFixedBehaviour(node, key) {
@@ -564,10 +615,9 @@ export function renderInspector() {
   const resolved = node.type === "run.inference" ? inferenceModel(node) : null;
   const configEntries = spec.isModel
     ? modelInspectorEntries(node, spec.modelId, 8)
-    : Object.entries(node.config)
+    : (node.type === "run.cad_generator" ? cadGeneratorEntries(node) : Object.entries(node.config))
       .filter(([key]) => node.type !== "source.parameters" || !["condition_names", "feature_names", "parameter_table", "parameter_dataset"].includes(key))
       .filter(([key]) => !inertGeometryKey(node, key))
-      .filter(([key]) => !inertGeneratorKey(node, key))
       .filter(([key]) => !isStatementRow(node, key))
       .filter(([key]) => !resolved || inferenceKeyApplies(node, key, resolved))
       .slice(0, 20);
@@ -605,7 +655,10 @@ export function renderInspector() {
           // picks whether "analyze" is the exact FEA solve or a fast but
           // currently unproven HI-MGN forward pass.
           ? { mode: ["sample", "reconstruct", "interpolate", "optimize"],
-              opt_analysis: ["fea", "surrogate"] }
+              opt_analysis: ["fea", "surrogate"],
+              // cond_sweep (CHOICES) is not offered: its cond_values_a/b and
+              // sweep_steps are Full config keys this block does not carry.
+              interpolation_space: withCurrent(["slerp_noise", "lerp_latent"], node.config.interpolation_space) }
           : node.type === "evaluate.training_metrics"
             ? { y_scale: ["linear", "log"] }
             : {};
@@ -659,11 +712,7 @@ export function renderInspector() {
         return `<div class="form-row${automatic ? " graph-autofilled" : ""}"><label>${keyLabel(key)}${automatic ? `<small class="inline-auto">auto · ${escapeHtml(automatic.sourceLabel)}</small>` : ""}</label><input class="field inspector-config" data-key="${escapeHtml(key)}" value="${escapeHtml(value)}">${rowHelp(node, key)}</div>`;
       }).join("")}</div>
     </section>
-    ${node.type === "run.cad_generator"
-      && String(node.config.mode || "").toLowerCase() === "optimize"
-      && String(node.config.opt_analysis || "fea").toLowerCase() === "surrogate"
-      ? surrogateGateSection(node)
-      : ""}
+    ${node.type === "run.cad_generator" ? surrogateSection(node) : ""}
     ${node.type === "prep.geometry" && String(node.config.emit || "").includes("pointcloud") && String(node.config.mode || "").toLowerCase() === "ingest"
       // pipeline.py writes the point cloud to a sidecar next to the graph file
       // (pointcloud_output_path: "<stem>_pointcloud<ext>"). Nothing in the graph
@@ -680,13 +729,18 @@ export function renderInspector() {
     snapshot();
     node.config[control.dataset.key] = control.value;
     markManualConfigValue(node, control.dataset.key, control.value);
+    // Switching a generator with an HI-MGN wired in to optimize means the
+    // surrogate search: that wire has no other use.
+    const ranks = node.type === "run.cad_generator" && control.dataset.key === "mode"
+      && cadGeneratorMode(node) === "optimize" && cadSurrogate(node) && !cadUsesSurrogate(node);
+    if (ranks) node.config.opt_analysis = "surrogate";
     applyGraphAutofill();
     renderInspector();
     // The canvas card shows the configured mode (title verb and kind line) and
     // autofill may have rewritten other blocks' values, so redraw it too --
     // editing `mode` here used to leave the card claiming the old one.
     render();
-    toast(`Updated ${control.dataset.key}.`);
+    toast(ranks ? "Updated mode. The wired HI-MGN now ranks the designs (opt analysis: surrogate)." : `Updated ${control.dataset.key}.`);
   }));
   $("#openParameterSpreadsheet")?.addEventListener("click", () => openArtifact(node.id));
   on("#inspectorRun", "click", () => {

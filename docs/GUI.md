@@ -221,14 +221,19 @@ checkpointed per GnBlock, so memory follows the full-resolution block count
 
 The other presets apply a fixed set of values or a checked-in config. Both SDFFlow closed-loop
 presets load the one checked-in optimize config,
-`configs/SDFFlow/geometry_generation/ex1/baseline/config_optimize_sdfflow.txt`;
-the surrogate preset then switches `opt_analysis surrogate`, points
+`configs/SDFFlow/geometry_generation/ex1/baseline/config_optimize_sdfflow.txt`,
+as a **recipe**: the block keeps its own `vae_modelpath`/`fm_modelpath`,
+`gpu_ids`, `parallel_mode` and `seed` (that file's are the dataset_matrix run's,
+including `gpu_ids 7`), and `output_dir` becomes `<the block's output_dir>/optimize`.
+The surrogate preset then switches `opt_analysis surrogate`, points
 `opt_surrogate_config`/`opt_surrogate_checkpoint` at the ex13 (DeepJEB vertical
 load) HI-MGN, and sets the values its labels fix: `opt_load_cases vertical`,
 `opt_length_scale 0.102323`, `opt_material_rho 4470`, `opt_vertical_disp_max
-0.36` (the ex13 median), and `opt_fea_verify False` (fea.py does not model the
-bolt-bore/lug-bore boundary conditions, so optimize refuses it on this layout).
-Until that model has trained, preflight names the missing checkpoint.
+0.36` (the ex13 median), and `opt_fea_verify False` (fea.py clamps the pad and
+loads the lug crown, not the bolt-bore/lug-bore rule the labels used, so
+optimize refuses it on this layout). Until that model has trained, preflight
+names the missing checkpoint. A wired HI-MGN (below) replaces both surrogate
+paths, so with a trained HI-MGN on the canvas the preset is not needed.
 
 A CAD Generator wired to the SDFFlow block runs with **its own** `mode` and
 `opt_analysis` (they are laid over the model block's), so applying either
@@ -236,15 +241,38 @@ closed-loop preset also sets those two on every connected generator, and the
 confirmation dialog lists them. Before this, the generator's defaults
 (`sample`, `fea`) silently undid the preset at Run.
 
+The CAD Generator's inspector shows **only the rows its mode reads**, and the run
+config blanks the rest: `num_samples` for `sample`; `interpolation_space`,
+`source_num_samples`, `sample_index_a`/`_b`, `alpha` and `interpolation_steps`
+for `interpolate` (defaults mirror the checked-in interpolate config, so a fresh
+block passes preflight); `input_mesh` for `reconstruct`; `opt_analysis` for
+`optimize`. A graph saved before a row existed shows and runs the block default
+(`cadGeneratorValue`), so what the panel shows is what runs. **Fix now** on a
+CAD Generator diagnostic jumps to that row, or to the connected SDFFlow block's
+Full config when the key lives there.
+
 The CAD Generator's optional **HI-MGN surrogate** port takes a MeshGraphNets
-model block or a saved HI-MGN checkpoint and fills the generator's
-`opt_surrogate_checkpoint` from it (re-rooted to `methods/SDFFlow`), so a canvas
-can train HI-MGN and SDFFlow side by side and close the loop on the trained
-surrogate. The trainer runs first because the wire orders it. The wire carries
-only the checkpoint: `opt_surrogate_config`, the matching HI-MGN *inference*
-config, still comes from the SDFFlow block's Full config. Validate rejects the
-wire outside `mode optimize` + `opt_analysis surrogate`, and rejects a non-MGN
-model on it.
+model block or a saved HI-MGN checkpoint. Drawing the wire is the whole setup:
+
+- the generator switches to `mode optimize` + `opt_analysis surrogate` (one
+  Ctrl+Z puts it back), and so does switching `mode` to optimize later;
+- `opt_surrogate_checkpoint` is filled from the wire (re-rooted to
+  `methods/SDFFlow`);
+- with a **model block** wired, `opt_surrogate_config` is written from that
+  block (`mode inference`) under `studio/runtime/configs/` at Validate and at
+  Run (`materializeStepConfigs`), so preflight checks the file the run reads;
+- when that block's contract is the ex13 vertical-load layout (`output_var 4`,
+  `cond_var 0`, the same test as `design_loop/surrogate.py`), the run is pinned
+  to `opt_load_cases vertical`, `opt_length_scale 0.102323`,
+  `opt_material_rho 4470` and `opt_fea_verify False`, shown read-only in the
+  inspector's **HI-MGN surrogate** section.
+
+A saved checkpoint carries no inference config, so on that wire
+`opt_surrogate_config` still comes from the SDFFlow block's Full config. In any
+other mode the wire is **dormant**, not an error: the inspector says it is
+unused and the run config leaves its checkpoint out. Pressing the CAD
+Generator's own Run executes only that block; it does not retrain the HI-MGN.
+Validate rejects a non-MGN model on the port.
 
 `opt_fea_verify` makes a surrogate search honest inside the run: after CMA-ES,
 the optimized design, the best baseline and the typical baseline are re-solved
@@ -253,7 +281,7 @@ with the tet4 FEA solver (`design_loop/verify_with_fea.py`). report.md gains an
 Optimization workspace's table gains `fea_*` columns -- rank and constrain on
 those (for example `fea_vertical_displacement_mm <= 0.2`, minimize
 `fea_mass_kg`), not on the surrogate's. The CAD Generator inspector's
-"Surrogate accuracy gate" says which of the two states the run is in.
+"HI-MGN surrogate" section says which of the two states the run is in.
 
 ---
 
