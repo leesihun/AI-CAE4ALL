@@ -15,8 +15,7 @@ paper and what it does not):
 | --- | --- | --- |
 | `ex1` | DeepJEB brackets (`ex1_deepjeb.h5`, parent-grouped split) | `volume, area` |
 | `ex2` | DrivAerML cars | the 16 geometry parameters + 5 force coefficients |
-| `ex3` | MCB nut subset | `bbox_x, bbox_y, bbox_z, volume, area` |
-| `ex4` | Thingi10K | none (unconditional) |
+| `ex3` | MCB nut subset | `bbox_x, bbox_y, bbox_z, volume, area`, five `class_*` one-hots, `hole_count` |
 
 From the `AI-CAE4ALL` root, validate and run the merged training config:
 
@@ -69,7 +68,7 @@ python SDFFlow_main.py --config ../../configs/SDFFlow/geometry_generation/ex1/ba
 Each slot has the same four configs; `ex1` adds the closed loop and `ex3` the
 two conditional-accuracy tasks. `<out>` is the slot's output directory:
 `output/dataset_matrix/geometry_generation/ex1/sdfflow/` for ex1 and
-`output/geometry_generation/<exN>_<dataset>/sdfflow/` for ex2-ex4.
+`output/geometry_generation/<exN>_<dataset>/sdfflow/` for ex2 and ex3.
 
 | Config (`<exN>/baseline/`) | Purpose | Main output |
 | --- | --- | --- |
@@ -262,7 +261,7 @@ model is reliable far outside the training range.
 
 `config_interpolate_sdfflow.txt` recreates the seed-42, `source_num_samples`
 (16) unconditional batch, selects indices 0 and 1, and interpolates between them
-at `alpha 0.5`. On ex2-ex4 that is the batch `config_infer_sdfflow.txt` draws
+at `alpha 0.5`. On ex2 and ex3 that is the batch `config_infer_sdfflow.txt` draws
 (`num_samples 16`); ex1's infer config draws 209, and the noise comes from a
 device generator whose draw depends on the tensor shape, so its endpoints are
 not that run's samples 0 and 1. `interpolation_space` chooses how:

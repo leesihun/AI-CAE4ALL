@@ -56,6 +56,9 @@ def main():
     # modes self-spawn one worker per GPU (each runs _train_dispatch).
     from general_modules import distributed as D
     if run_mode in ('train', 'train_vae', 'train_lc') and D.should_distribute(config):
+        from general_modules.resume_state import reject_multi_process
+        reject_multi_process(config, f'{D.parallel_mode(config)} training on '
+                                     f'{len(D.resolve_gpu_ids(config))} GPUs')
         D.spawn_workers(_train_dispatch, config, args.config)
         return
 

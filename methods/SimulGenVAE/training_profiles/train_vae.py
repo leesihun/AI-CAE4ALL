@@ -16,6 +16,7 @@ from torch.utils.data.distributed import DistributedSampler
 from general_modules import distributed as D
 from general_modules.field_viz import plot_field_reconstruction
 from general_modules.fom_dataset import build_dataset_splits
+from general_modules.resume_state import TrainingResume
 from model.common import add_sn, initialize_weights_He
 from training_profiles.setup import (
     append_log,
@@ -147,15 +148,35 @@ def vae_worker(config, config_filename='config.txt'):
     test_interval = max(1, int(config.get('test_interval', 50)))
     display_testset = bool(config.get('display_testset', True))
     modelpath = config.get('vae_modelpath', '../../output/simulgenvae/simulgenvae_vae.pth')
-    log_file = init_log_file(config, config_filename) if rank0 else None
+    valid_loss = float('nan')
+    # The KL beta is a function of the epoch; everything else the next epoch
+    # reads is in the resume state.
+    start_epoch, elapsed_before = 0, 0.0
+    resume = TrainingResume(config, modelpath)
+    state = resume.load()
+    if state is not None:
+        model.load_state_dict(state['model'])
+        if ema_model is not None:
+            ema_model.load_state_dict(state['ema'])
+        optimizer.load_state_dict(state['optimizer'])
+        scheduler.load_state_dict(state['scheduler'])
+        scaler.load_state_dict(state['scaler'])
+        valid_loss = state['valid_loss']
+        start_epoch, elapsed_before = state['epoch'] + 1, state['elapsed']
+        del state
+        # A persistent-worker loader draws its worker base seed only when its
+        # iterator is first built; build it now so that draw does not come
+        # out of the restored RNG stream.
+        if train_loader.persistent_workers:
+            iter(train_loader)
+    log_file = init_log_file(config, config_filename, resumed_at=start_epoch or None) if rank0 else None
     viz_dir = artifact_dir(config, modelpath) if rank0 else None
 
     if rank0:
         print('\n' + '=' * 60)
         print('Starting hierarchical VAE training loop...')
         print('=' * 60 + '\n')
-    start_time = time.time()
-    valid_loss = float('nan')
+    start_time = time.time() - elapsed_before
 
     def checkpoint_payload(epoch):
         return {
@@ -177,7 +198,8 @@ def vae_worker(config, config_filename='config.txt'):
             save_checkpoint(modelpath, payload)
 
     try:
-        for epoch in range(total_epochs):
+        resume.restore_rng()
+        for epoch in range(start_epoch, total_epochs):
             if train_sampler is not None:
                 train_sampler.set_epoch(epoch)
             train_model.train()
@@ -228,13 +250,24 @@ def vae_worker(config, config_filename='config.txt'):
                 run_reconstruction_test(eval_model, val_dataset, config, device, epoch,
                                         normalization, viz_dir)
 
+            if resume.due(epoch, total_epochs):
+                resume.save({
+                    'epoch': epoch, 'model': model.state_dict(),
+                    'ema': ema_model.state_dict() if ema_model is not None else None,
+                    'optimizer': optimizer.state_dict(), 'scheduler': scheduler.state_dict(),
+                    'scaler': scaler.state_dict(), 'valid_loss': valid_loss,
+                    'elapsed': time.time() - start_time,
+                })
+
         maybe_save(total_epochs - 1)
+        resume.finish()
         D.barrier()
         if rank0:
             print(f'\nTraining finished. VAE saved to {modelpath} (val recon {valid_loss:.2e})')
     except KeyboardInterrupt:
         if rank0:
-            print('\nTraining interrupted by user. Saving checkpoint...')
+            print('\nTraining interrupted by user. Saving checkpoint...'
+                  + (f' Resume state: {resume.path}' if resume.enabled and os.path.exists(resume.path) else ''))
         maybe_save(-1)
 
 

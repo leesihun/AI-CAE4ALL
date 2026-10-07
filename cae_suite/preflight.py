@@ -301,9 +301,8 @@ def _validate_sdf_against_config(result: PreflightResult, field_name: str) -> No
             field_name="condition_names",
             location=result.parsed.location("condition_names"),
             hint="Non-geometric conditions live in the 'cond_extra' sidecar. Write it first "
-            "with methods/SDFFlow/add_fea_conditions.py (FEA labels), "
-            "add_mcb_class_conditions.py (MCB class_* / --hole_count) or "
-            "add_thingi_category_conditions.py (Thingi10K cat_*).",
+            "with methods/SDFFlow/add_fea_conditions.py (FEA labels) or "
+            "add_mcb_class_conditions.py (MCB class_* / --hole_count).",
         )
 
 

@@ -1,3 +1,4 @@
+import os
 import random
 import time
 
@@ -5,6 +6,7 @@ import numpy as np
 import torch
 from torch_geometric.loader import DataLoader
 
+from general_modules.resume_state import TrainingResume
 from training_profiles.setup import (
     build_dataset_splits,
     build_model_and_ema,
@@ -31,6 +33,19 @@ from training_profiles.training_loop import (
     train_prior_epoch,
     validate_epoch,
 )
+
+
+def _saved_past(modelpath, switch_epoch):
+    """True when `modelpath` holds a checkpoint from `switch_epoch` on. In a
+    resumed run that means a cut-off launch already passed the switch and banked
+    the previous stage's best; banking again would copy the new stage's model."""
+    if not modelpath or not os.path.exists(modelpath):
+        return False
+    try:
+        saved = torch.load(modelpath, map_location='cpu', weights_only=False)
+    except Exception:
+        return False
+    return int(saved.get('epoch', -1)) >= switch_epoch
 
 
 def single_worker(config, config_filename='config.txt'):
@@ -142,35 +157,74 @@ def single_worker(config, config_filename='config.txt'):
         print(f'Peak memory so far: {torch.cuda.max_memory_allocated()/1e9:.2f}GB')
 
     log_training_config(config)
+
+    modelname = config.get('modelpath')
+    # prior_freeze_epoch > 0 turns the last epochs into a prior-only tail:
+    # simulator frozen, latent standardization fitted, fresh cosine over
+    # the prior alone. See training_loop.freeze_for_prior_fit.
+    prior_freeze = int(config.get('prior_freeze_epoch', 0) or 0)
+    moment_calibration = int(config.get('prior_moment_calibration_epochs', 0) or 0)
+    moment_switch = prior_freeze + moment_calibration
+
+    best_valid_loss = float('inf')
+    last_valid_loss = float('inf')
+    last_saved_epoch = -1
+    start_epoch, elapsed_before = 0, 0.0
+    resume = TrainingResume(config, modelname)
+    state = resume.load()
+    if state is not None:
+        start_epoch, elapsed_before = state['epoch'] + 1, state['elapsed']
+        # A state from inside the prior-only tail: re-apply its freeze and
+        # rebuild its optimizer before loading their state.
+        if prior_freeze and start_epoch > prior_freeze:
+            optimizer, scheduler = freeze_for_prior_fit(
+                model, ema_model, train_loader, device, config,
+                remaining_epochs=total_epochs - prior_freeze, fit_standardization=False,
+            )
+            if moment_calibration > 0 and start_epoch > moment_switch:
+                optimizer, scheduler = freeze_moments_for_residual_fit(
+                    model, config, remaining_epochs=total_epochs - moment_switch,
+                )
+        model.load_state_dict(state['model'])
+        if ema_model is not None:
+            ema_model.load_state_dict(state['ema'])
+        optimizer.load_state_dict(state['optimizer'])
+        scheduler.load_state_dict(state['scheduler'])
+        # A persistent-worker loader draws its worker base seed from its generator
+        # only when its iterator is first built; build it now, before the
+        # generators are restored, so that draw matches the uninterrupted run.
+        for loader in (train_loader, val_loader):
+            if loader.persistent_workers:
+                iter(loader)
+        # The loaders shuffle from their own generators, outside the global RNG.
+        for generator, generator_state in zip(
+                (train_generator, val_generator, test_generator), state['loaders']):
+            generator.set_state(generator_state)
+        best_valid_loss = state['best_valid_loss']
+        last_valid_loss = state['last_valid_loss']
+        last_saved_epoch = state['last_saved_epoch']
+        del state
+
     print("\n" + "=" * 60)
     print("Starting training loop...")
     print("=" * 60 + "\n")
-    start_time = time.time()
+    start_time = time.time() - elapsed_before
 
     # ---- Logging ----
-    log_file = init_log_file(config, config_filename)
+    log_file = init_log_file(config, config_filename, resumed_at=start_epoch or None)
 
-    modelname = config.get('modelpath')
     use_vae = config.get('use_vae', False)
     # Number of prior samples per graph used for the CRPS validation score
     # (consumed inside evaluate_vae_learned_prior_epoch); validate it here.
     if use_vae and int(config.get('vae_valid_prior_samples', 8)) < 1:
         raise ValueError("vae_valid_prior_samples must be >= 1")
 
-    best_valid_loss = float('inf')
-    last_valid_loss = float('inf')
-    last_saved_epoch = -1
     val_interval = int(config.get('val_interval', 1))
     mem_recording = start_memory_history()
 
     try:
-        # prior_freeze_epoch > 0 turns the last epochs into a prior-only tail:
-        # simulator frozen, latent standardization fitted, fresh cosine over
-        # the prior alone. See training_loop.freeze_for_prior_fit.
-        prior_freeze = int(config.get('prior_freeze_epoch', 0) or 0)
-        moment_calibration = int(config.get('prior_moment_calibration_epochs', 0) or 0)
-        moment_switch = prior_freeze + moment_calibration
-        for epoch in range(total_epochs):
+        resume.restore_rng()
+        for epoch in range(start_epoch, total_epochs):
             if prior_freeze and epoch == prior_freeze:
                 optimizer, scheduler = freeze_for_prior_fit(
                     model, ema_model, train_loader, device, config,
@@ -181,10 +235,11 @@ def single_worker(config, config_filename='config.txt'):
                 # tail epoch beats would keep a joint model in it and the arm
                 # would evaluate a model the tail never touched. Keep that joint
                 # best beside it and restart the selection for the tail.
-                bank_joint_checkpoint(
-                    modelname, last_saved_epoch, best_valid_loss,
-                    str(config.get('best_by', 'recon')).lower().strip(),
-                )
+                if not (start_epoch and _saved_past(modelname, epoch)):
+                    bank_joint_checkpoint(
+                        modelname, last_saved_epoch, best_valid_loss,
+                        str(config.get('best_by', 'recon')).lower().strip(),
+                    )
                 best_valid_loss = float('inf')
                 last_saved_epoch = -1
             if (prior_freeze and moment_calibration > 0
@@ -192,10 +247,11 @@ def single_worker(config, config_filename='config.txt'):
                 optimizer, scheduler = freeze_moments_for_residual_fit(
                     model, config, remaining_epochs=total_epochs - epoch,
                 )
-                bank_moment_checkpoint(
-                    modelname, last_saved_epoch, best_valid_loss,
-                    str(config.get('best_by', 'recon')).lower().strip(),
-                )
+                if not (start_epoch and _saved_past(modelname, epoch)):
+                    bank_moment_checkpoint(
+                        modelname, last_saved_epoch, best_valid_loss,
+                        str(config.get('best_by', 'recon')).lower().strip(),
+                    )
                 best_valid_loss = float('inf')
                 last_saved_epoch = -1
             if prior_freeze and epoch >= prior_freeze:
@@ -372,6 +428,18 @@ def single_worker(config, config_filename='config.txt'):
 
             dump_memory_snapshot(epoch, mem_recording, config)
 
+            if resume.due(epoch, total_epochs):
+                resume.save({
+                    'epoch': epoch, 'model': model.state_dict(),
+                    'ema': ema_model.state_dict() if ema_model is not None else None,
+                    'optimizer': optimizer.state_dict(), 'scheduler': scheduler.state_dict(),
+                    'loaders': [g.get_state() for g in (train_generator, val_generator, test_generator)],
+                    'best_valid_loss': best_valid_loss, 'last_valid_loss': last_valid_loss,
+                    'last_saved_epoch': last_saved_epoch,
+                    'elapsed': time.time() - start_time,
+                })
+
+        resume.finish()
         # The kept checkpoint is the BEST one, not the final epoch, so
         # name the criterion: an epoch well below total_epochs here is
         # the expected outcome, not a sign the run stopped early.
@@ -382,7 +450,8 @@ def single_worker(config, config_filename='config.txt'):
         criterion = str(config.get("best_by", "recon")).lower().strip()
         print(f"\nTraining interrupted by user. Kept checkpoint: epoch "
               f"{last_saved_epoch} (best by {criterion}), validation loss "
-              f"{last_valid_loss:.2e}")
+              f"{last_valid_loss:.2e}"
+              + (f" Resume state: {resume.path}" if resume.enabled and os.path.exists(resume.path) else ""))
 
     cleanup_dataloaders(train_loader, val_loader, test_loader)
     release_hierarchy_cache(config, train_dataset, val_dataset, test_dataset)

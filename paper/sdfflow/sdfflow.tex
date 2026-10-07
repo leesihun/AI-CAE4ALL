@@ -42,7 +42,7 @@
 
 \title{\textbf{SDFFlow 형상 생성 모델}\\[4pt]\large 쉽게 풀어 쓴 설명서: 구조, config 작성법, ex3 너트 실험, DeepJEB 진행 상황}
 \author{AI-CAE4ALL}
-\date{2026년 10월 1일 기준 (새 기본값: 대표점 128 + 2단계 처방, 섞기 결과 추가)}
+\date{2026년 10월 7일 기준 (새 기본값: 대표점 128 + 2단계 처방. Thingi10k를 빼고 세 데이터로 정리, MCB 재구축 결과 추가)}
 
 \begin{document}
 \maketitle
@@ -79,7 +79,7 @@ $M$은 부호 거리를 물어본 질문 점의 개수로, 학습할 때 8192개
 부피 오차가 2.5\%에서 8.3\%로 나빠졌다(\S\ref{sec:jebeval}). 2단계를 네 배 오래 학습해도 거의 그대로였다(38\%).
 형상마다 코드를 여러 개 뽑아 2단계 자료를 늘리고, 학습 시점을 잡음 쪽으로 치우치고, 2단계를 키우면 512도 32 수준까지 오르지만
 넘지는 못했고 2단계 시간이 약 20배다. MCB와 DrivAerML에서도 같았다. 대표점 128에 같은 처방을 하면 복원은 1.7배 좋고 생성은 32와 같아
-균형이 가장 좋았다(\S\ref{sec:tsize}). 학습 형상이 수천 개 이하인 지금은 32가 작지 않다. 씨앗을 바꾸고 MCB에서도 다시 확인한 뒤, 9월 29일부터 네 데이터의 기본 config를 대표점 128 + 2단계 처방으로 바꿨다(\S\ref{sec:default}). 표면 점 수는 저장된 8192개가 상한이고, 6144개를 매번 새로 뽑는 것 자체에도 쓸모가 있다(\S\ref{sec:vaeshapes}).
+균형이 가장 좋았다(\S\ref{sec:tsize}). 학습 형상이 수천 개 이하인 지금은 32가 작지 않다. 씨앗을 바꾸고 MCB에서도 다시 확인한 뒤, 9월 29일부터 모든 데이터의 기본 config를 대표점 128 + 2단계 처방으로 바꿨다(\S\ref{sec:default}). 표면 점 수는 저장된 8192개가 상한이고, 6144개를 매번 새로 뽑는 것 자체에도 쓸모가 있다(\S\ref{sec:vaeshapes}).
 \item[``Flow matching은 임의의 잡음에서 조건에 맞게 VAE 코드를 예측하는 것?'']
 거의 맞다. 정확히는 한 번에 ``예측''하지 않고 \textbf{50걸음에 걸쳐 조금씩 옮긴다}. 생성 모델은
 ``지금 위치, 진행 정도, 조건''을 받아 ``어느 쪽으로 가야 하는지''를 알려 주고, 잡음에서 출발해 그 방향으로
@@ -110,7 +110,7 @@ ex3에서는 \textbf{1e-6부터} 이미 좋다. 기준은 가중치 숫자 자�
 생성·섞기 평가도 J0를 포함한 네 모델에 똑같이 돌렸다(16:37 끝). 세 실험 모두 1단계가 무너지지 않았고,
 생성과 섞기는 대표점 32개인 J3가 가장 좋았다(\S\ref{sec:jeb}, \S\ref{sec:jebeval}).
 같은 부모의 형제끼리와 다른 부모끼리를 나눈 보간 평가는 아직 하지 않았다.
-대표점 수는 9월 26--28일에 따로 다시 확인했다(\S\ref{sec:tsize}). 새 기본값(대표점 128 + 처방)으로 네 데이터를 처음부터 다시 학습한 생성·섞기 결과는 \S\ref{sec:default}에 있다.
+대표점 수는 9월 26--28일에 따로 다시 확인했다(\S\ref{sec:tsize}). 새 기본값(대표점 128 + 처방)으로 세 데이터(DeepJEB, DrivAerML, MCB)를 처음부터 다시 학습한 생성·섞기 결과와, 10월 2일 다시 만든 MCB 데이터로 다시 학습한 결과는 \S\ref{sec:default}에 있다.
 \end{description}
 
 \tableofcontents
@@ -607,6 +607,7 @@ $z_t=(1-t)\cdot\text{잡음}+t\cdot\text{코드}$를 뽑는다. 이 점에서 �
 평균과 표준편차로 크기를 맞춘 뒤, 평균에서 표준편차의 5배($\pm5$) 넘게 벗어난 값은 잘라낸다(\key{condition_clip 5}).
 학습용 형상에서 거의 변하지 않는 조건(표준편차가 \key{min_condition_std 0.00001}보다 작음)이 있으면 학습이 오류로 멈추므로, 그런 조건은 \key{condition_names}에서 빼야 한다.
 ex3에는 너트 종류(육각, 잠금 등)를 나타내는 값도 데이터에 들어 있지만 \emph{조건으로는 쓰지 않는다}. 평가할 때 종류별로 나눠 보는 데만 쓴다.
+(10월 2일 다시 만든 MCB 데이터부터는 종류와 구멍 수도 조건으로 넣어 11개를 쓰고, 자르는 범위는 10, 조건 지우기는 조건마다 따로 한다. \S\ref{sec:mcbrebuild})
 
 \paragraph{빈 조건.} 학습 중 20\%는 조건을 모두 지우고 ``조건 없음'' 표시를 넣는다(\key{cond_dropout 0.2}, \key{cond_dropout_mode all}).
 그래서 한 모델로 조건 없는 생성도, 조건 있는 생성도 할 수 있다.
@@ -733,7 +734,7 @@ key & ex3 & DeepJEB & 뜻과 정하는 법 \\
 \key{num_query_points} & 8192 & & 학습 때 형상마다 부호 거리를 맞춰 볼 점 수. 저장된 점(ex3 81920개, DeepJEB 10240개)에서 뽑는다 \\
 \midrule
 \multicolumn{4}{l}{\textbf{형상 코드와 요약부}}\\
-\key{latent_tokens} & 32 & \textbf{512} & 대표점 수 $T$. 바꾸면 \key{kl_weight}를 다시 계산해야 한다(\S\ref{sec:kl}) \\
+\key{latent_tokens} & 128 & & 대표점 수 $T$. 바꾸면 \key{kl_weight}를 다시 계산해야 한다(\S\ref{sec:kl}). 9월 28일까지는 32(DeepJEB 512) \\
 \key{latent_dim} & 32 & & 대표점마다 숫자 개수 \\
 \key{encoder_query_type} & fps & & 대표점 고르는 법. fps = 서로 가장 멀리 떨어진 점 \\
 \key{encoder_dim}, \key{encoder_heads}, \key{encoder_blocks} & 256, 8, 4 & & 요약부가 점마다 다루는 숫자 개수, 관점 수, 반복 횟수 \\
@@ -746,7 +747,7 @@ key & ex3 & DeepJEB & 뜻과 정하는 법 \\
 \key{clamp_dist} & 0.1 & & 부호 거리를 자르는 거리 \\
 \midrule
 \multicolumn{4}{l}{\textbf{퍼짐 벌점과 흔들림}}\\
-\key{kl_weight} & 1e-10 & \textbf{1e-6} & 퍼짐 벌점 가중치. \S\ref{sec:kl}의 곱이 $10^{-3}$ 이하가 되게. DeepJEB 파일의 값은 J0에서 붕괴가 확인된 조합이다(\S\ref{sec:recommend}) \\
+\key{kl_weight} & 1e-8 & & 퍼짐 벌점 가중치. \S\ref{sec:kl}의 곱이 $10^{-3}$ 이하가 되게($10^{-8}\times128\times32\approx4\times10^{-5}$). 9월 28일까지 ex3는 1e-10, DeepJEB는 J0에서 붕괴가 확인된 512 + 1e-6이었다(\S\ref{sec:recommend}) \\
 \key{deterministic_warmup_epochs} & 50 & & 흔들림·벌점 없이 복원만 하는 바퀴 수 \\
 \key{posterior_noise_warmup_epochs} & 100 & & 흔들림을 키우는 바퀴 수 \\
 \key{posterior_noise_max_scale} & 1 & & 흔들림의 최종 크기(1 = 퍼짐 정도 그대로) \\
@@ -759,14 +760,15 @@ key & ex3 & DeepJEB & 뜻과 정하는 법 \\
 \midrule
 \multicolumn{4}{l}{\textbf{조건}}\\
 \key{use_conditions} & True & & 조건을 쓸지 \\
-\key{condition_names} & \key{bbox_x, bbox_y, bbox_z,} volume, area & volume, area & 조건 목록. 생성할 때 조건값도 이 순서로 적는다 \\
-\key{min_condition_std}, \key{condition_clip} & 0.00001, 5 & & 표준편차가 앞의 값보다 작은 조건이 있으면 학습이 오류로 멈춤(\key{condition_names}에서 뺄 것). 뒤의 값은 크기를 맞춘 조건을 자르는 범위 \\
-\key{cond_dropout}, \key{cond_dropout_mode} & 0.2, all & & 조건을 지우는 비율과 방식. all = 한꺼번에 모두 지움. per\_dim = 조건마다 따로 지움(생성 때 일부 조건만 \texttt{nan}으로 비워 둘 수 있음) \\
+\key{condition_names} & \key{bbox_x, bbox_y, bbox_z,} volume, area, 종류 0/1 5개, \key{hole_count} & volume, area & 조건 목록. 생성할 때 조건값도 이 순서로 적는다. ex3의 종류와 구멍 수는 10월 2일에 넣었다(\S\ref{sec:mcbrebuild}) \\
+\key{min_condition_std}, \key{condition_clip} & 0.00001, 10 & 0.00001, 5 & 표준편차가 앞의 값보다 작은 조건이 있으면 학습이 오류로 멈춤(\key{condition_names}에서 뺄 것). 뒤의 값은 크기를 맞춘 조건을 자르는 범위. ex3는 드문 종류의 0/1 표시(사각 너트 5.1)가 잘리지 않게 10 \\
+\key{cond_dropout}, \key{cond_dropout_mode} & 0.2, per\_dim & 0.2, all & 조건을 지우는 비율과 방식. all = 한꺼번에 모두 지움. per\_dim = 조건마다 따로 지우고 따로 10\%는 모두 지움(생성 때 일부 조건만 \texttt{nan}으로 비워 둘 수 있음) \\
 \midrule
 \multicolumn{4}{l}{\textbf{생성 모델}}\\
 \key{fm_arch} & dit & & 생성 모델 종류 \\
-\key{fm_hidden}, \key{fm_blocks}, \key{fm_heads}, \key{fm_cond_hidden} & 256, 8, 8, 128 & & 대표점마다 다루는 숫자 개수, 계산 단계 수, 관점 수, 진행 정도 $t$·조건을 바꾼 숫자 개수 \\
-\key{fm_time_sampling} & uniform & & 학습 때 진행 정도 $t$를 고르게 뽑음 \\
+\key{fm_hidden}, \key{fm_blocks}, \key{fm_heads}, \key{fm_cond_hidden} & 512, 12, 8, 128 & & 대표점마다 다루는 숫자 개수, 계산 단계 수, 관점 수, 진행 정도 $t$·조건을 바꾼 숫자 개수. 9월 28일까지는 256, 8, 8, 128 \\
+\key{fm_time_sampling}, \key{fm_time_logit_mean}, \key{fm_time_logit_std} & logit\_\allowbreak normal, $-0.693$, 1 & & 학습 때 진행 정도 $t$를 잡음 쪽으로 치우쳐 뽑음(중앙값 1/3). 9월 28일까지는 uniform(고르게) \\
+\key{fm_latent_draws} & 8 & & 학습용 형상마다 1단계 퍼짐에서 코드를 8개 뽑아 2단계 학습에 씀. 9월 28일까지는 1(평균 코드 하나) \\
 \key{ode_steps} & 50 & & 생성 걸음 수 \\
 \key{encode_batch_size} & 8 & & 2단계 시작 전 학습용 형상을 코드로 바꿀 때 한 번에 처리하는 형상 수 \\
 \midrule
@@ -781,7 +783,7 @@ key & ex3 & DeepJEB & 뜻과 정하는 법 \\
 \key{vae_num_workers} & 2 & & 데이터 읽기 보조 작업 수 \\
 \midrule
 \multicolumn{4}{l}{\textbf{2단계 학습}}\\
-\key{fm_training_epochs} & 500 & & 바퀴 수. 약 700 권장(\S\ref{sec:epochs}) \\
+\key{fm_training_epochs} & 250 & & 바퀴 수. 코드가 형상마다 8개라 한 바퀴의 학습 걸음도 8배다. 9월 28일까지는 500(코드 1개일 때 약 700 권장, \S\ref{sec:epochs}) \\
 \key{fm_batch_size} & 64 & & 한 번에 보는 코드 수 \\
 \key{fm_learningr}, \key{fm_weight_decay} & 0.0001, 0.0001 & & \\
 \key{fm_warmup_epochs} & 10 & & \\
@@ -816,6 +818,7 @@ key & ex3 & DeepJEB & 뜻과 정하는 법 \\
 대부분 오차가 유난히 큰 소수의 잠금·캐슬 너트에서 온다(점검용/학습용 오차 중앙값은 같고 평균만 3.6배, \S\ref{sec:castle}). DeepJEB J1--J3도 500바퀴면 충분했다.
 400바퀴에서 500바퀴까지 점검용 오차가 J1 1.4\%, J2 1.6\%, J3 0.5\%만 더 내려갔다.
 \item \textbf{2단계}: 500바퀴는 조금 모자라다. 약 700바퀴로 늘리고 \key{fm_best.pth}를 쓰기를 권한다. 2000바퀴까지 늘려도 이득이 없었다.
+이것은 형상마다 코드 1개일 때의 결과다. 새 기본값은 코드가 8개(\key{fm_latent_draws 8})라 250바퀴가 학습 걸음 수로는 2000바퀴에 해당한다(\S\ref{sec:default}).
 \end{itemize}
 
 \subsection{생성(sample) config}
@@ -1788,7 +1791,7 @@ DrivAerML & 512 + 8개 + 이동 (X2a) & 같음 & -- & 11.9 & -- & -- & 0.72 & --
 \item \textbf{128 + 처방(K16)이 가장 균형이 좋다.} 복원 1.7배, 실제 형상 복원·코드 직선 섞기 94--96\%, 조건 없는 생성은 J3와 같은 72\%, 부피 오차 1.3\%로 가장 작다.
 남은 약점은 실제 조건으로 생성한 한 조각 비율(78\%)이고, 씨앗 하나로만 확인했다.
 \item \textbf{더 좋게 하려면.} (가) 이 절을 쓸 때(9월 28일)는 32를 기본으로 두기를 권했다. 그 뒤 128 + 처방을 씨앗을 바꿔(K18) 그리고 MCB에서(X3p) 다시 보니
-결과가 유지되거나 32를 넘어서, 9월 29일 네 데이터의 기본값을 128에 시점 이동(\key{fm_time_logit_mean} $-0.693$), 큰 2단계(\key{fm_hidden 512}, \key{fm_blocks 12}),
+결과가 유지되거나 32를 넘어서, 9월 29일 모든 데이터의 기본값을 128에 시점 이동(\key{fm_time_logit_mean} $-0.693$), 큰 2단계(\key{fm_hidden 512}, \key{fm_blocks 12}),
 형상마다 코드 8개(\key{fm_latent_draws 8}, 이번에 config에 넣음)로 바꿨다(\S\ref{sec:default}). (다) 512는 학습 형상이 수만 개 이상일 때 다시 본다.
 (라) 평가 개수 32개와 씨앗 하나로는 20점 차이도 흔들림일 수 있으므로, 설정을 정할 때는 평가 형상 128개 이상, 씨앗 2--3개로 다시 잰다.
 \end{enumerate}
@@ -1801,23 +1804,27 @@ DrivAerML & 512 + 8개 + 이동 (X2a) & 같음 & -- & 11.9 & -- & -- & 0.72 & --
 9월 28--29일에 이것을 두 번 더 확인했다. DeepJEB에서 씨앗만 바꾼 K18은 조건 없는 생성 75\%, 실제 조건 97\%, 부피 오차 0.8\%로 K16(72\%, 78\%, 1.3\%)보다
 오히려 좋았다. MCB에서 128 + 처방(X3p)은 조건 없는 생성 88\%, 실제 조건 94\%, 부피 오차 2.1\%로 32(81\%, 78\%, 7.7\%)를 거의 모든 지표에서 넘었고,
 처방 없는 128(X3\_t128, 72\%, 84\%, 8.7\%)보다도 좋았다. DrivAerML에서는 128(X2\_t128)과 128 + 처방(X2p, 씨앗 7의 X2p\_s7)의 쏠림이 0.31, 0.34, 0.39로
-32($-0.16$)보다 크고 512(1.00)보다 작았다. 그래서 9월 29일 네 데이터의 기본 config를 모두 같은 값으로 바꿨다(그림~\ref{fig:defaultsetup}의 (b)).
+32($-0.16$)보다 크고 512(1.00)보다 작았다. 그래서 9월 29일 모든 데이터의 기본 config를 같은 값으로 바꿨다(그림~\ref{fig:defaultsetup}의 (b)).
 형상마다 코드 여러 개는 이번에 \key{fm_latent_draws}라는 config 이름으로 프로그램에 넣었다.
-바꾼 config는 \texttt{configs/SDFFlow/geometry\_generation/ex\{1,2,3,4\}/baseline/config\_train\_sdfflow.txt}이고, Studio의 기본 틀도 같은 값이다.
+바꾼 config는 \texttt{configs/SDFFlow/geometry\_generation/ex\{1,2,3\}/baseline/config\_train\_sdfflow.txt}이고, Studio의 기본 틀도 같은 값이다.
 
-\paragraph{확인 방법.} 새 config로 네 데이터를 두 단계 모두 aarl에서 처음부터 다시 학습했다(새 모델 이름 C1--C4).
-1단계는 config대로 DeepJEB 1500바퀴, DrivAerML 1500바퀴, MCB 1000바퀴, Thingi10k 400바퀴, 2단계는 모두 250바퀴다.
+\paragraph{세 데이터만 다룬다.} 처음에는 Thingi10k(ex4)도 같은 기본값으로 학습했지만 10월 7일 데이터, config, 학습 결과를 따로 옮겨 두고 저장소에서 뺐다.
+Thingi10k에서는 형상 코드 공간에서 가장 가까운 학습 형상이 같은 종류의 물체인 경우가 28\%뿐이어서(아무 형상을 골랐을 때 13\%) 두 형상 사이를 생성하면 조각나기 쉬웠고, 데이터를 늘릴 길도 막혀 있다(\S\ref{sec:limits}).
+이 문서는 DeepJEB(ex1), DrivAerML(ex2), MCB(ex3)의 결과만 적는다.
+
+\paragraph{확인 방법.} 새 config로 세 데이터를 두 단계 모두 aarl에서 처음부터 다시 학습했다(새 모델 이름 C1--C3).
+1단계는 config대로 DeepJEB 1500바퀴, DrivAerML 1500바퀴, MCB 1000바퀴, 2단계는 모두 250바퀴다.
 평가는 \S\ref{sec:jebeval}, \S\ref{sec:tsize}와 같은 프로그램, 같은 형상 쌍, 같은 잡음이다. 생성은 조건 없이 32개, 실제 조건으로 32개를 만들었다.
 섞기는 실제 점검용 형상 8쌍(거꾸로 걷기, 조건도 옮김, 코드 직선 섞기)과 잡음 16쌍에서 $\alpha=0.25, 0.5, 0.75$의 중간 형상을 보았다(길마다 24개, 잡음 쌍은 48개).
 마지막으로 저장소의 보간 기능(\key{mode interpolate})을 새 모델로 그대로 돌렸다.
-비교 대상은 같은 데이터의 대표점 32 모델(kl 1e-8)이다. Thingi10k만은 대표점 32 모델이 kl 1e-4로 학습되어 1단계가 무너진 예전 기본값뿐이라(쓰는 코드 숫자 1024개 중 5개),
-32와의 공정한 비교가 아니다. Thingi10k(학습 형상 5787개)는 조건이 없는 데이터라 조건 관련 칸이 비어 있다.
+비교 대상은 같은 데이터의 대표점 32 모델(kl 1e-8)이다.
+C3와 표의 MCB 수치는 모두 10월 2일 MCB 데이터를 다시 만들기 전의 데이터(학습 1044개)로 학습한 것이다. 다시 만든 데이터로 다시 학습한 결과는 \S\ref{sec:mcbrebuild}에 따로 적었다.
 
 \begin{figure}[htbp]
 \centering
 \wide{17.5cm}{figures/fig_default_setup.png}
 \caption{새 기본값의 설정과 확인 순서. (a) 데이터별 학습 형상 수와 형상 코드의 숫자 개수. 대표점 128이면 코드 숫자가 4096개로, DrivAerML(310개)과 MCB(1044개)의 형상 수보다 크다.
-(b) 네 config에서 바꾼 값과 확인 순서. ``예전''은 9월 28일까지의 checked-in config 값이다.}
+(b) 세 config에서 바꾼 값과 확인 순서. ``예전''은 9월 28일까지의 checked-in config 값이다. MCB의 형상 수는 10월 2일 다시 만들기 전 데이터의 것이다.}
 \label{fig:defaultsetup}
 \end{figure}
 
@@ -1843,14 +1850,11 @@ DrivAerML & 32 & $1.33\times10^{-3}$ & -- & 10.3 & -- & -- & $-0.16$ \\
 DrivAerML & 128 (X2\_t128) & $1.23\times10^{-3}$ & -- & 10.8 & -- & -- & 0.31 \\
 DrivAerML & 128 + 처방 (X2p / X2p\_s7) & 같음 & -- & 9.9 / 9.8 & -- & -- & 0.34 / 0.39 \\
 DrivAerML & \textbf{새 기본값 (C2)} & $1.21\times10^{-3}$ & -- & 8.9 & -- & -- & 0.48 \\
-\midrule
-Thingi10k & 예전 기본값 (32, kl 1e-4, 무너짐) & $1.38\times10^{-2}$ & 6 & 1.78$^\dagger$ & -- & -- & 0.33 \\
-Thingi10k & \textbf{새 기본값 (C4)} & $\mathbf{2.78\times10^{-3}}$ & 22 & \textbf{1.34}$^\dagger$ & -- & -- & \textbf{0.06} \\
 \bottomrule
 \end{tabular}
 \caption{새 기본값의 생성 결과. 조건 없이, 실제 조건은 한 조각 비율(\%), 조각 수는 조건 없이 만든 형상 하나의 평균 조각 수, 부피 오차와 쏠림의 뜻은 표~\ref{tab:tsizejeb}와 같다(쏠림은 0 근처가 좋다).
-복원 오차는 점검용 형상의 복원 오차(표~\ref{tab:tsizejeb}와 같은 정의)다. K16·K18·X3p·X2p는 \S\ref{sec:tsize}의 1단계(DeepJEB은 500바퀴만 학습한 J4)에 2단계만 처방으로 학습한 것이고, C1--C4는 새 config로 두 단계를 처음부터 학습한 것이다.
-$^\dagger$Thingi10k는 격자 칸 100개보다 작은 먼지 조각이 많아 그냥 센 조각 수가 부풀려지므로(예전 95개, 새 4.4개), 칸 100개 넘는 조각만 센 평균이다. 한 조각 비율도 이 먼지 때문에 낮게 나온다.}
+복원 오차는 점검용 형상의 복원 오차(표~\ref{tab:tsizejeb}와 같은 정의)다. K16·K18·X3p·X2p는 \S\ref{sec:tsize}의 1단계(DeepJEB은 500바퀴만 학습한 J4)에 2단계만 처방으로 학습한 것이고, C1--C3는 새 config로 두 단계를 처음부터 학습한 것이다.
+MCB 줄은 모두 10월 2일 다시 만들기 전 데이터의 결과다(다시 만든 데이터는 \S\ref{sec:mcbrebuild}).}
 \label{tab:defaultgen}
 \end{table}
 
@@ -1859,9 +1863,6 @@ C1은 1단계를 config대로 1500바퀴 학습해(J4는 500바퀴) 복원 오�
 실제 조건의 한 조각 비율은 91\%로 J3(100\%)보다 3개 적지만 흔들림 안이고(32개 평가에서는 20점 차이도 흔들림일 수 있다, \S\ref{sec:tsizeconclusion}), 부피 오차는 1.4\%로 J3(2.5\%)보다 작다.
 C3는 조건 없이 94\%, 실제 조건 94\%, 부피 오차 1.7\%로 MCB의 모든 모델 중 가장 좋다. 32(81\%, 78\%, 7.7\%)와 비교하면 부피 오차는 약 4.7분의 1이다.
 두 데이터 모두 쏠림은 0.08로 0 근처여서 학습 형상을 따라 하지 않는다.
-
-\paragraph{Thingi10k는 무너진 예전 기본값보다 훨씬 좋다.} 예전 기본값은 kl 1e-4 때문에 1단계가 무너져 복원 오차가 $1.38\times10^{-2}$였다. C4는 $2.78\times10^{-3}$로 5분의 1이고,
-큰 조각 수는 1.78개에서 1.34개로, 쏠림은 0.33에서 0.06으로 줄었다. 다만 비교 대상이 무너진 모델이므로 ``128이 32보다 낫다''의 증거는 아니고, ``새 기본값이 Thingi10k에서도 정상으로 학습된다''의 증거다.
 
 \paragraph{DrivAerML의 쏠림은 남았다.} 자동차는 조각 수로 모델을 가를 수 없다(8.9--10.8개, 부스러기 약 2\%로 모두 비슷). 쏠림은 C2가 0.48로, 128로 학습한 세 번(0.31--0.48)이 모두 양수이고
 32($-0.16$)보다 크다. 32개 중 3개(9\%)는 어느 점검용 형상보다도 학습 형상에 가깝다(32는 0개). 학습 형상이 310개뿐인 데이터에서는 128 + 처방도 학습 형상 쪽으로 기운다. 512(1.00)보다는 훨씬 작다.
@@ -1882,12 +1883,9 @@ MCB & 한 조각 \% & 32 & 75 & 74 & 75 & 77 & \textbf{79} & 0.9999 \\
 \midrule
 DrivAerML & 큰 조각 수 & 32 & 3.56 & 3.75 & 3.71 & 3.48 & 4.04 & 1.0000 \\
  & & 새 기본값 (C2) & 3.50 & 3.71 & 3.96 & 3.60 & 3.79 & 0.9998 \\
-\midrule
-Thingi10k & 큰 조각 수 & 예전 기본값 & 1.38 & 1.67 & -- & 1.77 & 2.38 & 0.9985 \\
- & & 새 기본값 (C4) & \textbf{1.19} & \textbf{1.21} & -- & \textbf{1.52} & \textbf{1.92} & 0.9982 \\
 \bottomrule
 \end{tabular}
-\caption{새 기본값의 섞기 결과. 데이터마다 뜻 있는 지표가 달라서, DeepJEB와 MCB는 중간 형상의 한 조각 비율(\%, 높을수록 좋음), 여러 부품인 DrivAerML과 먼지 조각이 많은 Thingi10k는
+\caption{새 기본값의 섞기 결과. 데이터마다 뜻 있는 지표가 달라서, DeepJEB와 MCB는 중간 형상의 한 조각 비율(\%, 높을수록 좋음), 여러 부품인 DrivAerML은
 격자 칸 100개 넘는 조각의 평균 수(1에 가까울수록 좋음)를 적었다. 그대로 복원은 점검용 형상 16개를 1단계로 줄였다 되돌린 것, 거꾸로 걷기와 조건도 옮김은 실제 형상 8쌍 사이(빈 조건 / 두 끝의 조건도 섞음),
 잡음 쌍은 씨앗 7로 뽑은 잡음 16쌍 사이, 코드 직선 섞기는 2단계 없이 두 실제 형상의 코드를 곧게 섞은 것이다. 중간 형상은 $\alpha=0.25, 0.5, 0.75$에서 길마다 24개(잡음 쌍 48개)다.
 되돌림 겹침은 실제 형상을 잡음으로 거꾸로 걸었다가 다시 앞으로 걸어 얻은 형상이 처음 형상과 겹치는 비율의 중앙값이다. 한 조각 비율에서 중간 형상 하나는 약 4\%(잡음 쌍 2\%)다.}
@@ -1896,10 +1894,10 @@ Thingi10k & 큰 조각 수 & 예전 기본값 & 1.38 & 1.67 & -- & 1.77 & 2.38 &
 
 \paragraph{잡음 두 개 사이 섞기가 가장 크게 좋아졌다.} 2단계로 만든 두 형상 사이를 섞는 잡음 쌍에서 C1은 중간 형상 48개 중 92\%가 한 조각으로 J3(67\%)보다 25점 높고, C3도 88\%로 32(77\%)보다 높다(표~\ref{tab:defaultinterp}).
 J3의 잡음 쌍 중간에는 작은 조각이 붙는 일이 잦았는데(그림~\ref{fig:defaultd1}의 둘째 줄), C1은 같은 잡음에서 거의 붙지 않는다. 이것은 \S\ref{sec:tsize}에서 본 ``조건 없는 생성의 약 30\%에 붙는 부스러기''가
-줄어든 것과 같은 현상이다. Thingi10k에서도 큰 조각 수가 1.77개에서 1.52개로 줄었다.
+줄어든 것과 같은 현상이다.
 
 \paragraph{실제 형상 사이 섞기는 같다.} 거꾸로 걷기와 조건도 옮김은 두 데이터 모두 차이가 중간 형상 1개 안쪽이다(DeepJEB 96\% 대 96\%, MCB 75\% 대 74\%). 되돌림 겹침은 모든 모델이 0.998 이상이어서
-실제 형상을 잡음으로 되돌리는 계산은 대표점 128에서도 정확하다. Thingi10k에서는 거꾸로 걷기의 한 조각 비율이 예전 12\%에서 54\%로, 큰 조각 수가 1.67개에서 1.21개로 좋아졌다(그림~\ref{fig:defaultinv}의 마지막 두 줄).
+실제 형상을 잡음으로 되돌리는 계산은 대표점 128에서도 정확하다.
 
 \paragraph{코드 직선 섞기는 조금 낮다.} 2단계를 거치지 않는 코드 직선 섞기는 C1 83\%(J3 88\%), C3 71\%(32 79\%)로 중간 형상 1--2개만큼 낮다. 흔들림 안이지만 두 데이터에서 같은 방향이다.
 코드 숫자가 4배인 공간에서 두 코드를 곧게 이으면 중간 코드가 1단계가 학습한 코드에서 더 멀어질 수 있다. 실제 형상 사이를 섞을 때는 거꾸로 걷기를 쓰면 되므로 실용상 문제는 작다.
@@ -1909,7 +1907,7 @@ DrivAerML은 모든 길에서 두 모델의 큰 조각 수가 0.25개 안쪽으�
 \centering
 \wide{14.5cm}{figures/fig_default_interp_inv.png}
 \caption{실제 형상 사이 거꾸로 걷기(빈 조건), 데이터마다 첫 쌍. 각 데이터의 위 줄이 새 기본값, 아래 줄이 비교 모델이고 두 줄은 같은 두 점검용 형상을 끝점으로 쓴다.
-회색은 가장 큰 조각, 황토색(DrivAerML, Thingi10k)은 면의 0.5\% 이상인 다른 큰 부품, 빨강은 작은 조각이다. 아래 숫자는 줄이기 전 표면에서 센 조각 수로, 먼지 조각까지 센다.
+회색은 가장 큰 조각, 황토색(DrivAerML)은 면의 0.5\% 이상인 다른 큰 부품, 빨강은 작은 조각이다. 아래 숫자는 줄이기 전 표면에서 센 조각 수로, 먼지 조각까지 센다.
 쌍 하나의 예이며 판정은 표~\ref{tab:defaultinterp}로 한다. 네 쌍 전체는 같은 결과를 돌려 볼 수 있는 화면(\url{https://claude.ai/artifact/Bgce3DkGdFcpC18ZLjni1d}, 공유 전에는 작성자만 열 수 있음)에 있다.}
 \label{fig:defaultinv}
 \end{figure}
@@ -1918,17 +1916,15 @@ DrivAerML은 모든 길에서 두 모델의 큰 조각 수가 0.25개 안쪽으�
 \centering
 \wide{14.5cm}{figures/fig_default_interp_d1.png}
 \caption{잡음 두 개 사이 섞기(씨앗 7, 빈 조건), 데이터마다 첫 쌍. 두 줄은 같은 잡음에서 출발하지만 모델이 달라 끝점 형상도 다르다. 색과 숫자는 그림~\ref{fig:defaultinv}와 같다.
-DeepJEB에서는 J3의 중간에 붙는 작은 조각이 C1에는 없다. MCB의 이 쌍은 오히려 C3의 중간(구멍이 닫힌 덩어리)이 32보다 나쁜 예이고, 48개 전체로는 C3가 88\% 대 77\%로 낫다.
-Thingi10k는 끝점이 서로 다른 물체(컵과 원판)라 중간이 어느 쪽도 아닌 형상이 되며, 예전 모델은 79--317조각으로 깨진다.}
+DeepJEB에서는 J3의 중간에 붙는 작은 조각이 C1에는 없다. MCB의 이 쌍은 오히려 C3의 중간(구멍이 닫힌 덩어리)이 32보다 나쁜 예이고, 48개 전체로는 C3가 88\% 대 77\%로 낫다.}
 \label{fig:defaultd1}
 \end{figure}
 
 \subsection{프로그램의 보간 기능}
 
 저장소의 보간 config(\key{mode interpolate}, \key{slerp_noise}, \S\ref{sec:paths}의 그림)는 조건 없이 생성한 형상 중 0번과 1번을 끝점으로 하고, 두 잡음을 원호로 섞어 $\alpha=0.5$의 중간 하나를 만든다.
-새 기본값 C1--C4로 config 그대로 돌린 결과가 그림~\ref{fig:defaultnative}이다. DeepJEB(조각 수 1, 1, 1)과 DrivAerML(7, 6, 5)은 두 끝의 중간다운 형상이 나온다.
-MCB(1, 2, 1)는 두 끝의 방향이 달라 중간이 구멍 없는 덩어리가 되었다. \S\ref{sec:orient}에서 본 방향 무리 문제가 새 기본값에서도 그대로라는 뜻이다.
-Thingi10k(2, 3, 5)는 끝점이 전혀 다른 물체라 중간도 어느 쪽과 닮지 않았다. 종류가 매우 다양한 데이터에서 아무 두 생성 형상을 섞는 것은 뜻이 적다.
+새 기본값 C1--C3로 config 그대로 돌린 결과가 그림~\ref{fig:defaultnative}이다. DeepJEB(조각 수 1, 1, 1)과 DrivAerML(7, 6, 5)은 두 끝의 중간다운 형상이 나온다.
+MCB(1, 2, 1)는 두 끝의 방향이 달라 중간이 구멍 없는 덩어리가 되었다. \S\ref{sec:orient}에서 본 방향 무리 문제가 새 기본값에서도 그대로라는 뜻이다(구멍 축을 z로 맞춘 데이터는 \S\ref{sec:mcbrebuild}).
 
 \begin{figure}[htbp]
 \centering
@@ -1938,6 +1934,60 @@ Thingi10k(2, 3, 5)는 끝점이 전혀 다른 물체라 중간도 어느 쪽과 
 \label{fig:defaultnative}
 \end{figure}
 
+\subsection{다시 만든 MCB 데이터로 다시 학습}
+\label{sec:mcbrebuild}
+
+\paragraph{데이터에서 바꾼 것.} 10월 1--2일에 MCB 데이터를 다시 만들었다(그림~\ref{fig:mcbrebuild}의 (a)). 바꾼 것은 세 가지다.
+\begin{itemize}
+\item \textbf{방향 정렬.} 모든 너트를 관성 주축 기준으로 돌려 구멍 축을 z에 맞췄다. 구멍 축이 z인 너트가 61\%에서 98\%가 되었다. 권장 사항 1번(\S\ref{sec:recommend})을 적용한 것이다.
+\item \textbf{깨진 정답 거르기.} 원본 캐슬 너트는 모두 표면이 닫혀 있지 않아 MeshFix로 고쳤는데, MeshFix가 면 일부만 남긴 조각이 그대로 정답이 된 경우가 예전 학습용에 270개였다. 캐슬 너트로 치면 86\%다.
+이제는 고친 표면이 원래 표면을 얼마나 덮는지와 원래 표면에 없는 면을 얼마나 더했는지를 점을 뽑아 재고, 기준을 넘지 못하면 winding 방식으로 다시 고친다.
+면 넓이 비율만 보면 구멍 입구를 막아 버린 결과도 통과했다. 그 기준으로 처음 다시 만들었을 때는 구멍 없는 너트가 77개 나왔는데, 덮임 검사를 더한 뒤에는 3개만 남았다. 셋 다 원본 파일부터 구멍이 막혀 있던 것이다.
+\item \textbf{조건 추가.} 조건을 5개(상자 x, y, z, 부피, 넓이)에서 11개로 늘렸다. 종류 5개(육각, 홈, 사각, 캐슬, 잠금)의 0/1 표시와 구멍 수(\key{hole_count})다. 권장 사항 10번을 적용한 것이다.
+조건 설정도 두 가지 바꿨다. 크기를 맞춘 사각 너트 표시가 5.1이라 예전 범위 5에서 잘리므로 자르는 범위를 10으로 넓혔다(\key{condition_clip 10}).
+그리고 조건을 하나씩 따로 지우게 했다(\key{cond_dropout_mode per_dim}). 학습 중 조건마다 20\%씩 따로 지우고, 따로 10\%는 모두 지운다. 그래서 생성 때 일부 조건만 비워 둘 수 있다.
+\end{itemize}
+파일 수는 학습 1305개 → 1320개, 점검용 329개 → 330개다. 예전 데이터와 그 데이터로 학습한 모델은 지우지 않고 따로 옮겨 두었다.
+
+\paragraph{확인 방법.} 새 기본값 config(대표점 128 + 처방, 1단계 1000바퀴, 2단계 250바퀴)에서 위의 조건 설정만 바꿔 새 데이터로 두 단계를 처음부터 다시 학습했다(전체 config는 부록~\ref{app:config}).
+1단계 점검용 오차는 $1.51\times10^{-3}$로 예전 데이터의 C3($3.17\times10^{-3}$)의 절반이다. 다만 점검용 형상 자체가 바뀌었으므로 같은 시험지의 점수는 아니다.
+생성은 점검용 형상 64개에 대해 네 가지로 만들었다. 1단계만 거친 복원, 그 형상의 실제 조건 11개를 넣고 조건 강조 1과 2로 만든 생성, 그리고 조건 없는 생성이다.
+네 가지 모두 형상마다 같은 시작 잡음을 쓴다. 64개는 육각 46개, 캐슬 11개, 잠금 7개다(홈과 사각은 뽑히지 않았다).
+구멍 수는 정답 파일에 저장된 값과 비교하고, 조각 수는 면의 0.5\% 미만인 부스러기를 빼고 센다.
+평가 프로그램과 형상 수가 달라 표~\ref{tab:defaultgen}의 MCB 줄과 숫자를 바로 비교하지 않는다.
+
+\begin{figure}[htbp]
+\centering
+\wide{17.5cm}{figures/fig_mcb_rebuild.png}
+\caption{다시 만든 MCB 데이터. (a) 데이터에서 바뀐 것과 1단계 점검용 오차. (b)--(d) 점검용 형상 64개마다 하나씩 만든 형상의 분포. 파랑은 1단계만 거친 복원,
+주황과 진한 주황은 실제 조건 11개를 넣고 강조 1, 2로 만든 생성, 회색은 조건 없는 생성이다. (b) 구멍 수에서 정답 구멍 수를 뺀 값. 0이 정답이다.
+(c) 면 0.5\% 미만의 부스러기를 뺀 조각 수. (d) 부피 오차를 요청한 부피로 나눈 값. 표면이 닫힌 형상만 센다(55--62개). 1을 넘는 값은 마지막 칸에 모았다.}
+\label{fig:mcbrebuild}
+\end{figure}
+
+\paragraph{구멍 없는 너트가 사라졌다.} 예전 데이터에서는 생성 형상의 약 9\%가 구멍 없는 덩어리였고, 그 원인이 깨진 캐슬 정답이었다(깨진 정답의 61\%가 구멍 없이 복원되었다).
+새 모델은 네 가지 모두 구멍 없는 형상이 64개 중 0개다. 구멍 수가 정답과 같은 비율은 94--95\%다(그림~\ref{fig:mcbrebuild}의 (b)). 틀린 것은 정답 구멍이 4개인 형상 1개(네 가지 모두 1개로 만듦)와 가짜 구멍이 여러 개 생긴 2--3개다.
+가짜 구멍이 가장 많은 형상(189번)은 1단계 복원에서도 구멍이 30개라, 2단계가 아니라 1단계가 이 형상을 담지 못한 것이다.
+다만 점검용 64개 중 63개의 정답 구멍 수가 1이어서 이 지표는 주로 ``구멍이 뚫렸는가''를 본다.
+
+\paragraph{조건이 크기와 부피를 정한다.} 실제 조건을 넣은 생성의 부피 오차 중앙값은 강조 1에서 1.6\%, 강조 2에서 1.1\%이고, 조건 없는 생성은 34.7\%다(그림~\ref{fig:mcbrebuild}의 (d)).
+높이(상자 z)의 오차 중앙값도 강조 1, 2에서 1.1\%, 0.6\%이고 조건 없이는 37.6\%다. 조건 없는 생성도 너트 모양은 맞지만 요청한 크기는 따르지 않는다는 뜻이다.
+
+\paragraph{한 조각 비율.} 강조 2는 64개 중 62개(97\%)가 한 조각이고 캐슬 11개는 모두 한 조각이다. 강조 1은 55개(86\%)로 낮은데, 두 조각이 된 8개 중 7개가 육각 너트다(그림~\ref{fig:mcbrebuild}의 (c)).
+64개에서 11점 차이는 형상 7개만큼이라 흔들림일 수 있다. 권장 사항 5번(조건 강조 1을 기본으로)을 바꿀 근거로는 아직 부족하다.
+
+\paragraph{프로그램의 보간 기능.} 새 모델로 저장소의 보간 config를 돌린 결과가 그림~\ref{fig:mcbrebuildinterp}이다. 일곱 형상이 모두 한 조각이고 방향이 바뀌지 않는다.
+그림~\ref{fig:defaultnative}의 구멍 없는 덩어리와 달라진 데에는 방향 정렬 말고도 config 변화가 섞여 있다. 10월 1일부터 보간 config는 같은 종류의 두 생성 형상을 고르고, 종류 조건(육각)을 넣고, 중간을 다섯 개 만든다.
+실제 형상 8쌍과 잡음 16쌍으로 하는 섞기 평가(표~\ref{tab:defaultinterp})는 새 데이터로 아직 다시 하지 않았다.
+
+\begin{figure}[htbp]
+\centering
+\wide{17.5cm}{figures/fig_mcb_rebuild_interp.png}
+\caption{다시 만든 MCB 데이터로 학습한 모델에서 저장소의 보간 기능(\key{mode interpolate}, \key{slerp_noise})을 돌린 결과. 종류 조건은 육각 너트, 나머지 조건은 비웠고 조건 강조는 1이다.
+양 끝(보라색 제목)은 생성 형상 0번과 1번이고, 가운데 다섯은 두 시작 잡음을 원호로 섞은 것이다. 아래 숫자는 프로그램이 기록한 조각 수(\key{body_count_raw})다.}
+\label{fig:mcbrebuildinterp}
+\end{figure}
+
 \subsection{결론: 새 기본값}
 
 \begin{enumerate}
@@ -1945,7 +1995,8 @@ Thingi10k(2, 3, 5)는 끝점이 전혀 다른 물체라 중간도 어느 쪽과 
 \item \textbf{생성은 DeepJEB와 MCB에서 32보다 같거나 좋다.} 조건 없는 한 조각 비율 78\% 대 72\%, 94\% 대 81\%, 부피 오차 1.4\% 대 2.5\%, 1.7\% 대 7.7\%다.
 DeepJEB 실제 조건의 한 조각 비율(91\% 대 100\%)만 조금 낮고 흔들림 안이다.
 \item \textbf{섞기는 잡음 쌍에서 크게 좋아지고 실제 형상 사이는 같다.} 잡음 쌍 92\% 대 67\%, 88\% 대 77\%, 거꾸로 걷기 96\% 대 96\%, 75\% 대 74\%다. 코드 직선 섞기만 중간 형상 1--2개만큼 낮다.
-\item \textbf{Thingi10k는 정상으로 학습된다.} 무너진 예전 기본값보다 복원 5배, 거꾸로 걷기 한 조각 54\% 대 12\%다. 대표점 32와의 공정한 비교는 아직 없다.
+\item \textbf{MCB는 데이터를 고치니 더 좋아졌다.} 방향을 맞추고 깨진 정답을 거르고 종류·구멍 수 조건을 넣은 새 데이터에서 1단계 점검용 오차가 절반이 되었고,
+구멍 없는 생성이 0개, 실제 조건의 부피 오차 중앙값이 1.1--1.6\%다. 보간 기능의 중간 형상도 덩어리가 되지 않는다. 섞기 평가는 아직 다시 하지 않았다.
 \item \textbf{남은 한계는 DrivAerML의 쏠림이다.} 128로 세 번 학습해 0.34, 0.39, 0.48로 모두 32($-0.16$)보다 크다. 형상 310개짜리 데이터에서는 대표점 32를 따로 두거나 형상 수를 늘려야 한다.
 결정은 사용자에게 있다.
 \end{enumerate}
@@ -1954,16 +2005,17 @@ DeepJEB 실제 조건의 한 조각 비율(91\% 대 100\%)만 조금 낮고 흔�
 \section{권장 사항 (9월 28일 작성, 일부 적용)}
 \label{sec:recommend}
 
-아래는 9월 28일에 쓴 제안이다. 그 뒤 2번, 3번, 12번에 해당하는 config와 코드를 바꿨다(\S\ref{sec:default}). 나머지는 바꾸지 않았다.
+아래는 9월 28일에 쓴 제안이다. 그 뒤 2번, 3번, 12번에 해당하는 config와 코드를 바꿨고(\S\ref{sec:default}), 10월 2일 MCB 데이터를 다시 만들면서 1번과 10번을 적용했다(\S\ref{sec:mcbrebuild}). 나머지는 바꾸지 않았다.
 
 \begin{enumerate}
 \item \textbf{ex3는 방향 정렬이 먼저다.} 전처리에서 모든 너트의 구멍 축을 z로 돌린다(비스듬한 105개는 눈으로 확인). 방향 무리가 사라지고
 상자 크기 조건이 순수한 크기 정보가 된다. 데이터를 다시 만드는 일이라 결정은 사용자에게 있다. 무작위 회전을 섞어 학습하는 방법은 방향 무리를
 없애지 못하고 연속 회전까지 배우게 만들므로, 보간이 목적이면 정렬이 맞다.
+\textbf{적용함(10월 2일):} 관성 주축 기준으로 돌려 구멍 축이 z인 너트가 61\%에서 98\%가 되었다(\S\ref{sec:mcbrebuild}).
 \item \textbf{DeepJEB config의 대표점 512 / kl 1e-6은 J0에서 붕괴가 확인된 조합이다.} \textbf{적용함(9월 29일):}
 ex1 config(\texttt{configs/SDFFlow/geometry\_generation/ex1/baseline/}의 \texttt{config\_train\_sdfflow.txt}, \texttt{dataset\_matrix/generate.py}가 만듦)는
 지금 대표점 128 / kl 1e-8 + 2단계 처방이다(C1, \S\ref{sec:default}). \texttt{paper/deepjeb\_design/deepjeb\_design.tex}의 설명은 고치지 않았다.
-\item \textbf{ex3 config의 kl.} 9월 28일에는 1e-10이었다(주석 ``was 1e-4''). \textbf{적용함(9월 29일):} 네 데이터 모두 대표점 128 / kl 1e-8 + 처방으로 바꿨다(C3, \S\ref{sec:default}).
+\item \textbf{ex3 config의 kl.} 9월 28일에는 1e-10이었다(주석 ``was 1e-4''). \textbf{적용함(9월 29일):} 모든 데이터를 대표점 128 / kl 1e-8 + 처방으로 바꿨다(C3, \S\ref{sec:default}).
 \item \textbf{2단계는 약 700바퀴 + \key{fm_best.pth}.} 1단계는 700--900바퀴면 충분하다.
 \item \textbf{조건 강조 배율은 1을 기본으로.} 치수를 꼭 맞춰야 할 때만 2.
 \item \textbf{보간 용도별 선택.} 실제 두 형상 사이를 섞을 때에는 ``거꾸로 걷기 + 조건도 옮김''이 가장 고르다. 한 속성(부피 등)을 따라 움직이는
@@ -1975,11 +2027,12 @@ ex1 config(\texttt{configs/SDFFlow/geometry\_generation/ex1/baseline/}의 \textt
 \item \textbf{떨어진 조각은 \key{body_count_raw}로 확인한다.} 가장 큰 조각만 남기는 동작을 config로 끌 수 있게 할지는 사용자 결정이다.
 \item \textbf{종류 조건은 뒤로 미룬다.} 두 끝 방향이 같은 쌍끼리 보면 다른 종류 쌍(CROSS)이 같은 종류 쌍(SAME)보다 조금 더 튀지만(튐 중앙값 3.14 대 2.21),
 방향이 같고 다름에 따른 차이(2.5 대 5.3)가 훨씬 크므로(표~\ref{tab:orient}) 지금 튐의 주원인은 종류가 아니라 방향이다. 방향을 정렬한 뒤에도 잠금 조건에서 육각이 나오는 일이 남으면 그때 \key{condition_names}에 종류를 넣는다.
+\textbf{적용함(10월 2일):} 방향 정렬과 함께 종류 5개의 0/1 표시와 구멍 수(\key{hole_count})를 조건에 넣었다(\S\ref{sec:mcbrebuild}).
 \item \textbf{DeepJEB 점 밀도.} J1--J3의 점검용 오차는 학습용과 크게 벌어지지 않았다(J3 1.4배, J1·J2는 학습용이 조금 더 큼).
 지금은 형상당 점을 다시 만들 필요가 없다.
 \item \textbf{대표점을 128 이상으로 쓰면 2단계 처방을 함께 쓴다.} 학습 시점 치우침(\key{fm_time_sampling logit_normal},
 \key{fm_time_logit_mean} $-0.693$)과 큰 2단계(\key{fm_hidden 512}, \key{fm_blocks 12})는 config만으로 된다.
-\textbf{적용함(9월 28--29일):} 가장 효과가 큰 ``형상마다 코드 여러 개''를 \key{fm_latent_draws}로 2단계 학습에 넣었고, 네 기본 config가 모두 \key{fm_latent_draws 8}을 쓴다(\S\ref{sec:default}).
+\textbf{적용함(9월 28--29일):} 가장 효과가 큰 ``형상마다 코드 여러 개''를 \key{fm_latent_draws}로 2단계 학습에 넣었고, 세 기본 config가 모두 \key{fm_latent_draws 8}을 쓴다(\S\ref{sec:default}).
 \end{enumerate}
 
 % ======================================================================
@@ -1989,11 +2042,14 @@ ex1 config(\texttt{configs/SDFFlow/geometry\_generation/ex1/baseline/}의 \textt
 \begin{itemize}
 \item 경로 수가 묶음마다 8--16개로 적다. 정상 모델 세 개(1e-6, 1e-8, 1e-10) 사이의 차이는 우연 범위 안일 수 있다.
 \item 모든 실험이 난수 고정값 하나, 데이터 나누기 하나로 돌았다.
-\item $128^3$ 격자는 얇은 벽을 다 담지 못한다. 캐슬은 정답도 한 조각 비율이 66.7\%다.
-\item ex3 점검용에는 학습용과 같은 형상이 섞여 있어(27/130) 점검용 수치가 후하게 나왔다.
+\item $128^3$ 격자는 얇은 벽을 다 담지 못한다. 예전 데이터에서는 캐슬의 정답도 한 조각 비율이 66.7\%였다. 새 데이터의 점검용 캐슬 11개는 1단계 복원 10개가 한 조각이지만, 새 정답 자체의 한 조각 비율은 다시 세지 않았다.
+\item 예전 ex3 점검용에는 학습용과 같은 형상이 섞여 있어(27/130) 점검용 수치가 후하게 나왔다. 새 데이터에서는 다시 세지 않았다.
 \item 구멍 수 오르내림의 원인은 아직 확정하지 못했다. DeepJEB 결과로 판단한다.
 \item 모든 판정은 기하 모양 기준이다. 구조 성능(해석 결과)은 보지 않았다.
-\item 새 기본값(대표점 128 + 처방)은 DrivAerML(학습 형상 310개)에서 학습 형상 쪽으로 기운다(쏠림 0.34--0.48, 세 번 학습). Thingi10k에는 대표점 32와의 공정한 비교가 없다(\S\ref{sec:default}).
+\item 새 기본값(대표점 128 + 처방)은 DrivAerML(학습 형상 310개)에서 학습 형상 쪽으로 기운다(쏠림 0.34--0.48, 세 번 학습, \S\ref{sec:default}).
+\item Thingi10k(여러 종류의 물체를 모은 데이터)는 뺐다. 형상 코드에서 가장 가까운 학습 형상이 같은 종류인 경우가 28\%(아무 형상 13\%)뿐이라 학습 형상 사이에서 생성한 형상이 자주 조각났다.
+데이터를 늘리려 해도 Thingiverse 내려받기가 막혀 있다(2026년 10월 6일 확인).
+\item 표~\ref{tab:defaultgen}, \ref{tab:defaultinterp}의 MCB 수치는 10월 2일 다시 만들기 전 데이터의 것이다. 새 데이터로는 생성과 보간 기능만 다시 확인했다(\S\ref{sec:mcbrebuild}).
 \item 생성 평가는 32개, 섞기 평가는 쌍 8--16개다. 이번 새 기본값 결과도 씨앗 하나다.
 \end{itemize}
 
@@ -2051,21 +2107,22 @@ ex1 config(\texttt{configs/SDFFlow/geometry\_generation/ex1/baseline/}의 \textt
 \label{app:config}
 
 \texttt{configs/SDFFlow/geometry\_generation/ex3/baseline/config\_train\_sdfflow.txt}(현재 작업본)의 key 부분이다. 머리 주석은 생략했다.
+10월 2일 다시 만든 MCB 데이터로 다시 학습한 모델(\S\ref{sec:mcbrebuild})이 쓴 설정과 같다(그때는 \key{gpu_ids 0}).
 DeepJEB(\texttt{ex1}) 파일과 다른 줄은 오른쪽에 적었다.
 
 \begin{Verbatim}[fontsize=\footnotesize, frame=single, framesep=2mm]
 model                          sdfflow
 mode                           train
-gpu_ids                        1                  % ex1: 7
+gpu_ids                        1                   % ex1: 7
 parallel_mode                  single
 seed                           42
 split_seed                     42
 dataset_dir                    ../../dataset/geometry_generation/ex3_mcb.h5
                                % ex1: ../../dataset/geometry_generation/ex1_deepjeb.h5
-split_by_parent                False              % ex1: True
+split_by_parent                False               % ex1: True
 num_encoder_points             6144
 num_query_points               8192
-latent_tokens                  32                 % ex1: 512
+latent_tokens                  128
 latent_dim                     32
 encoder_query_type             fps
 encoder_dim                    256
@@ -2077,7 +2134,7 @@ decoder_hidden                 256
 decoder_layers                 4
 decoder_heads                  8
 fourier_bands                  8
-kl_weight                      0.0000000001       % ex1: 0.000001
+kl_weight                      0.00000001
 clamp_dist                     0.1
 deterministic_warmup_epochs    50
 posterior_noise_warmup_epochs  100
@@ -2089,20 +2146,27 @@ normal_weight                  0.1
 eikonal_weight                 0.1
 hybrid_grad_points             1024
 use_conditions                 True
-condition_names                bbox_x, bbox_y, bbox_z, volume, area   % ex1: volume, area
+condition_names                bbox_x, bbox_y, bbox_z, volume, area,
+                               class_hexagonal_nuts, class_slotted_nuts,
+                               class_square_nuts, class_castle_nuts,
+                               class_locknuts, hole_count
+                               % 실제 파일은 한 줄. ex1: volume, area
 min_condition_std              0.00001
-condition_clip                 5
+condition_clip                 10                  % ex1: 5
 cond_dropout                   0.2
-cond_dropout_mode              all
+cond_dropout_mode              per_dim             % ex1: all
 fm_arch                        dit
-fm_hidden                      256
-fm_blocks                      8
+fm_hidden                      512
+fm_blocks                      12
 fm_heads                       8
 fm_cond_hidden                 128
-fm_time_sampling               uniform
+fm_time_sampling               logit_normal
+fm_time_logit_mean             -0.693
+fm_time_logit_std              1
+fm_latent_draws                8
 encode_batch_size              8
 ode_steps                      50
-vae_training_epochs            1000               % ex1: 1500
+vae_training_epochs            1000                % ex1: 1500
 vae_batch_size                 8
 vae_learningr                  0.0001
 vae_weight_decay               0.0001
@@ -2113,9 +2177,9 @@ vae_use_ema                    True
 vae_ema_decay                  0.99
 vae_val_interval               5
 vae_test_interval              100
-vae_num_test_shapes            2
-vae_mc_resolution_test         64
-fm_training_epochs             500
+vae_num_test_shapes            8                   % ex1: 2
+vae_mc_resolution_test         128                 % ex1: 64
+fm_training_epochs             250
 fm_batch_size                  64
 fm_learningr                   0.0001
 fm_weight_decay                0.0001
@@ -2126,8 +2190,8 @@ fm_use_ema                     True
 fm_ema_decay                   0.99
 fm_val_interval                5
 fm_test_interval               50
-fm_num_test_shapes             2
-fm_mc_resolution_test          64
+fm_num_test_shapes             8                   % ex1: 2
+fm_mc_resolution_test          128                 % ex1: 64
 display_testset                True
 skip_completed_stages          True
 output_dir                     ../../output/geometry_generation/ex3_mcb/sdfflow/samples

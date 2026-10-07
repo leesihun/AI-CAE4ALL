@@ -1,7 +1,8 @@
 # Dataset별 baseline config matrix
 
 2026-09-22 작업본. `manifest.json`이 generate.py가 만드는 75개 train/infer 쌍(150개 config)과
-손으로 관리하는 SDFFlow geometry_generation ex2/ex3/ex4 3쌍(`"generated": false`)의 경로를 담는다.
+손으로 관리하는 SDFFlow geometry_generation ex2/ex3 2쌍(`"generated": false`)의 경로를 담는다.
+2026-10-07에 SDFFlow ex4(Thingi10K)를 삭제했다: 데이터와 출력은 `_set_aside_20261007/`로 옮겼고 lane 2에는 arm이 없다.
 2026-09-23에 GINO가 suite에서 삭제되어 GINO 11쌍(22개 config)을 matrix에서 뺐다. GPU lane 2는 재배정하지 않았다.
 기존 config는 교체하지 않고 각 사례의 `baseline/`에 추가했다. Shell buckling은 제외했다.
 Flag(ex6) 일반 모델은 2026-09-24 결정대로 다른 사례와 같은 1-frame delta 예측을 유지한다(아래 MGN 행).
@@ -155,7 +156,7 @@ python AI_CAE4ALL_main.py --config configs/Transolver/deterministic/ex4/baseline
 전체 train→infer는 `run_matrix.py`가 돌리며, 머신마다 wrapper 하나씩이다(Linux 전용):
 
 ```bash
-bash configs/run_all_135.sh     # deterministic ex1, ex2, ex3_full, ex5, ex8 + probabilistic ex1 + geometry ex2, ex4  (35 arm / 70 stage)
+bash configs/run_all_135.sh     # deterministic ex1, ex2, ex3_full, ex5, ex8 + probabilistic ex1 + geometry ex2  (34 arm / 68 stage)
 bash configs/run_all_136.sh     # deterministic ex3_mid, ex4, ex6, ex7, ex9 + probabilistic ex2 + geometry ex1, ex3  (37 arm / 74 stage)
 
 DRY_RUN=1 bash configs/run_all_135.sh        # 계획만 출력, 아무것도 쓰지 않음 (nvidia-smi는 조회함)
@@ -167,17 +168,18 @@ PYTHON=/path/to/python bash configs/run_all_135.sh   # 기본은 PATH의 python3
 Wrapper는 git mode 100644라 `bash ...`로 실행한다(`./run_all_135.sh`로 쓰려면 `chmod +x`).
 Method별 interpreter는 기존대로 `ai_cae4all.local.toml`에서 고른다.
 
-- **Lane.** config의 `gpu_ids` 숫자가 home lane이다: 0 deeponet+fno, 1 point_deeponet, 2 (생성 arm 없음),
+- **Lane.** config의 `gpu_ids` 숫자가 home lane이다: 0 deeponet+fno, 1 point_deeponet, 2 (arm 없음),
   3 transolver3, 4 meshgraphnets, 5 himgn, 6 himgn_v+lsh_vae, 7 chi_mgnflow+sdfflow.
-  손으로 관리하는 SDFFlow geometry ex2/ex3/ex4는 자기 config의 `gpu_ids` 0/1/2를 그대로 lane으로 쓴다
-  (135: ex2 lane 0, ex4 lane 2 / 136: ex3 lane 1). 출력은 `output/geometry_generation/<ex>_<dataset>/sdfflow/`이다.
+  손으로 관리하는 SDFFlow geometry ex2/ex3는 자기 config의 `gpu_ids` 0/1을 그대로 lane으로 쓴다
+  (135: ex2 lane 0 / 136: ex3 lane 1). 출력은 `output/geometry_generation/<ex>_<dataset>/sdfflow/`이다.
   GPU마다 worker 하나가 자기 lane을 manifest 순서로 돌고, 끝나면 가장 뒤처진 lane의 다음 arm을 가져간다.
 - **Start gate.** 즉시 한 번, 그 뒤 `GATE_INTERVAL`(3600 s)마다 확인한다. GPU 8개가 보이고 모두 util 0%여야
   시작한다. 조건은 util뿐이다: 메모리만 잡고 계산하지 않는 process는 gate를 막지 않는다.
   한 번의 확인은 `GATE_SAMPLES`(3)회 × `GATE_SAMPLE_GAP`(20 s) 간격 측정이다.
 - **실행.** Stage마다 카드 하나. config를 `output/dataset_matrix/_campaign/<machine>/launch/`에 복사하되
-  `gpu_ids`만 0으로 바꾸고 원본 경로와 sha256을 머리 주석에 적는다. 그 복사본을 `CUDA_VISIBLE_DEVICES=<카드 UUID>`로
-  launcher에 넘긴다. 체크인된 config는 절대 수정하지 않는다. 학습이 실패하면 그 arm의 추론은 건너뛴다.
+  `gpu_ids`만 0으로 바꾸고, 학습이면 config에 없는 `resume_training True`/`resume_interval_minutes 15`를 끝에 붙인다.
+  원본 경로와 sha256은 머리 주석에 적는다. 그 복사본을 `CUDA_VISIBLE_DEVICES=<카드 UUID>`로
+  launcher에 넘긴다. 체크인된 config는 절대 수정하지 않는다(그래서 marker의 sha256도 그대로다). 학습이 실패하면 그 arm의 추론은 건너뛴다.
 - **GPU 사망.** 실행 중 `WATCH_INTERVAL`(300 s)마다 nvidia-smi를 보고, 성공하지 못한 stage 뒤에는 CUDA driver로
   카드를 직접 열어 본다. 죽은 것이 확인되면 그 worker만 멈추고, arm은 자기 lane 맨 앞으로 돌아가 다른 카드가 가져간다
   (arm당 1회). 나머지 worker는 계속 돈다.
@@ -189,13 +191,25 @@ Method별 interpreter는 기존대로 `ai_cae4all.local.toml`에서 고른다.
   byte 단위로 같고**(주석 한 줄을 고쳐도 다시 돈다), 추론이면 그 추론이 **현재 학습이 끝난 뒤에 시작**했어야 한다.
   그 밖의 marker(다른 config의 것, 읽을 수 없는 것, 예전 bash runner의 빈 파일)는 다시 돈다. 재학습하면 추론도 다시 돈다.
   같은 명령을 다시 실행하면 남은 것만 돈다.
+- **학습 도중 재개.** marker는 마지막 epoch까지 돌고 최종 checkpoint를 쓴 stage만 남긴다. 중간에 끊긴 학습(정지, 카드 사망,
+  머신 다운)은 trainer가 15분마다 epoch 경계에서 checkpoint 옆에 남긴 `<checkpoint>.resume`(model·EMA·optimizer·
+  scheduler·AMP scaler·RNG·best/patience tracker·epoch)을 다음 실행이 이어받아 **마지막 epoch까지** 돈다. 잃는 것은
+  마지막 state 이후의 epoch(최대 15분 + 1 epoch)뿐이다. 최종 checkpoint를 쓰면 `.resume`은 지워진다. 학습은 시작 전에
+  config sha256을 `_campaign/<machine>/started/<arm>__train`에 적고, 그 기록과 config가 맞을 때만 이어받는다.
+  trainer도 `.resume`에 적힌 config fingerprint(`gpu_ids`·resume key 제외)가 다르면 거부한다. 두 stage route
+  (LSH-VAE VAE→LC, SDFFlow VAE→FM, cHI-MGNflow AE→Prior)는 끝난 앞 stage를 다시 돌리지 않고 끊긴 stage부터 잇는다.
+  앞 stage checkpoint가 그 사이 다시 쓰였으면 뒤 stage state는 `.resume.stale`로 밀려나고 그 stage는 epoch 0부터 돈다.
+  재개는 단일 GPU 학습만 지원한다(matrix의 모든 stage가 그렇다). 다중 GPU 경로는 `resume_training`을 거부한다.
 - **Set aside.** stage를 돌리기 전에 이전 실행이 그 stage에 남긴 것을
   `_campaign/<machine>/set_aside/<run id>/<arm>__before_<stage>/`로 옮긴다: 맞지 않는 marker, 그 arm의 예측 디렉터리,
-  학습 전이면 추론 marker도. SimulGenVAE의 `vae.pth`/`lc.pth`는 `_campaign/<machine>/started/<arm>__train`이
-  **바로 이 config가 시작한 것**이라고 적고 있지 않으면 함께 옮긴다. `skip_completed_stages`는 자기 호환 key만
-  비교하므로 두면 다른 config의 checkpoint가 이 실행에 이어진다. 아무것도 지우지 않는다(`set_aside/`는 확인 후 손으로
+  학습 전이면 추론 marker도. `_campaign/<machine>/started/<arm>__train`이 **바로 이 config가 시작한 것**이라고
+  적고 있지 않으면 resume state(config가 가리키는 경로 옆의 `.resume`/`.resume.tmp`/`.resume.stale`)와
+  SimulGenVAE의 `vae.pth`/`lc.pth`도 함께 옮긴다. 그래서 고친 config의 학습이 이전 config의 끊긴 학습을 잇지 않는다.
+  `skip_completed_stages`는 자기 호환 key만 비교하므로 두면 다른 config의 checkpoint가 이 실행에 이어진다.
+  아무것도 지우지 않는다(`set_aside/`는 확인 후 손으로
   지운다). config가 가리키는 checkpoint·dataset·log가 든 경로나 `output/` 밖의 경로는 옮기지 않으며, 옮기지 못한 stage는
-  strike 없이 실패로 남는다. SDFFlow geometry는 자기 stage 기록을 따로 가지므로 marker만 옮긴다.
+  strike 없이 실패로 남는다. SDFFlow geometry는 자기 stage 기록을 따로 가지므로 marker와 resume state만 옮긴다.
+  `DRY_RUN=1`은 옮길 것과 함께 이어받을 `.resume`과 그 시각을 보여 준다(`train would continue from ...`).
 - **정지.** Ctrl-C/SIGTERM(nohup이 아니면 SIGHUP도)은 모든 stage에 SIGTERM, `KILL_GRACE`(30 s) 뒤 SIGKILL
   (두 번째 신호면 즉시). 그 stage들은 기록하지 않는다.
 - **출력.** `_campaign/<machine>/logs/runner.log`, stage별 로그는 `logs/stages/`, 결과표는 `report.txt`/`report.json`.
@@ -226,8 +240,25 @@ Method별 interpreter는 기존대로 `ai_cae4all.local.toml`에서 고른다.
 - runner 자체는 표준 라이브러리만 쓴다. numpy/matplotlib은 `score_spread.py`의 그림에만 필요하고 없으면 표만 낸다.
   `score_rank.py`는 numpy/h5py가 없으면 채점하지 못하고 그 사실만 runner.log에 남긴다.
   `PYTHON=/없는/경로`면 exit 127.
-- 학습 도중 재개(resume)는 없다. 정지되거나 카드를 잃은 학습 stage는 marker가 없으므로 다음 실행에서 **처음부터**
-  다시 돈다. 가장 긴 stage는 Transolver 3 ex4(20.1M update)다(아래 "학습 예산 기록").
+- 끊긴 학습은 다음 실행에서 마지막 `.resume`부터 이어 돈다(위 "학습 도중 재개"). 최종 checkpoint를 쓰고 `.resume`을
+  지우기 전에 끊기면 마지막 `.resume`부터 남은 epoch를 다시 돌아 같은 checkpoint를 다시 쓴다. `.resume`을 지운 뒤
+  marker를 쓰기 전에 끊긴 stage는 처음부터 다시 돈다(드물고, 보수적인 쪽이다).
+  가장 긴 stage는 Transolver 3 ex4(20.1M update)다(아래 "학습 예산 기록").
+- 이어 돈 학습의 marker `started`는 마지막 시도의 시작 시각이다. 로그의 `Elapsed`는 시도들을 이어서 센다.
+- 재개는 끊지 않은 실행과 같은 궤적을 잇는다. 끊지 않은 실행과 끊고 이은 실행의 최종 checkpoint가 bit 단위로 같다
+  (`num_workers 2` 포함; method별 검증은 아래 "검증 범위"). 예외는 셋이다. 앞의 둘은 DataLoader worker 안에서 뽑는
+  난수다. persistent worker는 그 난수열을 epoch 사이에 이어 쓰는데, 이은 실행은 새 worker로 시작하므로 그 난수열을 되살릴 수
+  없다. 그래서 같은 분포에서 뽑는 통계적으로 같은 학습이지만 같은 궤적은 아니다(끊지 않은 두 실행끼리는 0).
+  - SDFFlow VAE stage는 surface subsample을 worker 안에서 뽑는다. `vae_num_workers 2`(ex1–ex3)에서 VAE를 끊고 이으면
+    작은 합성 시험 두 번에서 VAE checkpoint가 3–5e-3, 그 VAE를 쓰는 FM도 같은 크기로 달랐다.
+    FM stage만 끊긴 경우는 bit 단위로 같다.
+  - HI-MGN-V와 cHI-MGNflow는 sample마다 쓸 coarsening hierarchy variant를 worker 안에서 고른다
+    (`mesh_dataset._pick_hierarchy_variant`). 해당 arm은 probabilistic ex1·ex2의 `himgn_v`/`chi_mgnflow` 4개로,
+    `num_workers 2`·`hierarchy_variants 2`다. 작은 합성 시험에서 checkpoint가 HI-MGN-V 9.5e-3, cHI-MGNflow 4.4e-2
+    달랐고, `hierarchy_variants 1`이면 bit 단위로 같았다. bit 단위로 맞추려면 variant를 (seed, epoch, sample) 함수로
+    골라야 하는데, 그러면 재개를 끈 학습이 뽑는 variant도 바뀌므로 하지 않았다.
+  - FNO(`grid_sampler` backward)와 SDFFlow(memory-efficient SDPA backward)는 GPU kernel 자체가 비결정적이라, 끊지 않은
+    두 실행끼리도 1–2 ULP 다르다. 이은 실행도 그 폭 안에 든다.
 
 ## 채점과 순위 (`score_rank.py`)
 
@@ -324,7 +355,7 @@ arm별 update 수(`manifest.json`의 `updates`):
 | ex1 (57 × 100) | 357k | 357k (178.5k + 178.5k) |
 | ex2 (1400 × 19) | 1.663M | 1.663M (831.5k + 831.5k) |
 
-geometry(SDFFlow)는 `updates`를 적지 않는다: VAE 322.5k / 58.5k / 131k / 289.6k, FM 13.5k / 2.5k / 8.5k / 45.5k(ex1 / ex2 / ex3 / ex4; ⌈학습 형상 / batch⌉ × epochs, DataLoader에 `drop_last`가 없다).
+geometry(SDFFlow)는 `updates`를 적지 않는다: VAE 322.5k / 58.5k / 131k, FM 13.5k / 2.5k / 8.5k(ex1 / ex2 / ex3; ⌈학습 형상 / batch⌉ × epochs, DataLoader에 `drop_last`가 없다).
 
 - **2026-09-25에 올린 곳.** NO 3종 ex1(80k → 400k, 2000 × 2 → 5000 × 1), T3 ex1(160k → 400k), ex8 전 method
   (NO 3종·MGN·HI-MGN 100k → 500k, 2000 × 16 → 625 × 1; T3 400k → 500k, 2026-09-26), ex5 전 method(8.0M → 10.01M, 627 epochs;
@@ -337,7 +368,7 @@ geometry(SDFFlow)는 `updates`를 적지 않는다: VAE 322.5k / 58.5k / 131k / 
   `fm_best.pth`를 쓰므로 에폭을 늘리지 않았다. LSH-VAE LC는 `drop_last=True`라 epoch당 ⌊학습 표본/16⌋ update이다.
 - **Warmup.** mesh/operator route는 `warmup_epochs 5`(epoch 수와 무관), Transolver 3는 epoch의 5%(ex1 250, ex3 62,
   ex4 21, ex5 31, ex8 31, 나머지 25)다.
-- **긴 쪽.** ex4–ex6의 AR 사례는 10M 이상이고 T3는 16–20M이다. 중단되면 처음부터 다시 돈다(재개 없음).
+- **긴 쪽.** ex4–ex6의 AR 사례는 10M 이상이고 T3는 16–20M이다. 중단되면 마지막 `.resume`(15분 간격)부터 이어 돈다.
 
 ### 수렴 확인 (예산이 같다고 수렴한 것은 아니다)
 
@@ -350,7 +381,8 @@ update 수를 맞추는 것은 method끼리 **공정하게** 비교하기 위해
    - **읽는 로그.** train config의 `log_file_dir`(두 stage route는 `vae_`/`lc_`/`fm_log_file_dir`)이다. LSH-VAE는
      `vae.log`/`lc.log`, SDFFlow는 `vae.log`/`fm.log`, cHI-MGNflow는 한 `train.log`의 `[AE]`(`ae_epochs`)와 `[Prior]`
      (`training_epochs`) 줄을 따로 본다. 로그는 **마지막 실행만** 읽는다: append 로그의 `==== Run` 머리, 또는 epoch가
-     줄어드는 곳부터 새 실행이다. Transolver 3 multi-GPU 로그는 검증하지 않은 epoch에도 직전 val 값을 다시 적으므로
+     줄어드는 곳부터 새 실행이다. 단 `==== Resume [TAG] at epoch K` 뒤는 같은 실행의 연속이다: 그 뒤 처음 적힌
+     epoch부터의 이전 줄(state 이후에 적혔다가 다시 도는 epoch)만 버리고 나머지는 이어 붙인다. Transolver 3 multi-GPU 로그는 검증하지 않은 epoch에도 직전 val 값을 다시 적으므로
      `val_interval` epoch(와 마지막 epoch)만 쓴다. 다른 route는 검증하지 않은 epoch에 `Valid skipped`라고 적는다.
    - **지표.** 계획 epoch를 5%씩 20개 구간으로 나누고 구간마다 loss의 median을 잡는다. `val 60-80%`는 55–60% 구간에서
      75–80% 구간으로의 val 변화율, `train 60-80%`는 같은 것의 train loss다. `tail`은 마지막 구간(95–100%)이 가장 낮은
@@ -401,7 +433,7 @@ deterministic mesh/operator route(MGN, HI-MGN, Transolver 3, NO 3종)는 학습�
 | HI-MGN-V | [InfoVAE](https://arxiv.org/abs/1706.02262), [Flow Matching](https://arxiv.org/abs/2210.02747) | 저장소의 conditional-prior variational hierarchy. Global latent 32(hyperparameter_sweep/SAOI 학습은 16이었으므로 그 결과를 그대로 옮길 수 없다), MMD, auxiliary reconstruction, conditional FM; posterior reconstruction과 prior sampling 성능을 구분해야 한다. 한 stage로 `training_epochs 1000`을 학습해 cHI-MGNflow의 AE 500 + flow 500과 update 수가 같다. `prior_freeze_epoch 700`부터 prior만 학습하고, checkpoint는 `best_by crps`로 고른다. 단일 논문의 동일 명칭 recipe로 오인하지 않는다. `alpha_recon 1000`/`lambda_mmd 1`은 hyperparameter_sweep base 그대로다. InfoVAE의 기준은 숫자가 아니라 "loss on X와 loss on Z가 비슷한 크기가 되도록 λ를 고른다"이며, 원문 λ=1000은 784픽셀 합산 Bernoulli NLL에 맞춘 값이라 정규화 필드의 평균 MSE인 여기로 옮길 수 없다. 이 비율에서 두 항이 균형을 이루는지는 측정되지 않았고, sweep2의 `mmd10`/`mmd100` arm이 그 판단 근거다(Adam + group별 clip이라 비율만 의미가 있다). |
 | cHI-MGNflow | [Latent Diffusion Graph Networks](https://arxiv.org/abs/2504.02843) | coarse-node AE latent 4 channels, KL 1e-6, AE 500 epochs 후 latent flow 500 epochs. `val_flow_steps 30` = `flow_steps 30`이라 validation이 추론과 같은 sampler로 채점된다. 저장소 HI hierarchy/flow adaptation이며 원문의 모든 architecture와 동일하지 않다. **latent 채널은 원문과 다르다**: LDGN은 세 과제 모두 F<sub>L</sub>=1이다(Appendix Table 1; 3필드 u,v,p인 ELLIPSEFLOW도 1). 여기서는 4를 유지한다. 원문의 F<sub>L</sub>=32·KL 1e-3/1e-8은 VGAE **베이스라인** 값이지 LDGN 값이 아니다. 전체 압축비는 F<sub>L</sub>뿐 아니라 latent mesh 노드 수(원문 1D ≈4×, 2D ≈16×)에도 달려 있고, 이 저장소의 voronoi coarsest 노드 비율은 측정하지 않았으므로 원문과 압축비가 같다고 가정하지 않는다. |
 | 확률 추론 공통 | — | HI-MGN-V와 cHI-MGNflow의 infer config는 `num_vae_samples` = held-out scene 수(probabilistic/ex1 18, ex2 250)이다. 이는 **scene당** draw 수이며, 각 scene의 ensemble 크기를 그것이 채점되는 held-out 세트 크기에 맞춘 것이다. |
-| SDFFlow | [3DShape2VecSet](https://arxiv.org/abs/2301.11445), [Flow Matching](https://arxiv.org/abs/2210.02747) | ex1은 512×32 latent token set(원문 M=512, C0=32; width는 256으로 원문 C=512보다 작다), FPS encoder, attention SDF decoder, DiT flow. KL은 latent 원소의 **합**에 곱해진다. ex1 `kl_weight 0.000001` × 16,384원소 = 0.0164로 원문(공식 코드: 원소 **평균** KL × 1e-3)의 약 16배다. ex2–ex4는 32×32 = 1,024원소에 `kl_weight 0.0000000001`이라 평균 기준 약 1.0e-7, 원문의 약 1/10,000로 사실상 KL이 없다. 근거는 ex3(MCB, 1,024원소) KL sweep이다: 1e-4는 epoch 50–75에서 posterior collapse, 1e-6·1e-8·1e-10은 1,024차원 모두 활성, valid L1 6.8–7.0e-3, sbr는 1e-4 .375, 1e-6 .81, 1e-10 .91. ex1의 1e-6은 이 sweep 결과를 옮긴 값이며 ex1에서 sweep하지 않았다. infer는 seed-42 parent split의 test 개수(209)만큼 무조건부 생성해 참조 집합과 같은 크기로 비교할 수 있게 한다. Surface/normal/eikonal loss와 condition dropout은 저장소의 조합이며 이 조합 전체를 원문 recipe로 주장하지 않는다. **학습 스케줄도 원문과 다르다**: 원문은 AE batch 512 / 1600 epochs / lr<sub>max</sub> 5e-5 (warmup 80 epochs), diffusion batch 256 / 8000 epochs / lr<sub>max</sub> 1e-4 (warmup 800 epochs), 둘 다 cosine으로 1e-6까지다. 여기서는 VAE batch 8 / 1500 epochs / lr 1e-4 (warmup 20), FM batch 64 / 500 epochs / lr 1e-4 (warmup 10), cosine으로 1e-8까지다. ex1의 학습 형상 1,713개 기준으로 원문 update는 AE ⌈1713/512⌉ × 1600 = 6,400, diffusion ⌈1713/256⌉ × 8000 = 56,000이고, 여기서는 VAE 215 × 1500 = 322.5k(약 50배), FM 27 × 500 = 13.5k(약 1/4)다. 이 스케줄은 ex1 값이며 ex3·ex4 VAE는 1000·400 epochs다. 원문은 ShapeNet-v2로 학습했고, 이 저장소에서는 FM val loss가 일찍 바닥을 찍고 다시 오르는 것이 측정되었으므로(ex4: epoch 200 0.660 → epoch 999 2.127) 에폭을 원문만큼 늘리지 않고 infer는 `fm_best.pth`를 읽는다. |
+| SDFFlow | [3DShape2VecSet](https://arxiv.org/abs/2301.11445), [Flow Matching](https://arxiv.org/abs/2210.02747) | ex1은 512×32 latent token set(원문 M=512, C0=32; width는 256으로 원문 C=512보다 작다), FPS encoder, attention SDF decoder, DiT flow. KL은 latent 원소의 **합**에 곱해진다. ex1 `kl_weight 0.000001` × 16,384원소 = 0.0164로 원문(공식 코드: 원소 **평균** KL × 1e-3)의 약 16배다. ex2–ex3는 32×32 = 1,024원소에 `kl_weight 0.0000000001`이라 평균 기준 약 1.0e-7, 원문의 약 1/10,000로 사실상 KL이 없다. 근거는 ex3(MCB, 1,024원소) KL sweep이다: 1e-4는 epoch 50–75에서 posterior collapse, 1e-6·1e-8·1e-10은 1,024차원 모두 활성, valid L1 6.8–7.0e-3, sbr는 1e-4 .375, 1e-6 .81, 1e-10 .91. ex1의 1e-6은 이 sweep 결과를 옮긴 값이며 ex1에서 sweep하지 않았다. infer는 seed-42 parent split의 test 개수(209)만큼 무조건부 생성해 참조 집합과 같은 크기로 비교할 수 있게 한다. Surface/normal/eikonal loss와 condition dropout은 저장소의 조합이며 이 조합 전체를 원문 recipe로 주장하지 않는다. **학습 스케줄도 원문과 다르다**: 원문은 AE batch 512 / 1600 epochs / lr<sub>max</sub> 5e-5 (warmup 80 epochs), diffusion batch 256 / 8000 epochs / lr<sub>max</sub> 1e-4 (warmup 800 epochs), 둘 다 cosine으로 1e-6까지다. 여기서는 VAE batch 8 / 1500 epochs / lr 1e-4 (warmup 20), FM batch 64 / 500 epochs / lr 1e-4 (warmup 10), cosine으로 1e-8까지다. ex1의 학습 형상 1,713개 기준으로 원문 update는 AE ⌈1713/512⌉ × 1600 = 6,400, diffusion ⌈1713/256⌉ × 8000 = 56,000이고, 여기서는 VAE 215 × 1500 = 322.5k(약 50배), FM 27 × 500 = 13.5k(약 1/4)다. 이 스케줄은 ex1 값이며 ex3 VAE는 1000 epochs다. 원문은 ShapeNet-v2로 학습했고, 이 저장소에서는 FM val loss가 일찍 바닥을 찍고 다시 오르는 것이 측정되었으므로(ex4: epoch 200 0.660 → epoch 999 2.127) 에폭을 원문만큼 늘리지 않고 infer는 `fm_best.pth`를 읽는다. |
 
 메모리/계산량을 고려한 grid, sensor 수, batch 크기이며 성능 튜닝 결과는 아니다.
 
@@ -431,7 +463,7 @@ deterministic mesh/operator route(MGN, HI-MGN, Transolver 3, NO 3종)는 학습�
 - 13개 mesh 사례의 train/infer 전체 sample shape, field 수, T 검사(`audit.py --data`); 유한값은 결정론적 node subset만 검사.
 - Native parser 139개 통과(`audit.py --native` 7개 runtime). Transolver 추론 11개는 아직 없는 실제 학습 checkpoint가 필요하여 해당 검증을 유보.
 - Runner launch copy 150개가 launcher parser와 각 native parser 양쪽에서 원본과 `gpu_ids`만 다르게 읽힘.
-- 손으로 관리하는 SDFFlow ex2/ex3/ex4 train config의 launch copy가 launcher preflight(`--check`) 통과.
+- 손으로 관리하는 SDFFlow ex2/ex3 train config의 launch copy가 launcher preflight(`--check`) 통과.
   infer config는 학습 산출 checkpoint가 아직 없어 PATH-INPUT-001만 나며, 그 경로는 train 출력 경로와 같다.
 - LSH 후보 4사례의 전체 train/infer 고정 topology 검사, derived VDS/CSV read-back.
 - 수정한 geometry, node type, grouped split, train-only scaler에 대한 회귀 테스트.
@@ -473,6 +505,25 @@ deterministic mesh/operator route(MGN, HI-MGN, Transolver 3, NO 3종)는 학습�
 - 실제 manifest 78개 arm(88 stage) 전부 로그 경로가 `output/` 아래이고 계획 epoch가 읽히며, 20개 구간 모두에 검증 epoch가
   1개 이상 들어감(가장 적은 곳은 ex2 MGN/HI-MGN 구간당 1개, cHI-MGNflow 2개). runner hook이 두 머신 모두 geometry를 포함해 `convergence.csv`를 씀(135: 45 stage, 136: 43 stage).
 - `DRY_RUN=1`: 135는 41 arm / 82 stage, 136은 37 arm / 74 stage, 둘 다 종료 코드 0이며 파일을 쓰지 않음.
+
+2026-10-07 (학습 도중 재개):
+
+- 7개 학습 repo(MGN, HI-MGN-V, cHI-MGNflow, NO, Transolver, SDFFlow, SimulGenVAE)를 process를 죽여서 시험했다.
+  끊지 않은 실행 A, 그 반복 A2(noise floor), 매 epoch state를 쓰다가 epoch K 뒤에 죽이고 다시 실행한 B를 두고,
+  최종 checkpoint(stage별 bank 포함)의 모든 tensor를 비교했다. 모든 시나리오에서 B 뒤에 `.resume`/`.resume.tmp`가
+  남지 않았고, 재개를 끈 A/A2는 resume 파일을 만들지 않았으며, B 로그는 `==== Resume [TAG] at epoch K` 한 줄로 이어졌다.
+- floor 0이고 A와 B가 bit 단위로 같았다: MGN(`num_workers` 0/2), Transolver, point_deeponet/deeponet(`num_workers` 0/2),
+  SimulGenVAE(VAE·LC 각각 끊기, EMA+fp16, VAE `num_workers 2`), HI-MGN-V(joint 구간, prior-only tail, moment 구간,
+  tail checkpoint 위의 오래된 state, multiscale 끔, `num_workers 2`+`hierarchy_variants 1`), cHI-MGNflow(AE, Prior,
+  Prior epoch 0, AE→Prior 경계 직후, 단독 `train_ae`/`train_prior`, `num_workers 2`+`hierarchy_variants 1`),
+  SDFFlow(SDPA math 고정, `num_workers 0`). 나머지는 위 "알고 둘 동작"의 예외 셋이다.
+- `train_prior`의 `ae_checkpoint`가 끊긴 뒤 다시 쓰이면 state가 `.resume.stale`로 밀려나고 그 stage는 epoch 0부터 돈다.
+- 최종 helper로 단위 테스트: MGN 93, HI-MGN-V 67, cHI-MGNflow 19, Transolver 23, NO 195(skip 6), SDFFlow 130(skip 2),
+  SimulGenVAE 29, Studio backend 109 통과.
+- suite 전체 `--audit-configs`(355개, 오류 0, 경고 54개는 이전과 같음). `DRY_RUN=1`: 135는 34 arm / 68 stage,
+  136은 37 arm / 74 stage, 둘 다 종료 코드 0.
+- 두 머신의 launch copy 71개 train config(`resume_training`/`resume_interval_minutes` 포함) 전부 launcher `--check`
+  통과(GPU 1장 box에서 `gpu_ids 0`으로).
 
 남은 항목:
 

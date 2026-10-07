@@ -5,11 +5,13 @@ from .base import (
     MethodSpec,
     PathKind,
     PathRule,
+    RESUME_KEYS,
     SpecValidationContext,
     as_list,
     integer,
     validate_common_values,
     validate_positive_fields,
+    validate_resume,
 )
 
 
@@ -145,7 +147,7 @@ def build_simulgenvae_spec() -> MethodSpec:
         repository="methods/SimulGenVAE",
         entrypoint="SimulGenVAE_main.py",
         valid_modes=("train", "train_vae", "train_lc", "reconstruct"),
-        known_keys=SIMULGENVAE_KEYS,
+        known_keys=SIMULGENVAE_KEYS | RESUME_KEYS,
         required_by_mode={
             "train": frozenset({
                 "dataset_dir", "vae_modelpath", "lc_modelpath", "num_filter_enc",
@@ -194,7 +196,7 @@ def build_simulgenvae_spec() -> MethodSpec:
             PathRule("lc_modelpath", PathKind.INPUT_FILE, frozenset({"reconstruct"})),
             PathRule("output_dir", PathKind.OUTPUT_DIR),
         ),
-        validators=(validate_simulgenvae,),
+        validators=(validate_simulgenvae, validate_resume),
         import_modules=("torch", "numpy", "h5py", "sklearn"),
         dataset_kind="mesh_hdf5",
         native_probe=True,

@@ -1,8 +1,10 @@
+import os
 import time
 
 import torch
 from torch_geometric.loader import DataLoader
 
+from general_modules.resume_state import TrainingResume
 from training_profiles.setup import (
     build_dataset_splits,
     build_model_and_ema,
@@ -27,18 +29,59 @@ from training_profiles.training_loop import (
 )
 
 
+def _stage_state(phase, epoch, model, ema_model, optimizer, scheduler,
+                 best_valid_loss, last_valid_loss, last_saved_epoch, start_time):
+    """A resume state of stage `phase` ('AE' / 'Prior'): everything its next epoch reads."""
+    return {
+        'phase': phase, 'epoch': epoch, 'model': model.state_dict(),
+        'ema': ema_model.state_dict() if ema_model is not None else None,
+        'optimizer': optimizer.state_dict(), 'scheduler': scheduler.state_dict(),
+        'best_valid_loss': best_valid_loss, 'last_valid_loss': last_valid_loss,
+        'last_saved_epoch': last_saved_epoch, 'elapsed': time.time() - start_time,
+    }
+
+
+def _restore_stage(state, model, ema_model, optimizer, scheduler, loaders):
+    """Load a _stage_state. Returns (best_valid_loss, last_valid_loss,
+    last_saved_epoch, start_epoch)."""
+    model.load_state_dict(state['model'])
+    if ema_model is not None:
+        ema_model.load_state_dict(state['ema'])
+    optimizer.load_state_dict(state['optimizer'])
+    scheduler.load_state_dict(state['scheduler'])
+    # A persistent-worker loader draws its worker base seed only when its
+    # iterator is first built; build it now so that draw does not come
+    # out of the restored RNG stream.
+    for loader in loaders:
+        if loader.persistent_workers:
+            iter(loader)
+    return (state['best_valid_loss'], state['last_valid_loss'],
+            state['last_saved_epoch'], state['epoch'] + 1)
+
+
+def _resume_note(resume):
+    return (f" Resume state: {resume.path}"
+            if resume.enabled and os.path.exists(resume.path) else "")
+
+
 def _run_ae_stage(model, ema_model, optimizer, scheduler, train_loader, val_loader,
                   test_loader, device, config, train_dataset, modelname, log_file,
-                  start_time, mem_recording, total_epochs, tag='AE'):
-    """Reconstruction + KL loop. Returns (last_saved_epoch, last_valid_loss, interrupted)."""
+                  start_time, mem_recording, total_epochs, resume, state=None, tag='AE'):
+    """Reconstruction + KL loop, continued from a resume `state` when one is given.
+    Returns (last_saved_epoch, last_valid_loss, interrupted)."""
     val_interval = int(config.get('val_interval', 1))
     test_interval = int(config.get('test_interval', 10))
     best_valid_loss = float('inf')
     last_valid_loss = float('inf')
     last_saved_epoch = -1
+    start_epoch = 0
+    if state is not None:
+        best_valid_loss, last_valid_loss, last_saved_epoch, start_epoch = _restore_stage(
+            state, model, ema_model, optimizer, scheduler, (train_loader, val_loader))
 
     try:
-        for epoch in range(total_epochs):
+        resume.restore_rng()
+        for epoch in range(start_epoch, total_epochs):
             train_metrics = train_ae_epoch(
                 model, train_loader, optimizer, device, config, epoch, ema_model=ema_model,
             )
@@ -105,28 +148,39 @@ def _run_ae_stage(model, ema_model, optimizer, scheduler, train_loader, val_load
 
             dump_memory_snapshot(epoch, mem_recording, config)
 
+            if resume.due(epoch, total_epochs):
+                resume.save(_stage_state(tag, epoch, model, ema_model, optimizer, scheduler,
+                                         best_valid_loss, last_valid_loss, last_saved_epoch,
+                                         start_time))
+
         print(f"\n[{tag}] stage finished. Kept checkpoint: epoch {last_saved_epoch} "
               f"(best recon), validation loss {last_valid_loss:.2e}")
         return last_saved_epoch, last_valid_loss, False
     except KeyboardInterrupt:
         print(f"\n[{tag}] stage interrupted by user. Kept checkpoint: epoch "
-              f"{last_saved_epoch} (best recon), validation loss {last_valid_loss:.2e}")
+              f"{last_saved_epoch} (best recon), validation loss {last_valid_loss:.2e}"
+              + _resume_note(resume))
         return last_saved_epoch, last_valid_loss, True
 
 
 def _run_prior_stage(model, ema_model, optimizer, scheduler, train_loader, val_loader,
                      test_loader, device, config, train_dataset, modelname, log_file,
-                     start_time, mem_recording, total_epochs, tag='Prior'):
-    """Latent flow-matching loop against the frozen AE. Returns (last_saved_epoch,
-    last_valid_loss, interrupted)."""
+                     start_time, mem_recording, total_epochs, resume, state=None, tag='Prior'):
+    """Latent flow-matching loop against the frozen AE, continued from a resume
+    `state` when one is given. Returns (last_saved_epoch, last_valid_loss, interrupted)."""
     val_interval = int(config.get('val_interval', 1))
     test_interval = int(config.get('test_interval', 10))
     best_valid_loss = float('inf')
     last_valid_loss = float('inf')
     last_saved_epoch = -1
+    start_epoch = 0
+    if state is not None:
+        best_valid_loss, last_valid_loss, last_saved_epoch, start_epoch = _restore_stage(
+            state, model, ema_model, optimizer, scheduler, (train_loader, val_loader))
 
     try:
-        for epoch in range(total_epochs):
+        resume.restore_rng()
+        for epoch in range(start_epoch, total_epochs):
             train_metrics = train_prior_epoch(
                 model, train_loader, optimizer, device, config, epoch, ema_model=ema_model,
             )
@@ -234,6 +288,11 @@ def _run_prior_stage(model, ema_model, optimizer, scheduler, train_loader, val_l
 
             dump_memory_snapshot(epoch, mem_recording, config)
 
+            if resume.due(epoch, total_epochs):
+                resume.save(_stage_state(tag, epoch, model, ema_model, optimizer, scheduler,
+                                         best_valid_loss, last_valid_loss, last_saved_epoch,
+                                         start_time))
+
         criterion = str(config.get("best_by", "recon")).lower().strip()
         print(f"\n[{tag}] stage finished. Kept checkpoint: epoch {last_saved_epoch} "
               f"(best by {criterion}), validation loss {last_valid_loss:.2e}")
@@ -242,7 +301,7 @@ def _run_prior_stage(model, ema_model, optimizer, scheduler, train_loader, val_l
         criterion = str(config.get("best_by", "recon")).lower().strip()
         print(f"\n[{tag}] stage interrupted by user. Kept checkpoint: epoch "
               f"{last_saved_epoch} (best by {criterion}), validation loss "
-              f"{last_valid_loss:.2e}")
+              f"{last_valid_loss:.2e}" + _resume_note(resume))
         return last_saved_epoch, last_valid_loss, True
 
 
@@ -356,15 +415,30 @@ def single_worker(config, config_filename='config.txt'):
         print(f'Peak memory so far: {torch.cuda.max_memory_allocated()/1e9:.2f}GB')
 
     log_training_config(config)
+
+    modelname = config.get('modelpath')
+    # One state beside modelpath for both stages of a combined run; its 'phase'
+    # says which. train_prior trains over ae_checkpoint, so a state written on
+    # top of an older one is stale.
+    upstream = [config['ae_checkpoint']] if mode == 'train_prior' and config.get('ae_checkpoint') else []
+    resume = TrainingResume(config, modelname, upstream=upstream)
+    state = resume.load()
+    first_state, prior_state = state, None
+    if mode == 'train' and state is not None and state['phase'] == 'Prior':
+        # Cut off in the prior stage: the trained compressor comes back with
+        # the state, so the AE stage is not run again.
+        first_state, prior_state = None, state
+
     print("\n" + "=" * 60)
     print("Starting training loop...")
     print("=" * 60 + "\n")
-    start_time = time.time()
+    start_time = time.time() - (state['elapsed'] if state is not None else 0.0)
 
     # ---- Logging ----
-    log_file = init_log_file(config, config_filename)
+    log_file = init_log_file(config, config_filename,
+                             resumed_at=state['epoch'] + 1 if state is not None else None,
+                             tag=state['phase'] if state is not None else None)
 
-    modelname = config.get('modelpath')
     if mode in ('train_prior', 'train'):
         # Members drawn per graph for the sampling-based validation score. The
         # CRPS estimator is unbiased at any S; S buys variance only, and the
@@ -380,10 +454,12 @@ def single_worker(config, config_filename='config.txt'):
         train_loader=train_loader, val_loader=val_loader, test_loader=test_loader,
         device=device, config=config, train_dataset=train_dataset, modelname=modelname,
         log_file=log_file, start_time=start_time, mem_recording=mem_recording,
-        total_epochs=first_epochs,
+        total_epochs=first_epochs, resume=resume, state=first_state,
     )
     config['mode'] = first_stage
-    if first_stage == 'train_ae':
+    if prior_state is not None:
+        interrupted = False
+    elif first_stage == 'train_ae':
         last_saved_epoch, last_valid_loss, interrupted = _run_ae_stage(**stage_args)
     else:
         last_saved_epoch, last_valid_loss, interrupted = _run_prior_stage(**stage_args)
@@ -406,15 +482,24 @@ def single_worker(config, config_filename='config.txt'):
         if val_num_samples < 1:
             raise ValueError("val_num_samples must be >= 1")
 
+        if resume.enabled and prior_state is None:
+            # The stage boundary (due() never fires on the AE's last epoch): a run
+            # cut off before the prior's first state resumes here, not in the AE.
+            resume.save(_stage_state('Prior', -1, model, ema_model, optimizer, scheduler,
+                                     float('inf'), float('inf'), -1, start_time))
+
         config['mode'] = 'train_prior'
         last_saved_epoch, last_valid_loss, interrupted = _run_prior_stage(
             model=model, ema_model=ema_model, optimizer=optimizer, scheduler=scheduler,
             train_loader=train_loader, val_loader=val_loader, test_loader=test_loader,
             device=device, config=config, train_dataset=train_dataset, modelname=modelname,
             log_file=log_file, start_time=start_time, mem_recording=mem_recording,
-            total_epochs=prior_epochs,
+            total_epochs=prior_epochs, resume=resume, state=prior_state,
         )
         config['mode'] = 'train'
+
+    if not interrupted:
+        resume.finish()
 
     cleanup_dataloaders(train_loader, val_loader, test_loader)
     release_hierarchy_cache(config, train_dataset, val_dataset, test_dataset)

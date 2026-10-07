@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from ..diagnostics import Severity
-from .base import MethodSpec, PathKind, PathRule, SpecValidationContext, integer, numeric
+from .base import MethodSpec, PathKind, PathRule, RESUME_KEYS, SpecValidationContext, integer, numeric, validate_resume
 from .meshgraphnets import validate_meshgraphnets
 from .meshgraphnets_variational import (VAR_KEYS, VAR_REMOVED_KEYS,
                                         validate_spread_keys)
@@ -351,7 +351,7 @@ def build_chi_mgnflow_spec() -> MethodSpec:
         repository="methods/HI_MGNFlow",
         entrypoint="CHiMGNFlow_main.py",
         valid_modes=("train", "train_ae", "train_prior", "inference"),
-        known_keys=FLOW_KEYS | REMOVED_LATENT_KEYS | FLOW_RUNTIME_REMOVED_KEYS | FLOW_HEAD_REMOVED_KEYS,
+        known_keys=FLOW_KEYS | REMOVED_LATENT_KEYS | FLOW_RUNTIME_REMOVED_KEYS | FLOW_HEAD_REMOVED_KEYS | RESUME_KEYS,
         required_by_mode={
             "train": _BASE_TRAIN_REQUIRED | {"ae_epochs"},
             "train_ae": _BASE_TRAIN_REQUIRED,
@@ -395,7 +395,7 @@ def build_chi_mgnflow_spec() -> MethodSpec:
             PathRule("eval_dataset", PathKind.INPUT_FILE, frozenset({"inference"})),
             PathRule("inference_output_dir", PathKind.OUTPUT_DIR, frozenset({"inference"})),
         ),
-        validators=(validate_chi_mgnflow,),
+        validators=(validate_chi_mgnflow, validate_resume),
         import_modules=("torch", "h5py", "torch_geometric"),
         dataset_kind="mesh_hdf5",
     )

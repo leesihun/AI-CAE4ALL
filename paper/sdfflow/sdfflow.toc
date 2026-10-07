@@ -25,64 +25,64 @@
 \contentsline {paragraph}{조건.}{14}{section*.25}%
 \contentsline {paragraph}{빈 조건.}{14}{section*.26}%
 \contentsline {paragraph}{조건 강조 배율.}{14}{section*.27}%
-\contentsline {paragraph}{생성 모델의 크기.}{14}{section*.28}%
+\contentsline {paragraph}{생성 모델의 크기.}{15}{section*.28}%
 \contentsline {section}{\numberline {5}형상 코드에서 STL까지}{15}{section.5}%
 \contentsline {section}{\numberline {6}config 작성법}{15}{section.6}%
 \contentsline {subsection}{\numberline {6.1}기본 문법과 실행}{15}{subsection.6.1}%
-\contentsline {subsection}{\numberline {6.2}모드와 꼭 적어야 하는 key}{15}{subsection.6.2}%
+\contentsline {subsection}{\numberline {6.2}모드와 꼭 적어야 하는 key}{16}{subsection.6.2}%
 \contentsline {subsection}{\numberline {6.3}학습 config: key별 의미와 정하는 법}{16}{subsection.6.3}%
-\contentsline {subsection}{\numberline {6.4}바퀴 수는 충분한가}{18}{subsection.6.4}%
+\contentsline {subsection}{\numberline {6.4}바퀴 수는 충분한가}{19}{subsection.6.4}%
 \contentsline {subsection}{\numberline {6.5}생성(sample) config}{19}{subsection.6.5}%
-\contentsline {subsection}{\numberline {6.6}보간(interpolate) config}{19}{subsection.6.6}%
-\contentsline {subsection}{\numberline {6.7}복원(reconstruct)과 평가(evaluate) config}{20}{subsection.6.7}%
+\contentsline {subsection}{\numberline {6.6}보간(interpolate) config}{20}{subsection.6.6}%
+\contentsline {subsection}{\numberline {6.7}복원(reconstruct)과 평가(evaluate) config}{21}{subsection.6.7}%
 \contentsline {subsection}{\numberline {6.8}자주 하는 실수 점검표}{21}{subsection.6.8}%
-\contentsline {section}{\numberline {7}실험 방법}{21}{section.7}%
-\contentsline {subsection}{\numberline {7.1}데이터}{21}{subsection.7.1}%
-\contentsline {subsection}{\numberline {7.2}놓인 방향}{21}{subsection.7.2}%
-\contentsline {subsection}{\numberline {7.3}비교한 모델}{23}{subsection.7.3}%
-\contentsline {subsection}{\numberline {7.4}섞기 경로 7가지}{23}{subsection.7.4}%
-\contentsline {subsection}{\numberline {7.5}지표}{23}{subsection.7.5}%
-\contentsline {section}{\numberline {8}ex3 결과}{24}{section.8}%
-\contentsline {subsection}{\numberline {8.1}경로 하나를 자세히 보기}{24}{subsection.8.1}%
-\contentsline {subsection}{\numberline {8.2}여러 경로의 통계}{24}{subsection.8.2}%
-\contentsline {subsection}{\numberline {8.3}섞는 방법 비교}{27}{subsection.8.3}%
-\contentsline {subsection}{\numberline {8.4}다른 종류 사이 섞기}{28}{subsection.8.4}%
-\contentsline {subsection}{\numberline {8.5}끝점 복원 확인}{28}{subsection.8.5}%
-\contentsline {subsection}{\numberline {8.6}튐의 상당 부분은 방향 전환이다}{28}{subsection.8.6}%
+\contentsline {section}{\numberline {7}실험 방법}{22}{section.7}%
+\contentsline {subsection}{\numberline {7.1}데이터}{22}{subsection.7.1}%
+\contentsline {subsection}{\numberline {7.2}놓인 방향}{22}{subsection.7.2}%
+\contentsline {subsection}{\numberline {7.3}비교한 모델}{22}{subsection.7.3}%
+\contentsline {subsection}{\numberline {7.4}섞기 경로 7가지}{22}{subsection.7.4}%
+\contentsline {subsection}{\numberline {7.5}지표}{25}{subsection.7.5}%
+\contentsline {section}{\numberline {8}ex3 결과}{25}{section.8}%
+\contentsline {subsection}{\numberline {8.1}경로 하나를 자세히 보기}{25}{subsection.8.1}%
+\contentsline {subsection}{\numberline {8.2}여러 경로의 통계}{26}{subsection.8.2}%
+\contentsline {subsection}{\numberline {8.3}섞는 방법 비교}{26}{subsection.8.3}%
+\contentsline {subsection}{\numberline {8.4}다른 종류 사이 섞기}{26}{subsection.8.4}%
+\contentsline {subsection}{\numberline {8.5}끝점 복원 확인}{26}{subsection.8.5}%
+\contentsline {subsection}{\numberline {8.6}튐의 상당 부분은 방향 전환이다}{30}{subsection.8.6}%
 \contentsline {subsection}{\numberline {8.7}조건부로 하면 나아지나}{30}{subsection.8.7}%
 \contentsline {paragraph}{(a) 조건을 고정하면 튐이 사라지지만, 그것은 형상이 거의 움직이지 않기 때문이다.}{30}{section*.48}%
-\contentsline {paragraph}{(b) 실제 형상 사이 섞기에는 도움이 된다.}{32}{section*.49}%
-\contentsline {paragraph}{(c) 조건만 옮기면 조건은 잘 따르지만 형상은 매끄럽지 않다.}{32}{section*.50}%
-\contentsline {paragraph}{강조 배율 2는 얻는 것과 잃는 것이 함께 있다.}{32}{section*.52}%
-\contentsline {paragraph}{조건이 형상을 결정한다는 말의 뜻.}{32}{section*.53}%
-\contentsline {paragraph}{캐슬은 조건으로 해결되지 않는다.}{32}{section*.54}%
-\contentsline {subsection}{\numberline {8.8}캐슬 너트와 1단계 점검용 오차}{32}{subsection.8.8}%
+\contentsline {paragraph}{(b) 실제 형상 사이 섞기에는 도움이 된다.}{31}{section*.49}%
+\contentsline {paragraph}{(c) 조건만 옮기면 조건은 잘 따르지만 형상은 매끄럽지 않다.}{31}{section*.50}%
+\contentsline {paragraph}{강조 배율 2는 얻는 것과 잃는 것이 함께 있다.}{33}{section*.52}%
+\contentsline {paragraph}{조건이 형상을 결정한다는 말의 뜻.}{33}{section*.53}%
+\contentsline {paragraph}{캐슬은 조건으로 해결되지 않는다.}{33}{section*.54}%
+\contentsline {subsection}{\numberline {8.8}캐슬 너트와 1단계 점검용 오차}{33}{subsection.8.8}%
 \contentsline {subsection}{\numberline {8.9}조건 없는 생성 결과}{33}{subsection.8.9}%
-\contentsline {section}{\numberline {9}DeepJEB}{33}{section.9}%
-\contentsline {subsection}{\numberline {9.1}왜 DeepJEB로 먼저 하나}{33}{subsection.9.1}%
-\contentsline {subsection}{\numberline {9.2}J0: 기존 Studio 실험은 붕괴했다}{33}{subsection.9.2}%
+\contentsline {section}{\numberline {9}DeepJEB}{34}{section.9}%
+\contentsline {subsection}{\numberline {9.1}왜 DeepJEB로 먼저 하나}{34}{subsection.9.1}%
+\contentsline {subsection}{\numberline {9.2}J0: 기존 Studio 실험은 붕괴했다}{34}{subsection.9.2}%
 \contentsline {subsection}{\numberline {9.3}J1--J3 1단계 결과}{34}{subsection.9.3}%
 \contentsline {paragraph}{무너짐 판정 기준.}{34}{section*.58}%
 \contentsline {paragraph}{J3: 무너지지 않음.}{34}{section*.59}%
 \contentsline {paragraph}{J1·J2: 무너지지 않음.}{34}{section*.60}%
-\contentsline {subsection}{\numberline {9.4}계획과 진행}{34}{subsection.9.4}%
-\contentsline {paragraph}{데이터 밀도.}{34}{section*.61}%
+\contentsline {subsection}{\numberline {9.4}계획과 진행}{35}{subsection.9.4}%
+\contentsline {paragraph}{데이터 밀도.}{35}{section*.61}%
 \contentsline {subsection}{\numberline {9.5}결과}{35}{subsection.9.5}%
-\contentsline {subsection}{\numberline {9.6}생성·섞기 평가 (J3, J1, J2, J0)}{35}{subsection.9.6}%
-\contentsline {paragraph}{읽는 법.}{35}{section*.63}%
-\contentsline {paragraph}{조건 따르기와 베끼기.}{35}{section*.66}%
-\contentsline {paragraph}{실제 형상 사이 섞기.}{37}{section*.67}%
-\contentsline {paragraph}{잡음 섞기는 J0가 더 높게 나온다.}{37}{section*.69}%
-\contentsline {paragraph}{대표점 512의 생성은 나빠졌다.}{37}{section*.70}%
-\contentsline {paragraph}{결론.}{37}{section*.71}%
+\contentsline {subsection}{\numberline {9.6}생성·섞기 평가 (J3, J1, J2, J0)}{36}{subsection.9.6}%
+\contentsline {paragraph}{읽는 법.}{36}{section*.63}%
+\contentsline {paragraph}{조건 따르기와 베끼기.}{36}{section*.66}%
+\contentsline {paragraph}{실제 형상 사이 섞기.}{36}{section*.67}%
+\contentsline {paragraph}{잡음 섞기는 J0가 더 높게 나온다.}{38}{section*.69}%
+\contentsline {paragraph}{대표점 512의 생성은 나빠졌다.}{38}{section*.70}%
+\contentsline {paragraph}{결론.}{39}{section*.71}%
 \contentsline {section}{\numberline {10}대표점 수 다시 보기: 32는 너무 작은가, 512는 안 되는가}{39}{section.10}%
 \contentsline {paragraph}{질문.}{39}{section*.72}%
 \contentsline {paragraph}{논문들과 무엇이 다른가.}{39}{section*.73}%
 \contentsline {paragraph}{가설과 처방.}{39}{section*.74}%
-\contentsline {paragraph}{흔들림.}{39}{section*.75}%
-\contentsline {paragraph}{새 지표: 학습 형상 쪽 쏠림.}{39}{section*.77}%
-\contentsline {subsection}{\numberline {10.1}DeepJEB 결과}{41}{subsection.10.1}%
-\contentsline {paragraph}{512는 2단계 처방으로 살아난다.}{41}{section*.80}%
+\contentsline {paragraph}{흔들림.}{40}{section*.75}%
+\contentsline {paragraph}{새 지표: 학습 형상 쪽 쏠림.}{40}{section*.77}%
+\contentsline {subsection}{\numberline {10.1}DeepJEB 결과}{40}{subsection.10.1}%
+\contentsline {paragraph}{512는 2단계 처방으로 살아난다.}{40}{section*.80}%
 \contentsline {paragraph}{32에는 같은 처방이 거의 듣지 않는다.}{42}{section*.81}%
 \contentsline {paragraph}{128은 복원 경로가 가장 좋고, 처방을 더하면 균형이 가장 좋다.}{42}{section*.82}%
 \contentsline {subsection}{\numberline {10.2}다른 데이터에서 확인}{42}{subsection.10.2}%
@@ -92,18 +92,25 @@
 \contentsline {subsection}{\numberline {10.3}결론: 대표점 수}{43}{subsection.10.3}%
 \contentsline {section}{\numberline {11}새 기본값: 대표점 128 + 2단계 처방}{43}{section.11}%
 \contentsline {paragraph}{무엇을 바꿨나.}{43}{section*.87}%
-\contentsline {paragraph}{확인 방법.}{44}{section*.88}%
+\contentsline {paragraph}{세 데이터만 다룬다.}{44}{section*.88}%
+\contentsline {paragraph}{확인 방법.}{44}{section*.89}%
 \contentsline {subsection}{\numberline {11.1}생성}{44}{subsection.11.1}%
-\contentsline {paragraph}{DeepJEB와 MCB는 처방 결과를 재현했다.}{44}{section*.91}%
-\contentsline {paragraph}{Thingi10k는 무너진 예전 기본값보다 훨씬 좋다.}{44}{section*.92}%
+\contentsline {paragraph}{DeepJEB와 MCB는 처방 결과를 재현했다.}{44}{section*.92}%
 \contentsline {paragraph}{DrivAerML의 쏠림은 남았다.}{44}{section*.93}%
 \contentsline {subsection}{\numberline {11.2}섞기}{45}{subsection.11.2}%
 \contentsline {paragraph}{잡음 두 개 사이 섞기가 가장 크게 좋아졌다.}{45}{section*.95}%
-\contentsline {paragraph}{실제 형상 사이 섞기는 같다.}{46}{section*.96}%
-\contentsline {paragraph}{코드 직선 섞기는 조금 낮다.}{46}{section*.97}%
+\contentsline {paragraph}{실제 형상 사이 섞기는 같다.}{45}{section*.96}%
+\contentsline {paragraph}{코드 직선 섞기는 조금 낮다.}{45}{section*.97}%
 \contentsline {subsection}{\numberline {11.3}프로그램의 보간 기능}{46}{subsection.11.3}%
-\contentsline {subsection}{\numberline {11.4}결론: 새 기본값}{46}{subsection.11.4}%
-\contentsline {section}{\numberline {12}권장 사항 (9월 28일 작성, 일부 적용)}{49}{section.12}%
-\contentsline {section}{\numberline {13}한계}{50}{section.13}%
-\contentsline {section}{\numberline {A}풀어 쓴 말과 흔히 쓰는 용어}{51}{appendix.A}%
-\contentsline {section}{\numberline {B}ex3 학습 config 원문}{51}{appendix.B}%
+\contentsline {subsection}{\numberline {11.4}다시 만든 MCB 데이터로 다시 학습}{46}{subsection.11.4}%
+\contentsline {paragraph}{데이터에서 바꾼 것.}{46}{section*.101}%
+\contentsline {paragraph}{확인 방법.}{46}{section*.102}%
+\contentsline {paragraph}{구멍 없는 너트가 사라졌다.}{46}{section*.104}%
+\contentsline {paragraph}{조건이 크기와 부피를 정한다.}{50}{section*.105}%
+\contentsline {paragraph}{한 조각 비율.}{50}{section*.106}%
+\contentsline {paragraph}{프로그램의 보간 기능.}{50}{section*.107}%
+\contentsline {subsection}{\numberline {11.5}결론: 새 기본값}{50}{subsection.11.5}%
+\contentsline {section}{\numberline {12}권장 사항 (9월 28일 작성, 일부 적용)}{51}{section.12}%
+\contentsline {section}{\numberline {13}한계}{52}{section.13}%
+\contentsline {section}{\numberline {A}풀어 쓴 말과 흔히 쓰는 용어}{53}{appendix.A}%
+\contentsline {section}{\numberline {B}ex3 학습 config 원문}{53}{appendix.B}%

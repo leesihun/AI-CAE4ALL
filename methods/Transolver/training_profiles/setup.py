@@ -263,13 +263,15 @@ def cleanup_dataloaders(*loaders) -> None:
     gc.collect()
 
 
-def init_log_file(config, config_filename: str):
+def init_log_file(config, config_filename: str, resumed_at=None):
     """Create the epoch log file (config embedded) and return its path, or None.
 
     Also records config['log_dir'], which the training profiler uses as the
     destination for its chrome trace. `log_file_dir` is a plain cwd-relative
     path: from a method repo under `methods/`, `../../output/<method>/<run>/`
-    reaches the suite-wide `output/` directory (section 8).
+    reaches the suite-wide `output/` directory (section 8). A resumed run
+    (`resumed_at` = its first epoch) appends a resume line to the existing
+    log instead of replacing it.
     """
     log_file_dir = config.get('log_file_dir')
     if not log_file_dir:
@@ -279,6 +281,12 @@ def init_log_file(config, config_filename: str):
     log_dir = os.path.dirname(log_file)
     os.makedirs(log_dir, exist_ok=True)
     config['log_dir'] = log_dir
+
+    if resumed_at is not None and os.path.exists(log_file):
+        from general_modules.resume_state import resume_log_line
+        with open(log_file, 'a') as f:
+            f.write(resume_log_line(resumed_at) + '\n')
+        return log_file
 
     with open(log_file, 'w') as f:
         f.write("Transolver training epoch log file\n")

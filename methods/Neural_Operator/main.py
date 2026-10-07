@@ -61,6 +61,11 @@ def main():
     print('\n' * 2)
     print(f"Current absolute path: {os.path.abspath('.')}")
 
+    # model_split on one GPU falls back to single_worker, which resumes.
+    if run_mode != 'inference' and use_distributed:
+        from general_modules.resume_state import reject_multi_process
+        reject_multi_process(config, f'{parallel_mode} training on {world_size} GPUs')
+
     if run_mode == 'inference':
         run_rollout(config, args.config)
     elif parallel_mode == 'model_split':

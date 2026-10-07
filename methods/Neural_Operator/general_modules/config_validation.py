@@ -31,6 +31,8 @@ COMMON_KEYS = {
     "val_interval", "test_interval", "test_max_batches", "test_batch_idx",
     "plot_feature_idx", "display_trainset", "display_testset", "write_test_predictions",
     "checkpoint_interval",
+    # Mid-training resume (general_modules/resume_state.py), single-GPU only.
+    "resume_training", "resume_interval_minutes",
     "train_query_chunk_size", "infer_query_chunk_size",
     "write_preprocessing",
     "use_world_edges", "use_multiscale",
@@ -236,6 +238,12 @@ def validate_common_config(config, source="configuration"):
             f"{source}: use_parallel_stats must be true or false, "
             f"got {config['use_parallel_stats']!r}."
         )
+    if "resume_training" in config and not isinstance(config["resume_training"], bool):
+        raise ValueError(
+            f"{source}: resume_training must be true or false, "
+            f"got {config['resume_training']!r}."
+        )
+    _require_positive_number(config, "resume_interval_minutes", source, allow_zero=True)
     if "train_eval_subset_size" in config:
         subset_size = config["train_eval_subset_size"]
         if not isinstance(subset_size, int) or isinstance(subset_size, bool) or subset_size <= 0:

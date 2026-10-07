@@ -553,14 +553,13 @@ SDFFlow uses a **different SDF-sidecar layout** entirely
 (`shapes/{index}/{surface_points, surface_normals, sdf_points, sdf_values,
 cond}` -- see [SDFFlow/CLAUDE.md](../../methods/SDFFlow/CLAUDE.md#data-and-condition-invariants)),
 built by `methods/SDFFlow/build_dataset.py --mesh_dir`, not by anything in
-`dataset/`. These three are staged raw sources for exercising SDFFlow's VAE
+`dataset/`. These are staged raw sources for exercising SDFFlow's VAE
 reconstruction/generation on non-bracket "general mechanical CAD" geometry,
 benchmarked against the existing `deepjeb.h5`:
 
 | Dataset | Raw size (staged) | Location | What it's for |
 | --- | --- | --- | --- |
 | [MCB](https://mcb.eecs.umich.edu/) (Mechanical Components Benchmark, part A) | 2.4 GB (`MCB_A.tar.gz`, not yet extracted) | `D:/CAE_datasets_raw/mcb/` | general geometric VAE benchmark; shape-classification labels (mechanical part category) available as a per-shape condition |
-| [Thingi10K](https://ten-thousand-models.appspot.com/) | 37 GB, 10,005 meshes | `D:/CAE_datasets_raw/thingi10k/` | general geometric VAE benchmark; wide, unconstrained mesh variety, sparse/inconsistent per-model metadata |
 | [DrivAerML](https://caemldatasets.org/drivaerml/) | 203 GB, 484 cases (STL+STEP+CFD CSVs) | `D:/CAE_datasets_raw/drivaerml/` | general geometric VAE benchmark with real continuous CFD force/moment + `geo_parameters_all.csv` labels available as conditions |
 
 `ShapeNet-Car` (Umetani & Bickel, listed below) was also attempted via
@@ -568,9 +567,15 @@ benchmarked against the existing `deepjeb.h5`:
 environment; abandoned, DrivAerML covers the same "cars" niche with a
 redistributable source and richer per-case labels.
 
+Thingi10K (37 GB, 10,005 meshes) was staged and trained as SDFFlow `ex4`, then
+removed on 2026-10-07: its shapes are unrelated objects, so a shape's nearest
+neighbour in the latent space is usually a different kind of object and the
+generator's in-between samples break into fragments. The raw data, the HDF5
+files and the runs are kept under `_set_aside_20261007/` next to where they were.
+
 **Do not reuse DeepJEB's `FEA_CONDITIONS` registry or `add_fea_conditions.py`
 CSV schema for these.** Each dataset's own labels are structurally different
-(MCB/Thingi10K have no FEA simulation at all; DrivAerML's labels are CFD, not
+(MCB has no FEA simulation at all; DrivAerML's labels are CFD, not
 structural), so each needs its own small `cond_extra` sidecar writer and, for
 MCB's categorical class label, a decision between a learned embedding and a
 split-only usage rather than a raw one-hot. The full per-dataset conditioning

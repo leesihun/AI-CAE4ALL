@@ -5,11 +5,13 @@ from .base import (
     MethodSpec,
     PathKind,
     PathRule,
+    RESUME_KEYS,
     SpecValidationContext,
     as_list,
     integer,
     validate_common_values,
     validate_positive_fields,
+    validate_resume,
 )
 
 
@@ -227,7 +229,7 @@ def build_meshgraphnets_spec() -> MethodSpec:
         repository="methods/MeshGraphNets",
         entrypoint="MeshGraphNets_main.py",
         valid_modes=("train", "inference"),
-        known_keys=MGN_KEYS | MGN_NATIVE_REMOVED_KEYS | MGN_VARIATIONAL_IGNORED_KEYS,
+        known_keys=MGN_KEYS | MGN_NATIVE_REMOVED_KEYS | MGN_VARIATIONAL_IGNORED_KEYS | RESUME_KEYS,
         required_by_mode={
             "train": frozenset({"dataset_dir", "modelpath", "input_var", "output_var", "edge_var", "latent_dim", "training_epochs", "batch_size", "learningr"}),
             "inference": frozenset({"modelpath", "infer_dataset", "input_var", "output_var", "edge_var"}),
@@ -243,7 +245,7 @@ def build_meshgraphnets_spec() -> MethodSpec:
             PathRule("infer_dataset", PathKind.INPUT_FILE, frozenset({"inference"})),
             PathRule("inference_output_dir", PathKind.OUTPUT_DIR, frozenset({"inference"})),
         ),
-        validators=(validate_meshgraphnets,),
+        validators=(validate_meshgraphnets, validate_resume),
         import_modules=("torch", "h5py", "torch_geometric"),
         dataset_kind="mesh_hdf5",
     )

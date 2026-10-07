@@ -1,10 +1,10 @@
 # Fdb version 4
-["xdvipdfmx"] 1790416676.70273 "sdfflow.xdv" "sdfflow.pdf" "sdfflow" 1790416685.07891 0
-  "sdfflow.xdv" 1790416676.35663 1232980 11aeb009f6760bc86eff3f5666b31e03 "xelatex"
+["xdvipdfmx"] 1791339030.46516 "sdfflow.xdv" "sdfflow.pdf" "sdfflow" 1791339044.41647 0
+  "sdfflow.xdv" 1791339030.0076 1523964 6c8797ebb7d882e73ee21892d08fd8f8 "xelatex"
   (generated)
   "sdfflow.pdf"
   (rewritten before read)
-["xelatex"] 1790416669.67251 "sdfflow.tex" "sdfflow.xdv" "sdfflow" 1790416685.05088 0
+["xelatex"] 1791339020.80093 "sdfflow.tex" "sdfflow.xdv" "sdfflow" 1791339044.38269 0
   "C:/Users/Lee/AppData/Local/MiKTeX/miktex/data/le/xetex/xelatex.fmt" 1789718775.63083 27175906 b45f230e68f1dd87e72e67b8a3165dde ""
   "C:/Users/Lee/AppData/Local/Programs/MiKTeX/fonts/tfm/adobe/zapfding/pzdr.tfm" 1136739854 1528 f853c4d1b4e0550255e02831fdc8496f ""
   "C:/Users/Lee/AppData/Local/Programs/MiKTeX/fonts/tfm/public/amsfonts/cmextra/cmex7.tfm" 1233951848 1004 54797486969f23fa377b128694d548df ""
@@ -185,6 +185,10 @@
   "figures/fig_csweep.png" 1790343649.69154 1012854 0188556afde19296b8c7dfa450979a16 ""
   "figures/fig_data_ex3.png" 1790343396.7349 386547 f7aa356da01c061d4d12ca8df9555b97 ""
   "figures/fig_data_jeb.png" 1790343314.53931 257236 9aaa472b95912b4cf33543a03d116c55 ""
+  "figures/fig_default_interp_d1.png" 1791338135.32279 862721 04f558b3b9011086a5429711fda7196f ""
+  "figures/fig_default_interp_inv.png" 1791338122.97636 904452 495f40ad75f608080c717539597f0624 ""
+  "figures/fig_default_native.png" 1791338109.153 234843 b0a2d4f79ad9d1b5708bf489cc95d409 ""
+  "figures/fig_default_setup.png" 1791338108.94733 124590 0fa1083dcbbdc33928f0dcfc14faf7a2 ""
   "figures/fig_endpoints.png" 1790343591.94736 732248 16dc17afcec575c6d056ad1541ffeb6f ""
   "figures/fig_epochs.png" 1790416264.79105 258794 428492246cdd8d071a2833652abd227e ""
   "figures/fig_interp_kl.png" 1790343701.74093 514344 7507d14718e764baed470a774b063e9e ""
@@ -193,15 +197,19 @@
   "figures/fig_jeb_eval_setup.png" 1790416195.03603 123803 87bf379132bce1e1024ac78612f36ef8 ""
   "figures/fig_jeb_interp_strip.png" 1790416196.62075 327421 299fcfb5896d6c261b97c27d28b78f2e ""
   "figures/fig_kl_budget.png" 1790342551.44188 127807 7eed9c7e540ca8acd0afbe1d1c88a71a ""
+  "figures/fig_mcb_rebuild.png" 1791338157.46657 116516 bf112acdfaf5f3f34f117f17f1e886de ""
+  "figures/fig_mcb_rebuild_interp.png" 1791338421.57734 175192 3db403488b3bf51ed3c59f745989181e ""
   "figures/fig_orient.png" 1790342551.66977 98289 59b6660e42f975591e18d65e2f70f728 ""
   "figures/fig_schedule.png" 1790342551.05341 126347 cc7820e7e0464bec36ebf85e3e87cd94 ""
   "figures/fig_sdf2d.png" 1790342550.89009 466201 aeec44569e9e4e85e4fb0e973f21dfe5 ""
+  "figures/fig_tsize_results.png" 1790531227.59624 137671 31649db081eaa89504f15c8fff70b25e ""
+  "figures/fig_tsize_setup.png" 1790531227.58923 273589 b9083aa41f10aafea308139177a48a64 ""
   "figures/fig_vae_points.png" 1790377633.51632 292257 49393c8867c60ff4445db0854d5459a9 ""
   "figures/fig_vae_shapes.png" 1790377633.29063 207915 505f6d66c3542e548f84db2b65d8415c ""
-  "sdfflow.aux" 1790416676.34484 49046 617756e4dae108e185dc4ce550b89b98 "xelatex"
-  "sdfflow.out" 1790416676.35362 7839 74071f52d24cdda399335820ffd1d557 "xelatex"
-  "sdfflow.tex" 1790416652.32289 131013 f424755012241bd5377338dfcfb4f509 ""
-  "sdfflow.toc" 1790416676.35663 7164 41d6778439a830be71bee6df894bddbe "xelatex"
+  "sdfflow.aux" 1791339029.9816 68780 36fbae678515c54f2c2aad7391d4abb8 "xelatex"
+  "sdfflow.out" 1791339029.9976 9426 3a45962c7967e118c934205932b63044 "xelatex"
+  "sdfflow.tex" 1791339003.96073 173575 89306990a78c98ae4895437e7d98c621 ""
+  "sdfflow.toc" 1791339030.0076 10028 9509fd2a36f1865acaf98e29ac2ef2e9 "xelatex"
   (generated)
   "sdfflow.aux"
   "sdfflow.log"

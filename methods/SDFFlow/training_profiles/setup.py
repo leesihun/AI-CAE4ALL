@@ -81,13 +81,20 @@ def log_model_summary(model, config, ema_model=None):
     print(f'Trainable parameters: {trainable:,}')
 
 
-def init_log_file(config, config_filename):
+def init_log_file(config, config_filename, resumed_at=None):
+    """Append a run header to the epoch log and return its path, or None. A
+    resumed run (`resumed_at` = its first epoch) appends a resume line instead."""
     log_file = config.get('log_file_dir')
     if not log_file:
         return None
     log_dir = os.path.dirname(log_file)
     if log_dir:
         os.makedirs(log_dir, exist_ok=True)
+    if resumed_at is not None and os.path.exists(log_file):
+        from general_modules.resume_state import resume_log_line
+        with open(log_file, 'a') as f:
+            f.write(resume_log_line(resumed_at) + '\n')
+        return log_file
     with open(log_file, 'a') as f:
         f.write(f"\n==== Run {time.strftime('%Y-%m-%d %H:%M:%S')} config={config_filename} ====\n")
     return log_file

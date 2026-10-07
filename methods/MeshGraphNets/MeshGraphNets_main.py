@@ -62,6 +62,10 @@ def main():
     print('\n' * 2)
     print(f"Current absolute path: {os.path.abspath('.')}")
 
+    if run_mode != 'inference' and (use_distributed or parallel_mode == 'model_split'):
+        from general_modules.resume_state import reject_multi_process
+        reject_multi_process(config, f'{parallel_mode} training on {world_size} GPU(s)')
+
     if run_mode == 'inference':
         run_rollout(config, args.config)
     elif parallel_mode == 'model_split':

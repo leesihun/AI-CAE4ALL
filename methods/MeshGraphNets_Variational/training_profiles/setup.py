@@ -410,7 +410,7 @@ def dump_memory_snapshot(epoch: int, enabled: bool, config=None) -> None:
         print(f"[mem] snapshot failed: {exc}")
 
 
-def init_log_file(config, config_filename: str):
+def init_log_file(config, config_filename: str, resumed_at=None):
     """Create the epoch log file (with the config embedded) and return its path, or None.
 
     Also records `config['log_dir']` -- the directory the log lives in, which is
@@ -421,6 +421,9 @@ def init_log_file(config, config_filename: str):
     `log_file_dir` is a plain cwd-relative path like every other path key: from
     a method repo under `methods/`, `../../output/<method>/<run>/train.log`
     reaches the suite-wide `output/` directory.
+
+    A resumed run (`resumed_at` = its first epoch) appends a resume line to the
+    existing log instead of replacing it.
     """
     log_file_dir = config.get('log_file_dir')
     if not log_file_dir:
@@ -429,6 +432,12 @@ def init_log_file(config, config_filename: str):
     log_file = os.path.normpath(log_file_dir)
     config['log_dir'] = os.path.dirname(log_file)
     os.makedirs(os.path.dirname(log_file), exist_ok=True)
+
+    if resumed_at is not None and os.path.exists(log_file):
+        from general_modules.resume_state import resume_log_line
+        with open(log_file, 'a', encoding='utf-8') as f:
+            f.write(resume_log_line(resumed_at) + '\n')
+        return log_file
 
     # Explicit utf-8 both ways: load_config() already reads the config as utf-8,
     # and a config carrying non-ASCII comments would otherwise raise

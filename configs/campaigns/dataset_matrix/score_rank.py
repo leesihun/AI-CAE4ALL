@@ -147,6 +147,9 @@ RISING = 0.05
 FLAG_ORDER = 'FRINXO?'
 # One line per epoch in every trainer's log, optionally tagged ([AE], [Prior]).
 EPOCH_LINE = re.compile(r'^(?:\[(?P<tag>[^\]]+)\] )?Elapsed:? [0-9.]+s Epoch (?P<epoch>\d+) (?P<rest>.*)$')
+# A training continued from its resume state (resume_state.py in each method)
+# appends this to the same log before redoing the epochs after that state.
+RESUME_LINE = re.compile(r'^==== Resume(?: \[(?P<tag>[^\]]+)\])? at epoch \d+')
 NUMBER = r'(nan|-?inf|[-+]?[0-9.]+(?:[eE][-+]?[0-9]+)?)'
 # The first loss of each kind on the line: TrainOpt (MeshGraphNets, operators,
 # Transolver), Train / Train recon= / Train fm= (MGN-V, HI_MGNFlow), Recon and
@@ -597,7 +600,11 @@ def training_stages(root: Path, pair: dict) -> list[dict]:
 def read_log(path: Path) -> dict:
     """{tag: [(epoch, train loss, val loss), ...]} for the last run in a log.
     A `==== Run` header (the logs SimulGenVAE and SDFFlow append to) or an
-    epoch that does not increase starts a new run; a missing number is None."""
+    epoch that does not increase starts a new run; a missing number is None.
+    After a `==== Resume` line the run goes on: the first epoch logged after
+    it drops that tag's entries from its own number on (logged after the
+    state was saved, they are redone), so a training that was cut off and
+    continued reads as the one run it is."""
     def number(regex, text):
         m = regex.search(text)
         if not m:
@@ -607,18 +614,25 @@ def read_log(path: Path) -> dict:
         except ValueError:
             return None
 
-    runs = {}
+    runs, resumed = {}, set()
     with open(path, encoding='utf-8', errors='replace') as fh:
         for line in fh:
             if line.startswith('==== Run'):
-                runs = {}
+                runs, resumed = {}, set()
+                continue
+            m = RESUME_LINE.match(line)
+            if m:
+                resumed.add(m.group('tag'))
                 continue
             m = EPOCH_LINE.match(line.rstrip('\r\n'))
             if not m:
                 continue
-            epoch, rest = int(m.group('epoch')), m.group('rest')
-            run = runs.setdefault(m.group('tag'), [])
-            if run and epoch <= run[-1][0]:
+            epoch, rest, tag = int(m.group('epoch')), m.group('rest'), m.group('tag')
+            run = runs.setdefault(tag, [])
+            if tag in resumed:
+                resumed.discard(tag)
+                run[:] = [e for e in run if e[0] < epoch]
+            elif run and epoch <= run[-1][0]:
                 run.clear()
             run.append((epoch, number(TRAIN_FIELD, rest), number(VAL_FIELD, rest)))
     return runs

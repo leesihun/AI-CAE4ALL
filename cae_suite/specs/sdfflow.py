@@ -6,6 +6,7 @@ from .base import (
     MethodSpec,
     PathKind,
     PathRule,
+    RESUME_KEYS,
     SpecValidationContext,
     as_list,
     integer,
@@ -13,6 +14,7 @@ from .base import (
     validate_common_values,
     validate_nonnegative_int_fields,
     validate_positive_fields,
+    validate_resume,
 )
 
 
@@ -1091,7 +1093,7 @@ def build_sdfflow_spec() -> MethodSpec:
         repository="methods/SDFFlow",
         entrypoint="SDFFlow_main.py",
         valid_modes=("train", "train_vae", "train_fm", "sample", "reconstruct", "interpolate", "optimize", "evaluate"),
-        known_keys=SDFFLOW_KEYS,
+        known_keys=SDFFLOW_KEYS | RESUME_KEYS,
         required_by_mode={
             "train": frozenset({
                 "dataset_dir", "output_dir", "vae_modelpath", "fm_modelpath",
@@ -1237,7 +1239,7 @@ def build_sdfflow_spec() -> MethodSpec:
                      frozenset({"optimize", "sample", "evaluate"})),
             PathRule("output_dir", PathKind.OUTPUT_DIR),
         ),
-        validators=(validate_sdfflow,),
+        validators=(validate_sdfflow, validate_resume),
         import_modules=("torch", "h5py", "numpy", "trimesh", "skimage"),
         dataset_kind="sdf_hdf5",
     )

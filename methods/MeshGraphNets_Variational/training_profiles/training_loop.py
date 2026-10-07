@@ -431,7 +431,8 @@ def _bare(model):
 
 
 @torch.no_grad()
-def freeze_for_prior_fit(model, ema_model, dataloader, device, config, remaining_epochs):
+def freeze_for_prior_fit(model, ema_model, dataloader, device, config, remaining_epochs,
+                         fit_standardization=True):
     """Switch a joint run into its prior-only tail. Returns (optimizer, scheduler).
 
     Three things happen, and they are one intervention:
@@ -458,6 +459,9 @@ def freeze_for_prior_fit(model, ema_model, dataloader, device, config, remaining
     fitted standardization is copied into it explicitly -- rollout loads EMA
     weights, and a prior trained on whitened targets sampled through identity
     buffers would be wrong in a way nothing would flag.
+
+    `fit_standardization=False` (a resumed tail) only re-applies the freeze and
+    rebuilds the optimizer; the fitted buffers come back with the weights.
     """
     from training_profiles.setup import build_optimizer_scheduler
 
@@ -473,42 +477,45 @@ def freeze_for_prior_fit(model, ema_model, dataloader, device, config, remaining
         p.requires_grad_(True)
         n_prior += p.numel()
 
-    # posterior over the training set, exactly as _encode_vae computes it
-    was_training = bare.training
-    bare.eval()
-    mus, lvs = [], []
-    for g in dataloader:
-        g = _move_graph_to_device(g, device, config)
-        batch = g.batch if getattr(g, 'batch', None) is not None else \
-            torch.zeros(g.x.shape[0], dtype=torch.long, device=device)
-        _, mu, lv = inner.vae_encoder(
-            g.y, g.edge_index, g.edge_attr, batch,
-            x=(g.x if inner.vae_graph_aware else None),
-        )
-        mus.append(mu.float())
-        lvs.append(lv.float())
-    if was_training:
-        bare.train()
-    if getattr(prior, 'use_conditional_moments', False):
-        # The conditional moment head already supplies a graph-dependent
-        # coordinate system. Changing a second, global affine transform at the
-        # phase boundary would invalidate the moment head learned during joint
-        # training and confound the P2 treatment with a coordinate reset.
-        prior.z_shift.zero_()
-        prior.z_scale.fill_(1.0)
-        shift = prior.z_shift.detach().cpu()
-        scale = prior.z_scale.detach().cpu()
-        standardization_note = 'conditional moment base active; global transform kept identity'
+    if not fit_standardization:
+        standardization_note = 'restored with the resumed weights'
     else:
-        shift, scale = prior.fit_standardization(torch.cat(mus), torch.cat(lvs))
-        standardization_note = (
-            f'global |shift| rms {float(shift.norm() / shift.numel() ** 0.5):.4f}, '
-            f'scale min {float(scale.min()):.4f} max {float(scale.max()):.4f}'
-        )
-    if ema_model is not None:
-        ema_prior = _bare(ema_model.module).prior
-        ema_prior.z_shift.copy_(prior.z_shift)
-        ema_prior.z_scale.copy_(prior.z_scale)
+        # posterior over the training set, exactly as _encode_vae computes it
+        was_training = bare.training
+        bare.eval()
+        mus, lvs = [], []
+        for g in dataloader:
+            g = _move_graph_to_device(g, device, config)
+            batch = g.batch if getattr(g, 'batch', None) is not None else \
+                torch.zeros(g.x.shape[0], dtype=torch.long, device=device)
+            _, mu, lv = inner.vae_encoder(
+                g.y, g.edge_index, g.edge_attr, batch,
+                x=(g.x if inner.vae_graph_aware else None),
+            )
+            mus.append(mu.float())
+            lvs.append(lv.float())
+        if was_training:
+            bare.train()
+        if getattr(prior, 'use_conditional_moments', False):
+            # The conditional moment head already supplies a graph-dependent
+            # coordinate system. Changing a second, global affine transform at the
+            # phase boundary would invalidate the moment head learned during joint
+            # training and confound the P2 treatment with a coordinate reset.
+            prior.z_shift.zero_()
+            prior.z_scale.fill_(1.0)
+            shift = prior.z_shift.detach().cpu()
+            scale = prior.z_scale.detach().cpu()
+            standardization_note = 'conditional moment base active; global transform kept identity'
+        else:
+            shift, scale = prior.fit_standardization(torch.cat(mus), torch.cat(lvs))
+            standardization_note = (
+                f'global |shift| rms {float(shift.norm() / shift.numel() ** 0.5):.4f}, '
+                f'scale min {float(scale.min()):.4f} max {float(scale.max()):.4f}'
+            )
+        if ema_model is not None:
+            ema_prior = _bare(ema_model.module).prior
+            ema_prior.z_shift.copy_(prior.z_shift)
+            ema_prior.z_scale.copy_(prior.z_scale)
 
     optimizer, scheduler, _, _ = build_optimizer_scheduler(
         config, prior.parameters(), max(int(remaining_epochs), 1))

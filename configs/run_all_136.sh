@@ -13,7 +13,9 @@
 #   output/dataset_matrix/_campaign/136/ranking.txt    per-example ranking (+ ranking.csv), and
 #       how far each arm's validation loss still fell at 80% of its epochs (+ convergence.csv)
 #   output/dataset_matrix/_campaign/136/spread_scores.csv  probabilistic calibration
-# Running it again after everything is done only re-scores and re-ranks.
+# Running it again after a stop or a crash skips the finished stages and continues a
+# training cut off midway from its last <checkpoint>.resume (written every 15 minutes)
+# to its last epoch; after everything is done it only re-scores and re-ranks.
 #
 # The launcher needs Python >= 3.10. Point each method at its venv in
 # ai_cae4all.local.toml, or run from one venv that has everything; PYTHON=...

@@ -27,6 +27,7 @@ from general_modules import distributed as D
 from general_modules.sdf_dataset import build_dataset_splits
 from general_modules.mesh_extraction import decode_sdf_grid, sdf_grid_to_mesh, mesh_report
 from general_modules.mesh_render import ENDPOINT_COLOR, MIDDLE_COLOR, plot_mesh_strip
+from general_modules.resume_state import TrainingResume
 from model.sdf_vae import SDFVAE
 from model.velocity_net import VelocityNet, flow_matching_loss, sample_latents
 from training_profiles.setup import (
@@ -278,14 +279,34 @@ def fm_worker(config, config_filename='config.txt'):
     best_modelpath = config.get('fm_best_modelpath')
     best_valid_loss = float('inf')
     params = [p for p in train_model.parameters() if p.requires_grad]
+    valid_loss = float('nan')
 
-    log_file = init_log_file(config, config_filename) if rank0 else None
+    # Opt-in mid-training resume (`resume_training`, single process only). The
+    # latent cache and its statistics are re-encoded deterministically above;
+    # a state written before the VAE checkpoint was rewritten goes stale.
+    start_epoch, elapsed_before = 0, 0.0
+    resume = TrainingResume(config, modelpath, upstream=[vae_path])
+    resumed = resume.load()
+    if resumed is not None:
+        model.load_state_dict(resumed['model'])
+        if ema_model is not None:
+            ema_model.load_state_dict(resumed['ema'])
+        optimizer.load_state_dict(resumed['optimizer'])
+        scheduler.load_state_dict(resumed['scheduler'])
+        if scaler.is_enabled():
+            scaler.load_state_dict(resumed['scaler'])
+        if train_loader.generator is not None:
+            train_loader.generator.set_state(resumed['loader_generator'])
+        best_valid_loss, valid_loss = resumed['best_valid_loss'], resumed['valid_loss']
+        start_epoch, elapsed_before = resumed['epoch'] + 1, resumed['elapsed']
+        del resumed
+
+    log_file = init_log_file(config, config_filename, resumed_at=start_epoch or None) if rank0 else None
     if rank0:
         print('\n' + '=' * 60)
         print('Starting flow-matching training loop...')
         print('=' * 60 + '\n')
-    start_time = time.time()
-    valid_loss = float('nan')
+    start_time = time.time() - elapsed_before
 
     def checkpoint_payload(epoch):
         return {
@@ -328,7 +349,8 @@ def fm_worker(config, config_filename='config.txt'):
             save_checkpoint(modelpath, payload)
 
     try:
-        for epoch in range(total_epochs):
+        resume.restore_rng()
+        for epoch in range(start_epoch, total_epochs):
             if train_sampler is not None:
                 train_sampler.set_epoch(epoch)
             train_model.train()
@@ -401,14 +423,29 @@ def fm_worker(config, config_filename='config.txt'):
                 maybe_save(epoch)
                 D.barrier()
 
+            if resume.due(epoch, total_epochs):
+                resume.save({
+                    'epoch': epoch, 'model': model.state_dict(),
+                    'ema': ema_model.state_dict() if ema_model is not None else None,
+                    'optimizer': optimizer.state_dict(), 'scheduler': scheduler.state_dict(),
+                    'scaler': scaler.state_dict(),
+                    'loader_generator': (train_loader.generator.get_state()
+                                         if train_loader.generator is not None else None),
+                    'best_valid_loss': best_valid_loss, 'valid_loss': valid_loss,
+                    'elapsed': time.time() - start_time,
+                })
+
         maybe_save(total_epochs - 1)
+        resume.finish()
         if rank0:
             print(f'\nTraining finished. FM saved to {modelpath} (val FM loss {valid_loss:.2e})')
             if best_modelpath:
                 print(f'Best-validation FM (val FM loss {best_valid_loss:.2e}) at {best_modelpath}')
     except KeyboardInterrupt:
         if rank0:
-            print('\nTraining interrupted by user. Saving checkpoint...')
+            print('\nTraining interrupted by user. Saving checkpoint...'
+                  + (f' Resume state: {resume.path}'
+                     if resume.enabled and os.path.exists(resume.path) else ''))
         maybe_save(-1)
 
 

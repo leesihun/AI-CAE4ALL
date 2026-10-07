@@ -21,8 +21,9 @@ def decode_sdf_grid(vae, z_flat, resolution=128, bound=1.0, chunk=65536, device=
 # A Marching Cubes body smaller than this share of the surface's faces is a
 # floater (a stray SDF sign flip) and is dropped; anything larger is real
 # geometry and is kept. Keeping only the single largest body instead cut real
-# parts off multi-part shapes: on the Thingi10K held-out set it raised the
-# reconstruction Chamfer p90 from 0.011 to 0.063.
+# parts off multi-part shapes: on a multi-part held-out set (Thingi10K, since
+# removed from the suite) it raised the reconstruction Chamfer p90 from 0.011
+# to 0.063.
 MIN_BODY_FRACTION = 0.005
 
 

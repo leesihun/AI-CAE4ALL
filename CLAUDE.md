@@ -217,6 +217,38 @@ method-local `outputs/`.
 `init_log_file` records `config['log_dir']`, and the periodic train/test
 prediction dumps write under it, so every artifact of one run lands together.
 
+### Mid-training resume (`resume_training`)
+
+Every training repo except MLP carries `general_modules/resume_state.py`,
+**copied byte-for-byte** into seven repos (they share no imports), so an edit to
+one copy goes to all seven. With `resume_training true` the trainer:
+
+- keeps `<checkpoint>.resume` (everything the next epoch reads, RNG included) at
+  the first epoch boundary after every `resume_interval_minutes` (15);
+- on start, continues from a state written under the same config fingerprint
+  (`gpu_ids`, `log_dir`, the resume keys and `_`-keys excluded) and refuses any
+  other;
+- removes the state once the final checkpoint is written, so a cut-off run
+  never looks finished.
+
+A resumed run appends `==== Resume [TAG] at epoch K` to its epoch log instead of
+a new header, and `configs/campaigns/dataset_matrix/score_rank.py` reads it as
+one run. Multi-process entry points reject the key. With the key off (the
+default) training is unchanged. The dataset_matrix runner appends both keys to
+every training's launch copy; the checked-in configs do not carry them.
+**Adding mutable training state** to a trainer (a tracker, a stateful
+schedule) means adding it to that trainer's `resume.save({...})` dict too, or
+resumed runs silently diverge from uninterrupted ones. Likewise, a
+**persistent-worker DataLoader** draws its worker base seed (from the global RNG,
+or from its own `generator=`) only when its iterator is first built, so a
+resuming trainer calls `iter(loader)` on each one *before* `resume.restore_rng()`
+and before restoring any loader generator; otherwise that draw consumes the
+restored stream and every later shuffle shifts. RNG used *inside* workers is not
+restored, so two cases resume statistically equivalent, not bit-identical:
+SDFFlow's VAE surface subsampling with `vae_num_workers > 0`, and the MGN-V /
+HI_MGNFlow `_pick_hierarchy_variant` draw with `num_workers > 0` and
+`hierarchy_variants > 1`.
+
 ### Periodic visualization (every method that trains)
 
 `test_interval` gates a periodic pass that writes a picture into the **log

@@ -238,7 +238,8 @@ def _read_parent_keys(h5_path, num_shapes):
     """One parent key per shape index.
 
     A per-shape 'group' attr (``build_dataset.py --split_groups``, e.g. the
-    Thingi10K Thing ID) wins; otherwise the key comes from the 'source' attr.
+    ID of the design several meshes were exported from) wins; otherwise the
+    key comes from the 'source' attr.
     """
     keys = []
     with h5py.File(h5_path, 'r') as h5:

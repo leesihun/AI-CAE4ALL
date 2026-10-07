@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from ..diagnostics import Severity
-from .base import MethodSpec, PathKind, PathRule, SpecValidationContext, integer, numeric, validate_positive_fields
+from .base import MethodSpec, PathKind, PathRule, RESUME_KEYS, SpecValidationContext, integer, numeric, validate_positive_fields, validate_resume
 from .meshgraphnets import validate_meshgraphnets
 
 
@@ -376,7 +376,7 @@ def build_variational_spec() -> MethodSpec:
         repository="methods/MeshGraphNets_Variational",
         entrypoint="MeshGraphNets_main.py",
         valid_modes=("train", "inference"),
-        known_keys=VAR_KEYS | VAR_REMOVED_KEYS,
+        known_keys=VAR_KEYS | VAR_REMOVED_KEYS | RESUME_KEYS,
         required_by_mode={
             "train": frozenset({"dataset_dir", "modelpath", "input_var", "output_var", "edge_var", "latent_dim", "training_epochs", "batch_size", "learningr"}),
             "inference": frozenset({"modelpath", "infer_dataset", "input_var", "output_var", "edge_var"}),
@@ -396,7 +396,7 @@ def build_variational_spec() -> MethodSpec:
             PathRule("eval_dataset", PathKind.INPUT_FILE, frozenset({"inference"})),
             PathRule("inference_output_dir", PathKind.OUTPUT_DIR, frozenset({"inference"})),
         ),
-        validators=(validate_variational,),
+        validators=(validate_variational, validate_resume),
         import_modules=("torch", "h5py", "torch_geometric"),
         dataset_kind="mesh_hdf5",
     )

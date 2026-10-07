@@ -14,11 +14,11 @@ generate.py):
 
     lane 0  deeponet + fno        lane 4  meshgraphnets
     lane 1  point_deeponet        lane 5  himgn
-    lane 2  (no generated arms)   lane 6  himgn_v + lsh_vae
+    lane 2  (no arms)             lane 6  himgn_v + lsh_vae
     lane 3  transolver3           lane 7  chi_mgnflow + sdfflow
 
-The hand-maintained SDFFlow geometry ex2/ex3/ex4 configs (generated: false in
-manifest.json) carry their own gpu_ids 0/1/2 and run on those lanes.
+The hand-maintained SDFFlow geometry ex2/ex3 configs (generated: false in
+manifest.json) carry their own gpu_ids 0/1 and run on those lanes.
 
 Behaviour
   - Start gate: checks at once, then every GATE_INTERVAL seconds (3600), and
@@ -31,10 +31,12 @@ Behaviour
     nothing left to take stays until every running arm has finished, because
     an arm whose card is lost comes back to the queue.
   - Every stage runs on exactly one card. The worker writes a launch copy of
-    the config -- its bytes unchanged except gpu_ids set to 0, under a header
-    naming the source and its sha256 -- and starts the launcher on that copy
-    with CUDA_VISIBLE_DEVICES=<the card's UUID>. The checked-in configs are
-    never modified, and a taken-over arm runs unchanged on any card.
+    the config -- its bytes unchanged except gpu_ids set to 0 and, for a
+    training, resume_training True / resume_interval_minutes 15 appended
+    unless the config sets them, under a header naming the source and its
+    sha256 -- and starts the launcher on that copy with
+    CUDA_VISIBLE_DEVICES=<the card's UUID>. The checked-in configs are never
+    modified, and a taken-over arm runs unchanged on any card.
   - A failed training skips that arm's inference. A failed stage is that
     arm's own problem: it is reported and the worker moves on to the next arm.
   - Strikes: a worker whose card fails STRIKE_LIMIT (3) stages in a row --
@@ -53,17 +55,25 @@ Behaviour
     (an edited comment counts), and an inference only if it also started
     after the arm's current training finished. Any other marker -- stale,
     unreadable, or the old bash runner's empty file -- runs the stage again.
+    Only a run that reaches the end writes a marker. A training cut off
+    midway (a stop, a lost card, a dead machine) leaves <checkpoint>.resume,
+    written at most every 15 minutes at an epoch boundary; the next run of
+    the same config continues from it to the last epoch, losing at most the
+    epochs since that state. Each training records its config's sha256 in
+    _campaign/<machine>/started/<arm>__train before it starts.
   - Set aside: before a stage runs, what an earlier run left for it moves to
     _campaign/<machine>/set_aside/<run id>/<arm>__before_<stage>/ -- its
     stale marker and the arm's prediction directory, and before a training
-    also the inference's marker. SimulGenVAE's vae.pth/lc.pth move too unless
-    _campaign/<machine>/started/<arm>__train says this very config started
-    them: skip_completed_stages checks only its own compatibility keys and
-    would carry an older config's checkpoint into this run. Nothing is
-    deleted. Only paths inside output/ that hold no checkpoint, dataset or
-    log a config names are moved; a stage that cannot be cleared fails
-    without a strike. SDFFlow geometry keeps its own stage bookkeeping, so
-    only its markers move.
+    also the inference's marker. Unless the start record says this very
+    config started the training that left them, its resume states move too
+    (.resume, .resume.tmp, .resume.stale beside any path the config names),
+    so a cut-off run of an edited config is never continued, and so do
+    SimulGenVAE's vae.pth/lc.pth: skip_completed_stages checks only its own
+    compatibility keys and would carry an older config's checkpoint into
+    this run. Nothing is deleted. Only paths inside output/ that hold no
+    checkpoint, dataset or log a config names are moved; a stage that cannot
+    be cleared fails without a strike. SDFFlow geometry keeps its own stage
+    bookkeeping, so only its markers and resume states move.
   - Stop: Ctrl-C or SIGTERM (and SIGHUP, unless started under nohup) sends
     SIGTERM to every running stage and SIGKILL after KILL_GRACE seconds (at
     once on a second signal); nothing is recorded for those stages. SIGINT is
@@ -125,13 +135,12 @@ LAUNCHER_PYTHON = (3, 10)  # pyproject.toml: requires-python >= 3.10
 # nodes x 50 steps, ex3_full, ex4 at 599 steps, ex6 at 400, ex7 at 1000
 # samples) are split across the two boxes rather than stacked on one. Of the
 # SDFFlow geometry runs, 136 has DeepJEB (ex1) and MCB (ex3) and 135 has
-# DrivAerML (ex2) and Thingi10k (ex4, the largest), which is lane 2's only
-# home arm.
+# DrivAerML (ex2).
 MACHINES = {
     "135": (
         "deterministic/ex1", "deterministic/ex2", "deterministic/ex3_full",
         "deterministic/ex5", "deterministic/ex8",
-        "probabilistic/ex1", "geometry_generation/ex2", "geometry_generation/ex4",
+        "probabilistic/ex1", "geometry_generation/ex2",
     ),
     "136": (
         "deterministic/ex3_mid", "deterministic/ex4", "deterministic/ex6",
@@ -170,6 +179,14 @@ NOT_STARTED = b"No model process was started"
 # this and return normally, so an interrupted run can exit 0. It is never a
 # finished one.
 INTERRUPT_MARK = b"interrupted by user"
+# Appended to every training's launch copy unless its config sets the key: the
+# trainer keeps <checkpoint>.resume (general_modules/resume_state.py in each
+# method) at the first epoch boundary every 15 minutes, and a training cut off
+# by a stop, a lost card or a dead machine continues from it on the next run.
+RESUME_LINES = (("resume_training", "True"), ("resume_interval_minutes", "15"))
+# Beside a checkpoint: the state, a write cut off mid-way, and a state the
+# trainer set aside because the stage it was trained on top of was retrained.
+RESUME_SUFFIXES = (".resume", ".resume.tmp", ".resume.stale")
 TRUTHY = {"1", "true", "yes", "on"}
 # NVML states nvidia-smi prints in place of a value for a card that is still
 # enumerated but dead.
@@ -282,8 +299,9 @@ def parse_lane(data: bytes):
                       "at the start of the line, one digit, no trailing comment")
     return int(match.group(2)), None
 
-def launch_bytes(source_rel: str, data: bytes, lane: int, gpu) -> bytes:
-    """The config's own bytes with gpu_ids set to 0, under a provenance header."""
+def launch_bytes(source_rel: str, data: bytes, lane: int, gpu, stage: str) -> bytes:
+    """The config's own bytes with gpu_ids set to 0, under a provenance header;
+    a training also gets the RESUME_LINES its config does not set."""
     lines, rewritten = data.split(b"\n"), 0
     for i, line in enumerate(lines):
         if config_key(line) != "gpu_ids":
@@ -296,14 +314,23 @@ def launch_bytes(source_rel: str, data: bytes, lane: int, gpu) -> bytes:
         rewritten += 1
     if rewritten != 1:
         raise ValueError(f"{source_rel} has {rewritten} gpu_ids lines")
+    present = {config_key(line) for line in lines}
+    added = [f"{key} {value}" for key, value in RESUME_LINES
+             if stage == "train" and key not in present]
     header = (
         "% dataset_matrix launch copy written by run_matrix.py -- do not edit.\n"
         f"% source: {source_rel}\n"
         f"% source_sha256: {sha256(data)}\n"
         f"% binding: gpu_ids {lane} -> 0, run on GPU {gpu.index} ({gpu.uuid}) "
         "through CUDA_VISIBLE_DEVICES\n"
+        + (f"% resume: appended {', '.join(added)}\n" if added else "")
     )
-    return header.encode("utf-8") + b"\n".join(lines)
+    body = b"\n".join(lines)
+    if added:
+        if body and not body.endswith(b"\n"):
+            body += b"\n"
+        body += ("\n".join(added) + "\n").encode("utf-8")
+    return header.encode("utf-8") + body
 
 # -------------------------------------------------------------------- the plan
 
@@ -559,23 +586,46 @@ def read_start_record(paths: StatePaths, arm: Arm):
         return None
     return record if isinstance(record, dict) else None
 
+def resume_states(arm: Arm, train_values: dict, suffixes=RESUME_SUFFIXES):
+    """The resume files (RESUME_SUFFIXES) that exist beside a path the train
+    config names -- every trainer keeps its state beside its checkpoint."""
+    path_keys = config_parser().PATH_KEYS
+    found = {}
+    for key, value in train_values.items():
+        p = native_path(arm, "train", value) if key in path_keys else None
+        for suffix in (suffixes if p is not None else ()):
+            state = Path(str(p) + suffix)
+            if os.path.lexists(state):
+                found.setdefault(os.path.normcase(os.path.abspath(state)), state)
+    return [found[k] for k in sorted(found)]
+
+def written(path: Path) -> str:
+    try:
+        return time.strftime("%Y-%m-%d %H:%M", time.localtime(os.stat(path).st_mtime))
+    except OSError:
+        return "?"
+
 def stale_outputs(paths: StatePaths, arm: Arm, stage: str):
     """What a stage about to run first moves out of the way. Pure, so a dry run
-    can print it. Returns (targets, record_sha, protected):
+    can print it. Returns (targets, record_sha, protected, resuming):
 
     targets     [(path, what)] that exist now: the stage's own stale markers
                 (a training also takes the inference's, which scored the
                 checkpoint about to be replaced) and the arm's prediction
                 directory, so nothing a later score reads is left from an
-                earlier run. For SimulGenVAE, also vae.pth/lc.pth unless the
-                start record says this very config wrote them: with
+                earlier run. Before a training, unless the start record says
+                this very config started the one that left them: its resume
+                states, so a cut-off training of another config is never
+                continued, and for SimulGenVAE also vae.pth/lc.pth: with
                 skip_completed_stages it reuses a checkpoint that matches
                 only its own compatibility keys, which would carry an older
                 config's training into this one.
-    record_sha  the train config's sha256 to record as started (SimulGenVAE
-                only; None otherwise)
+    record_sha  the train config's sha256 to record as started (a training;
+                None for an inference)
     protected   every other path either config names (checkpoints, datasets,
                 logs); a target that holds one is not moved
+    resuming    the resume states the training will continue from: those
+                that stay
     """
     train_values = config_values(arm.path("train"))
     infer_values = config_values(arm.path("infer"))
@@ -587,15 +637,20 @@ def stale_outputs(paths: StatePaths, arm: Arm, stage: str):
     pred = prediction_dir(arm, infer_values)
     if pred is not None and os.path.lexists(pred):
         targets.append((pred, "predictions"))
-    record_sha = None
-    if stage == "train" and train_values.get("model") == "simulgenvae":
+    record_sha, resuming = None, []
+    if stage == "train":
         record_sha = sha256(arm.path("train").read_bytes())
         record = read_start_record(paths, arm)
         if record is None or record.get("sha256") != record_sha:
-            for key in LSH_CHECKPOINT_KEYS:
-                ckpt = native_path(arm, "train", train_values.get(key))
-                if ckpt is not None and os.path.lexists(ckpt):
-                    targets.append((ckpt, "checkpoint not written by this config"))
+            if train_values.get("model") == "simulgenvae":
+                for key in LSH_CHECKPOINT_KEYS:
+                    ckpt = native_path(arm, "train", train_values.get(key))
+                    if ckpt is not None and os.path.lexists(ckpt):
+                        targets.append((ckpt, "checkpoint not written by this config"))
+            targets += [(s, "resume state not written by this config")
+                        for s in resume_states(arm, train_values)]
+        else:
+            resuming = resume_states(arm, train_values, (".resume",))
     named = set()
     path_keys = config_parser().PATH_KEYS
     for s, values in (("train", train_values), ("infer", infer_values)):
@@ -606,7 +661,7 @@ def stale_outputs(paths: StatePaths, arm: Arm, stage: str):
                     named.add(os.path.normcase(os.path.abspath(p)))
     moving = {os.path.normcase(os.path.abspath(t)) for t, _ in targets}
     protected = [Path(p) for p in sorted(named - moving)]
-    return targets, record_sha, protected
+    return targets, record_sha, protected, resuming
 
 def move_problem(paths: StatePaths, target: Path, protected):
     """None if target may be set aside, else why not."""
@@ -650,7 +705,7 @@ def set_aside(ctx, arm: Arm, stage: str, targets, say):
 def prepare_stage(ctx, arm: Arm, stage: str, say):
     """Clears what an earlier run left for this stage. None, or why it could not."""
     try:
-        targets, record_sha, protected = stale_outputs(ctx.paths, arm, stage)
+        targets, record_sha, protected, resuming = stale_outputs(ctx.paths, arm, stage)
     except (OSError, ValueError, ImportError) as exc:
         return f"could not read its configs to clear earlier outputs: {exc}"
     for target, _ in targets:
@@ -660,6 +715,9 @@ def prepare_stage(ctx, arm: Arm, stage: str, say):
     problem = set_aside(ctx, arm, stage, targets, say)
     if problem:
         return problem
+    for state in resuming:
+        say(f"resume state {rel(state)} (written {written(state)}) kept; "
+            "the training continues from it")
     if record_sha is not None:
         record = {"config": arm.rels["train"], "sha256": record_sha, "run_id": ctx.run_id,
                   "machine": ctx.machine, "started": now_iso()}
@@ -1004,7 +1062,7 @@ def run_stage(ctx: Ctx, gpu: Gpu, arm: Arm, stage: str) -> str:
     try:
         data = arm.path(stage).read_bytes()
         launch = ctx.paths.launch / f"{arm.key}__{stage}.txt"
-        body = launch_bytes(arm.rels[stage], data, arm.lane, gpu)
+        body = launch_bytes(arm.rels[stage], data, arm.lane, gpu, stage)
         write_atomic(launch, body)
         if launch.read_bytes() != body or parse_lane(body) != (0, None):
             raise ValueError(f"{rel(launch)} did not read back as written")
@@ -1029,7 +1087,8 @@ def run_stage(ctx: Ctx, gpu: Gpu, arm: Arm, stage: str) -> str:
         f"\n===== {now_iso()}  run {ctx.run_id}  machine {ctx.machine}  "
         f"GPU {gpu.index} {gpu.uuid}  {arm.label} {stage} =====\n"
         f"config   {arm.rels[stage]}  sha256 {sha256(data)}\n"
-        f"launch   {rel(launch)}  (gpu_ids {arm.lane} -> 0)\n"
+        f"launch   {rel(launch)}  (gpu_ids {arm.lane} -> 0"
+        f"{', resume keys added' if stage == 'train' else ''})\n"
         f"command  CUDA_VISIBLE_DEVICES={gpu.uuid} {' '.join(command)}\n\n"
     )
     say(f"running, log {rel(log_path)}")
@@ -1458,7 +1517,7 @@ def lock_state(paths: StatePaths):
 def aside_plan(paths: StatePaths, arm: Arm, stage: str):
     """The dry run's lines for what starting `stage` would first move aside."""
     try:
-        targets, _, protected = stale_outputs(paths, arm, stage)
+        targets, _, protected, resuming = stale_outputs(paths, arm, stage)
     except (OSError, ValueError, ImportError) as exc:
         return [f"(!) cannot tell what its {stage} would set aside: {exc}"]
     lines = []
@@ -1468,6 +1527,8 @@ def aside_plan(paths: StatePaths, arm: Arm, stage: str):
             lines.append(f"(!) {stage} would not start: will not set aside {rel(target)}: {problem}")
         else:
             lines.append(f"{stage} would first set aside {what} {rel(target)}")
+    lines += [f"{stage} would continue from {rel(state)} (written {written(state)})"
+              for state in resuming]
     return lines
 
 def dry_run(machine: str, arms, s: Settings) -> int:
@@ -1524,7 +1585,9 @@ def dry_run(machine: str, arms, s: Settings) -> int:
         print(f"first stage, as lane {arm.lane}'s worker would launch it:")
         print(f"  CUDA_VISIBLE_DEVICES={uuid} {sys.executable} {rel(LAUNCHER)} --config "
               f"{rel(paths.launch / (arm.key + '__' + stage + '.txt'))}")
-        print(f"  launch copy = {arm.rels[stage]} with gpu_ids {arm.lane} -> 0")
+        print(f"  launch copy = {arm.rels[stage]} with gpu_ids {arm.lane} -> 0"
+              + ("; appends " + ", ".join(f"{k} {v}" for k, v in RESUME_LINES)
+                 + " unless the config sets them" if stage == "train" else ""))
         print(f"  log        -> {rel(paths.stage_logs / (arm.key + '__' + stage + '.log'))}")
     print()
     if s.skip_gate:

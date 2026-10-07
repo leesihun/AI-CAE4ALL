@@ -20,13 +20,14 @@ REPOSITORIES = {**{m: 'Neural_Operator' for m in METHODS[:3]},
 # Lane assignment: one GPU per method group on an 8-card box, cheap routes
 # sharing a lane and the few-example generative routes bundled two per lane.
 # configs/run_all_135.sh and configs/run_all_136.sh drive these lanes. No
-# generated arm sits on lane 2; only the hand-maintained geometry ex4 does.
+# arm sits on lane 2 (the hand-maintained geometry ex4, Thingi10K, was
+# removed on 2026-10-07); its worker takes over other lanes' arms.
 LANE_GPU = {'deeponet': 0, 'fno': 0, 'point_deeponet': 1, 'transolver3': 3,
             'meshgraphnets': 4, 'himgn': 5, 'himgn_v': 6, 'lsh_vae': 6,
             'chi_mgnflow': 7, 'sdfflow': 7}
 # SDFFlow geometry examples whose configs are written by hand, not by build();
 # manifest.json lists them (generated: false) so run_matrix.py runs them.
-HAND_GEOMETRY = ('ex2', 'ex3', 'ex4')
+HAND_GEOMETRY = ('ex2', 'ex3')
 PAPERS = {
     'meshgraphnets': 'https://arxiv.org/abs/2010.03409',
     'himgn': 'https://arxiv.org/abs/2608.13827',
@@ -586,7 +587,7 @@ def build():
     pairs.append(dict(category=c['category'], example=c['key'], method='sdfflow', train=paths[0], infer=paths[1]))
     assert len(pairs) == 75 and len(files) == 150
     # Hand-maintained SDFFlow geometry configs: listed so the campaign runner
-    # runs them, but not rendered here. Their gpu_ids (0/1/2) and output paths
+    # runs them, but not rendered here. Their gpu_ids (0/1) and output paths
     # are their own, so `generated: false` exempts them from the one-lane-per-
     # method rule and from --check.
     for key in HAND_GEOMETRY:

@@ -60,6 +60,10 @@ def main():
     # (config['parallel_mode'] is already normalized: 'model_split' -> 'node_shard')
     parallel_mode = str(config.get('parallel_mode', 'ddp')).lower().strip()
 
+    if run_mode != 'inference' and use_distributed:
+        from general_modules.resume_state import reject_multi_process
+        reject_multi_process(config, f'{parallel_mode} training on {world_size} GPU(s)')
+
     if run_mode == 'inference':
         run_inference(config, args.config)
     elif use_distributed is False:

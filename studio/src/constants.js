@@ -462,7 +462,7 @@ export const PARALLEL_MODE_CHOICES = Object.freeze({
   "chi-mgnflow": ["ddp"]
 });
 
-export const BOOLEAN_KEYS = new Set(keys(`augment_geometry bipartite_unpool coarse_world_edges display_testset display_trainset encoder_self_attention fit_latent_gmm fm_use_amp fm_use_ema guidance_enabled load_all make_histogram opt_fea_verify overfit_all_shapes point_resample_each_epoch resume_prior show_histogram skip_completed_stages small_output_init split_by_parent train_conditional_prior use_amp use_checkpointing use_compile use_conditional_prior use_ema use_multiscale use_node_types use_parallel_stats use_vae use_world_edges vae_graph_aware vae_use_amp vae_use_ema lc_use_amp lc_use_ema write_preprocessing write_test_predictions`));
+export const BOOLEAN_KEYS = new Set(keys(`augment_geometry bipartite_unpool coarse_world_edges display_testset display_trainset encoder_self_attention fit_latent_gmm fm_use_amp fm_use_ema guidance_enabled load_all make_histogram opt_fea_verify overfit_all_shapes point_resample_each_epoch resume_prior resume_training show_histogram skip_completed_stages small_output_init split_by_parent train_conditional_prior use_amp use_checkpointing use_compile use_conditional_prior use_ema use_multiscale use_node_types use_parallel_stats use_vae use_world_edges vae_graph_aware vae_use_amp vae_use_ema lc_use_amp lc_use_ema write_preprocessing write_test_predictions`));
 BOOLEAN_KEYS.delete("load_all");
 export const OPERATOR_REMOVED = new Set(keys(`message_passing_num latent_dim edge_var world_radius_multiplier world_max_num_neighbors world_edge_backend coarse_world_edges multiscale_levels mp_per_level coarsening_type voronoi_clusters coarse_cache_per_worker use_vae vae_latent_dim vae_mp_layers vae_graph_aware free_bits posterior_min_std lambda_mmd lambda_kl lambda_det`));
 export const TRANSOLVER_REJECTED = new Set(keys(`edge_var message_passing_num mp_per_level coarsening_type voronoi_clusters multiscale_levels world_radius_multiplier world_max_num_neighbors world_edge_backend coarse_world_edges`));
@@ -1290,6 +1290,8 @@ export const HELP = {
   timesteps_reduced: "Optional timestep truncation; zero means the full trajectory.",
   loss_type: "1=MSE, 2=MAE, 3=SmoothL1, 4=Huber.",
   skip_completed_stages: "Reuse a complete stage only when its checkpoint metadata is configuration-compatible.",
+  resume_training: "Keep <checkpoint>.resume during training; a cut-off run of this same config continues from it to the last epoch. Single-GPU training only.",
+  resume_interval_minutes: "Minutes between resume states (written at the next epoch boundary); default 15.",
   parallel_mode: "Backend validator filters valid modes and reports insufficient GPU counts.",
   learningr: "Native flat-config spelling for learning rate.",
   use_checkpointing: "Activation checkpointing trades additional compute for a lower training memory peak.",

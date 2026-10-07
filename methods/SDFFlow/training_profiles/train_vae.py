@@ -34,6 +34,7 @@ from general_modules import distributed as D
 from general_modules.sdf_dataset import build_dataset_splits, compute_cond_stats
 from general_modules.mesh_extraction import decode_sdf_grid, sdf_grid_to_mesh, mesh_report
 from general_modules.mesh_render import plot_mesh_strip
+from general_modules.resume_state import TrainingResume
 from model.sdf_vae import SDFVAE, describe_state_key_flag, load_vae_state_dict, sdf_loss
 from training_profiles.setup import (
     append_log,
@@ -356,16 +357,44 @@ def vae_worker(config, config_filename='config.txt'):
         print(f'Best-validation selection starts at epoch {best_eligible_epoch} '
               f'(warmup completes there; earlier ValidSDF is not comparable)')
 
-    log_file = init_log_file(config, config_filename) if rank0 else None
-    if rank0:
-        print('\n' + '=' * 60)
-        print('Starting SDF-VAE training loop...')
-        print('=' * 60 + '\n')
-    start_time = time.time()
     valid_loss = float('nan')
     valid_sign = float('nan')
     valid_sign_balanced = float('nan')
     active_units, active_units_snr, latent_dim_total = 0, 0, int(model.latent_flat_dim)
+    # Opt-in mid-training resume (`resume_training`, single process only). The
+    # warmup ramps and best-checkpoint eligibility follow the epoch counter.
+    start_epoch, elapsed_before = 0, 0.0
+    resume = TrainingResume(config, modelpath)
+    resumed = resume.load()
+    if resumed is not None:
+        # A persistent-worker loader draws its worker base seed (and, through
+        # prefetching, its first shuffle) only when its iterator is first
+        # built; build it now so those draws do not come out of the RNG
+        # streams restored below.
+        for loader in (train_loader, val_loader):
+            if loader is not None and loader.persistent_workers:
+                iter(loader)
+        model.load_state_dict(resumed['model'])
+        if ema_model is not None:
+            ema_model.load_state_dict(resumed['ema'])
+        optimizer.load_state_dict(resumed['optimizer'])
+        scheduler.load_state_dict(resumed['scheduler'])
+        if scaler.is_enabled():
+            scaler.load_state_dict(resumed['scaler'])
+        if train_loader.generator is not None:
+            train_loader.generator.set_state(resumed['loader_generator'])
+        best_valid_loss = resumed['best_valid_loss']
+        (valid_loss, valid_sign, valid_sign_balanced,
+         active_units, active_units_snr, latent_dim_total) = resumed['valid_stats']
+        start_epoch, elapsed_before = resumed['epoch'] + 1, resumed['elapsed']
+        del resumed
+
+    log_file = init_log_file(config, config_filename, resumed_at=start_epoch or None) if rank0 else None
+    if rank0:
+        print('\n' + '=' * 60)
+        print('Starting SDF-VAE training loop...')
+        print('=' * 60 + '\n')
+    start_time = time.time() - elapsed_before
     params = [p for p in train_model.parameters() if p.requires_grad]
 
     def checkpoint_payload(epoch):
@@ -387,7 +416,8 @@ def vae_worker(config, config_filename='config.txt'):
             save_checkpoint(modelpath, payload)
 
     try:
-        for epoch in range(total_epochs):
+        resume.restore_rng()
+        for epoch in range(start_epoch, total_epochs):
             if train_sampler is not None:
                 train_sampler.set_epoch(epoch)
             train_model.train()
@@ -529,14 +559,31 @@ def vae_worker(config, config_filename='config.txt'):
                 maybe_save(epoch)
                 D.barrier()
 
+            if resume.due(epoch, total_epochs):
+                resume.save({
+                    'epoch': epoch, 'model': model.state_dict(),
+                    'ema': ema_model.state_dict() if ema_model is not None else None,
+                    'optimizer': optimizer.state_dict(), 'scheduler': scheduler.state_dict(),
+                    'scaler': scaler.state_dict(),
+                    'loader_generator': (train_loader.generator.get_state()
+                                         if train_loader.generator is not None else None),
+                    'best_valid_loss': best_valid_loss,
+                    'valid_stats': (valid_loss, valid_sign, valid_sign_balanced,
+                                    active_units, active_units_snr, latent_dim_total),
+                    'elapsed': time.time() - start_time,
+                })
+
         maybe_save(total_epochs - 1)
+        resume.finish()
         if rank0:
             print(f'\nTraining finished. VAE saved to {modelpath} (val SDF loss {valid_loss:.2e})')
             if best_modelpath:
                 print(f'Best-validation VAE (val SDF loss {best_valid_loss:.2e}) at {best_modelpath}')
     except KeyboardInterrupt:
         if rank0:
-            print('\nTraining interrupted by user. Saving checkpoint...')
+            print('\nTraining interrupted by user. Saving checkpoint...'
+                  + (f' Resume state: {resume.path}'
+                     if resume.enabled and os.path.exists(resume.path) else ''))
         maybe_save(-1)
 
 

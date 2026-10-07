@@ -1015,14 +1015,6 @@
       "train": "configs/SDFFlow/geometry_generation/ex3/baseline/config_train_sdfflow.txt",
       "infer": "configs/SDFFlow/geometry_generation/ex3/baseline/config_infer_sdfflow.txt",
       "generated": false
-    },
-    {
-      "category": "geometry_generation",
-      "example": "ex4",
-      "method": "sdfflow",
-      "train": "configs/SDFFlow/geometry_generation/ex4/baseline/config_train_sdfflow.txt",
-      "infer": "configs/SDFFlow/geometry_generation/ex4/baseline/config_infer_sdfflow.txt",
-      "generated": false
     }
   ]
 }

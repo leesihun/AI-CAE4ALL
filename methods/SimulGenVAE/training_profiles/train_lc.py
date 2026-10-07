@@ -24,6 +24,7 @@ from general_modules.fom_dataset import (
     fit_minmax,
     read_conditions,
 )
+from general_modules.resume_state import TrainingResume
 from model.common import add_sn
 from training_profiles.setup import (
     append_log,
@@ -162,7 +163,18 @@ def lc_worker(config, config_filename='config.txt'):
     mse = nn.MSELoss()
 
     modelpath = config.get('lc_modelpath', '../../output/simulgenvae/simulgenvae_lc.pth')
-    log_file = init_log_file(config, config_filename) if rank0 else None
+    # The targets are the frozen VAE's latents: a state written over an
+    # earlier VAE checkpoint is set aside rather than resumed.
+    start_epoch, elapsed_before = 0, 0.0
+    resume = TrainingResume(config, modelpath, upstream=[vae_path])
+    state = resume.load()
+    if state is not None:
+        lc.load_state_dict(state['model'])
+        optimizer.load_state_dict(state['optimizer'])
+        scheduler.load_state_dict(state['scheduler'])
+        start_epoch, elapsed_before = state['epoch'] + 1, state['elapsed']
+        del state
+    log_file = init_log_file(config, config_filename, resumed_at=start_epoch or None) if rank0 else None
     test_interval = max(1, int(config.get('test_interval', 100)))
     # The same cadence as the VAE stage (train_vae.py); a hardcoded 100 left
     # a short LC run with a two-point curve.
@@ -173,7 +185,7 @@ def lc_worker(config, config_filename='config.txt'):
         print('\n' + '=' * 60)
         print(f'Starting latent-conditioner training ({num_levels} hierarchical levels)...')
         print('=' * 60 + '\n')
-    start_time = time.time()
+    start_time = time.time() - elapsed_before
 
     def payload(epoch):
         return {
@@ -187,7 +199,8 @@ def lc_worker(config, config_filename='config.txt'):
             'split_manifest': train_dataset.split_manifest,
         }
 
-    for epoch in range(total_epochs):
+    resume.restore_rng()
+    for epoch in range(start_epoch, total_epochs):
         if sampler is not None:
             sampler.set_epoch(epoch)
         train_lc_model.train()
@@ -221,8 +234,16 @@ def lc_worker(config, config_filename='config.txt'):
             run_latent_parity_test(D.unwrap_model(train_lc_model), val_loader, config,
                                    device, epoch, viz_dir)
 
+        if resume.due(epoch, total_epochs):
+            resume.save({
+                'epoch': epoch, 'model': lc.state_dict(),
+                'optimizer': optimizer.state_dict(), 'scheduler': scheduler.state_dict(),
+                'elapsed': time.time() - start_time,
+            })
+
     if rank0:
         save_checkpoint(modelpath, payload(total_epochs - 1))
+        resume.finish()
         print(f'\nLatent conditioner saved to {modelpath}')
     D.barrier()
 

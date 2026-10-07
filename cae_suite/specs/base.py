@@ -226,6 +226,25 @@ def validate_common_values(ctx: SpecValidationContext) -> None:
             )
 
 
+# Mid-training resume (`general_modules/resume_state.py` in every training
+# repo but MLP). The trainers decide what is single-process; this checks types.
+RESUME_KEYS = frozenset({"resume_training", "resume_interval_minutes"})
+
+
+def validate_resume(ctx: SpecValidationContext) -> None:
+    values = ctx.values
+    if "resume_training" in values and not isinstance(values["resume_training"], bool):
+        ctx.add("CFG-RESUME-001", Severity.ERROR,
+                f"resume_training must be true or false; got {values['resume_training']!r}.",
+                field_name="resume_training")
+    if "resume_interval_minutes" in values:
+        minutes = numeric(values["resume_interval_minutes"])
+        if minutes is None or minutes < 0:
+            ctx.add("CFG-RESUME-002", Severity.ERROR,
+                    f"resume_interval_minutes must be a number >= 0; got {values['resume_interval_minutes']!r}.",
+                    field_name="resume_interval_minutes")
+
+
 def validate_positive_fields(ctx: SpecValidationContext, names: tuple[str, ...], code: str) -> None:
     for name in names:
         if name not in ctx.values:

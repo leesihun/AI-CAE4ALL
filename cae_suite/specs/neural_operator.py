@@ -5,6 +5,7 @@ from .base import (
     MethodSpec,
     PathKind,
     PathRule,
+    RESUME_KEYS,
     SpecValidationContext,
     as_list,
     integer,
@@ -12,6 +13,7 @@ from .base import (
     validate_common_values,
     validate_nonnegative_int_fields,
     validate_positive_fields,
+    validate_resume,
 )
 
 
@@ -256,7 +258,7 @@ def build_neural_operator_spec() -> MethodSpec:
         repository="methods/Neural_Operator",
         entrypoint="main.py",
         valid_modes=("train", "inference"),
-        known_keys=all_keys,
+        known_keys=all_keys | RESUME_KEYS,
         required_by_mode={
             "train": frozenset({"dataset_dir", "modelpath", "input_var", "output_var", "training_epochs", "batch_size", "learningr", "coordinate_normalization"}),
             "inference": frozenset({"modelpath", "infer_dataset", "input_var", "output_var"}),
@@ -272,7 +274,7 @@ def build_neural_operator_spec() -> MethodSpec:
             PathRule("inference_output_dir", PathKind.OUTPUT_DIR, frozenset({"inference"})),
             PathRule("sdf_sidecar", PathKind.INPUT_FILE),
         ),
-        validators=(validate_neural_operator,),
+        validators=(validate_neural_operator, validate_resume),
         import_modules=("torch", "h5py", "torch_geometric", "scipy"),
         dataset_kind="mesh_hdf5",
     )

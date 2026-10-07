@@ -93,6 +93,10 @@ def main():
     # Display the current absolute path
     print(f"Current absolute path: {os.path.abspath('.')}")
 
+    if run_mode != 'inference' and use_distributed:
+        from general_modules.resume_state import reject_multi_process
+        reject_multi_process(config, f'DDP training on {world_size} GPUs')
+
     if run_mode == 'inference':
         # Inference mode: autoregressive rollout
         run_rollout(config, args.config)
