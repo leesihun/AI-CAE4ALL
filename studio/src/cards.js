@@ -14,6 +14,7 @@
 import { state } from "./state.js";
 import { BLOCK_SPECS, MODEL_CATALOG, REQUIRED } from "./constants.js";
 import { apiRequest } from "./api.js";
+import { cadGeneratorValue } from "./validate.js";
 
 const FACTS = new Map();          // repo-relative path -> facts | {error} | "pending"
 
@@ -296,8 +297,18 @@ export function blockFacts(node, onReady) {
   if (node.type === "run.cad_generator") {
     const mode = value(node, "mode");
     const rows = [["mode", mode]];
-    if (mode === "optimize") rows.push(["analysis", value(node, "opt_analysis") === "surrogate" ? "HI-MGN surrogate" : "FEA (gmsh + linear static)"]);
-    else {
+    if (mode === "optimize") {
+      // The values the run uses: an opt_* key left on the SDFFlow block by a
+      // graph saved before these rows moved here still counts.
+      const cad = key => String(cadGeneratorValue(node, key) ?? "").trim();
+      rows.push(["analysis", cad("opt_analysis") === "surrogate" ? "HI-MGN surrogate" : "FEA (gmsh + linear static)"]);
+      // opt_budget 0 is the screen that writes screening.csv for the
+      // Optimization block; anything above it is a CMA-ES search.
+      const budget = cad("opt_budget");
+      rows.push(["search", budget === "" ? "native default budget"
+        : Number(budget) === 0 ? `screening · ${cad("opt_baseline_size") || "default"} designs`
+          : `CMA-ES · ${budget} evaluations`]);
+    } else {
       // cfg_scale only acts on a conditional request: with no cond_values the
       // sampler integrates the null-condition branch and the scale is inert.
       const conditioned = String(config.cond_values || "").trim() !== "";

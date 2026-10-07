@@ -1,6 +1,8 @@
 import { toast } from "./dom.js";
 import { state } from "./state.js";
-import { BLOCK_SPECS, INPUT_SOURCE_META, MODEL_CATALOG, TYPE_META } from "./constants.js";
+import {
+  BLOCK_SPECS, INPUT_SOURCE_META, MODEL_CATALOG, SDFFLOW_OPTIMIZE_KEYS, SDFFLOW_STRUCTURAL_KEYS, TYPE_META
+} from "./constants.js";
 import { apiRequest, checkpointMetaNow, requireRuntime } from "./api.js";
 import { flatConfigLine, normalizeConfigValues, rawConfig, requiredFor } from "./config.js";
 import { applyGraphAutofill, selectedParameterCandidate, toGeometryPath, toMethodPath } from "./autofill.js";
@@ -115,9 +117,10 @@ export const CAD_GENERATOR_MODES = ["sample", "reconstruct", "interpolate", "opt
 // The CAD Generator's own SDFFlow rows and the modes that read each one. A row
 // outside its modes is hidden in the inspector and blanked in the run config,
 // so a value carried by the connected SDFFlow block cannot reach a mode that
-// ignores it. Unlisted rows (graph-filled paths, geometry checks) are shown in
-// every mode. `candidates` / `guidance` are the pre-rename names of
-// num_samples / cfg_scale that older saved graphs still carry.
+// ignores it. Unlisted rows (graph-filled paths, geometry checks, the
+// structural opt_* keys) are kept in every mode. `candidates` / `guidance`
+// are the pre-rename names of num_samples / cfg_scale that older saved graphs
+// still carry.
 export const CAD_GENERATOR_ROW_MODES = {
   num_samples: ["sample"], candidates: ["sample"], candidate_multiplier: ["sample"],
   cfg_scale: ["sample", "interpolate"], guidance: ["sample", "interpolate"],
@@ -128,16 +131,16 @@ export const CAD_GENERATOR_ROW_MODES = {
   interpolation_space: ["interpolate"], source_num_samples: ["interpolate"],
   sample_index_a: ["interpolate"], sample_index_b: ["interpolate"],
   alpha: ["interpolate"], interpolation_steps: ["interpolate"],
-  opt_analysis: ["optimize"]
+  ...Object.fromEntries(SDFFLOW_OPTIMIZE_KEYS.map(key => [key, ["optimize"]]))
 };
 const CAD_GENERATOR_ALIASES = { num_samples: "candidates", cfg_scale: "guidance" };
+const CAD_OPT_KEYS = new Set([...SDFFLOW_OPTIMIZE_KEYS, ...SDFFLOW_STRUCTURAL_KEYS]);
 
 // The ex13 ('ver') HI-MGN surrogate's label constants: vertical load only,
 // DeepJEB's own frame (184.181 mm longest side), Ti-6Al-4V at 4470 kg/m^3.
 // `mode optimize` refuses any other load case and opt_fea_verify on this layout
 // (fea.py does not model its bolt-bore/lug-bore BCs). Mirrors
-// SURROGATE_LABEL_CONSTANTS_VER in cae_suite/specs/sdfflow.py and the
-// "Closed-loop optimization (surrogate)" preset.
+// SURROGATE_LABEL_CONSTANTS_VER in cae_suite/specs/sdfflow.py.
 export const VER_SURROGATE_SETTINGS = {
   opt_load_cases: "vertical",
   opt_length_scale: "0.102323",
@@ -155,11 +158,36 @@ export function cadRowActive(mode, key) {
   return !CAD_GENERATOR_ROW_MODES[key] || CAD_GENERATOR_ROW_MODES[key].includes(mode);
 }
 
+/** The SDFFlow model block wired into this CAD Generator's `model` port. */
+export function cadModelBlock(node) {
+  const edge = state.edges.find(item => item.toNode === node.id && item.toPort === "model");
+  const source = edge && state.nodes.find(item => item.id === edge.fromNode);
+  return source && BLOCK_SPECS[source.type]?.isModel ? source : null;
+}
+
+/** Whether this is one of SDFFlow's opt_* keys, which the CAD Generator owns. */
+export function isCadOptKey(key) {
+  return CAD_OPT_KEYS.has(key);
+}
+
+/**
+ * An opt_* value a graph saved before these keys moved still carries on the
+ * SDFFlow model block, where the optimize settings used to be typed. It is
+ * used only while the generator has no value of its own for that key.
+ */
+export function cadLegacyOptValue(node, key) {
+  if (!CAD_OPT_KEYS.has(key) || node.config[key] !== undefined) return "";
+  const legacy = cadModelBlock(node)?.config?.[key];
+  return String(legacy ?? "").trim() ? legacy : "";
+}
+
 /**
  * The value a CAD Generator row runs with -- and so the value the inspector
  * shows. A graph saved before a row existed has no such key (import does not
- * merge defaults), so it runs at the block default; a row the user cleared
- * stays empty, which leaves the connected SDFFlow block's value in force.
+ * merge defaults), so it runs at the block default -- or, for an opt_* key,
+ * at the value the SDFFlow block still carries from before the move. A row
+ * the user cleared stays empty: a generation row then leaves the connected
+ * SDFFlow block's value in force, an opt_* row the native default.
  */
 export function cadGeneratorValue(node, key) {
   const own = node.config[key];
@@ -167,6 +195,8 @@ export function cadGeneratorValue(node, key) {
   const alias = CAD_GENERATOR_ALIASES[key];
   if (alias && String(node.config[alias] ?? "").trim()) return node.config[alias];
   if (own !== undefined) return own;
+  const legacy = cadLegacyOptValue(node, key);
+  if (legacy) return legacy;
   return BLOCK_SPECS["run.cad_generator"].defaults[key] ?? "";
 }
 
@@ -197,7 +227,7 @@ export function cadSurrogate(node) {
 /** Whether this CAD Generator runs the surrogate search (and reads the wire). */
 export function cadUsesSurrogate(node) {
   return cadGeneratorMode(node) === "optimize"
-    && String(node.config.opt_analysis || "fea").trim().toLowerCase() === "surrogate";
+    && String(cadGeneratorValue(node, "opt_analysis") || "fea").trim().toLowerCase() === "surrogate";
 }
 
 /**
@@ -448,10 +478,21 @@ export function executableSteps(targetId = null) {
           return;
         }
         const value = cadGeneratorValue(node, key);
-        if (!String(value ?? "").trim()) return;
+        if (!String(value ?? "").trim()) {
+          // An empty opt_* row means the native default, so a leftover value
+          // on the SDFFlow block (cadLegacyOptValue) must not show through.
+          if (isCadOptKey(key)) overrides[key] = "";
+          return;
+        }
         // A browsed or uploaded mesh is suite-relative; the run opens it from
         // methods/SDFFlow.
         overrides[key] = key === "input_mesh" ? toMethodPath(value, "sdfflow") : value;
+      });
+      // The structural opt_* keys are read by optimize and by sample's
+      // condition audit alike, so no mode blanks them; they still run with the
+      // value the generator shows, not one the SDFFlow block kept.
+      SDFFLOW_STRUCTURAL_KEYS.forEach(key => {
+        if (catalogKeys.includes(key)) overrides[key] = cadGeneratorValue(node, key);
       });
       if (mode === "optimize") {
         SDFFLOW_OPTIMIZE_INERT_KEYS.forEach(key => {
@@ -475,10 +516,10 @@ export function executableSteps(targetId = null) {
         }];
         if (surrogate.layout === "ver") Object.assign(overrides, VER_SURROGATE_SETTINGS);
       } else if (surrogate && !cadUsesSurrogate(node)
-        && String(upstream.config.condition_audit || "").trim().toLowerCase() !== "surrogate") {
+        && String(node.config.condition_audit || upstream.config.condition_audit || "").trim().toLowerCase() !== "surrogate") {
         // A dormant wire: the run does not read the checkpoint autofill put
         // here, and preflight would still check that the file exists.
-        delete overrides.opt_surrogate_checkpoint;
+        overrides.opt_surrogate_checkpoint = "";
       }
     }
     if (catalogKeys.includes("infer_dataset") && node.config.dataset_path) {
@@ -805,7 +846,7 @@ export function validateGraph(showToast = true) {
   state.nodes.filter(node => node.type === "run.cad_generator").forEach(node => {
     const label = BLOCK_SPECS[node.type].label;
     const generatorMode = cadGeneratorMode(node);
-    const analysisBackend = String(node.config.opt_analysis || "fea").trim().toLowerCase();
+    const analysisBackend = String(cadGeneratorValue(node, "opt_analysis") || "fea").trim().toLowerCase();
     if (generatorMode === "optimize" && !["fea", "surrogate"].includes(analysisBackend)) {
       push(`${label}: analysis backend must be fea or surrogate.`, node.id);
     }
@@ -818,18 +859,15 @@ export function validateGraph(showToast = true) {
       push(`${label}: the surrogate must be a MeshGraphNets (HI-MGN) model, not ${MODEL_CATALOG[surrogate.family]?.label || surrogate.family}.`, node.id);
     }
     if (cadUsesSurrogate(node)) {
-      const modelEdge = state.edges.find(edge => edge.toNode === node.id && edge.toPort === "model");
-      const modelNode = modelEdge && state.nodes.find(candidate => candidate.id === modelEdge.fromNode);
-      const merged = { ...(modelNode?.config || {}), ...node.config };
       // A wired HI-MGN model block supplies the inference config itself.
       const missing = ["opt_surrogate_checkpoint", "opt_surrogate_config"]
         .filter(key => !(key === "opt_surrogate_config" && surrogate?.block))
-        .filter(key => !String(merged[key] || "").trim());
+        .filter(key => !String(cadGeneratorValue(node, key) || "").trim());
       if (missing.length) {
         push(surrogate?.block
           ? `${label}: the wired ${BLOCK_SPECS[surrogate.block.type].label} block has no model path yet. Set its modelpath (the trained model.pth) in that block.`
           : surrogate
-            ? `${label}: a saved checkpoint in "HI-MGN surrogate" carries no inference config. Wire the HI-MGN model block that trained it instead, or set ${missing.join(" and ")} in the connected SDFFlow block's Full config.`
+            ? `${label}: a saved checkpoint in "HI-MGN surrogate" carries no inference config. Wire the HI-MGN model block that trained it instead, or set ${missing.join(" and ")} in this block's "HI-MGN surrogate" section.`
             : `${label}: surrogate analysis needs a trained HI-MGN. Wire the HI-MGN model block into the "HI-MGN surrogate" port.`, node.id);
       }
     }

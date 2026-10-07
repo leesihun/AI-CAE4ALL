@@ -48,6 +48,7 @@
 # Useful overrides:
 #   PYTHON, METHOD_PYTHON, GPUS (default: every GPU the interpreter sees), ARMS,
 #   PROBE_TIMEOUT=900 (seconds the stage-1 environment probe may take),
+#   THREADS_PER_JOB=4 (each trainer's torch CPU threads; BLAS stays at 1),
 #   PREFLIGHT=1, TRAIN=1, INFER=1, REPORT=1
 # Report-only rerun:   TRAIN=0 INFER=0 bash .../run_sweep.sh
 # Re-score one arm:    ARMS=tok TRAIN=0 bash .../run_sweep.sh
@@ -58,6 +59,18 @@ export PYTHONUNBUFFERED=1
 # GPU numbers mean what nvidia-smi prints.
 export CUDA_DEVICE_ORDER=PCI_BUS_ID
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
+# CPU threads. Left alone, every trainer's torch pool and every loader worker's
+# numpy BLAS pool start about one thread per core, and idle BLAS threads spin
+# rather than sleep. With 8 trainers and 64 loader workers per sweep (two
+# sweeps per node), the CPU reads 100% while the GPUs wait for batches. torch
+# already runs each loader worker on one thread. These cap the rest: a
+# trainer's own torch pool to THREADS_PER_JOB, and BLAS to one thread
+# everywhere. A worker's matmul is one sample's 3x3 rotation; a trainer's
+# matmuls run on the GPU.
+THREADS_PER_JOB="${THREADS_PER_JOB:-4}"
+export OMP_NUM_THREADS="${OMP_NUM_THREADS:-$THREADS_PER_JOB}"
+export MKL_NUM_THREADS="${MKL_NUM_THREADS:-1}"
+export OPENBLAS_NUM_THREADS="${OPENBLAS_NUM_THREADS:-1}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../../../.." && pwd)"
@@ -91,6 +104,7 @@ die() {
 
 echo "=================================================================="
 echo " cHI-MGNflow ex3 B300 sweep   ($TS, host $(hostname))"
+echo " CPU threads per job: torch $OMP_NUM_THREADS, BLAS $OPENBLAS_NUM_THREADS ($(nproc) CPUs)"
 echo "=================================================================="
 
 # ------------------------------------------------------------ 1. environment

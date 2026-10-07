@@ -97,6 +97,10 @@ Overrides:
   `ai_cae4all.local.toml` names.
 - `PROBE_TIMEOUT=900`: how many seconds the environment probe may take. Its
   steps print as they run, so a stall shows the step it is stuck in.
+- `THREADS_PER_JOB=4`: the CPU threads of each trainer's own torch pool. BLAS
+  (numpy and torch matmuls) runs on one thread in every process. Without
+  these caps, every process starts about one thread per core, and two sweeps
+  on one node keep the CPU at 100% while the GPUs wait.
 - `PREFLIGHT=0`, `EVAL_PREFLIGHT=0`, `TRAIN=0`, `INFER=0` or `REPORT=0` skips
   that stage.
 

@@ -219,34 +219,44 @@ checkpointed per GnBlock, so memory follows the full-resolution block count
 (15 flat, 4 + 4 HI-MGN). MLP has no checked-in config and keeps
 **Studio defaults**.
 
-The other presets apply a fixed set of values or a checked-in config. Both SDFFlow closed-loop
-presets load the one checked-in optimize config,
-`configs/SDFFlow/geometry_generation/ex1/baseline/config_optimize_sdfflow.txt`,
-as a **recipe**: the block keeps its own `vae_modelpath`/`fm_modelpath`,
-`gpu_ids`, `parallel_mode` and `seed` (that file's are the dataset_matrix run's,
-including `gpu_ids 7`), and `output_dir` becomes `<the block's output_dir>/optimize`.
-The surrogate preset then switches `opt_analysis surrogate`, points
-`opt_surrogate_config`/`opt_surrogate_checkpoint` at the ex13 (DeepJEB vertical
-load) HI-MGN, and sets the values its labels fix: `opt_load_cases vertical`,
-`opt_length_scale 0.102323`, `opt_material_rho 4470`, `opt_vertical_disp_max
-0.36` (the ex13 median), and `opt_fea_verify False` (fea.py clamps the pad and
-loads the lug crown, not the bolt-bore/lug-bore rule the labels used, so
-optimize refuses it on this layout). Until that model has trained, preflight
-names the missing checkpoint. A wired HI-MGN (below) replaces both surrogate
-paths, so with a trained HI-MGN on the canvas the preset is not needed.
+The other presets apply a fixed set of values or a checked-in config.
 
-A CAD Generator wired to the SDFFlow block runs with **its own** `mode` and
-`opt_analysis` (they are laid over the model block's), so applying either
-closed-loop preset also sets those two on every connected generator, and the
-confirmation dialog lists them. Before this, the generator's defaults
-(`sample`, `fea`) silently undid the preset at Run.
+**Post-training settings live on the CAD Generator, not on the SDFFlow block.**
+The SDFFlow model block is the generator being trained: its mode list offers the
+training modes and `evaluate`, while `sample`, `reconstruct`, `interpolate` and
+`optimize` are the CAD Generator's modes (a saved block already in one of them
+keeps it in its list). Every `opt_*` key is set on the CAD Generator:
+
+- the main rows in **Settings** -- `opt_analysis`, `opt_budget`,
+  `opt_baseline_size`, `opt_popsize`, `opt_load_cases`,
+  `opt_vertical_disp_max`, `opt_stress_margin` (block defaults mirror
+  `configs/SDFFlow/geometry_generation/ex1/baseline/config_optimize_sdfflow.txt`);
+- everything else -- search details, material, `opt_length_scale`, mesh sizes,
+  verification resolution, the surrogate interpreter -- under the collapsible
+  **More optimization settings**, where an empty row runs the native default
+  shown as its placeholder. In `sample` mode the section holds the structural
+  keys when `condition_audit` is `fea` or `surrogate`.
+
+`opt_budget 0` is a **screen**: `opt_baseline_size` designs are generated and
+analysed once, and `screening.csv` -- the table the Optimization block ranks
+into a Pareto set -- is written. A budget above 0 runs CMA-ES from that
+population instead. The canvas card says which (`screening · 12 designs` or
+`CMA-ES · 120 evaluations`).
+
+The model block's `evaluate` mode still reads the structural keys (its
+condition audit), so they stay live there. A graph saved before the move keeps
+working: an `opt_*` value left on the SDFFlow block is used by a CAD Generator
+with no value of its own for it, the generator's row says "from the SDFFlow
+block", and the model block's Full config lists the key under Inactive /
+rejected so it can be cleared. The two closed-loop presets that wrote these keys
+onto the model block are gone; the HI-MGN wire below replaces the surrogate one.
 
 The CAD Generator's inspector shows **only the rows its mode reads**, and the run
 config blanks the rest: `num_samples` for `sample`; `interpolation_space`,
 `source_num_samples`, `sample_index_a`/`_b`, `alpha` and `interpolation_steps`
 for `interpolate` (defaults mirror the checked-in interpolate config, so a fresh
-block passes preflight); `input_mesh` for `reconstruct`; `opt_analysis` for
-`optimize`. A graph saved before a row existed shows and runs the block default
+block passes preflight); `input_mesh` for `reconstruct`; the `opt_*` rows above
+for `optimize`. A graph saved before a row existed shows and runs the block default
 (`cadGeneratorValue`), so what the panel shows is what runs. **Fix now** on a
 CAD Generator diagnostic jumps to that row, or to the connected SDFFlow block's
 Full config when the key lives there.
@@ -265,16 +275,20 @@ model block or a saved HI-MGN checkpoint. Drawing the wire is the whole setup:
   `cond_var 0`, the same test as `design_loop/surrogate.py`), the run is pinned
   to `opt_load_cases vertical`, `opt_length_scale 0.102323`,
   `opt_material_rho 4470` and `opt_fea_verify False`, shown read-only in the
-  inspector's **HI-MGN surrogate** section.
+  inspector's **HI-MGN surrogate** section, and a deflection limit still at
+  the FEA default 0.2 mm becomes `opt_vertical_disp_max 0.36`, the ex13 median
+  (a value you typed is left alone).
 
 A saved checkpoint carries no inference config, so on that wire
-`opt_surrogate_config` still comes from the SDFFlow block's Full config. In any
+`opt_surrogate_config` is typed into the generator's **HI-MGN surrogate**
+section, as is the checkpoint when nothing is wired. In any
 other mode the wire is **dormant**, not an error: the inspector says it is
 unused and the run config leaves its checkpoint out. Pressing the CAD
 Generator's own Run executes only that block; it does not retrain the HI-MGN.
 Validate rejects a non-MGN model on the port.
 
-`opt_fea_verify` makes a surrogate search honest inside the run: after CMA-ES,
+`opt_fea_verify` (the **FEA re-check** row, offered on a surrogate search
+whose labels fea.py reproduces) makes a surrogate search honest inside the run: after CMA-ES,
 the optimized design, the best baseline and the typical baseline are re-solved
 with the tet4 FEA solver (`design_loop/verify_with_fea.py`). report.md gains an
 "FEA verification" section (surrogate vs FEA, limit verdicts), and the

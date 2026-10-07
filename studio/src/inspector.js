@@ -1,15 +1,18 @@
 import { $, $$, escapeHtml, toast, formatBytes, on, closeOverlay } from "./dom.js";
 import { state, snapshot } from "./state.js";
 import { savePipelineState } from "./persistence.js";
-import { BLOCK_SPECS, MODEL_CATALOG, TYPE_META, INPUT_SOURCE_META, HELP } from "./constants.js";
+import {
+  BLOCK_SPECS, MODEL_CATALOG, TYPE_META, INPUT_SOURCE_META, HELP, SDFFLOW_OPTIMIZE_KEYS, SDFFLOW_STRUCTURAL_KEYS
+} from "./constants.js";
 import { apiRequest, requireRuntime } from "./api.js";
 import {
   typeColor, STANDALONE_INFERENCE_MODEL_IDS, SDFFLOW_OPTIMIZE_INERT_KEYS, CAD_GENERATOR_ROW_MODES, VER_SURROGATE_SETTINGS,
-  inferenceModel, cadGeneratorMode, cadGeneratorValue, cadRowActive, cadSurrogate, cadUsesSurrogate
+  inferenceModel, cadGeneratorMode, cadGeneratorValue, cadLegacyOptValue, cadModelBlock, cadRowActive,
+  cadSurrogate, cadUsesSurrogate, isCadOptKey
 } from "./validate.js";
 import { blockFacts, factsTable } from "./cards.js";
 import { duplicateNode, deleteSelected, render } from "./graph.js";
-import { openConfig, choicesFor, requiredFor } from "./config.js";
+import { openConfig, choicesFor, requiredFor, backendDefaultsFor, keyDisposition } from "./config.js";
 import { openArtifact } from "./viewer.js";
 import { runGraph } from "./run.js";
 import { activateStudioWorkspace, openStudio, openModelDetailWorkspace, openTrainingMetricsWorkspace, liveShell, liveError } from "./studio.js";
@@ -300,25 +303,30 @@ function surrogateSection(node) {
       : `Switch <strong>mode</strong> to <code>optimize</code> to search designs with it; this ${escapeHtml(mode)} run ignores it.`;
     return `<section class="inspect-section"><div class="section-title">HI-MGN surrogate</div><div class="diagnostic"><i></i><div><strong>${escapeHtml(sourceLabel)} is wired but unused in this mode.</strong><br>It is read only by <code>mode optimize</code> with <code>opt_analysis surrogate</code>. ${next}</div></div></section>`;
   }
-  const modelEdge = state.edges.find(edge => edge.toNode === node.id && edge.toPort === "model");
-  const modelNode = modelEdge && state.nodes.find(candidate => candidate.id === modelEdge.fromNode);
-  const merged = { ...(modelNode?.config || {}), ...node.config };
   const ver = surrogate?.layout === "ver";
+  // What the wire does not supply is typed here: the checkpoint with nothing
+  // wired, the inference config unless an HI-MGN model block is wired.
+  const editable = key => {
+    const legacy = cadLegacyOptValue(node, key);
+    return `<div class="form-row"><label>${keyLabel(key)}${legacy ? `<small class="inline-auto">from the SDFFlow block</small>` : ""}</label><input class="field inspector-config" data-key="${escapeHtml(key)}" value="${escapeHtml(cadGeneratorValue(node, key))}" placeholder="path, relative to methods/SDFFlow">${rowHelp(node, key)}</div>`;
+  };
   const rows = [
     readonlyRow("surrogate model", surrogate ? `${sourceLabel} (${surrogate.source.id})` : "", surrogate ? "wired" : "wire an HI-MGN model block in"),
-    readonlyRow("checkpoint", String(merged.opt_surrogate_checkpoint || ""), surrogate ? "from the wire" : "SDFFlow Full config"),
+    surrogate
+      ? readonlyRow("checkpoint", String(cadGeneratorValue(node, "opt_surrogate_checkpoint") || ""), "from the wire")
+      : editable("opt_surrogate_checkpoint"),
     surrogate?.block
       ? readonlyRow("inference config", `written from ${surrogate.block.id} at Validate / Run`, "automatic")
-      : readonlyRow("inference config", String(merged.opt_surrogate_config || ""), "SDFFlow Full config"),
+      : editable("opt_surrogate_config"),
     ...(ver ? Object.entries(VER_SURROGATE_SETTINGS).map(([key, value]) => readonlyRow(keyLabel(key), value, "fixed by the ex13 labels")) : [])
   ].join("");
-  const verified = !ver && ["true", "1", "yes", "on"].includes(String(merged.opt_fea_verify ?? "").trim().toLowerCase());
+  const verified = !ver && ["true", "1", "yes", "on"].includes(String(cadGeneratorValue(node, "opt_fea_verify") ?? "").trim().toLowerCase());
   const layoutNote = ver
     ? "This surrogate was trained on the ex13 vertical-load labels (output_var 4, cond_var 0), so the run is set to the vertical load case in DeepJEB's frame at 4470 kg/m³. FEA re-verification stays off: <code>opt_fea_verify</code> re-solves with fea.py's pad / lug-crown boundary conditions, not the bolt-bore / lug-bore rule these labels used, so it would grade the surrogate against a different problem."
     : "";
   const gate = verified
     ? `<div class="diagnostic"><i></i><div><strong>FEA verification on (<code>opt_fea_verify</code>).</strong><br>The search ranks with HI-MGN; afterwards the optimized design, the best baseline, and the typical baseline are re-solved with the tet4 FEA solver. report.md and the <code>fea_*</code> columns of the optimization table carry the solver's numbers: judge the design on those.</div></div>`
-    : `<div class="diagnostic warning"><i></i><div><strong>Demonstration path, not verified structural evidence.</strong><br>Every number this run reports is a HI-MGN prediction. ${ver ? layoutNote + " Check the winner with an independent analysis before acting on it." : "Set <code>opt_fea_verify</code> True in the connected SDFFlow block's Full config to re-solve the result with the real solver at the end, or use FEA analysis."}</div></div>`;
+    : `<div class="diagnostic warning"><i></i><div><strong>Demonstration path, not verified structural evidence.</strong><br>Every number this run reports is a HI-MGN prediction. ${ver ? layoutNote + " Check the winner with an independent analysis before acting on it." : "Set <strong>FEA re-check</strong> (<code>opt_fea_verify</code>) to True in Settings above to re-solve the result with the real solver at the end, or use FEA analysis."}</div></div>`;
   return `<section class="inspect-section"><div class="section-title">HI-MGN surrogate</div>${rows}${gate}</section>`;
 }
 
@@ -331,16 +339,75 @@ function surrogateSection(node) {
 function cadGeneratorEntries(node) {
   const mode = cadGeneratorMode(node);
   const rank = key => key === "mode" ? 0 : CAD_GENERATOR_ROW_MODES[key]?.length === 1 && CAD_GENERATOR_ROW_MODES[key][0] === mode ? 1 : 2;
-  return [...new Set([...Object.keys(BLOCK_SPECS[node.type].defaults), ...Object.keys(node.config)])]
+  // FEA re-check means something only for a surrogate search whose labels
+  // fea.py can reproduce; a block default would put it on every FEA search.
+  const feaRecheck = cadUsesSurrogate(node) && !verPinned(node);
+  return [...new Set([...Object.keys(BLOCK_SPECS[node.type].defaults), ...(feaRecheck ? ["opt_fea_verify"] : []), ...Object.keys(node.config)])]
     // Pre-rename names; their values run (and show) as num_samples / cfg_scale.
     .filter(key => !["candidates", "guidance"].includes(key))
-    // Shown, with what it is used for, in the HI-MGN surrogate section.
-    .filter(key => key !== "opt_surrogate_checkpoint")
+    // The other opt_* keys sit in "More optimization settings", and the
+    // surrogate's files in the HI-MGN surrogate section.
+    .filter(key => !isCadOptKey(key) || CAD_MAIN_OPT_KEYS.has(key))
+    .filter(key => key !== "opt_fea_verify" || feaRecheck)
+    // Fixed by the ex13 labels; shown read-only in the surrogate section.
+    .filter(key => !(verPinned(node) && key in VER_SURROGATE_SETTINGS))
     .filter(key => cadRowActive(mode, key))
     .filter(key => !(mode === "optimize" && SDFFLOW_OPTIMIZE_INERT_KEYS.has(key)))
     .map((key, index) => ({ key, index }))
     .sort((a, b) => rank(a.key) - rank(b.key) || a.index - b.index)
     .map(({ key }) => [key, cadGeneratorValue(node, key)]);
+}
+
+// The optimization rows the CAD Generator shows up front; every other opt_*
+// key is under "More optimization settings", at its native default.
+const CAD_MAIN_OPT_KEYS = new Set([
+  "opt_analysis", "opt_budget", "opt_baseline_size", "opt_popsize",
+  "opt_load_cases", "opt_vertical_disp_max", "opt_stress_margin", "opt_fea_verify"
+]);
+// Read only by the surrogate side of a run.
+const SURROGATE_ONLY_KEYS = new Set([
+  "opt_screen_batch", "opt_surrogate_python", "opt_surrogate_target_nodes",
+  "opt_surrogate_config", "opt_surrogate_checkpoint"
+]);
+// optimize.py falls back to these literals; the live spec publishes no default.
+const SDFFLOW_OPT_FALLBACKS = {
+  opt_shell_scale: "1.25", opt_subspace_seed: "0", opt_seed: "0",
+  opt_latent_range: "opt_shell_scale", opt_surrogate_python: "SDFFlow's own interpreter"
+};
+let cadMoreOpen = false;
+
+/** Whether the wired ex13 HI-MGN fixes VER_SURROGATE_SETTINGS for this run. */
+function verPinned(node) {
+  const surrogate = cadSurrogate(node);
+  return Boolean(surrogate?.block && surrogate.layout === "ver" && cadUsesSurrogate(node));
+}
+
+/** What an empty opt_* row runs with. */
+function cadOptPlaceholder(key) {
+  if (!isCadOptKey(key)) return "";
+  const fallback = backendDefaultsFor("sdfflow", "optimize")[key] ?? SDFFLOW_OPT_FALLBACKS[key];
+  return fallback === undefined || fallback === null || fallback === "" ? "native default" : `native default: ${fallback}`;
+}
+
+/**
+ * The opt_* rows behind "More optimization settings": the rest of what
+ * `mode optimize` reads, and in `sample` the structural keys its condition
+ * audit reads when that audit runs FEA or the surrogate.
+ */
+function cadMoreEntries(node) {
+  const mode = cadGeneratorMode(node);
+  const audit = String(node.config.condition_audit || cadModelBlock(node)?.config?.condition_audit || "").trim().toLowerCase();
+  const keys = mode === "optimize"
+    ? [...SDFFLOW_OPTIMIZE_KEYS, ...SDFFLOW_STRUCTURAL_KEYS]
+    : mode === "sample" && ["fea", "surrogate"].includes(audit) ? SDFFLOW_STRUCTURAL_KEYS : [];
+  const surrogateRun = cadUsesSurrogate(node) || (mode === "sample" && audit === "surrogate");
+  return keys
+    .filter(key => !CAD_MAIN_OPT_KEYS.has(key))
+    .filter(key => surrogateRun || !SURROGATE_ONLY_KEYS.has(key))
+    // The surrogate section owns these whenever it is shown.
+    .filter(key => !(cadUsesSurrogate(node) && ["opt_surrogate_config", "opt_surrogate_checkpoint"].includes(key)))
+    .filter(key => !(verPinned(node) && key in VER_SURROGATE_SETTINGS))
+    .map(key => [key, cadGeneratorValue(node, key)]);
 }
 
 function isFixedBehaviour(node, key) {
@@ -413,6 +480,8 @@ const KEY_LABELS = {
   fm_learningr: "Flow learning rate", lc_learningr: "LC learning rate",
   num_samples: "Shapes to generate", ode_steps: "ODE steps", mc_resolution: "Mesh resolution",
   cfg_scale: "Guidance scale", cond_values: "Condition values", opt_analysis: "Analysis backend", opt_vertical_disp_max: "Vertical deflection limit (mm)", opt_load_cases: "Load cases",
+  opt_budget: "Search budget (0 = screening)", opt_baseline_size: "Designs screened first", opt_popsize: "Designs per generation",
+  opt_stress_margin: "Stress margin (× baseline)", opt_fea_verify: "FEA re-check",
   infer_timesteps: "Rollout steps", inference_output_dir: "Results folder", num_workers: "Loader workers",
   infer_chunk_size: "Node chunk", infer_query_chunk_size: "Query chunk",
   num_vae_samples: "Ensemble draws", flow_steps: "Flow steps", flow_solver: "Flow solver",
@@ -550,7 +619,10 @@ function modelInspectorEntries(node, modelId, limit) {
   ];
   // `model` is deliberately excluded: it is the block's identity, the header
   // already names it, and the summary line above prints the exact route id.
-  const rest = Object.keys(config).filter(key => key !== "model" && !ranked.includes(key) && !trainingOnly(key));
+  // A leftover opt_* value on SDFFlow belongs to its CAD Generator; the Full
+  // config lists it under "Inactive / rejected" to be cleared.
+  const rest = Object.keys(config).filter(key => key !== "model" && !ranked.includes(key) && !trainingOnly(key)
+    && keyDisposition(modelId, key, config) !== "generator");
   return [...ranked, ...rest].slice(0, limit).map(key => [key, config[key]]);
 }
 
@@ -656,25 +728,15 @@ export function renderInspector() {
           // currently unproven HI-MGN forward pass.
           ? { mode: ["sample", "reconstruct", "interpolate", "optimize"],
               opt_analysis: ["fea", "surrogate"],
+              opt_fea_verify: withCurrent(["False", "True"], node.config.opt_fea_verify),
               // cond_sweep (CHOICES) is not offered: its cond_values_a/b and
               // sweep_steps are Full config keys this block does not carry.
               interpolation_space: withCurrent(["slerp_noise", "lerp_latent"], node.config.interpolation_space) }
           : node.type === "evaluate.training_metrics"
             ? { y_scale: ["linear", "log"] }
             : {};
-  const actions = inspectorActions(node, spec);
-  $("#inspectorContent").innerHTML = `
-    <section class="inspect-hero">
-      <div class="inspect-meta"><span class="type-chip">${escapeHtml(node.type)}</span><span class="status"><i></i>${node.status === "idle" ? "Ready" : node.status}</span></div>
-      <h2>${escapeHtml(spec.label)}</h2>
-      <p>${escapeHtml(spec.description)}</p>
-      <div class="inspect-actions"><button class="button primary" id="inspectorRun">${escapeHtml(actions.primary)}</button>${actions.secondary ? `<button class="button" id="inspectorSamples">${escapeHtml(actions.secondary)}</button>` : ""}</div>
-    </section>
-    ${glance.length ? `<section class="inspect-section"><div class="section-title">At a glance</div>${factsTable(glance, "inspect-facts")}</section>` : ""}
-    <section class="inspect-section">
-      <div class="section-title">${spec.isModel ? "Key settings" : "Settings"}</div>
-      ${spec.isModel ? `<div class="config-summary"><span><strong>${escapeHtml(spec.modelId)}</strong><small>${Object.keys(node.config).length} settings in this block · every key in Full config${autoFillCount(node) ? ` · ${autoFillCount(node)} filled from links` : ""}</small></span><button class="button small primary" id="openFullConfig">Full config</button></div>` : ""}
-      <div style="margin-top:${spec.isModel ? 9 : 0}px">${configEntries.map(([key, value]) => {
+  const moreEntries = node.type === "run.cad_generator" ? cadMoreEntries(node) : [];
+  const configRow = ([key, value]) => {
         // Model blocks: reuse the config sheet's own choice table rather than a
         // second hand-written one. Only `mode` used to become a <select> here,
         // so parallel_mode, activation, coordinate_normalization, lc_data_type,
@@ -682,7 +744,7 @@ export function renderInspector() {
         // in the inspector while the Full config sheet offered a dropdown for
         // the exact same key -- the inspector happily accepted values the
         // launcher rejects.
-        const modelChoices = spec.isModel ? choicesFor(spec.modelId, key) : null;
+        const modelChoices = spec.isModel ? choicesFor(spec.modelId, key, node.config) : null;
         if (modelChoices?.length) {
           return `<div class="form-row"><label>${keyLabel(key)}</label><select class="field inspector-config" data-key="${escapeHtml(key)}">${modelChoices.map(choice => `<option value="${escapeHtml(choice)}"${sameChoice(value, choice) ? " selected" : ""}>${escapeHtml(choice)}</option>`).join("")}</select></div>`;
         }
@@ -709,10 +771,30 @@ export function renderInspector() {
           return `<div class="form-row run-evidence"><label>${keyLabel(key)}<small class="inline-auto">${note}</small></label><output class="field readonly" title="${escapeHtml(value)}">${escapeHtml(value) || "—"}</output></div>`;
         }
         const automatic = autoFillMeta(node, key);
-        return `<div class="form-row${automatic ? " graph-autofilled" : ""}"><label>${keyLabel(key)}${automatic ? `<small class="inline-auto">auto · ${escapeHtml(automatic.sourceLabel)}</small>` : ""}</label><input class="field inspector-config" data-key="${escapeHtml(key)}" value="${escapeHtml(value)}">${rowHelp(node, key)}</div>`;
-      }).join("")}</div>
+        // A CAD Generator opt_* row: empty runs the native default, and a value
+        // still read off the SDFFlow block (a graph saved before the move) says so.
+        const cadOpt = node.type === "run.cad_generator" && isCadOptKey(key);
+        const legacy = cadOpt && cadLegacyOptValue(node, key);
+        const note = automatic ? `auto · ${escapeHtml(automatic.sourceLabel)}` : legacy ? "from the SDFFlow block" : "";
+        const placeholder = cadOpt ? ` placeholder="${escapeHtml(cadOptPlaceholder(key))}"` : "";
+        return `<div class="form-row${automatic ? " graph-autofilled" : ""}"><label>${keyLabel(key)}${note ? `<small class="inline-auto">${note}</small>` : ""}</label><input class="field inspector-config" data-key="${escapeHtml(key)}" value="${escapeHtml(value)}"${placeholder}>${rowHelp(node, key)}</div>`;
+  };
+  const actions = inspectorActions(node, spec);
+  $("#inspectorContent").innerHTML = `
+    <section class="inspect-hero">
+      <div class="inspect-meta"><span class="type-chip">${escapeHtml(node.type)}</span><span class="status"><i></i>${node.status === "idle" ? "Ready" : node.status}</span></div>
+      <h2>${escapeHtml(spec.label)}</h2>
+      <p>${escapeHtml(spec.description)}</p>
+      <div class="inspect-actions"><button class="button primary" id="inspectorRun">${escapeHtml(actions.primary)}</button>${actions.secondary ? `<button class="button" id="inspectorSamples">${escapeHtml(actions.secondary)}</button>` : ""}</div>
+    </section>
+    ${glance.length ? `<section class="inspect-section"><div class="section-title">At a glance</div>${factsTable(glance, "inspect-facts")}</section>` : ""}
+    <section class="inspect-section">
+      <div class="section-title">${spec.isModel ? "Key settings" : "Settings"}</div>
+      ${spec.isModel ? `<div class="config-summary"><span><strong>${escapeHtml(spec.modelId)}</strong><small>${Object.keys(node.config).length} settings in this block · every key in Full config${autoFillCount(node) ? ` · ${autoFillCount(node)} filled from links` : ""}</small></span><button class="button small primary" id="openFullConfig">Full config</button></div>` : ""}
+      <div style="margin-top:${spec.isModel ? 9 : 0}px">${configEntries.map(configRow).join("")}</div>
     </section>
     ${node.type === "run.cad_generator" ? surrogateSection(node) : ""}
+    ${moreEntries.length ? `<section class="inspect-section"><details class="inspect-more" id="cadMore"${cadMoreOpen ? " open" : ""}><summary>More optimization settings <small>${moreEntries.length}</small></summary><p class="input-source-help">An empty row runs at the native default shown in it.</p>${moreEntries.map(configRow).join("")}</details></section>` : ""}
     ${node.type === "prep.geometry" && String(node.config.emit || "").includes("pointcloud") && String(node.config.mode || "").toLowerCase() === "ingest"
       // pipeline.py writes the point cloud to a sidecar next to the graph file
       // (pointcloud_output_path: "<stem>_pointcloud<ext>"). Nothing in the graph
@@ -725,6 +807,7 @@ export function renderInspector() {
     ${connectionsSection(node, spec)}
     <section class="inspect-section"><div style="display:grid;grid-template-columns:1fr 1fr;gap:6px"><button class="button" id="duplicateNode">Duplicate</button><button class="button danger" id="deleteNode">Delete block</button></div></section>
   `;
+  $("#cadMore")?.addEventListener("toggle", event => { cadMoreOpen = event.target.open; });
   $$(".inspector-config").forEach(control => control.addEventListener("change", () => {
     snapshot();
     node.config[control.dataset.key] = control.value;

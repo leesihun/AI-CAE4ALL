@@ -7,7 +7,7 @@ import {
 } from "./constants.js";
 import { parametersTableGraphic } from "./graphics.js";
 import { blockFacts, blockSubtitle, factsTable } from "./cards.js";
-import { typeColor, compatible, portRequiredInMode, validateGraph, cadUsesSurrogate } from "./validate.js";
+import { typeColor, compatible, portRequiredInMode, validateGraph, cadGeneratorValue, cadSurrogate, cadUsesSurrogate } from "./validate.js";
 import { openArtifact } from "./viewer.js";
 import { runGraph } from "./run.js";
 import { renderInspector } from "./inspector.js";
@@ -425,10 +425,18 @@ export function connectPortDetails(first, second) {
   const ranks = inputNode?.type === "run.cad_generator" && input.portId === "surrogate"
     && !cadUsesSurrogate(inputNode);
   if (ranks) Object.assign(inputNode.config, { mode: "optimize", opt_analysis: "surrogate" });
+  // The block's 0.2 mm deflection limit is set for the FEA labels; on the ex13
+  // vertical-load labels the median design deflects 0.36 mm, so 0.2 rejects
+  // most of the population. Move it only off that default, never off a value
+  // the user typed.
+  const relimit = inputNode?.type === "run.cad_generator" && input.portId === "surrogate"
+    && cadSurrogate(inputNode)?.layout === "ver" && cadUsesSurrogate(inputNode)
+    && ["", "0.2"].includes(String(cadGeneratorValue(inputNode, "opt_vertical_disp_max") ?? "").trim());
+  if (relimit) inputNode.config.opt_vertical_disp_max = "0.36";
   render();
   toast(ranks
-    ? "Blocks linked. CAD Generator switched to optimize with the HI-MGN surrogate (undo with Ctrl+Z)."
-    : "Blocks linked.");
+    ? `Blocks linked. CAD Generator switched to optimize with the HI-MGN surrogate${relimit ? "; vertical deflection limit set to the ex13 median, 0.36 mm" : ""} (undo with Ctrl+Z).`
+    : relimit ? "Blocks linked. Vertical deflection limit set to the ex13 median, 0.36 mm." : "Blocks linked.");
   return true;
 }
 

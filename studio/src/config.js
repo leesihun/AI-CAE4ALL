@@ -6,7 +6,7 @@ import {
   OPERATOR_REMOVED, TRANSOLVER_REJECTED, VARIATIONAL_REMOVED,
   CHI_FLOW_REMOVED, SIMULGEN_REMOVED_NOOPS, PARALLEL_MODE_CHOICES, MODEL_CHOICES,
   MGN_NATIVE_REMOVED, MGN_VARIATIONAL_IGNORED,
-  CONFIG_SECTIONS, HELP, PRESET_SOURCES
+  CONFIG_SECTIONS, HELP, PRESET_SOURCES, SDFFLOW_STRUCTURAL_KEYS
 } from "./constants.js";
 import { apiRequest, requireRuntime } from "./api.js";
 import { addBlock, selectNode } from "./graph.js";
@@ -101,8 +101,30 @@ export function keyDisposition(modelId, key, config = null) {
     const owner = key.startsWith("point") ? "point_deeponet" : key.startsWith("deeponet_") ? "deeponet" : key.startsWith("fno_") ? "fno" : "";
     if (owner && owner !== modelId) return "inactive";
   }
+  // SDFFlow's opt_* keys are the CAD Generator's (constants.js
+  // SDFFLOW_OPTIMIZE_KEYS): training never reads them, and evaluate reads only
+  // the structural ones, through its condition audit. A block a graph saved in
+  // a generation mode, from before those modes moved, still reads them all.
+  if (modelId === "sdfflow" && key.startsWith("opt_")) {
+    const mode = String(config?.mode || "").trim().toLowerCase();
+    if (mode === "sample" || mode === "optimize") return "active";
+    return mode === "evaluate" && SDFFLOW_STRUCTURAL_KEYS.includes(key) ? "active" : "generator";
+  }
   if (key.startsWith("_") || ["num_timesteps", "num_node_types", "log_dir"].includes(key)) return "runtime";
   return "active";
+}
+
+// Modes a route runs from its execution block rather than its model block:
+// SDFFlow's generation modes are the CAD Generator's, which carries their rows
+// (num_samples, the optimization settings, ...). The model block trains and
+// evaluates; a block saved in one of these modes keeps it on its list.
+const EXECUTION_BLOCK_MODES = { sdfflow: ["sample", "reconstruct", "interpolate", "optimize"] };
+
+/** The modes a model block offers, keeping the one it is saved in. */
+export function blockModes(modelId, current = "") {
+  const saved = String(current ?? "").trim().toLowerCase();
+  const moved = EXECUTION_BLOCK_MODES[modelId] || [];
+  return MODEL_CATALOG[modelId].modes.filter(mode => !moved.includes(mode) || mode === saved);
 }
 
 function isTruthyConfigValue(value) {
@@ -165,9 +187,9 @@ export function sectionFor(modelId, key, required, config = null) {
   return "Advanced";
 }
 
-export function choicesFor(modelId, key) {
+export function choicesFor(modelId, key, config = null) {
   if (key === "model") return [modelId];
-  if (key === "mode") return MODEL_CATALOG[modelId].modes;
+  if (key === "mode") return blockModes(modelId, config?.mode);
   if (BOOLEAN_KEYS.has(key) || /^use_/.test(key)) return ["False", "True"];
   if (key === "parallel_mode") {
     // Mirrors each spec's own validator exactly: sdfflow/simulgenvae take
@@ -336,13 +358,14 @@ export function presetOptions(modelId) {
     ? [["high_performance", `High performance (${sources.high.note})`], ["smoke", "Smoke test"], ["low_vram", `Low VRAM (${sources.low.note})`]]
     : [["repository", "Studio defaults"], ["smoke", "Smoke test"]];
   if (modelId === "meshgraphnets") options.push(["mgn_flat", "Flat MGN"], ["mgn_hi", "HI-MGN"], ["mgn_bsms", "BSMS-GNN"]);
-  // One checked-in optimize config; the two entries differ only in opt_analysis
-  // (the exact FEA solve, or the HI-MGN surrogate forward pass).
-  // No "sdfflow_full" / "simulgen_full" entry: both fell through to the same
+  // No closed-loop optimization entries: those settings are the CAD
+  // Generator's (its optimize rows default to the checked-in optimize config),
+  // and a preset here set them on a block whose training never reads them.
+  // No "sdfflow_full"" / "simulgen_full" entry: both fell through to the same
   // `{...model.defaults}` branch as "Studio defaults", so the menu offered the
   // same action under three names. The staged presets below each change a
   // different set of keys.
-  if (modelId === "sdfflow") options.push(["sdfflow_vae", "VAE only"], ["sdfflow_fm", "Flow matching only"], ["sdfflow_optimize", "Closed-loop optimization (FEA)"], ["sdfflow_optimize_surrogate", "Closed-loop optimization (surrogate)"]);
+  if (modelId === "sdfflow") options.push(["sdfflow_vae", "VAE only"], ["sdfflow_fm", "Flow matching only"]);
   if (modelId === "simulgenvae") options.push(["simulgen_vae", "VAE only"], ["simulgen_lc", "LC only"], ["simulgen_reconstruct", "Reconstruct fields"]);
   return options;
 }
@@ -366,7 +389,7 @@ export function openConfig(nodeId) {
   $("#configIcon").textContent = ICONS.model;
   $("#configTitle").textContent = `${spec.label} · full configuration`;
   $("#configSubtitle").textContent = `${MODEL_CATALOG[spec.modelId].keys.length} accepted keys · ${MODEL_CATALOG[spec.modelId].modes.length} modes · ${MODEL_CATALOG[spec.modelId].dataset}`;
-  $("#configMode").innerHTML = MODEL_CATALOG[spec.modelId].modes.map(mode => `<option value="${mode}">${mode}</option>`).join("");
+  $("#configMode").innerHTML = blockModes(spec.modelId, node.config.mode).map(mode => `<option value="${mode}">${mode}</option>`).join("");
   $("#configMode").value = node.config.mode || MODEL_CATALOG[spec.modelId].modes[0];
   $("#configPreset").innerHTML = presetOptions(spec.modelId).map(([value, label]) => `<option value="${value}">${label}</option>`).join("");
   $("#configOverlay").classList.add("open");
@@ -394,6 +417,9 @@ export function renderConfig() {
   model.keys.forEach(key => {
     const disposition = keyDisposition(spec.modelId, key, node.config);
     if (!showInactive && disposition !== "active") return;
+    // Listing every unset opt_* key here is what made SDFFlow look like it
+    // took a search budget; only a leftover value is shown, to be cleared.
+    if (disposition === "generator" && !Object.hasOwn(node.config, key)) return;
     if (changedOnly && !Object.hasOwn(node.config, key)) return;
     if (search && !key.toLowerCase().includes(search)) return;
     groups[sectionFor(spec.modelId, key, required, node.config)].push(key);
@@ -447,10 +473,10 @@ export function renderConfig() {
     const hasBackendDefault = !set && Object.hasOwn(backendDefaults, key);
     const backendDefault = hasBackendDefault ? backendDefaults[key] : "";
     const rejectedByPreflight = state.configRejectedNode === node.id && state.configRejectedField === key;
-    const status = rejectedByPreflight || disposition === "removed" || disposition === "unknown" ? "rejected" : disposition === "inactive" ? "inactive" : disposition === "runtime" ? "runtime" : hasBackendDefault ? "defaulted" : requiredKey ? "required" : set ? "set" : "optional";
+    const status = rejectedByPreflight || disposition === "removed" || disposition === "unknown" ? "rejected" : ["inactive", "generator"].includes(disposition) ? "inactive" : disposition === "runtime" ? "runtime" : hasBackendDefault ? "defaulted" : requiredKey ? "required" : set ? "set" : "optional";
     const value = set ? node.config[key] : "";
     const automatic = autoFillMeta(node, key);
-    const choices = choicesFor(spec.modelId, key);
+    const choices = choicesFor(spec.modelId, key, node.config);
     const disabled = disposition === "removed" || disposition === "runtime";
     const unsetLabel = hasBackendDefault ? `backend default: ${backendDefault}` : "not set";
     const control = choices
@@ -464,6 +490,7 @@ export function renderConfig() {
       : disposition === "unknown" ? "This key is not accepted by the selected model. Clear its value to remove it before running preflight again."
       : disposition === "removed" ? "Known by a shared diagnostic schema, but rejected for this selected model."
       : disposition === "inactive" ? "Accepted by the shared family schema but configures a different variant."
+      : disposition === "generator" ? "A post-training setting, read only by the runs a CAD Generator launches: set it in that block's optimization rows. Clear it here — until then a CAD Generator with no value of its own for it still uses this one."
       : "";
     const baseHelp = dispositionHelp || HELP[key] || (choices
       ? "Pick one of the accepted values, or leave it unset to use the native default."
@@ -473,7 +500,7 @@ export function renderConfig() {
       : hasBackendDefault && disposition === "active"
         ? `${baseHelp} Backend default for ${mode}: ${backendDefault}; leave this unset to use it or enter a value to override it.`
         : baseHelp;
-    return `<article class="config-card ${disposition}${automatic ? " graph-autofilled" : ""}${rejectedByPreflight ? " preflight-rejected" : ""}"><header class="config-card-head"><span class="config-key">${escapeHtml(key)}</span><span class="config-card-states">${automatic ? `<span class="config-status autofill">auto · ${escapeHtml(automatic.sourceLabel)}</span>` : ""}<span class="config-status ${status}">${status}</span></span></header>${control}<p class="config-help">${escapeHtml(help)}</p></article>`;
+    return `<article class="config-card ${disposition === "generator" ? "inactive" : disposition}${automatic ? " graph-autofilled" : ""}${rejectedByPreflight ? " preflight-rejected" : ""}"><header class="config-card-head"><span class="config-key">${escapeHtml(key)}</span><span class="config-card-states">${automatic ? `<span class="config-status autofill">auto · ${escapeHtml(automatic.sourceLabel)}</span>` : ""}<span class="config-status ${status}">${status}</span></span></header>${control}<p class="config-help">${escapeHtml(help)}</p></article>`;
   }).join("") : `<div class="inspect-empty" style="height:auto;grid-column:1/-1"><p>No keys match this filter.</p></div>`;
 
   $$(".full-config-control").forEach(control => control.addEventListener("change", () => {
@@ -606,48 +633,6 @@ export async function applyPreset() {
   };
   if (preset === "sdfflow_vae") values = { mode: "train_vae" };
   if (preset === "sdfflow_fm") values = { mode: "train_fm" };
-  if (preset === "sdfflow_optimize" || preset === "sdfflow_optimize_surrogate") {
-    if (!requireRuntime()) return;
-    // The flat configs/SDFFlow/config_optimize*.txt roster this used to fetch no
-    // longer exists (the tree is configs/SDFFlow/geometry_generation/<ex>/baseline/),
-    // so both entries could only ever fail with a 400. There is one checked-in
-    // optimize config; the surrogate entry is that same run with the analysis
-    // backend switched, which is the only difference between the two.
-    const file = "configs/SDFFlow/geometry_generation/ex1/baseline/config_optimize_sdfflow.txt";
-    try {
-      const payload = await apiRequest(`/api/config?path=${encodeURIComponent(file)}`);
-      values = parseConfig(payload.text).values;
-    } catch (error) {
-      toast(`Could not load ${file}: ${error.message}`, "error");
-      return;
-    }
-    // That file is the dataset_matrix run's: its generator checkpoints, its
-    // device (gpu_ids 7, an 8-GPU host) and its output tree. Applied whole, it
-    // pointed a Studio-trained block at someone else's model and a GPU this
-    // machine may not have. The preset is the optimization recipe; the block
-    // keeps its own generator, device and seed, and the search writes beside
-    // its own outputs.
-    ["vae_modelpath", "fm_modelpath", "gpu_ids", "parallel_mode", "seed"].forEach(key => delete values[key]);
-    const ownDir = String(node.config.output_dir || "").trim().replace(/\/+$/, "");
-    if (ownDir) values.output_dir = /\/optimize$/i.test(ownDir) ? ownDir : `${ownDir}/optimize`;
-    // The surrogate is the ex13 (DeepJEB vertical load) HI-MGN. Its checkpoint
-    // exists only after that run has trained; until then preflight names the
-    // missing file, which is the true state of the surrogate path. Its labels
-    // fix the problem: vertical load only, DeepJEB's own frame (184.181 mm
-    // longest side), Ti-6Al-4V at 4470 kg/m^3, and bolt-bore/lug-bore boundary
-    // conditions that fea.py does not model -- so opt_fea_verify stays off
-    // (optimize refuses it on this layout) and 0.36 mm is the ex13 median u_z.
-    if (preset === "sdfflow_optimize_surrogate") Object.assign(values, {
-      opt_analysis: "surrogate",
-      opt_surrogate_config: "../../configs/MeshGraphNets/deterministic/ex13/baseline/config_infer_himgn.txt",
-      opt_surrogate_checkpoint: "../../output/dataset_matrix/deterministic/ex13/himgn/model.pth",
-      opt_load_cases: "vertical",
-      opt_length_scale: "0.102323",
-      opt_material_rho: "4470",
-      opt_vertical_disp_max: "0.36",
-      opt_fea_verify: "False"
-    });
-  }
   if (preset === "simulgen_vae") values = { mode: "train_vae", training_epochs: model.defaults.vae_training_epochs, batch_size: model.defaults.vae_batch_size, learningr: model.defaults.vae_learningr };
   if (preset === "simulgen_lc") values = { mode: "train_lc", training_epochs: model.defaults.lc_training_epochs, batch_size: model.defaults.lc_batch_size, learningr: model.defaults.lc_learningr };
   if (preset === "simulgen_reconstruct") values = { mode: "reconstruct", batch_size: "16", output_dir: "../../output/simulgenvae/ex1/reconstruct" };
@@ -657,30 +642,11 @@ export async function applyPreset() {
   // ERRORS -- so only keys this route actively reads are applied.
   values = Object.fromEntries(Object.entries(values).filter(([key]) => model.keys.includes(key) && keyDisposition(spec.modelId, key, { ...node.config, ...values }) === "active"));
   const changes = Object.entries(values).filter(([key, value]) => String(node.config[key] ?? "") !== String(value));
-  // A CAD Generator wired to this block runs the pipeline with ITS mode and
-  // opt_analysis -- the run config lays the generator's own values over this
-  // block's -- so an optimize preset applied here alone was undone at Run: the
-  // generator's default `sample` launched a plain candidate batch, and its
-  // default `fea` replaced the surrogate. The two switches the preset is about
-  // are carried to every connected generator, and the dialog names them.
-  const generatorSwitches = ["sdfflow_optimize", "sdfflow_optimize_surrogate"].includes(preset) && values.mode === "optimize"
-    ? { mode: "optimize", opt_analysis: String(values.opt_analysis || "fea") }
-    : {};
-  const generatorChanges = state.edges
-    .filter(edge => edge.fromNode === node.id && edge.toPort === "model")
-    .map(edge => state.nodes.find(candidate => candidate.id === edge.toNode))
-    .filter(candidate => candidate?.type === "run.cad_generator")
-    .flatMap(generator => Object.entries(generatorSwitches)
-      .filter(([key, value]) => String(generator.config[key] ?? "").toLowerCase() !== value)
-      .map(([key, value]) => ({ generator, key, value })));
-  if (!changes.length && !generatorChanges.length) {
+  if (!changes.length) {
     toast("Preset already matches the current configuration.");
     return;
   }
-  const lines = [
-    ...changes.map(([key, value]) => `${key} → ${value}`),
-    ...generatorChanges.map(({ key, value }) => `CAD Generator ${key} → ${value}`)
-  ];
+  const lines = changes.map(([key, value]) => `${key} → ${value}`);
   const count = lines.length;
   const preview = lines.slice(0, 9).join("\n");
   const origin = source
@@ -689,10 +655,9 @@ export async function applyPreset() {
   if (!window.confirm(`${origin}Apply ${count} preset changes?\n\n${preview}${count > 9 ? "\n…" : ""}\n\nOther manual values are preserved.`)) return;
   snapshot();
   Object.assign(node.config, values);
-  generatorChanges.forEach(({ generator, key, value }) => { generator.config[key] = value; });
   if (values.mode) $("#configMode").value = values.mode;
   const label = presetOptions(spec.modelId).find(([value]) => value === preset)?.[1] || preset;
-  state.configMessages = [{ type: "", text: `Applied ${label} with ${count} explicit changes${source ? ` from ${source.path}` : ""}${generatorChanges.length ? ` (${generatorChanges.length} on the connected CAD Generator)` : ""}.` }];
+  state.configMessages = [{ type: "", text: `Applied ${label} with ${count} explicit changes${source ? ` from ${source.path}` : ""}.` }];
   $("#savedState").textContent = "Unsaved changes";
   renderConfig();
 }
@@ -813,6 +778,9 @@ export function jumpToFailingField(nodeId, field) {
     const control = document.querySelector(`#inspectorContent .inspector-config[data-key="${CSS.escape(key)}"]`);
     const row = control?.closest(".form-row");
     if (row) {
+      // "More optimization settings" is collapsed by default.
+      const fold = row.closest("details");
+      if (fold) fold.open = true;
       row.scrollIntoView({ block: "center", behavior: "smooth" });
       row.classList.add("field-flash");
       control.focus();
@@ -841,7 +809,7 @@ export function jumpToFailingField(nodeId, field) {
   const required = requiredFor(modelId, mode);
   state.configSearch = "";
   $("#configSearch").value = "";
-  state.configSection = model.keys.includes(field) ? sectionFor(modelId, field, required) : "Inactive / rejected";
+  state.configSection = model.keys.includes(field) ? sectionFor(modelId, field, required, node.config) : "Inactive / rejected";
   renderConfig();
   requestAnimationFrame(() => {
     const control = document.querySelector(`.full-config-control[data-key="${CSS.escape(field)}"]`);

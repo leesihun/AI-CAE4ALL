@@ -479,6 +479,30 @@ export const VARIATIONAL_REMOVED = new Set(keys(`alpha_prior_max bipartite_unpoo
 export const CHI_FLOW_REMOVED = new Set(keys(`use_vae vae_latent_dim vae_mp_layers vae_graph_aware posterior_min_std num_z z_conditioning mmd_bandwidth mmd_gather_ranks lambda_mmd beta_aux alpha_recon recon_loss prior_type use_conditional_prior prior_family prior_nll_weight prior_fm_steps prior_fm_solver prior_mp_layers prior_hidden_dim prior_temperature latent_inflation prior_kl_reg_weight prior_cov_rank prior_min_std prior_mixture_components prior_grad_to_encoder prior_freeze_epoch pv_channel vae_valid_prior_samples gamma_es es_samples es_steps es_noise_source es_start_epoch pipeline_microbatches std_noise noise_gamma noise_std_ratio flow_head flow_head_eps`));
 VARIATIONAL_REMOVED.forEach(key => CHI_FLOW_REMOVED.add(key));
 
+// SDFFlow's `opt_*` keys are post-training settings: no training mode reads
+// them, only the runs a CAD Generator launches. They are set on the CAD
+// Generator, not on the SDFFlow model block, whose Full config files a leftover
+// one under "Inactive / rejected" (config.js keyDisposition).
+//
+// The ones only `mode optimize` reads (inference_profiles/optimize.py) ...
+export const SDFFLOW_OPTIMIZE_KEYS = [
+  "opt_analysis", "opt_budget", "opt_baseline_size", "opt_popsize", "opt_screen_batch",
+  "opt_load_cases", "opt_vertical_disp_max", "opt_stress_margin", "opt_disp_margin",
+  "opt_stress_weight", "opt_disp_weight", "opt_fea_verify",
+  "opt_subspace_dim", "opt_subspace_seed", "opt_condition_dims", "opt_latent_range",
+  "opt_shell_scale", "opt_sigma0", "opt_seed",
+  "opt_verify_resolution", "opt_verify_target_faces", "opt_verify_mesh_size_max"
+];
+// ... and the structural ones sample (and evaluate, through it) also read for
+// condition_audit fea | surrogate (inference_profiles/sample.py): material,
+// frame, meshing, and the surrogate's files.
+export const SDFFLOW_STRUCTURAL_KEYS = [
+  "opt_length_scale", "opt_material_e", "opt_material_nu", "opt_material_rho",
+  "opt_yield_stress", "opt_stress_percentile", "opt_mesh_size_max", "opt_target_faces",
+  "opt_surrogate_target_nodes", "opt_surrogate_python",
+  "opt_surrogate_config", "opt_surrogate_checkpoint"
+];
+
 export const BLOCK_SPECS = {
   "source.cad": {
     label: "CAD", category: "Sources", icon: "cad", accent: "#4c7f71", visual: "geometry", maturity: "native",
@@ -572,12 +596,16 @@ export const BLOCK_SPECS = {
       mode: "sample", num_samples: "24", cfg_scale: "2.5", ode_steps: "50",
       mc_resolution: "128", seed: "42", cond_values: "",
       geometry_checks: "automatic: connected + watertight + bounds",
-      // Only load-bearing in `mode optimize` (generate -> analyze -> search);
-      // inert otherwise. Kept visible here rather than buried in the
-      // generator model's own full-config panel since it is the one switch
-      // that decides whether "analyze" is the exact FEA solve or the faster,
-      // currently unproven HI-MGN surrogate -- see that model's own notes.
-      opt_analysis: "fea",
+      // `mode optimize` (generate -> analyze -> search). The optimization
+      // settings live here, on the block that runs them, not on the SDFFlow
+      // model block (whose training never reads them). These mirror the
+      // checked-in configs/SDFFlow/geometry_generation/ex1/baseline/
+      // config_optimize_sdfflow.txt; every other opt_* key sits under the
+      // inspector's "More optimization settings" at its native default.
+      // opt_budget 0 is a screen: no search, one screening.csv row per design,
+      // which is what the Optimization block ranks.
+      opt_analysis: "fea", opt_budget: "120", opt_baseline_size: "12", opt_popsize: "8",
+      opt_load_cases: "vertical, diagonal", opt_vertical_disp_max: "0.2", opt_stress_margin: "1",
       // `mode interpolate` blends two drawn samples; these mirror the checked-in
       // configs/SDFFlow/geometry_generation/ex1/baseline/config_interpolate_sdfflow.txt.
       // source_num_samples and sample_index_a have no launcher default, so the
@@ -1086,11 +1114,11 @@ export const TEMPLATES = {
     name: "Design optimization (needs trained SDFFlow)",
     nodes: [
       ["parameters", "source.parameters", 35, 300],
-      // num_samples/seed are required for sdfflow `sample` and were absent, so
-      // this block reported two CFG-REQ-001 errors on a freshly loaded template.
-      // They match the run.cad_generator block it feeds, which is where the
-      // user actually reads them.
-      ["generator_model", "model.sdfflow", 35, 55, { mode: "sample", num_samples: "24", seed: "42" }],
+      // The model block only provides the trained generator; what to generate
+      // (and how to optimize) is set on the CAD Generator it feeds. `evaluate`
+      // is a non-training mode, so neither Validate nor the pipeline Run
+      // launches this block on its own.
+      ["generator_model", "model.sdfflow", 35, 55, { mode: "evaluate" }],
       ["generator", "run.cad_generator", 330, 125],
       ["optimization", "optimize.design", 625, 125, {
         objectives: "volume,bbox_z", directions: "min,max", constraints: "watertight >= 1"
