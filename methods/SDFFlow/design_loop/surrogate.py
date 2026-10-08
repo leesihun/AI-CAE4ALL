@@ -140,6 +140,7 @@ class HIMGNSurrogate:
         self.predicted = 0
         # Why each None of the last analyze_batch call is None, by batch index.
         self.last_errors = {}
+        self.last_rollouts = {}
         # 'ver' layout: every registration scale found, and how many shapes
         # could not be registered (the summary's frame record).
         self.frame_scales = []
@@ -228,6 +229,9 @@ class HIMGNSurrogate:
                     'frame': frame,
                 }
             entry = results[index]
+            # The rollout file this case was read from: the prediction on every
+            # node, which optimize's designs.h5 keeps for viewing.
+            entry.setdefault('rollouts', {})[rec['case']] = self.last_rollouts.get(sample_id)
             # Each generated candidate is sampled independently and may land a
             # few nodes either side of target_nodes. Preserve this record's
             # actual graph size; using records[0] mislabeled every later design
@@ -299,6 +303,7 @@ class HIMGNSurrogate:
             raise SurrogateError(f'surrogate inference failed (exit {proc.returncode}):\n{tail}')
 
         predictions = {}
+        self.last_rollouts = {}
         search = rollout_dir if os.path.isdir(rollout_dir) else \
             os.path.join(_SUITE, 'output', 'chi-mgnflow', 'rollout')
         import glob
@@ -310,6 +315,7 @@ class HIMGNSurrogate:
             with h5py.File(path, 'r') as f:
                 key = next(iter(f['data']))
                 predictions[int(m.group(1))] = f['data'][key]['nodal_data'][:, -1, :]
+            self.last_rollouts[int(m.group(1))] = path
         if not predictions:
             raise SurrogateError(f'no rollout files under {search}')
         return predictions
@@ -464,6 +470,7 @@ def _result_record(x, mesh, gen_info, result, reason=None):
         'frame': result.get('frame'),
     }
     record['mesh'] = {'num_nodes': result['num_nodes'], 'surrogate': True}
+    record['rollouts'] = result.get('rollouts') or {}
     return record
 
 

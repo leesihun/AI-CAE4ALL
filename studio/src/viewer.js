@@ -892,7 +892,27 @@ async function loadPreviewCatalog(path, limit = null, truth = "") {
   return catalog;
 }
 
+// A screen keeps every design it analysed, shape plus fields (the HI-MGN
+// prediction or the FEA solve), in designs.h5 beside its table. The folder of
+// STLs holds only the delivered and typical designs, with no fields on them.
+const DESIGN_FIELDS_FILE = "designs.h5";
+const DESIGN_CATALOG_LIMIT = 5000;
+
+function screeningDesignsPath(node) {
+  if (node.type !== "run.cad_generator" || !node.config.results_dir) return "";
+  if (!/(^|\/)optimize_screening\.csv$/i.test(String(node.config.results_path || "").trim())) return "";
+  return `${String(node.config.results_dir).trim()}/${DESIGN_FIELDS_FILE}`;
+}
+
 async function resolvePreview(node, spec) {
+  const designs = screeningDesignsPath(node);
+  if (designs) {
+    try {
+      return await loadPreviewCatalog(designs, DESIGN_CATALOG_LIMIT);
+    } catch {
+      // A screen run before designs.h5 existed: its STL folder is still there.
+    }
+  }
   const configured = configuredPreviewPath(node, spec);
   if (configured) {
     try {
@@ -1094,7 +1114,12 @@ export async function uploadArtifactDataset(file) {
   }
 }
 
-export async function openArtifact(nodeId) {
+/**
+ * Open the sample viewer for a block. `target` ({path, sample}) opens a given
+ * file instead of the block's own artifact and goes straight to one sample --
+ * how the Optimization report shows the design behind a point it plots.
+ */
+export async function openArtifact(nodeId, target = null) {
   const node = state.nodes.find(item => item.id === nodeId);
   if (!node) return;
   const spec = BLOCK_SPECS[node.type];
@@ -1156,7 +1181,9 @@ export async function openArtifact(nodeId) {
   $("#sampleInfo").innerHTML = "";
   $("#artifactSampleSearch").value = "";
   try {
-    const catalog = await resolvePreview(node, spec);
+    const catalog = target?.path
+      ? await loadPreviewCatalog(target.path, DESIGN_CATALOG_LIMIT)
+      : await resolvePreview(node, spec);
     if (!isCurrentArtifactLoad(requestGeneration)) return;
     state.realArtifact = { ...catalog, node, currentSample: null };
     syncCompareButton();
@@ -1165,6 +1192,11 @@ export async function openArtifact(nodeId) {
     $("#artifactSubtitle").textContent = `${catalog.path} · choose a sample to visualize`;
     renderArtifactCatalog();
     renderEmptyViewer();
+    if (target?.sample != null) {
+      const index = catalog.samples.findIndex(sample => sample.id === String(target.sample));
+      if (index >= 0) await renderRealArtifactSample(index);
+      else toast(`${catalog.path} has no sample ${target.sample}.`, "warn");
+    }
   } catch (error) {
     if (!isCurrentArtifactLoad(requestGeneration)) return;
     $("#sampleList").innerHTML = "";

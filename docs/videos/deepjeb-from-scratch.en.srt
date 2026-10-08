@@ -1,0 +1,63 @@
+1
+00:00:00,000 --> 00:00:09,810
+Start with an empty canvas. Add the DeepJEB geometry dataset.
+
+2
+00:00:09,810 --> 00:00:19,410
+Browse a real training shape before choosing a model.
+
+3
+00:00:19,410 --> 00:00:25,390
+Add SDFFlow: a learned shape representation and a conditional flow.
+
+4
+00:00:25,390 --> 00:00:40,240
+Set a batch size of one, and choose the training schedule.
+
+5
+00:00:40,240 --> 00:01:12,440
+Use fresh output paths so this demo starts from scratch.
+
+6
+00:01:12,440 --> 00:01:17,000
+Connect the dataset output to the model training input.
+
+7
+00:01:17,000 --> 00:01:33,000
+Click Train. Studio checks the configuration and launches the native trainer.
+
+8
+00:01:33,000 --> 00:01:35,520
+Training is now running. The training wait is omitted in the next edit.
+
+9
+00:01:35,120 --> 00:01:37,820
+Training demo stopped. Continue with previously trained SDFFlow and HI-MGN models.
+
+10
+00:01:37,820 --> 00:01:47,880
+Other model families are available in the same Studio.
+
+11
+00:01:47,880 --> 00:01:56,010
+Open the completed candidate run and choose a bracket.
+
+12
+00:01:56,010 --> 00:02:00,300
+The stress field is a HI-MGN prediction. Drag to inspect it in 3D.
+
+13
+00:02:00,300 --> 00:02:09,520
+Change the field to vertical displacement on the same shape.
+
+14
+00:02:09,520 --> 00:02:17,600
+Choose the candidate table and compare mass with vertical deflection.
+
+15
+00:02:17,600 --> 00:02:30,230
+Try a 0.4 mm deflection constraint and keep five selected designs.
+
+16
+00:02:30,230 --> 00:02:38,770
+The Pareto front shows the mass-deflection trade-off. Click a design.

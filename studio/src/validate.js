@@ -489,10 +489,14 @@ export function executableSteps(targetId = null) {
         overrides[key] = key === "input_mesh" ? toMethodPath(value, "sdfflow") : value;
       });
       // The structural opt_* keys are read by optimize and by sample's
-      // condition audit alike, so no mode blanks them; they still run with the
-      // value the generator shows, not one the SDFFlow block kept.
+      // condition audit when it runs FEA or the surrogate (sample.py's
+      // resolve_condition_audit; geometric by default). They run with the
+      // value the generator shows, not one the SDFFlow block kept, and any
+      // other run leaves them out.
+      const audit = String(node.config.condition_audit || upstream.config.condition_audit || "").trim().toLowerCase();
+      const readsStructure = mode === "optimize" || (mode === "sample" && ["fea", "surrogate"].includes(audit));
       SDFFLOW_STRUCTURAL_KEYS.forEach(key => {
-        if (catalogKeys.includes(key)) overrides[key] = cadGeneratorValue(node, key);
+        if (catalogKeys.includes(key)) overrides[key] = readsStructure ? cadGeneratorValue(node, key) : "";
       });
       if (mode === "optimize") {
         SDFFLOW_OPTIMIZE_INERT_KEYS.forEach(key => {

@@ -221,3 +221,50 @@ def test_screen_plot_needs_no_search_and_no_stress_allowable(tmp_path):
     limits, _, baseline = _screen()
     _plot(str(tmp_path), baseline, [], [], limits, 'surrogate', delivered_index=1)
     assert (tmp_path / 'convergence.png').stat().st_size > 0
+
+
+def test_designs_file_keeps_each_screened_design_with_its_fields(tmp_path):
+    h5py = pytest.importorskip('h5py')
+    from design_loop.design_fields import FEATURE_NAMES, DesignFieldsWriter
+
+    writer = DesignFieldsWriter(str(tmp_path))
+    # FEA: a tet with one interior node; only the 4 surface nodes are kept.
+    nodes = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1], [.2, .2, .2]], float)
+    faces = np.array([[0, 1, 2], [0, 1, 3], [0, 2, 3], [1, 2, 3]])
+    u = np.zeros((5, 3))
+    u[3] = [0, 0, -2e-4]
+    writer.add_fea('screen_0000', {
+        'faces': faces, 'nodes_norm': nodes, 'worst_case': 'lateral',
+        'cases': {'lateral': {'von_mises_nodal': np.zeros(5), 'displacement': np.zeros((5, 3))},
+                  'vertical': {'von_mises_nodal': np.arange(5) * 1e6, 'displacement': u}}},
+        length_scale=0.1, attrs={'mass_kg': 1.5, 'feasible': 0, 'score': None})
+    # Surrogate ('ver' layout): x, y, z, u_x, u_y, u_z, von Mises, part.
+    pred = np.zeros((8, 1, 3), np.float32)
+    pred[5, 0] = [-.1, -.3, -.2]
+    pred[6, 0] = [10, 20, 30]
+    rollout = tmp_path / 'rollout_sample1_steps1.h5'
+    with h5py.File(rollout, 'w') as f:
+        f.create_dataset('data/1/nodal_data', data=pred)
+        f.create_dataset('data/1/mesh_edge', data=np.array([[0, 1], [1, 0]]))
+    writer.add_surrogate('screen_0001', {'ver': str(rollout)}, 'ver', {'mass_kg': 0.9})
+    writer.add_surrogate('screen_0002', {'ver': str(tmp_path / 'missing.h5')}, 'ver', {})
+    writer.annotate('screen_0001', {'feasible': 1})
+    assert (writer.count, writer.failures) == (2, 1)
+
+    with h5py.File(tmp_path / 'designs.h5', 'r') as f:
+        assert [n.decode() for n in f['metadata/feature_names'][:]] == list(FEATURE_NAMES)
+        fea = f['data/screen_0000']
+        data = fea['nodal_data'][:]
+        assert data.shape == (8, 1, 4)
+        # Vertical case, not the worst one; mm and MPa.
+        assert fea.attrs['load_case'] == 'vertical' and fea.attrs['source'] == 'fea'
+        np.testing.assert_allclose(data[0:3, 0].T, nodes[:4] * 100, atol=1e-5)
+        np.testing.assert_allclose(data[3, 0], [0, 1, 2, 3], atol=1e-5)
+        np.testing.assert_allclose(data[5, 0], [0, 0, 0, -0.2], atol=1e-6)
+        assert 'score' not in fea.attrs
+        assert fea['mesh_edge'].shape == (2, 12)
+        sur = f['data/screen_0001']
+        np.testing.assert_allclose(sur['nodal_data'][3, 0], [10, 20, 30])
+        np.testing.assert_allclose(sur['nodal_data'][5, 0], [-.1, -.3, -.2], atol=1e-6)
+        assert sur.attrs['feasible'] == 1 and sur.attrs['source'] == 'surrogate'
+        assert 'screen_0002' not in f['data']

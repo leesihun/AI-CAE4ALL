@@ -1,288 +1,257 @@
 # AI-CAE4ALL
 
-**The all-in-one SciML platform for AI-driven CAE.** Nine self-contained method
-repositories — eight ML methods plus a CAD-to-dataset front end — exposing
-**12 routable model IDs across 31 mode routes**, behind one config-driven
-launcher that validates everything before a single GPU-second is spent, and a
-full browser Studio that turns the whole thing into a drag-and-drop pipeline.
+**Simulation learning and generative design in one local workspace.**
 
-![AI-CAE4ALL Studio — pipeline editor](docs/images/studio-pipeline-editor.png)
+AI-CAE4ALL brings a browser Studio, a config-driven launcher, and nine independent
+method runtimes together. Inspect geometry and simulation fields, configure and
+train models, run inference, and explore generated designs through the same
+workspace. Each method keeps its native implementation and environment.
 
-Pick a method by writing **one word** in a text config:
+![AI-CAE4ALL Studio pipeline editor](docs/images/studio-pipeline-editor.png)
 
-```bash
-python AI_CAE4ALL_main.py --config configs/MeshGraphNets/deterministic/ex1/baseline/config_train_himgn.txt
-```
+[Quick start](#quick-start) | [Video walkthroughs](#video-walkthroughs) | [Supported models](#supported-models) | [Documentation](#documentation)
 
-…or never touch a terminal at all:
+## Video walkthroughs
 
-```powershell
-studio\START_STUDIO.bat
-```
+Two recordings of the real local Studio, with English captions. Click a thumbnail
+to open its video file; use **Watch / download** for the direct MP4.
 
----
-
-## What this is
-
-Most ML-for-CAE work dies at the seams: every method wants its own data format,
-its own CLI, its own environment, and its own idea of what a checkpoint is.
-AI-CAE4ALL removes the seams without merging the code.
-
-Three layers, each usable on its own:
-
-| Layer | What it gives you |
+| DeepJEB design workflow | From an empty canvas to a training run |
 | --- | --- |
-| **Studio** ([studio/](studio/)) | A local, zero-install browser workspace: typed drag-and-drop pipeline blocks, a real 3D field/mesh/CAD viewer, live training metrics, authoritative preflight, and real job execution with logs and cancellation. |
-| **Launcher** ([cae_suite/](cae_suite/)) | `parse → route → layered preflight → subprocess`. One command, every method. Never imports ML code; validates in the *target method's* interpreter. |
-| **Method runtimes** ([methods/](methods/)) | Nine independent runtimes, each with its own entrypoint and optional isolated interpreter. Eight ship native tests; GeometryIngest is covered by the root launcher-contract tests. All remain runnable standalone. |
+| [![Watch the DeepJEB workflow](docs/images/deepjeb-workflow-video.jpg)](docs/videos/deepjeb-workflow.mp4) | [![Watch the from-scratch walkthrough](docs/images/deepjeb-from-scratch-video.jpg)](docs/videos/deepjeb-from-scratch.mp4) |
+| **2 min 39 sec.** Zoom into the graph, inspect SDFFlow and HI-MGN, click a generated bracket, rotate its mesh, switch stress/displacement fields, and select a design from the Pareto plot. | **2 min 39 sec.** Add a dataset and SDFFlow, enter a fresh training configuration, connect the blocks, launch training, browse other model families, and explore existing trained results. |
+| [Watch / download](https://github.com/leesihun/AI-CAE4ALL/raw/refs/heads/main/docs/videos/deepjeb-workflow.mp4) ? [English subtitles](docs/videos/deepjeb-workflow.en.srt) | [Watch / download](https://github.com/leesihun/AI-CAE4ALL/raw/refs/heads/main/docs/videos/deepjeb-from-scratch.mp4) ? [English subtitles](docs/videos/deepjeb-from-scratch.en.srt) |
 
-The launcher's value is **uniform validation and routing**: it reports *every*
-problem with a config before launching, and it always starts the native process
-in that method's working directory and Python interpreter.
+The workflow recording is one continuous take at normal speed. The training
+recording contains one labelled edit after the native SDF-VAE training loop
+starts: the demonstration job is stopped, and the video continues with previously
+trained SDFFlow and HI-MGN checkpoints.
 
----
+The DeepJEB example screens **100 generated candidates** with HI-MGN-predicted
+structural fields. Its Pareto demonstration minimizes mass and vertical
+deflection under an illustrative **0.4 mm** bound. These are surrogate predictions;
+the recording does not establish independent FEA accuracy or a CMA-ES improvement.
+Datasets, checkpoints, and generated candidate files used in the recordings are
+local artifacts and are not included in a clone. See the [demo notes](docs/videos/README.md).
 
-## The model zoo — 11 routes, one contract
+## What you can do
 
-Every one of these is selected purely by the `model` field in a flat text config.
-No code changes, no format conversion, no per-method CLI to memorize.
+- **Build pipelines visually.** Add typed blocks, connect their ports, and inspect
+  the settings and data that flow into each model.
+- **Configure native methods.** Edit a form or the flat text config, inspect every
+  accepted key, and run the launcher's preflight before training or inference.
+- **Follow actual runs.** Start native processes, inspect logs and training
+  metrics, cancel jobs, and reopen saved artifacts.
+- **Inspect real geometry and fields.** Browse HDF5 samples, CAD surfaces and
+  meshes; rotate the viewport and select named response channels.
+- **Explore generated designs.** Read candidate CSVs, apply constraints, compare
+  objectives on a Pareto plot, and open a candidate's saved shape and fields.
 
-| `model` value(s) | Method | Directory | Modes |
-| --- | --- | --- | --- |
-| `meshgraphnets` | **MeshGraphNets and HI-MGN** — encode–process–decode GNN mesh simulator with a multiscale V-cycle processor, world edges, and learned attention transfer operators | [methods/MeshGraphNets/](methods/MeshGraphNets/) | `train`, `inference` |
-| `meshgraphnets-v` | **MeshGraphNets (variational)** — probabilistic superset: VAE latent path + a learned conditional prior (flow-matching or GMM) → a *distribution* of plausible trajectories | [methods/MeshGraphNets_Variational/](methods/MeshGraphNets_Variational/) | `train`, `inference` |
-| `chi-mgnflow` | **cHI-MGNflow** — hierarchical conditional MeshGraphNet with flow-matching field generation, deterministic readout, and sampled or ensemble inference | [methods/HI_MGNFlow/](methods/HI_MGNFlow/) | `train`, `inference` |
-| `point_deeponet` | **Point-DeepONet** — PointNet branch + SIREN trunk with early fusion; arbitrary query points | [methods/Neural_Operator/](methods/Neural_Operator/) | `train`, `inference` |
-| `deeponet` | **DeepONet** — canonical fixed-sensor branch/trunk operator | [methods/Neural_Operator/](methods/Neural_Operator/) | `train`, `inference` |
-| `fno` | **FNO** — native spectral (Fourier) convolutions, no `neuraloperator` dependency | [methods/Neural_Operator/](methods/Neural_Operator/) | `train`, `inference` |
-| `transolver` | **Transolver** — transformer surrogate over learned Physics-Attention "slices": `O(N²)` → `O(N·slice_num)` | [methods/Transolver/](methods/Transolver/) | `train`, `inference` |
-| `sdfflow` | **SDFFlow** — *generates new 3D shapes*: SDF-VAE + rectified-flow matching, conditioned on geometric descriptors, meshed with marching cubes | [methods/SDFFlow/](methods/SDFFlow/) | `train`, `train_vae`, `train_fm`, `sample`, `reconstruct`, `interpolate`, `optimize` |
-| `simulgenvae` | **SimulGenVAE** — hierarchical VAE + latent conditioner: conditions → full simulation field, no FOM solve | [methods/SimulGenVAE/](methods/SimulGenVAE/) | `train`, `train_vae`, `train_lc`, `reconstruct` |
-| `mlp` | **MLP Surrogate** — tabular parametric regressor: N scalar inputs → M scalar outputs. CPU-only, seconds to train | [methods/MLP/](methods/MLP/) | `train`, `inference` |
-| `geometry_ingest` | **Geometry Ingest** — non-ML data prep: STEP/IGES/STL/PLY/OBJ → the shared mesh HDF5 contract | [methods/GeometryIngest/](methods/GeometryIngest/) | `ingest`, `inspect` |
-
-```bash
-python AI_CAE4ALL_main.py --list-models   # every route + install health
-```
-
-**Three operator architectures live in one repo** ([methods/Neural_Operator/](methods/Neural_Operator/))
-sharing a single split / target / normalization / noise / optimizer / scheduler /
-checkpoint / rollout convention. Switching `model deeponet` → `model fno` must never
-require touching dataset, training-loop, loss, checkpoint, or inference code —
-and it doesn't.
-
----
-
-## The Studio: a real GUI over real runs
-
-[studio/](studio/) is not a mockup. Every button is wired to the actual suite: the
-same `MethodSpec` validation, the same `AI_CAE4ALL_main.py` subprocess, the same
-HDF5 files on disk. Blocks carry visible maturity labels (`native` / `adapter` /
-`roadmap`) so nothing that isn't finished is presented as if it were.
-
-**Typed, drag-and-drop pipelines.** Sources → preparation → models → execution →
-evaluation → export, with typed ports that only connect where the data actually
-flows. Dependency-ordered execution runs each step through the real launcher,
-capturing logs, exit codes, and exact pipeline-node lineage. Graph-aware autofill
-propagates `dataset_dir`, `input_var`/`output_var`, and checkpoint-appropriate
-model paths along the connections, with manual edits kept as persistent overrides.
-
-![Generative design optimization pipeline](docs/images/studio-optimization-pipeline.png)
-
-**Every config key, form and text, always in sync.** The configuration workspace
-exposes the complete live key catalog per method — required, recommended,
-inactive, and checkpoint-owned — with the flat `.txt` rendered side-by-side and
-synchronized in both directions. **Run preflight** and **Explain config** call the
-authoritative launcher, not a reimplementation.
-
-![SimulGen-VAE full configuration workspace](docs/images/studio-config-workspace.png)
-
-**A real 3D viewer for real artifacts.** An opaque, depth-buffered WebGL viewport
-(with a Canvas 2D fallback) renders *actual repository data* — never a substituted
-placeholder. The shared contract stores no cells, only a `mesh_edge` graph, so the
-Studio reconstructs elements from it: 3-cliques recover triangles, 4-cycles recover
-quads. Oversized meshes are reduced by vertex clustering, never by striding the
-edge list, so every surviving element stays connected.
-
-| Mesh fields from the shared HDF5 contract | CAD / surface meshes |
-| --- | --- |
-| ![HDF5 field viewer](docs/images/studio-hdf5-field-viewer.png) | ![CAD mesh viewer](docs/images/studio-cad-viewer.png) |
-
-| SDFFlow shape point clouds | Tabular MLP input/output pairs |
-| --- | --- |
-| ![SDF point cloud viewer](docs/images/studio-sdf-pointcloud.png) | ![Design parameters spreadsheet](docs/images/studio-design-parameters.png) |
-
-**Live training metrics, from the actual logs.** The Train Metrics block discovers
-every scalar in a persisted training log, plots all series by default, supports
-per-series exclusion and visual-only smoothing (statistics and CSV stay raw), and
-downloads the selected raw observations.
-
-![Train Metrics workspace with live process log](docs/images/studio-training-metrics.png)
-
-Twelve repository-backed workspaces — Data, Experiments, Optimization, Evaluation,
-Compare, Export, Models, Benchmarks, Artifacts, Deploy, System, Docs — each reading
-live repository state, with real field evaluation, cross-model ranking, Pareto
-fronts, and export. Everything the Studio writes lands under the git-ignored
-`studio/runtime/`; method repositories and suite modules are launched or imported,
-never rewritten. It is a localhost development API — not a multi-user production
-deployment. Full detail: [docs/guides/studio.md](docs/guides/studio.md).
-
----
+Studio blocks expose their `native`, `adapter`, or `roadmap` status. The launcher
+checks the selected configuration in the target method's interpreter, then starts
+that method as a subprocess. Preflight success checks a configuration; measured
+accuracy, convergence, and runtime require an actual experiment.
 
 ## Quick start
 
-### Installing
+### 1. Clone and set up Python
 
-The launcher itself is deliberately tiny: **Python ≥ 3.10** and, on 3.10 only,
-`tomli`. It has no ML dependencies at all — that is what lets it validate a
-config for a method whose environment it does not share.
+Python **3.10 or newer** is required. From a terminal:
 
 ```bash
-python -m pip install -e .                # optional; also provides the `ai-cae4all` command
-python AI_CAE4ALL_main.py --list-models   # confirms registered repos and entrypoints
+git clone https://github.com/leesihun/AI-CAE4ALL.git
+cd AI-CAE4ALL
+python -m venv .venv
 ```
 
-Each method brings its own dependencies, installed into that method's venv —
-there is intentionally **no root `requirements.txt`**:
+Activate the environment:
+
+```powershell
+# Windows PowerShell
+.\.venv\Scripts\Activate.ps1
+```
+
+```bash
+# Linux / macOS
+source .venv/bin/activate
+```
+
+Install the launcher and Studio dependencies:
+
+```bash
+python -m pip install -e .
+python -m pip install -r studio/requirements.txt
+python AI_CAE4ALL_main.py --list-models
+```
+
+The launcher has no ML dependencies. Install the dependencies for the method you
+intend to run in that method's environment; for example:
 
 ```bash
 python -m pip install -r methods/SDFFlow/requirements.txt
-python -m pip install -r methods/SimulGenVAE/requirements.txt
-python -m pip install -r methods/MLP/requirements.txt          # CPU-only
-python -m pip install -r inference/requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
 ```
 
-The mesh/operator methods need PyTorch matched to your CUDA build.
-`geometry_ingest` needs `trimesh` for surface meshes and `gmsh` for
-volume tet meshes. `--list-models` reports install health per route, and
-preflight's environment layer tells you what a specific config is missing before
-it launches. The Studio shell needs a browser and the launcher's Python; its
-HDF5, CAD/mesh, and VTK viewers use the dependencies listed in
-`studio/requirements.txt`.
+Follow each method's setup instructions, including a PyTorch build suitable for
+your hardware. For separate method environments, copy
+[ai_cae4all.local.example.toml](ai_cae4all.local.example.toml) to the ignored
+`ai_cae4all.local.toml` and configure the interpreter paths.
 
-To give each method its own interpreter, copy
-[ai_cae4all.local.example.toml](ai_cae4all.local.example.toml) to
-`ai_cae4all.local.toml` (git-ignored). Launching from an already-activated venv
-needs no configuration at all.
-
-### Running
-
-`--config` selects the file; **`mode` (train / inference / sample / …) lives
-inside the config**, not on the CLI.
+### 2. Open Studio
 
 ```bash
-# Validate only — reports every missing or conflicting setting together, no launch:
-python AI_CAE4ALL_main.py --config configs/Transolver/deterministic/ex2/baseline/config_train_transolver3.txt --check
+python studio/start_studio.py 8080
+```
 
-# Print the exact native command without launching:
+Open **http://127.0.0.1:8080/index.html**. The launcher opens the default browser
+where supported. On Windows, [studio/START_STUDIO.bat](studio/START_STUDIO.bat)
+provides the same startup; pass `8081` to either command if another application
+uses port 8080.
+
+Use the Studio server for the execution, validation, and artifact APIs. A static
+HTML server only serves the interface. Studio is a local development workspace;
+see the [Studio guide](docs/guides/studio.md) and [GUI walkthrough](docs/GUI.md).
+
+### 3. Configure a run
+
+1. Place a compatible dataset under `dataset/`, or select/upload one through
+   Studio's data workspace.
+2. Add a data block and a model block, then connect the typed data port.
+3. Set dataset paths, output paths, GPU IDs, model settings, and checkpoint paths
+   in the inspector or **Full config** workspace.
+4. Run preflight, resolve its diagnostics, and start the requested mode.
+5. Inspect the live process log and reopen the resulting metrics or artifacts.
+
+The checked-in configs are examples for specific datasets and hardware. Adjust
+paths and GPU selections to your machine before running them. Training produces
+the checkpoints required by subsequent inference and generation jobs.
+
+## Supported models
+
+The live registry currently exposes **11 model IDs and 32 mode routes** across
+nine method directories. `meshgraphnets` includes both MeshGraphNets and HI-MGN
+configurations. Select a route with the `model` key in a config; use Studio's
+model workspace to inspect its available settings and modes.
+
+| Model ID | Method / purpose | Modes | Implementation |
+| --- | --- | --- | --- |
+| `meshgraphnets` | MeshGraphNets and HI-MGN mesh-field simulation | `train`, `inference` | [MeshGraphNets](methods/MeshGraphNets/) |
+| `meshgraphnets-v` | Variational mesh-field simulation | `train`, `inference` | [MeshGraphNets Variational](methods/MeshGraphNets_Variational/) |
+| `chi-mgnflow` | Hierarchical conditional field generation | `train`, `train_ae`, `train_prior`, `inference` | [cHI-MGNflow](methods/HI_MGNFlow/) |
+| `point_deeponet` | Point-based neural operator | `train`, `inference` | [Neural Operator](methods/Neural_Operator/) |
+| `deeponet` | Branch/trunk neural operator | `train`, `inference` | [Neural Operator](methods/Neural_Operator/) |
+| `fno` | Fourier neural operator | `train`, `inference` | [Neural Operator](methods/Neural_Operator/) |
+| `transolver` | Physics-Attention simulation surrogate | `train`, `inference` | [Transolver](methods/Transolver/) |
+| `sdfflow` | SDF-VAE and flow matching for geometry generation | `train`, `train_vae`, `train_fm`, `sample`, `reconstruct`, `interpolate`, `optimize`, `evaluate` | [SDFFlow](methods/SDFFlow/) |
+| `simulgenvae` | Hierarchical VAE and latent conditioner for fixed-geometry fields | `train`, `train_vae`, `train_lc`, `reconstruct` | [SimulGenVAE](methods/SimulGenVAE/) |
+| `mlp` | Tabular parameter-to-response regression | `train`, `inference` | [MLP](methods/MLP/) |
+| `geometry_ingest` | CAD/geometry conversion to mesh HDF5 | `ingest`, `inspect` | [Geometry Ingest](methods/GeometryIngest/) |
+
+These methods have distinct data contracts and architecture constraints. Mesh
+methods use the shared mesh HDF5 contract; SDFFlow consumes SDF geometry data;
+MLP consumes tabular `X`/`Y` data. SimulGenVAE requires matching node and timestep
+counts across samples. Choose compatible methods when comparing the same task;
+the common launcher does not make every dataset interchangeable.
+
+```bash
+python AI_CAE4ALL_main.py --list-models
+python AI_CAE4ALL_main.py --describe sdfflow
+```
+
+## Run from a config
+
+The same workflow is available from the command line. `mode` is a config field.
+Run these commands from the repository root:
+
+```bash
+# Validate a concrete configuration without starting training.
+python AI_CAE4ALL_main.py --config configs/MeshGraphNets/deterministic/ex1/baseline/config_train_himgn.txt --check
+
+# Print the native command without launching it.
 python AI_CAE4ALL_main.py --config configs/Neural_Operator/deterministic/ex1/baseline/config_train_fno.txt --dry-run
 
-# A clean preflight auto-launches the native process:
-python AI_CAE4ALL_main.py --config configs/MeshGraphNets/deterministic/ex1/baseline/config_train_himgn.txt
-
-# Introspection (no config needed):
-python AI_CAE4ALL_main.py --list-models
-python AI_CAE4ALL_main.py --describe transolver
-python AI_CAE4ALL_main.py --audit-configs
+# Train the geometry VAE, then its flow-matching model.
+python AI_CAE4ALL_main.py --config configs/SDFFlow/geometry_generation/ex1/baseline/config_train_sdfflow.txt
 ```
 
-### The Studio
+Use `--explain-config` to inspect configured, defaulted, inactive, and
+checkpoint-owned settings. See the [configuration reference](docs/CONFIGURATION.md)
+for all launcher options.
 
-```powershell
-studio\START_STUDIO.bat          # opens http://127.0.0.1:8080/index.html
-studio\START_STUDIO.bat 8081     # if 8080 is taken
-python studio\start_studio.py 8080
+## DeepJEB design workflow
+
+```mermaid
+flowchart LR
+    G[Geometry HDF5] --> S[SDFFlow]
+    M[Mesh and field HDF5] --> H[HI-MGN]
+    S --> C[CAD Generator]
+    H --> C
+    C --> D[designs.h5]
+    C --> T[screening.csv]
+    T --> P[Pareto selection]
+    P --> V[Shape and field viewer]
+    D --> V
 ```
 
-Do **not** use `python -m http.server` — it will display the HTML but provide no
-model execution, preflight, repository browsing, or artifact APIs. The correct
-console prints `AI-CAE4ALL Studio is ready` and the badge in the browser reports
-the registered repositories and entrypoints it found. Run Preflight to verify
-the dependencies, paths, data, and native probe for a concrete configuration.
+Connect trained SDFFlow and HI-MGN models to the CAD Generator. In `mode optimize`,
+choose either a structural FEA backend or a compatible HI-MGN surrogate. A zero
+`opt_budget` screens `opt_baseline_size` generated designs; a positive budget
+runs CMA-ES after the baseline population. The checked-in
+[optimization config](configs/SDFFlow/geometry_generation/ex1/baseline/config_optimize_sdfflow.txt)
+uses FEA and a positive budget. The videos use surrogate screening.
 
-### Geometry generation and CAD ingest
-
-```bash
-python AI_CAE4ALL_main.py --config configs/SDFFlow/geometry_generation/ex1/baseline/config_train_sdfflow.txt  # VAE → flow matching, one config
-python AI_CAE4ALL_main.py --config configs/SDFFlow/geometry_generation/ex1/baseline/config_infer_sdfflow.txt  # mode sample
-python AI_CAE4ALL_main.py --config configs/GeometryIngest/config_ingest_volume.txt --check
-```
-
----
+A screening run writes its numeric candidate table to `screening.csv` and saves
+available candidate shapes and fields in `designs.h5`, keyed by the same design
+IDs. Studio's Optimization block applies the chosen objectives and constraints,
+plots the candidate population and Pareto set, and opens saved designs when a
+point is clicked. The displayed fields retain their FEA or surrogate provenance.
 
 ## Repository layout
 
 ```text
-AI-CAE4ALL/
-├── AI_CAE4ALL_main.py            # entrypoint → cae_suite.cli.main
-├── ai_cae4all.local.example.toml # template for per-method interpreter paths
-├── CLAUDE.md                     # agent-facing root conventions
-│
-├── cae_suite/                    # the launcher: parse → route → preflight → subprocess (no ML)
-│   ├── cli.py registry.py preflight.py diagnostics.py config_parser.py path_checks.py
-│   ├── native_probe.py dataset_probe.py checkpoint_probe.py   # run in the METHOD's venv
-│   └── specs/                    # one MethodSpec per method — validation truth
-│
-├── methods/                      # the nine native runtimes, each standalone
-│   ├── MeshGraphNets/            #   model = meshgraphnets
-│   ├── MeshGraphNets_Variational/#   model = meshgraphnets-v
-│   ├── HI_MGNFlow/               #   model = chi-mgnflow
-│   ├── Neural_Operator/          #   model = point_deeponet | deeponet | fno
-│   ├── Transolver/               #   model = transolver
-│   ├── SDFFlow/                  #   model = sdfflow
-│   ├── SimulGenVAE/              #   model = simulgenvae
-│   ├── MLP/                      #   model = mlp          (tabular, not mesh)
-│   └── GeometryIngest/           #   model = geometry_ingest  (non-ML data prep)
-│
-├── configs/                      # method configs plus cross-method campaigns
-│   ├── MeshGraphNets/            #   same nine method directory names as methods/
-│   ├── MeshGraphNets_Variational/
-│   ├── HI_MGNFlow/
-│   ├── Neural_Operator/
-│   ├── Transolver/
-│   ├── SDFFlow/
-│   ├── SimulGenVAE/
-│   ├── MLP/
-│   ├── GeometryIngest/
-│   └── campaigns/                #   multi-arm train/infer campaign runners
-├── dataset/                      # shared HDF5 data (git-ignored payloads)
-├── output/                       # native method artifacts: checkpoints, logs, rollouts, samples
-├── studio/                       # browser UI + local API; runtime/ holds Studio-owned state
-├── inference/                    # stand-alone CPU inference bundle + PyInstaller spec
-├── docs/                         # centralized suite, reference, and research documentation
-└── tests/                        # launcher / MethodSpec contract tests
+AI_CAE4ALL_main.py       Launcher entrypoint
+cae_suite/              Registry, method specifications, validation, routing
+methods/                Nine independent native runtimes
+configs/                Per-method configs and cross-method campaigns
+dataset/                Local datasets (payloads ignored by Git)
+output/                 Generated checkpoints, logs, rollouts, and designs
+studio/                 Browser UI, local server, and backend services
+studio/runtime/         Local Studio configs, jobs, logs, uploads, and reports
+inference/              Portable CPU inference bundle
+docs/                   Guides, references, screenshots, and demo videos
 ```
 
-Two conventions matter:
+Native methods run from `methods/<Name>/`, so their configs usually reference
+root datasets as `../../dataset/...` and artifacts as `../../output/...`.
+Generated artifacts stay in ignored `output/`; temporary Studio state stays in
+ignored `studio/runtime/`. The published demo MP4s and subtitles are curated
+assets under `docs/videos/`.
 
-- **Method config directories mirror `methods/`.** Each of the nine method
-  directories has a same-named directory under `configs/`; `configs/campaigns/`
-  is the one cross-method exception.
-- **Checked-in native configs write method artifacts to root `output/`.** Their
-  paths are relative to the method runtime, so they use `../../output/...`.
-  Studio-owned temporary configs, uploads, job metadata/logs, exports, and
-  deploy builds instead live under git-ignored `studio/runtime/`. Neither path
-  writes generated artifacts into a method source directory.
+## Development checks
 
----
+```bash
+# Structural validation of checked-in configs.
+python AI_CAE4ALL_main.py --audit-configs
+
+# Studio backend tests, from the repository root.
+python -m pytest -q studio/studio_backend
+
+# SDFFlow tests, from that method's directory.
+cd methods/SDFFlow
+python -m pytest -q tests
+```
+
+Each method's tests run in its own environment. See the
+[testing guide](docs/guides/testing.md) for the other methods and validation layers.
 
 ## Documentation
 
-| Doc | Purpose |
+| Guide | Contents |
 | --- | --- |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Full architecture guide: launcher internals plus a section on every method |
-| [docs/CONFIGURATION.md](docs/CONFIGURATION.md) | Suite-wide config grammar, routes, validation commands, key/default contracts |
-| [docs/reference/DATASET_FORMAT.md](docs/reference/DATASET_FORMAT.md) | The shared mesh HDF5 contract (and the tabular/SDF exceptions) |
-| [docs/reference/PUBLIC_DATASETS.md](docs/reference/PUBLIC_DATASETS.md) | Where the public benchmark datasets come from |
-| [docs/methods/](docs/methods/) | Architecture write-ups and the complete method index |
-| [docs/guides/studio.md](docs/guides/studio.md) | Studio capabilities, local API surface, integration boundary |
-| [docs/guides/inference-bundle.md](docs/guides/inference-bundle.md) | Portable CPU bundle: family detection, CLI, `.exe` build |
-| [docs/guides/testing.md](docs/guides/testing.md) | What to run after a change, per layer |
-| [docs/research/](docs/research/) | Design notes and research write-ups, grouped by method |
-| [CLAUDE.md](CLAUDE.md) | Condensed conventions for agents working in this repo |
-
-For any specific config key, the live `MethodSpec` in
-[cae_suite/specs/](cae_suite/specs/) and the native validator are authoritative;
-for a method's internals, that method's own code and `CLAUDE.md` are
-authoritative. Known gaps are tracked in
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+| [Studio](docs/guides/studio.md) / [GUI walkthrough](docs/GUI.md) | Pipelines, configuration, viewers, jobs, and workspaces |
+| [Architecture](docs/ARCHITECTURE.md) | Launcher and native method integration |
+| [Configuration](docs/CONFIGURATION.md) | Config grammar, routes, validation, and defaults |
+| [Dataset format](docs/reference/DATASET_FORMAT.md) | Shared mesh, tabular, and geometry data contracts |
+| [Public datasets](docs/reference/PUBLIC_DATASETS.md) | Dataset sources and preparation references |
+| [Methods](docs/methods/) | Method architecture and configuration guides |
+| [Inference bundle](docs/guides/inference-bundle.md) | Portable CPU inference and packaging |
+| [Demo notes](docs/videos/README.md) | Video contents, artifacts, and interpretation |

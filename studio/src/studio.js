@@ -1644,7 +1644,7 @@ export async function renderOptimizationWorkspace(container, nodeId = null) {
         node.optimizationReport = report.report_path;
       }
       if (!isCurrentStudioRender(container, actionRequest)) return;
-      renderOptimizationReport(container, report);
+      renderOptimizationReport(container, report, false, node?.id);
       toast(`Optimization complete: ${report.pareto} Pareto candidates, ${report.selected.length} selected.`);
     } catch (error) {
       if (!isCurrentStudioRender(container, actionRequest)) return;
@@ -1661,7 +1661,7 @@ export async function renderOptimizationWorkspace(container, nodeId = null) {
       const restored = await apiRequest(`/api/text?path=${encodeURIComponent(savedReport)}`);
       const parsed = JSON.parse(restored.text);
       if (parsed && isCurrentStudioRender(container, request)) {
-        renderOptimizationReport(container, { ...parsed, report_path: savedReport }, true);
+        renderOptimizationReport(container, { ...parsed, report_path: savedReport }, true, node?.id);
       }
     } catch {
       /* A deleted or unreadable report is not an error worth interrupting for. */
@@ -1677,10 +1677,11 @@ export async function renderOptimizationWorkspace(container, nodeId = null) {
  * Pareto 0` above an empty list is not a result, it is a puzzle. The backend now
  * returns the per-constraint rejection counts it was already computing.
  */
-function renderOptimizationReport(container, report, restored = false) {
+function renderOptimizationReport(container, report, restored = false, nodeId = null) {
   const target = $("#optimizationResults", container);
   if (!target) return;
   const rejections = Array.isArray(report.rejections) ? report.rejections : [];
+  const designIds = new Set((report.design_ids || []).map(String));
   const explanation = report.feasible === 0
     ? `<div class="diagnostic error"><i></i><div><strong>No candidate satisfied every constraint, so there is no Pareto set.</strong>${rejections.length ? `<ul style="margin:6px 0 0;padding-left:18px">${rejections.map(item => `<li><code>${escapeHtml(item.column)} ${escapeHtml(item.operator)} ${escapeHtml(item.threshold)}</code> rejected ${item.rows} row${item.rows === 1 ? "" : "s"}; closest observed value ${escapeHtml(item.closest_value)}.</li>`).join("")}</ul>` : "<br>No constraint is set, so every row was skipped for a blank or non-numeric objective value."}</div></div>`
     : rejections.length
@@ -1695,14 +1696,144 @@ function renderOptimizationReport(container, report, restored = false) {
       <span><strong>${report.pareto}</strong><small>Pareto designs</small></span>
     </div>
     ${explanation}
+    <section class="pareto-panel" id="paretoPanel"></section>
     ${report.selected_csv ? `<div class="live-toolbar" style="margin-top:8px"><span><strong>Selected designs</strong><small>${escapeHtml(report.selected_csv)}</small></span><span class="live-actions"><button class="button small" data-open-optimization-artifact="${escapeHtml(report.selected_csv)}">Open table</button><button class="button small" data-open-optimization-artifact="${escapeHtml(report.report_path)}">Open report</button></span></div>` : ""}
     <div class="live-list" style="margin-top:8px">${(report.selected || []).map((candidate, index) => `<article class="live-row">
       <span><strong>#${index + 1} · ${escapeHtml(candidate.id)}</strong><small>CSV row ${candidate.index}</small></span>
       <span class="chip-row">${Object.entries(candidate.objectives).map(([name, value]) => `<span class="chip">${escapeHtml(name)}=${escapeHtml(value)}</span>`).join("")}</span>
-      <span><strong>${candidate.crowding == null ? "boundary" : Number(candidate.crowding).toFixed(4)}</strong><small>Pareto crowding</small></span><span></span>
+      <span><strong>${candidate.crowding == null ? "boundary" : Number(candidate.crowding).toFixed(4)}</strong><small>Pareto crowding</small></span><span>${designIds.has(String(candidate.id)) ? `<button class="button small" data-open-design="${escapeHtml(candidate.id)}">View design</button>` : ""}</span>
     </article>`).join("")}</div>`;
   $$("[data-open-optimization-artifact]", container).forEach(button =>
     button.addEventListener("click", () => openTextArtifact(container, button.dataset.openOptimizationArtifact)));
+  const openDesign = async id => {
+    if (!designIds.has(String(id))) {
+      toast(report.designs_path
+        ? `${report.designs_path} has no design ${id}.`
+        : `No shape was saved for ${id}. Re-run the CAD Generator (mode optimize) to write designs.h5 beside its table.`, "warn");
+      return;
+    }
+    const block = state.nodes.find(item => item.id === nodeId) || state.nodes.find(item => item.type === "optimize.design");
+    if (!block) {
+      toast("Add an Optimization block to view designs.", "warn");
+      return;
+    }
+    const { openArtifact } = await import("./viewer.js");
+    await openArtifact(block.id, { path: report.designs_path, sample: String(id) });
+  };
+  $$("[data-open-design]", container).forEach(button =>
+    button.addEventListener("click", () => openDesign(button.dataset.openDesign)));
+  renderParetoPanel($("#paretoPanel", container), report, designIds, openDesign);
+}
+
+/**
+ * The candidate population on two of its columns.
+ *
+ * The report used to be four counts and a list, so "where is the front" had no
+ * answer on screen -- and with nothing feasible there was nothing to look at at
+ * all. Infeasible rows are drawn too (hollow grey), with each plotted
+ * constraint as a dashed line, so how far the population sits from a limit is
+ * visible. A point whose design was saved opens its shape and fields.
+ */
+function renderParetoPanel(target, report, designIds, openDesign) {
+  if (!target) return;
+  const points = Array.isArray(report.points) ? report.points : [];
+  if (!points.length) {
+    target.innerHTML = report.points
+      ? ""
+      : `<div class="config-help">This report predates the Pareto plot. Press Evaluate to recompute it.</div>`;
+    return;
+  }
+  const objectives = Object.keys(report.objectives || {});
+  const constraintColumns = [...new Set((report.constraints || []).map(item => item.column))]
+    .filter(name => !objectives.includes(name));
+  const columns = [...objectives, ...constraintColumns];
+  let xName = objectives[0];
+  let yName = objectives[1] || constraintColumns[0] || objectives[0];
+  const value = (point, name) => Number(point.objectives?.[name] ?? point.constraints?.[name]);
+  const axisLabel = name => report.objectives?.[name] ? `${name} (${report.objectives[name]})` : name;
+  const draw = () => {
+    const width = 640;
+    const height = 330;
+    const top = 14;
+    const right = 16;
+    const bottom = 42;
+    const plotted = points
+      .map(point => ({ ...point, x: value(point, xName), y: value(point, yName) }))
+      .filter(point => Number.isFinite(point.x) && Number.isFinite(point.y));
+    if (!plotted.length) {
+      $(".pareto-plot", target).innerHTML = `<div class="live-empty">No numeric values for ${escapeHtml(xName)} × ${escapeHtml(yName)}.</div>`;
+      return;
+    }
+    const limits = name => (report.constraints || [])
+      .filter(item => item.column === name && Number.isFinite(Number(item.threshold)));
+    const xs = [...plotted.map(point => point.x), ...limits(xName).map(item => Number(item.threshold))];
+    const ys = [...plotted.map(point => point.y), ...limits(yName).map(item => Number(item.threshold))];
+    const xAxis = niceTicks(Math.min(...xs), Math.max(...xs), { target: 6 });
+    const yAxis = niceTicks(Math.min(...ys), Math.max(...ys));
+    const xLabels = tickLabels(xAxis.ticks, xAxis.step);
+    const yLabels = tickLabels(yAxis.ticks, yAxis.step);
+    const left = Math.ceil(Math.max(...yLabels.map(label => label.length)) * AXIS_GLYPH_WIDTH + 13);
+    const px = x => left + (x - xAxis.min) / (xAxis.max - xAxis.min) * (width - left - right);
+    const py = y => top + (yAxis.max - y) / (yAxis.max - yAxis.min) * (height - top - bottom);
+    const base = height - bottom;
+    const grid = `<g class="training-metric-grid">${yAxis.ticks.map((tick, index) =>
+      `<path d="M${left} ${py(tick).toFixed(2)}H${width - right}"/><text x="${left - 7}" y="${(py(tick) + 3).toFixed(2)}" text-anchor="end">${escapeHtml(yLabels[index])}</text>`
+    ).join("")}${xAxis.ticks.map((tick, index) =>
+      `<path d="M${px(tick).toFixed(2)} ${top}V${base}"/><text x="${px(tick).toFixed(2)}" y="${base + 14}" text-anchor="middle">${escapeHtml(xLabels[index])}</text>`
+    ).join("")}</g>
+      <text class="training-axis-label" x="${width - right}" y="${height - 6}" text-anchor="end">${escapeHtml(axisLabel(xName))}</text>
+      <text class="training-axis-label" x="${left + 4}" y="${top + 9}">${escapeHtml(axisLabel(yName))}</text>`;
+    const limitLines = [
+      ...limits(xName).map(item => `<path class="pareto-limit" d="M${px(Number(item.threshold)).toFixed(2)} ${top}V${base}"/><text class="pareto-limit-label" x="${(px(Number(item.threshold)) + 4).toFixed(2)}" y="${base - 6}">${escapeHtml(`${item.column} ${item.operator} ${item.threshold}`)}</text>`),
+      ...limits(yName).map(item => `<path class="pareto-limit" d="M${left} ${py(Number(item.threshold)).toFixed(2)}H${width - right}"/><text class="pareto-limit-label" x="${width - right - 4}" y="${(py(Number(item.threshold)) - 4).toFixed(2)}" text-anchor="end">${escapeHtml(`${item.column} ${item.operator} ${item.threshold}`)}</text>`)
+    ].join("");
+    // The front is a line only when the plot IS the objective space; with a
+    // third objective or a constraint on an axis, the set is marked, not joined.
+    const front = objectives.length === 2 && objectives.includes(xName) && objectives.includes(yName) && xName !== yName
+      ? plotted.filter(point => point.pareto).sort((a, b) => a.x - b.x)
+      : [];
+    const frontLine = front.length > 1
+      ? `<polyline class="pareto-front" points="${front.map(point => `${px(point.x).toFixed(2)},${py(point.y).toFixed(2)}`).join(" ")}"/>`
+      : "";
+    const role = point => point.pareto ? "pareto" : point.feasible ? "feasible" : "infeasible";
+    const order = { infeasible: 0, feasible: 1, pareto: 2 };
+    const dots = [...plotted].sort((a, b) => order[role(a)] - order[role(b)]).map(point => {
+      const cx = px(point.x).toFixed(2);
+      const cy = py(point.y).toFixed(2);
+      const viewable = designIds.has(String(point.id));
+      const tip = [
+        `${point.id}${point.feasible ? "" : " (infeasible)"}${point.pareto ? " · Pareto" : ""}${point.selected ? " · selected" : ""}`,
+        `${axisLabel(xName)} = ${point.x}`,
+        `${axisLabel(yName)} = ${point.y}`,
+        ...(viewable ? ["Click to view its shape and fields"] : [])
+      ].join("\n");
+      return `<g class="pareto-point ${role(point)}${viewable ? " viewable" : ""}"${viewable ? ` data-pareto-design="${escapeHtml(point.id)}" tabindex="0" role="button"` : ""}>${point.selected ? `<circle class="pareto-selected" cx="${cx}" cy="${cy}" r="8.5"/>` : ""}<circle cx="${cx}" cy="${cy}" r="${point.pareto ? 5.5 : 4.5}"/><title>${escapeHtml(tip)}</title></g>`;
+    }).join("");
+    $(".pareto-plot", target).innerHTML = `<svg class="pareto-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(xName)} versus ${escapeHtml(yName)}">${grid}${limitLines}${frontLine}${dots}</svg>`;
+    $$("[data-pareto-design]", target).forEach(element => {
+      element.addEventListener("click", () => openDesign(element.dataset.paretoDesign));
+      element.addEventListener("keydown", event => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          openDesign(element.dataset.paretoDesign);
+        }
+      });
+    });
+  };
+  const counts = {
+    infeasible: points.filter(point => !point.feasible).length,
+    feasible: points.filter(point => point.feasible && !point.pareto).length,
+    pareto: points.filter(point => point.pareto).length
+  };
+  const axisSelect = (id, current) => `<select class="config-control" id="${id}">${columns.map(name =>
+    `<option value="${escapeHtml(name)}"${name === current ? " selected" : ""}>${escapeHtml(axisLabel(name))}</option>`).join("")}</select>`;
+  target.innerHTML = `<div class="live-toolbar"><span><strong>Pareto plot</strong><small>${points.length} candidate${points.length === 1 ? "" : "s"}${report.points_truncated ? " (first 5000)" : ""}${designIds.size ? " · click a point to view its shape and fields" : " · no designs.h5 beside this CSV, so points are not viewable"}</small></span></div>
+    ${columns.length > 1 ? `<div class="pareto-axes"><label>x ${axisSelect("paretoX", xName)}</label><label>y ${axisSelect("paretoY", yName)}</label></div>` : ""}
+    <div class="pareto-plot"></div>
+    <div class="pareto-legend"><span><i class="pareto-swatch infeasible"></i>infeasible ${counts.infeasible}</span><span><i class="pareto-swatch feasible"></i>feasible ${counts.feasible}</span><span><i class="pareto-swatch pareto"></i>Pareto ${counts.pareto}</span><span><i class="pareto-swatch selected"></i>selected (top-k)</span></div>`;
+  $("#paretoX", target)?.addEventListener("change", event => { xName = event.target.value; draw(); });
+  $("#paretoY", target)?.addEventListener("change", event => { yName = event.target.value; draw(); });
+  draw();
 }
 
 /**

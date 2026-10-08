@@ -1779,6 +1779,25 @@ def _candidate_id_column(columns: list[str], requested: str = "") -> str:
     return ""
 
 
+_MAX_PLOT_POINTS = 5000
+_DESIGN_FIELDS_FILE = "designs.h5"
+
+
+def _design_fields_file(csv_path: Path) -> dict[str, Any] | None:
+    """designs.h5 beside a candidate table, with the design ids it holds."""
+    path = csv_path.parent / _DESIGN_FIELDS_FILE
+    if not path.is_file():
+        return None
+    try:
+        import h5py
+
+        with h5py.File(path, "r") as handle:
+            ids = sorted(str(key) for key in handle["data"].keys()) if "data" in handle else []
+    except (ImportError, OSError, KeyError):
+        return None
+    return {"path": relative(path), "ids": ids} if ids else None
+
+
 def run_optimization(payload: dict[str, Any]) -> dict[str, Any]:
     csv_path = safe_repo_path(
         str(payload.get("csv_path", "")),
@@ -1904,6 +1923,9 @@ def run_optimization(payload: dict[str, Any]) -> dict[str, Any]:
                     - ordered[position - 1]["values"][objective_index]
                 ) / (high - low)
     selected = sorted(pareto, key=lambda candidate: candidate.get("crowding", 0.0), reverse=True)[:top_k]
+    pareto_ids = {id(candidate) for candidate in pareto}
+    selected_ids = {id(candidate) for candidate in selected}
+    designs = _design_fields_file(csv_path)
     report_id = uuid.uuid4().hex[:12]
     report = {
         "id": report_id,
@@ -1933,6 +1955,28 @@ def run_optimization(payload: dict[str, Any]) -> dict[str, Any]:
             }
             for candidate in selected
         ],
+        # Every numeric candidate, feasible or not, so the report can plot the
+        # whole population against the front. A screen with nothing feasible is
+        # exactly when the user needs to see how far off the designs are.
+        "points": [
+            {
+                "id": candidate["id"],
+                "index": candidate["index"],
+                "objectives": candidate["objectives"],
+                "constraints": {
+                    name: _finite_float(candidate["row"].get(name)) for name, _, _ in constraints
+                },
+                "feasible": candidate["feasible"],
+                "pareto": id(candidate) in pareto_ids,
+                "selected": id(candidate) in selected_ids,
+            }
+            for candidate in candidates[:_MAX_PLOT_POINTS]
+        ],
+        "points_truncated": len(candidates) > _MAX_PLOT_POINTS,
+        # The shape and fields behind each row, when the generator saved them
+        # (an SDFFlow optimize run's designs.h5, keyed by the same ids).
+        "designs_path": designs["path"] if designs else "",
+        "design_ids": designs["ids"] if designs else [],
     }
     report_dir = RUNTIME_ROOT / "optimization"
     report_dir.mkdir(parents=True, exist_ok=True)

@@ -150,6 +150,22 @@ def _table_column_names(handle: Any) -> list[str]:
     return inputs + outputs
 
 
+def _group_scalars(group: Any) -> list[dict[str, Any]]:
+    """A sample group's numeric scalar attributes, listed as its parameters.
+
+    An optimize run's designs.h5 stores each design's screening numbers (mass,
+    peak stress, u_z, feasible) this way, beside the fields they were read off.
+    """
+    _, np = _imports()
+    found = []
+    for key, value in getattr(group, "attrs", {}).items():
+        if isinstance(value, (bool, np.bool_)):
+            value = int(value)
+        if isinstance(value, (int, float, np.integer, np.floating)) and np.isfinite(value):
+            found.append({"name": str(key), "value": float(value)})
+    return found
+
+
 def _sample_indices(count: int, limit: int) -> Any:
     _, np = _imports()
     stride = max(1, (count + max(1, limit) - 1) // max(1, limit))
@@ -531,6 +547,7 @@ def _mesh_state_sample(
         preview_kind="mesh",
         supports_field=True,
         feature_names=feature_names,
+        parameters=_group_scalars(group),
         metadata={
             "has_coordinates": True,
             "node_reduction": "vertex clustering" if topology["reduced"] else "none",

@@ -353,6 +353,41 @@ class ScreeningTableTests(unittest.TestCase):
             self.assertEqual(report["skipped_rows"], 1)
             self.assertEqual(report["feasible"], 2)
             self.assertEqual([item["id"] for item in report["selected"]], ["screen_0001"])
+            # Every numeric candidate is plotted, infeasible ones included.
+            points = {item["id"]: item for item in report["points"]}
+            self.assertEqual(set(points), {"screen_0000", "screen_0001", "screen_0002"})
+            self.assertFalse(points["screen_0000"]["feasible"])
+            self.assertEqual(points["screen_0000"]["constraints"], {"vertical_displacement_mm": 0.2})
+            self.assertTrue(points["screen_0001"]["pareto"] and points["screen_0001"]["selected"])
+            self.assertFalse(points["screen_0002"]["pareto"])
+            self.assertEqual((report["designs_path"], report["design_ids"]), ("", []))
+
+    def test_designs_file_beside_the_table_is_published(self):
+        import h5py
+        import numpy as np
+
+        from studio_backend.hdf5_preview import hdf5_sample
+
+        RUNTIME_ROOT.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="screening-table-", dir=RUNTIME_ROOT) as directory:
+            output = Path(directory)
+            ComparisonSchemaTests._write(output / "optimize_screening.csv", ["id", "mass_kg"],
+                                         [["screen_0000", 0.3], ["screen_0001", 0.5]])
+            with h5py.File(output / "designs.h5", "w") as handle:
+                group = handle.create_group("data/screen_0001")
+                nodes = np.array([[0, 1, 0], [0, 0, 1], [0, 0, 0]], dtype=np.float32)
+                group.create_dataset("nodal_data", data=np.concatenate(
+                    [nodes, np.array([[1, 2, 3]], dtype=np.float32)])[:, None, :])
+                group.create_dataset("mesh_edge", data=np.array([[0, 1, 2], [1, 2, 0]]))
+                group.attrs.update({"mass_kg": 0.5, "feasible": 1, "source": "surrogate"})
+            report = run_optimization({"csv_path": str(output / "optimize_screening.csv"),
+                                       "objectives": "mass_kg"})
+            self.assertEqual(Path(report["designs_path"]).name, "designs.h5")
+            self.assertEqual(report["design_ids"], ["screen_0001"])
+            # The viewer lists the design's numeric attributes as its parameters.
+            sample = hdf5_sample(output / "designs.h5", "screen_0001", 3, 0)
+            self.assertEqual({item["name"]: item["value"] for item in sample["parameters"]},
+                             {"mass_kg": 0.5, "feasible": 1.0})
 
     def test_not_a_screen_falls_through(self):
         RUNTIME_ROOT.mkdir(parents=True, exist_ok=True)

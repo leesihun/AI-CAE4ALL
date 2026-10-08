@@ -771,7 +771,15 @@ that is the lightest design meeting the limits). What changes against a search:
   and `summary['search_improved_on_baseline']` is None;
 - the Studio publishes the joined `optimize_screening.csv` (native rows plus
   the delivered/typical verify and FEA columns) ahead of the
-  single-row summary table, so an Optimization block ranks the whole screen.
+  single-row summary table, so an Optimization block ranks the whole screen;
+- `designs.h5` (`design_loop/design_fields.py`) keeps every baseline/screened
+  design with its fields in the shared mesh contract: `data/<id>/nodal_data
+  [8,1,N]` = x, y, z (mm), von_mises (MPa), disp_mag, u_z, u_x, u_y (mm) plus
+  `mesh_edge`, and the screening numbers (mass, peak stress, u_z, feasible, ...)
+  as group attrs. FEA designs keep surface nodes only and the **vertical** load
+  case; surrogate designs copy the HI-MGN rollout rows. A missing rollout is
+  counted as a failure, not written. The Studio opens it from the CAD
+  Generator's results and from the Optimization block's Pareto plot.
 
 `opt_stress_margin 0` switches the stress constraint off
 (`SDF-OPT-MARGIN-002`, NOTICE; < 0 is `SDF-OPT-MARGIN-001`): `calibrate`

@@ -601,11 +601,14 @@ export const BLOCK_SPECS = {
       // model block (whose training never reads them). These mirror the
       // checked-in configs/SDFFlow/geometry_generation/ex1/baseline/
       // config_optimize_sdfflow.txt; every other opt_* key sits under the
-      // inspector's "More optimization settings" at its native default.
+      // inspector's "More optimization settings" at its native default, except
+      // the four the launcher asks to be stated (CFG-REC-001,
+      // SDF-OPT-FEA-REC-001), which carry that file's values there.
       // opt_budget 0 is a screen: no search, one screening.csv row per design,
       // which is what the Optimization block ranks.
       opt_analysis: "fea", opt_budget: "120", opt_baseline_size: "12", opt_popsize: "8",
       opt_load_cases: "vertical, diagonal", opt_vertical_disp_max: "0.2", opt_stress_margin: "1",
+      opt_length_scale: "0.10556", opt_yield_stress: "903e6", opt_mesh_size_max: "0.05", opt_target_faces: "12000",
       // `mode interpolate` blends two drawn samples; these mirror the checked-in
       // configs/SDFFlow/geometry_generation/ex1/baseline/config_interpolate_sdfflow.txt.
       // source_num_samples and sample_index_a have no launcher default, so the

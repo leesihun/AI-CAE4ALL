@@ -1,0 +1,32 @@
+{
+  "recorded_on": "2026-10-08",
+  "caption_language": "en",
+  "videos": [
+    {
+      "file": "deepjeb-workflow.mp4",
+      "captions": "deepjeb-workflow.en.srt",
+      "duration_seconds": 159.43,
+      "width": 1920,
+      "height": 1080,
+      "fps": 30,
+      "playback_speed": 1,
+      "continuous_segments": 1,
+      "training_transition_seconds": 0,
+      "size_bytes": 22793569,
+      "sha256": "203fb629cf7bc42d55dbca4565a6a3a6ff639743521bd6912085ca0291acc530"
+    },
+    {
+      "file": "deepjeb-from-scratch.mp4",
+      "captions": "deepjeb-from-scratch.en.srt",
+      "duration_seconds": 158.8,
+      "width": 1920,
+      "height": 1080,
+      "fps": 30,
+      "playback_speed": 1,
+      "continuous_segments": 2,
+      "training_transition_seconds": 0.4,
+      "size_bytes": 19581086,
+      "sha256": "0e1a05d9cf1372691d49b875c273249aa8a84d289f54779c76a3a9742a75b9d4"
+    }
+  ]
+}

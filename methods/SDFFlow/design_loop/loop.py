@@ -86,20 +86,27 @@ class Evaluator:
         return record['score']
 
 
-def baseline_population(evaluator, size=12, seed=0, spread=1.0):
+def baseline_population(evaluator, size=12, seed=0, spread=1.0, on_record=None):
     """Sample the design space to calibrate the objective against typical DeepJEB parts.
 
     Allowables anchored to this population make the constraints active by
     construction: the target is a bracket lighter than a typical sample without
     being weaker or more compliant than one.
+
+    `on_record(record)`, when given, sees every record with its nodal fields
+    attached (record['fields']) before they are dropped; without it no fields
+    are kept, as before.
     """
     rng = np.random.default_rng(seed)
     lo, hi = evaluator.generator.bounds()
     records = []
     for i in range(size):
         x = rng.uniform(lo, hi) * spread
-        record = evaluator.analyze(x)
+        record = evaluator.analyze(x, return_fields=on_record is not None)
         record['index'] = i
+        if on_record is not None:
+            on_record(record)
+        record.pop('fields', None)
         status = 'ok' if record['ok'] else record['error']
         if record['ok']:
             f = record['fea']

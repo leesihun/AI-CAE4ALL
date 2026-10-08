@@ -12,6 +12,7 @@ import time
 import numpy as np
 
 from design_loop import fea
+from design_loop.design_fields import DESIGNS_FILE, DesignFieldsWriter, screening_attrs
 from design_loop.deepjeb_bridge import LABEL_MESH_SIZE_MAX, LABEL_SURFACE_FACES, apply_frame
 from design_loop.generator import NOISE_PARAM_DEFAULT, SDFFlowGenerator
 from design_loop.loop import (
@@ -64,7 +65,7 @@ def _flag(config, key, default=False):
 _OWNED_OUTPUTS = ('summary.json', 'history.json', 'convergence.png',
                   'stress_comparison.png', 'report.md', 'screening.csv',
                   'optimized.stl', 'baseline.stl', 'typical.stl', 'fea_verified.json',
-                  'optimized_mm.stl', 'baseline_mm.stl', 'typical_mm.stl')
+                  'optimized_mm.stl', 'baseline_mm.stl', 'typical_mm.stl', DESIGNS_FILE)
 
 SCREENING_TABLE_NAME = 'screening.csv'
 
@@ -243,6 +244,19 @@ def run_optimize(config, config_filename='config.txt'):
     else:
         print(f'\n=== Baseline population ({baseline_size} designs) ===', flush=True)
     screen_started = time.time()
+    # Every screened design's shape and fields, beside screening.csv's numbers.
+    designs = DesignFieldsWriter(out_dir)
+
+    def keep_fields(record):
+        if not record['ok'] or 'fields' not in record:
+            return
+        try:
+            designs.add_fea(_screen_id(record['index']), record['fields'],
+                            bracket.length_scale, {})
+        except Exception as exc:          # a viewing aid must never end a screen
+            designs.failures += 1
+            print(f"  designs.h5: could not store #{record['index']}: {exc}", flush=True)
+
     if analysis_backend == 'surrogate':
         # One native call per `opt_screen_batch` designs instead of one per
         # design -- see `surrogate_baseline_population`'s docstring.
@@ -252,7 +266,8 @@ def run_optimize(config, config_filename='config.txt'):
             on_chunk=_screen_progress(vertical_disp_allow, screen_started))
     else:
         baseline = baseline_population(evaluator, size=baseline_size,
-                                       seed=_int(config, 'opt_seed', 0))
+                                       seed=_int(config, 'opt_seed', 0),
+                                       on_record=keep_fields)
     screen_wall_time = time.time() - screen_started
     limits = calibrate(baseline, stress_margin=stress_margin,
                        disp_margin=_flt(config, 'opt_disp_margin', 1.0))
@@ -304,6 +319,21 @@ def run_optimize(config, config_filename='config.txt'):
     # starts from -- and is compared against -- the member it would have picked.
     reference = select_best(baseline_scored)
     feasible_screened = [r for r in baseline_scored if r['penalty'].get('feasible')]
+    for record in baseline_scored:
+        design_id = _screen_id(record['index'])
+        try:
+            if analysis_backend == 'surrogate':
+                designs.add_surrogate(design_id, record.get('rollouts'), surrogate.layout,
+                                      screening_attrs(record, limits))
+            else:
+                designs.annotate(design_id, screening_attrs(record, limits))
+        except Exception as exc:
+            designs.failures += 1
+            print(f'  designs.h5: could not store {design_id}: {exc}', flush=True)
+    print(f'  {DESIGNS_FILE}: {designs.count} design(s) with their '
+          + ('predicted' if analysis_backend == 'surrogate' else 'solved')
+          + ' fields' + (f', {designs.failures} not stored' if designs.failures else ''),
+          flush=True)
     if screening_only:
         # A feasible record scores mass / mass_ref exactly, so the feasible
         # minimum is the lightest design meeting every active limit.
@@ -459,6 +489,8 @@ def run_optimize(config, config_filename='config.txt'):
             baseline, reference, typical, limits,
             screen_batch if analysis_backend == 'surrogate' else None, screen_wall_time)
         _write_screening_table(out_dir, baseline, reference, typical, limits, analysis_backend)
+        if designs.count:
+            summary['screening']['designs_file'] = DESIGNS_FILE
     if analysis_backend == 'surrogate':
         summary['surrogate'] = dict(surrogate.stats(), checkpoint=surrogate.checkpoint,
                                     label_constants=dict(_label_constants(surrogate.layout)),
@@ -1111,7 +1143,9 @@ def _write_report(out_dir, summary):
                   f"- typical (median mass): `{screen['typical_id']}`", '',
                   f"Every screened design is a row of `{screen['table']}` (screening "
                   'resolution); the delivered and typical designs are re-generated at the '
-                  'verification resolution below.', '']
+                  'verification resolution below.'
+                  + (f" Each design's shape and fields are in `{screen['designs_file']}`, "
+                     'keyed by the same id.' if screen.get('designs_file') else ''), '']
     if 'baseline_population' in summary and not screen:
         bp = summary['baseline_population']
         lines += [f"Population median mass {bp['median_mass_kg']:.4f} kg; the best-scoring "

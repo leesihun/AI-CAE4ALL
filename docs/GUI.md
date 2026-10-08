@@ -243,6 +243,19 @@ into a Pareto set -- is written. A budget above 0 runs CMA-ES from that
 population instead. The canvas card says which (`screening · 12 designs` or
 `CMA-ES · 120 evaluations`).
 
+A screen also writes `designs.h5` beside the table: every screened design's
+surface with its fields (von Mises, |u|, u_z, ...) -- FEA fields, or the HI-MGN
+prediction when a surrogate is wired. The CAD Generator's results open that file
+first (falling back to the STL folder), and each sample's screening numbers show
+under **Sample parameters**.
+
+The Optimization block's report draws a **Pareto plot** of every candidate:
+infeasible rows hollow grey, feasible blue, the Pareto set orange, top-k ringed.
+Either axis can be an objective or a constraint column; a plotted constraint
+draws its limit as a dashed line. Clicking a point (or **View design** on a
+selected row) opens that design's shape and fields from `designs.h5`. A report
+saved before the plot existed asks you to press Evaluate again.
+
 The model block's `evaluate` mode still reads the structural keys (its
 condition audit), so they stay live there. A graph saved before the move keeps
 working: an `opt_*` value left on the SDFFlow block is used by a CAD Generator
