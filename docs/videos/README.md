@@ -4,12 +4,13 @@ These videos were recorded on October 8, 2026 against the local AI-CAE4ALL Studi
 They show actual repository data and browser interactions. English captions are
 included in the MP4s, with separate SRT files for accessible playback and reuse.
 
-| Recording | Duration | Video | Captions |
-| --- | --- | --- | --- |
-| DeepJEB design workflow | 2:39 | [MP4](deepjeb-workflow.mp4) | [English SRT](deepjeb-workflow.en.srt) |
-| From an empty canvas to a training run | 2:39 | [MP4](deepjeb-from-scratch.mp4) | [English SRT](deepjeb-from-scratch.en.srt) |
+Play either recording directly below. Both are 2:39 at normal speed.
 
 ## DeepJEB workflow
+
+https://github.com/user-attachments/assets/76410429-83e7-4492-aa9f-42115051c48e
+
+[English subtitles](deepjeb-workflow.en.srt) | [Original MP4](deepjeb-workflow.mp4)
 
 The recording starts with the six core pipeline blocks and clicks the zoom-in
 button three times. It pans to each model, opens its inspector, chooses a generated
@@ -27,6 +28,10 @@ five are selected. These counts describe this saved candidate population and
 this demonstration constraint.
 
 ## Training walkthrough
+
+https://github.com/user-attachments/assets/72b5dfa4-2f81-4ee2-a1af-0ce5f0ca6796
+
+[English subtitles](deepjeb-from-scratch.en.srt) | [Original MP4](deepjeb-from-scratch.mp4)
 
 The recording starts with an empty canvas, inspects an SDF dataset, adds SDFFlow,
 enters new checkpoint/output paths, connects the dataset, and clicks Train.
@@ -52,7 +57,9 @@ configure the CAD Generator, then connect its candidate table to Optimization.
 The checked-in native optimization config uses FEA with a positive search budget,
 so adjust its backend and budget for a surrogate screening workflow.
 
-`manifest.json` records file sizes, SHA-256 checksums, and playback metadata.
+`manifest.json` records file sizes, SHA-256 checksums, inline attachment URLs,
+and playback metadata. The GitHub attachments contain the same full-quality
+files as the originals in this directory.
 The two MP4s are curated documentation assets. Local raw takes, job logs,
 checkpoints, and alternate edits remain outside the published documentation.
 
