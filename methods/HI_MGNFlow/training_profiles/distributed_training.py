@@ -21,6 +21,7 @@ from training_profiles.setup import (
     log_model_summary,
     release_hierarchy_cache,
     save_checkpoint,
+    seed_training_rng,
     start_memory_history,
 )
 from training_profiles.training_loop import (
@@ -354,6 +355,8 @@ def _train_worker_inner(rank, world_size, config, gpu_ids, config_filename):
         if rank == 0:
             print(f'Using device: {device}')
 
+    base_seed = seed_training_rng(config, rank)
+
     # ---- Dataset ----
     if rank == 0:
         print("\nLoading dataset...")
@@ -376,7 +379,8 @@ def _train_worker_inner(rank, world_size, config, gpu_ids, config_filename):
     # Create distributed samplers
     if rank == 0:
         print("\nCreating dataloaders (distributed train, rank-0 eval)...")
-    train_sampler = DistributedSampler(train_dataset, num_replicas=world_size, rank=rank, shuffle=True)
+    train_sampler = DistributedSampler(train_dataset, num_replicas=world_size, rank=rank,
+                                       shuffle=True, seed=base_seed)
 
     # Create dataloaders
     num_workers = int(config.get('num_workers', 0))
@@ -499,7 +503,7 @@ def _train_worker_inner(rank, world_size, config, gpu_ids, config_filename):
         print(f"Optimizer: Adam (fused={use_fused}) over "
               f"{'AE' if first_stage == 'train_ae' else 'prior'} parameters")
         print(f"Scheduler: LinearLR warmup ({warmup_epochs} epochs) -> "
-              f"CosineAnnealingWarmRestarts (T_0={cosine_T0}, T_mult=2, eta_min=1e-8)")
+              f"CosineAnnealingWarmRestarts (T_0={cosine_T0}, T_mult=1, eta_min=1e-8)")
 
     if torch.cuda.is_available() and rank == 0:
         print(f'After optimizer creation: {torch.cuda.memory_allocated()/1e9:.2f}GB')
@@ -560,7 +564,7 @@ def _train_worker_inner(rank, world_size, config, gpu_ids, config_filename):
         if rank == 0:
             print(f"Optimizer: Adam (fused={use_fused}) over prior parameters")
             print(f"Scheduler: LinearLR warmup ({warmup_epochs} epochs) -> "
-                  f"CosineAnnealingWarmRestarts (T_0={cosine_T0}, T_mult=2, eta_min=1e-8)")
+                  f"CosineAnnealingWarmRestarts (T_0={cosine_T0}, T_mult=1, eta_min=1e-8)")
 
         val_num_samples = int(config.get('val_num_samples', 8))
         if val_num_samples < 1:

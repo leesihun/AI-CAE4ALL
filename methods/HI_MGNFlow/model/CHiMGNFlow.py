@@ -3,12 +3,14 @@
 Two-stage architecture, after Lino, Pfaff & Thuerey, "Learning Distributions
 of Complex Fluid Simulations with Diffusion Graph Networks" (ICLR 2025,
 arXiv:2504.02843; "LDGN" is that paper's own name for its compressed-latent
-variant): their winning MGN+flow design,
-adopted directly, with HI-MGN's hierarchical V-cycle standing in for their own
-multiscale backbone everywhere a graph network is needed -- both the
-compressor and the latent-space prior. See model/autoencoder.py for the full
-rationale (the paper's own VGAE ablation, why hierarchy alone does not explain
-the win, and the two-pass shared-encoder fix for skip-connection leakage).
+variant). LDGN pairs a compressor with a DIFFUSION prior in its latent
+space; this model keeps that split but trains the prior by flow matching (the
+paper tries flow matching only as a field-space variant, App. D.7). HI-MGN's
+hierarchical V-cycle replaces their multiscale backbone in the COMPRESSOR
+only; the prior is a flat stack of GnBlocks on the coarsest level's graph,
+with no V-cycle of its own. See model/autoencoder.py for what the paper's
+ablations do and do not show, and for the two-pass shared-encoder fix for
+skip-connection leakage.
 
     Stage 1 (mode 'train_ae'):    HierarchyEncoder + MultiscaleDecoder learn to
                                    compress the true field onto the coarsest
@@ -21,10 +23,14 @@ the win, and the two-pass shared-encoder fix for skip-connection leakage).
                                    exist even when the field is unknown. The
                                    compressor is loaded from `ae_checkpoint`
                                    and frozen.
-    mode 'train':                 back-compat convenience -- runs stage 1 to
-                                   completion, checkpoints it, then runs stage
-                                   2, mirroring SimulGenVAE's combined pipeline.
-                                   See training_profiles/single_training.py.
+    mode 'train':                 both stages in one process: stage 1 for
+                                   `ae_epochs`, then freeze_ae() on the same
+                                   in-memory model (no checkpoint round-trip,
+                                   no `ae_checkpoint`) and stage 2 for
+                                   `training_epochs`. The prior stage writes to
+                                   the same `modelpath`, so only the combined
+                                   checkpoint is kept. See
+                                   training_profiles/single_training.py.
 
 Node feature layout is unchanged from the rest of the suite:
 

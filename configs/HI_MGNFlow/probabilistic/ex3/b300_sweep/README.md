@@ -1,5 +1,9 @@
 # cHI-MGNflow ex3 sweep (one 8-GPU B300 node)
 
+This is round 1. Round 2 sums these changes into one arm and removes them one
+at a time, and adds MeshGraphNets-V beside it: [`../b300_r2/`](../b300_r2/),
+design in [`configs/campaigns/b300_r2/README.md`](../../../../campaigns/b300_r2/README.md).
+
 Eight arms on ex3 shell buckling, one GPU each: train (AE, then prior) and then
 score on the held-out geometries. Every arm is the ex3 baseline
 (`configs/HI_MGNFlow/probabilistic/ex3/baseline/`) plus the B300 layout and

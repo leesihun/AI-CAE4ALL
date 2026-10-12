@@ -30,6 +30,7 @@ from torch.multiprocessing.spawn import ProcessExitedException
 from general_modules.config_validation import validate_runtime_config
 from general_modules.load_config import load_config
 from training_profiles.distributed_training import train_worker
+from training_profiles.setup import resolve_training_seed
 from training_profiles.single_training import single_worker
 from inference_profiles.rollout import run_rollout
 
@@ -105,6 +106,8 @@ def main():
         single_worker(config, args.config)
 
     else:
+        # Resolved once here so an unset training_seed is drawn once, not per rank.
+        resolve_training_seed(config)
         # Find a free port once, before spawning, so workers never collide
         # with zombie processes from prior runs.
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:

@@ -15,6 +15,7 @@ from training_profiles.setup import (
     log_model_summary,
     release_hierarchy_cache,
     save_checkpoint,
+    seed_training_rng,
     start_memory_history,
 )
 from training_profiles.training_loop import (
@@ -318,6 +319,7 @@ def single_worker(config, config_filename='config.txt'):
     gpu_ids = config.get('gpu_ids')
     mode = str(config.get('mode', 'train')).lower().strip()
     print("Starting single-process training...")
+    seed_training_rng(config)
 
 
     if torch.cuda.is_available():
@@ -408,7 +410,7 @@ def single_worker(config, config_filename='config.txt'):
     print(f"Optimizer: Adam (fused={use_fused}) over "
           f"{'AE' if first_stage == 'train_ae' else 'prior'} parameters")
     print(f"Scheduler: LinearLR warmup ({warmup_epochs} epochs) -> "
-          f"CosineAnnealingWarmRestarts (T_0={cosine_T0}, T_mult=2, eta_min=1e-8)")
+          f"CosineAnnealingWarmRestarts (T_0={cosine_T0}, T_mult=1, eta_min=1e-8)")
 
     if torch.cuda.is_available():
         print(f'After optimizer creation: {torch.cuda.memory_allocated()/1e9:.2f}GB')
@@ -476,7 +478,7 @@ def single_worker(config, config_filename='config.txt'):
         )
         print(f"Optimizer: Adam (fused={use_fused}) over prior parameters")
         print(f"Scheduler: LinearLR warmup ({warmup_epochs} epochs) -> "
-              f"CosineAnnealingWarmRestarts (T_0={cosine_T0}, T_mult=2, eta_min=1e-8)")
+              f"CosineAnnealingWarmRestarts (T_0={cosine_T0}, T_mult=1, eta_min=1e-8)")
 
         val_num_samples = int(config.get('val_num_samples', 8))
         if val_num_samples < 1:

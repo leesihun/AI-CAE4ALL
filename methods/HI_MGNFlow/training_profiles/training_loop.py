@@ -515,7 +515,8 @@ def log_training_config(config):
     for i in range(L - 1, -1, -1):
         print(f"  Level {i} post: {mp[2 * L - i]} blocks")
     print(f"  Coarse latent: {config.get('latent_ch', 4)} channels/coarse-node "
-          f"(norm_latents, ae_kl_weight={float(config.get('ae_kl_weight', 1e-6)):g})")
+          f"(prior sees z at its raw scale -- no latent normalization; "
+          f"ae_kl_weight={float(config.get('ae_kl_weight', 1e-6)):g})")
 
     if mode in ('train_ae', 'train'):
         print("Stage 1 (compressor): reconstruction + KL, near-unregularized")

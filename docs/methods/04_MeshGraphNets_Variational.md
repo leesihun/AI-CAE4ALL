@@ -210,8 +210,10 @@ effectively off. Watch `mmd` and `fm_p` against `total` on the progress bar.
 
 All flat-MGN and multiscale (HI-MGN) keys apply. Canonical example:
 [`configs/MeshGraphNets_Variational/probabilistic/ex1/baseline/config_train_himgn_v.txt`](../../configs/MeshGraphNets_Variational/probabilistic/ex1/baseline/config_train_himgn_v.txt).
-Three trees ship: `probabilistic/ex1|ex2/baseline/` (the baseline roster),
-`SAOI_run/` and `hyperparameter_sweep/` (the latent-capacity sweep arms). The
+The trees are `probabilistic/exN/baseline/` (the baseline roster), `SAOI_run/`,
+and the B300 round-2 arms in `probabilistic/ex3/b300_r2/` and
+`hyperparameter_sweep/b300_r2/` (design in
+[`configs/campaigns/b300_r2/README.md`](../../configs/campaigns/b300_r2/README.md)). The
 `b8_all_warpage_input/` tree this doc used to cite no longer exists. The live
 [`cae_suite/specs/meshgraphnets_variational.py`](../../cae_suite/specs/meshgraphnets_variational.py)
 is the authoritative key catalog.

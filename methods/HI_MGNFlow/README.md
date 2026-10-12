@@ -35,21 +35,27 @@ ODE로 목표 분포에 도달하므로 이 불일치 자체가 없다.
 이 리포의 cHI-MGNflow는 처음에 이 flow matching을 **필드 공간에서 그대로**
 (압축 없이, `[N, output_var]` 전체에 대해) 적용해서 만들어졌다. 그런데
 reconstruction test부터 결과가 맞지 않았고, 참고 논문(Lino, Pfaff, Thuerey)을
-다시 확인해보니 그 논문은 필드 공간이 아니라 **압축된 coarse 잠재 위에서**
-flow matching을 하고 있었다. 그래서 이 논문의 설계를 그대로 채택하기로
+다시 확인해보니 그 논문의 LDGN은 필드 공간이 아니라 **압축된 coarse 잠재 위에서**
+생성 모델을 학습하고 있었다. 단, 그 prior는 diffusion이고 flow matching은
+논문 App. D.7에서 필드 공간 변형으로만 시험된다. 그래서 "압축기 + 잠재 공간의
+학습된 prior"라는 분할은 채택하되 prior 학습은 flow matching으로 유지하기로
 결정했고, 이번 재작성으로 이전 단일 단계(필드 공간) 아키텍처는 코드베이스에서
 전부 교체됐다 — 남아있는 이전 버전은 없다. (flow matching의 수학 자체 —
 경로 구성, ODE 적분기, 시간 임베딩 — 는 `model/flow.py`에서 거의 그대로
 재사용된다. 바뀐 것은 그 수학이 적용되는 대상이 필드에서 coarse 잠재로
 바뀌었다는 것과, 그 앞에 압축기(compressor) 단계가 새로 생겼다는 것이다.)
 
-`model/autoencoder.py`의 모듈 docstring이 이 설계 선택의 근거를 논문 자체의
-ablation을 인용해서 직접 담고 있다: 논문에서 **같은 멀티스케일 구조를 쓴
-VGAE**(더 무거운 KL, 더 coarse한 latent)로 만든 baseline도 여전히 collapse
-한다 — 즉 계층 구조(hierarchy) 자체가 LDGN이 이기는 이유가 아니라는 뜻이다.
-결정적인 lever는 "`N(0,I)`를 직접 샘플링하는 대신 **prior를 명시적으로
-학습시키는 것**"이며, 필드 공간 flow matching(=이전 cHI-MGNflow)은 논문의
-표현으로 "정확히 그 ablation이 지는 쪽의 접근 방식"이다.
+`model/autoencoder.py`의 모듈 docstring이 논문 ablation이 실제로 보여주는 것을
+정리해 둔다. 논문의 **VGAE** baseline은 학습된 prior 없이 `N(0,I)`를 직접
+샘플링하고, LDGN보다 덜 압축된(더 깊은) latent를 쓰며 skip 연결이 없다.
+EllipseFlow(KL 1e-8, latent 32채널)에서 이 VGAE는 mode collapse하고, 저자들은
+그 원인을 디코더가 조건에 기대고 latent가 정보를 거의 싣지 않는 것으로 본다.
+즉 계층 구조만으로는 LDGN의 우위가 설명되지 않고, 이 모델이 가져온 lever는
+"`N(0,I)`를 직접 샘플링하는 대신 **잠재 공간의 prior를 학습시키는 것**"이다.
+필드 공간 diffusion(DGN)이 진 것은 아니다: 분포 지표는 LDGN이 앞서지만
+(EllipseFlow W2 3.07 대 4.72) R²는 DGN이 가장 높다. 필드 공간 flow
+matching(=이전 cHI-MGNflow)은 VGAE ablation이 아니라 논문 App. D.7의 변형에
+해당한다.
 
 | | MeshGraphNets-V | 현재 cHI-MGNflow |
 |---|---|---|
@@ -65,7 +71,7 @@ VGAE**(더 무거운 KL, 더 coarse한 latent)로 만든 baseline도 여전히 c
 - **`CHiMGNFlow`** (`model/CHiMGNFlow.py`) — 생성자에서 `LatentDiffusionGraphNet`을
   만들고 `self.model.apply(init_weights)`(전역 kaiming 초기화)를 먼저 실행한
   다음 `self.model.reset_zero_init_heads()`(디코더 마지막 층, prior의
-  `out_head`, 모든 `AdaLNZero` 헤드를 다시 0 근처로 되돌림)를 실행한다 — **이
+  `out_head`를 0 근처로, 모든 `AdaLNZero` 헤드를 shift=scale=0·gate=1로 되돌림)를 실행한다 — **이
   순서가 중요하다.** 반대로 하면 kaiming 초기화가 zero-init을 덮어써서 필요한
   near-identity 스케일링이 깨진다. `_load_frozen_ae(ae_checkpoint)`는
   `train_prior` 단독 모드에서 완료된 stage 1 체크포인트를 로드하고 즉시

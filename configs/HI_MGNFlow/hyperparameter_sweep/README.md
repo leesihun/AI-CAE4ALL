@@ -42,7 +42,8 @@ Everything else (600 compressor epochs, 2000 prior epochs, b16, val every 25,
 | `config_train_<arm>_<half>.txt` | 16 = 8 arms x 2 halves |
 | `config_infer_<arm>_<half>_<eval set>.txt` | 48 = 16 x 3 eval sets (`s26fe_main`, `s26fe_sec`, `sm_l345u_main`) |
 | `run_sweep.sh` | preflight, train, infer, report |
-| `train_parts/` | the train-part check, run after the sweep (see the last section) |
+| `train_parts/` | the train-part check, run after the sweep (see "Train-part check") |
+| `b300_r2/` | round 2's cHI-MGNflow arms, run by `configs/campaigns/b300_r2/run_node.sh` (see the last section) |
 
 The eval-pair check is SAOI_run's `check_eval_inputs.py`, run against this
 directory. There is no copy here.
@@ -227,3 +228,19 @@ Output goes under `output/chi-mgnflow/saoi_b300_sweep/`:
 
 - `train_parts/{census_<half>.json, report.txt, histograms.png, run_logs/}`
 - `<arm>/<half>/infer/train_part<k>/`
+
+## Round 2 (geometry split, both methods)
+
+The train-part check found that `tok` matches the parts it trained on and
+misses unseen ones, and that most of the unseen parts lie inside the training
+range. Every arm here splits **samples** 80/10/10. Its validation set
+therefore holds more realizations of the parts it trains on, and
+`best_by crps` keeps the epoch that reproduces those parts best.
+
+Round 2 follows this up with geometry-grouped validation
+(`split_group_attr geometry_id`), a no-part-ID arm, held-out SEEN versus
+UNSEEN parts, and MeshGraphNets-V beside cHI-MGNflow. Its arms are in
+[`b300_r2/`](b300_r2/), and the design and run command are in
+[`configs/campaigns/b300_r2/README.md`](../../campaigns/b300_r2/README.md).
+It replaces the single-arm `tok_grp` / `part_split/` kit, which was never
+run.

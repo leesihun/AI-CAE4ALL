@@ -18,18 +18,24 @@ V-cycle instead of the paper's own multiscale backbone:
         features that are available even when y is unknown (generation
         time). See CHiMGNFlow.py's `train_prior` mode.
 
-The paper's own ablation (a VGAE built on the same multiscale shape, with a
-heavier KL and a coarser latent) still collapses -- proof that hierarchy alone
-does not explain LDGN's win. The decisive lever is training a prior instead of
-sampling N(0, I) directly. Field-space flow matching (this repo's PREVIOUS
-cHI-MGNflow) is exactly the class of approach that ablation loses to.
+What the paper's ablations show, read as written: their VGAE baseline samples
+N(0, I) directly (no learned prior), keeps a deeper, less-compressed latent
+and has no skip connections. On EllipseFlow (KL weight 1e-8, 32 latent
+channels) it mode-collapses, which the authors attribute to the decoder
+leaning on the condition while the latent carries little. So hierarchy alone
+does not explain LDGN's win; the learned latent prior is the lever this model
+copies. The paper's field-space diffusion model (DGN) is not dominated:
+LDGN wins on distribution metrics (W2 on EllipseFlow 3.07 vs DGN's 4.72), but
+DGN keeps the best R^2. Field-space flow matching -- this repo's previous
+cHI-MGNflow -- is the paper's App. D.7 variant, not what the VGAE ablation is.
 
 Two-pass shared encoder (the skip-connection leakage fix)
 -----------------------------------------------------------
 A naive retrofit that reuses the V-cycle's ordinary fine-level skip states for
 an autoencoder's decoder lets the decoder reconstruct the field from the skip
-path alone, bypassing z entirely -- precisely the paper's own VGAE-collapse
-mechanism. HierarchyEncoder is therefore called TWICE per step with different
+path alone, bypassing z entirely. (This is our own concern, not the paper's
+VGAE mechanism: that VGAE has no skips, but it shows the same symptom -- a
+decoder that ignores the latent.) HierarchyEncoder is therefore called TWICE per step with different
 node inputs, sharing one set of weights:
 
     outs_y = hierarchy_encoder(x=[state | graph.y      | cond | pos | ...])

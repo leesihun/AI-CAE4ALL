@@ -133,9 +133,19 @@ class UnpoolBlock(nn.Module):
 
 
 class AdaLNZero(nn.Module):
-    """AdaLN-Zero conditioning of one GnBlock on the global latent z.
+    """DiT-style (shift, scale, gate) modulation of one GnBlock by a conditioning vector.
 
-    Replaces the concat-fuser `Linear([x, z])`, which had two defects:
+    In cHI-MGNflow the only user is LatentFlowPrior, and the vector is the
+    flow-time embedding of t alone -- there is no global latent z in this
+    model; z is the per-coarse-node latent the prior transports. The name is
+    kept from DiT's AdaLN-Zero, but two things differ: there is no LayerNorm
+    before the modulation (the GnBlock's own MLPs normalize), and the gate is
+    initialized to 1, not 0, so the block starts as the unconditioned block
+    rather than as the identity.
+
+    The rationale below dates from HI-MGN-V (MeshGraphNets_Variational), where
+    this class conditions every V-cycle block on a per-graph latent z. There it
+    replaced the concat-fuser `Linear([x, z])`, which had two defects:
       (a) z is broadcast identically to every node of a graph, so
           `Linear([x, z]) = W_x x + W_z z + b` could only add ONE constant
           vector per graph -- no scaling, no gating, no spatial selection.
@@ -170,7 +180,7 @@ class AdaLNZero(nn.Module):
         self.reset_identity()
 
     def reset_identity(self):
-        """(Re-)initialize to the identity map.
+        """(Re-)initialize to shift=0, scale=0, gate=1: the unconditioned block.
 
         Must run AFTER any global `apply(init_weights)`, which would otherwise
         kaiming-fill these and reintroduce the very gain problem being fixed.

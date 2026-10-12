@@ -6,14 +6,60 @@ avoid maintaining duplicate dataset/model/optimizer/checkpoint logic.
 """
 
 import os
+import random
 import time
 
+import numpy as np
 import torch
 
 from general_modules.data_loader import load_data
 from model.CHiMGNFlow import CHiMGNFlow
 from training_profiles.amp import describe_amp, resolve_amp_dtype
 from training_profiles.training_loop import build_ema_model
+
+
+# ---------------------------------------------------------------------------
+# RNG
+# ---------------------------------------------------------------------------
+
+def resolve_training_seed(config) -> int:
+    """The run's base seed: `training_seed` when set, else one drawn per launch.
+
+    Before 2026-10-12 nothing read `training_seed`, so every launch drew a fresh
+    initialization and data order -- which the repeat arms of the sweeps rely
+    on. A config without the key keeps that: a seed is drawn here, printed and
+    kept in `_training_seed` so the run can be replayed. Call it before
+    mp.spawn so every DDP rank derives its stream from the same base.
+    """
+    if config.get('_training_seed') is None:
+        seed = config.get('training_seed')
+        drawn = seed is None
+        config['_training_seed'] = (int.from_bytes(os.urandom(4), 'little') & 0x7FFFFFFF
+                                    if drawn else int(seed))
+        config['_training_seed_drawn'] = drawn
+    return config['_training_seed']
+
+
+def seed_training_rng(config, rank: int = 0) -> int:
+    """Seed the python/numpy/torch/CUDA global RNGs with base seed + rank.
+
+    Initialization, shuffling, KL noise and flow-matching draws all come from
+    these global streams (no loader owns a generator), so the resume state's
+    saved RNG covers them. DDP ranks differ by `rank` so their noise does not
+    coincide; DistributedSampler takes the base seed so all ranks agree on the
+    permutation. Returns the base seed.
+    """
+    base = resolve_training_seed(config)
+    seed = base + rank
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    if rank == 0:
+        origin = 'drawn (training_seed unset)' if config.get('_training_seed_drawn') else 'training_seed'
+        print(f"Training RNG seed: {base} [{origin}]")
+    return base
 
 
 # ---------------------------------------------------------------------------
