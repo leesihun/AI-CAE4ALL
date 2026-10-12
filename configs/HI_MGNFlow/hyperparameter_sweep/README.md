@@ -1,26 +1,30 @@
 # cHI-MGNflow parametric study (B300 round 2)
 
-Round 2 runs on two 8-GPU B300 nodes, one study per node. Each node runs
-this method's runner and the MeshGraphNets-V runner side by side, so every
-card holds one cHI job and one MGN-V job:
+Round 2 runs on two 8-GPU B300 nodes, one method per node. Each node runs
+both studies at once, so every card holds one SAOI job and one
+shell-buckling job:
 
-| node | study | data | cHI-MGNflow jobs | MGN-V jobs |
+| node | method | directory | SAOI jobs | ex3 jobs |
 | --- | --- | --- | --- | --- |
-| 1 | [`SAOI/`](SAOI/) | `dataset/SAOI/saoi_train_{bot,top}.h5` | 4 arms x 2 board halves | 4 arms x 2 board halves |
-| 2 | [`probabilistic/`](probabilistic/) | `dataset/probabilistic/ex3_shell_buckling{,_infer}.h5` | 8 arms | 8 arms |
+| 1 | cHI-MGNflow | this one | 4 arms x 2 board halves | 8 arms |
+| 2 | MeshGraphNets-V | [`configs/MeshGraphNets_Variational/hyperparameter_sweep/`](../../MeshGraphNets_Variational/hyperparameter_sweep/) | 4 arms x 2 board halves | 8 arms |
 
-The MGN-V half of each study lives in
-[`configs/MeshGraphNets_Variational/hyperparameter_sweep/`](../../MeshGraphNets_Variational/hyperparameter_sweep/),
-with a byte-identical copy of every script here.
+| study | data (needed on **both** nodes) |
+| --- | --- |
+| [`SAOI/`](SAOI/) | `dataset/SAOI/saoi_train_{bot,top}.h5` and the official eval parts |
+| [`probabilistic/`](probabilistic/) | `dataset/probabilistic/ex3_shell_buckling{,_infer}.h5` |
+
+The MGN-V directory holds a byte-identical copy of every script here.
 
 The results come back as **typed text only**. Nothing is copied off the
-nodes. Each runner therefore ends with a block of short lines (see "Reading
-the block") that holds its whole result and is short enough to retype.
+nodes. Each node's run therefore ends with one block of short lines (see
+"Reading the block") that holds both studies' results and is short enough
+to retype.
 
 | File | Purpose |
 | --- | --- |
-| `run_sweep.sh SAOI\|probabilistic` | one method on one node, end to end: checks, data, preflight, the 8 jobs, the summary |
-| `brief.py SAOI\|probabilistic\|r1` | prints the type-back block at any time, during or after the run |
+| `run_sweep.sh [SAOI\|probabilistic]` | this method on one node, end to end: checks, data, preflight, the 16 jobs, the summary, the block. No argument runs both studies |
+| `brief.py [SAOI\|probabilistic\|r1]` | prints the type-back block at any time, during or after the run. No argument prints both studies |
 | `SAOI/saoi_heldout.py` | SAOI only: geometry labels, the held-out parts and their inference configs |
 | `SAOI/*.txt`, `probabilistic/*.txt` | round 2 configs; every header names the arm's change and its question |
 | `SAOI/r1/`, `probabilistic/r1/` | round 1, with its own runner and README |
@@ -91,9 +95,7 @@ per arm:
 | `c_full_short` | `c_full` with 60 + 120 epochs | what the doubled epochs contribute |
 
 Inference draws 64 samples per scene of `ex3_shell_buckling_infer.h5`. The
-cHI jobs go heaviest first and the MGN-V jobs lightest first, so card k pairs
-the k-th heaviest cHI job with the k-th lightest MGN-V job and the two
-biggest jobs never share a card.
+ex3 jobs go heaviest first, and job k of each study runs on card k.
 
 ## Run
 
@@ -101,77 +103,89 @@ Prerequisites on each node:
 
 - A checkout of `main` with `prior_global` and `split_group_attr`. The runner
   checks both.
-- The data, named exactly as the configs spell it, because Linux opens only
-  that case:
-  - SAOI node: `dataset/SAOI/saoi_train_{bot,top}.h5` and
+- The data of **both** studies, named exactly as the configs spell it,
+  because Linux opens only that case:
+  - `dataset/SAOI/saoi_train_{bot,top}.h5` and
     `test_{S26FE-MAIN,S26FE-SEC,SM-L345U-MAIN}_{infer,compare}_{bot,top}.h5`.
-  - ex3 node: `dataset/probabilistic/ex3_shell_buckling.h5` and
+  - `dataset/probabilistic/ex3_shell_buckling.h5` and
     `ex3_shell_buckling_infer.h5`.
-- A cHI-MGNflow and a MeshGraphNets-V interpreter, set in
-  `ai_cae4all.local.toml` or through `METHOD_PYTHON=` on each runner. Each
-  needs torch built for Blackwell (sm_100, CUDA 12.8 or newer).
+- This method's interpreter, set in `ai_cae4all.local.toml` or through
+  `METHOD_PYTHON=`. It needs torch built for Blackwell (sm_100, CUDA 12.8 or
+  newer).
 
-From the repo root:
+One command per node, with no argument and no `nohup`:
 
 ```bash
-# node 1 (SAOI)
-nohup bash configs/HI_MGNFlow/hyperparameter_sweep/run_sweep.sh SAOI > output/b300_r2_saoi_chi.out 2>&1 &
-nohup bash configs/MeshGraphNets_Variational/hyperparameter_sweep/run_sweep.sh SAOI > output/b300_r2_saoi_mgnv.out 2>&1 &
+# node 1 (cHI-MGNflow)
+cd configs/HI_MGNFlow/hyperparameter_sweep && ./run_sweep.sh
 
-# node 2 (shell buckling)
-nohup bash configs/HI_MGNFlow/hyperparameter_sweep/run_sweep.sh probabilistic > output/b300_r2_ex3_chi.out 2>&1 &
-nohup bash configs/MeshGraphNets_Variational/hyperparameter_sweep/run_sweep.sh probabilistic > output/b300_r2_ex3_mgnv.out 2>&1 &
+# node 2 (MeshGraphNets-V)
+cd configs/MeshGraphNets_Variational/hyperparameter_sweep && ./run_sweep.sh
 ```
 
-Start both runners of a node together. Each runner stops before any GPU time
-is spent if any of the following fails, and prints the reason as a type-back
-block (`R2 <saoi|ex3> <chi|mgnv> ABORT <reason>`):
+If `./run_sweep.sh` answers "Permission denied", the checkout has no exec
+bit on the file; `bash run_sweep.sh` does the same thing.
+
+The runner first checks both studies, in the terminal. It stops before any
+GPU time is spent if any of the following fails, and prints the reason as a
+type-back block (`R2 <saoi|ex3> <chi|mgnv> ABORT <reason>`):
 
 1. **Environment.** The launcher Python imports `cae_suite`. This method's
    interpreter imports torch, torch_geometric and h5py, and runs a bf16 matmul
    and a scatter on a GPU.
 2. **Data.**
-   - SAOI node: `SAOI/saoi_heldout.py` writes
+   - SAOI: `SAOI/saoi_heldout.py` writes
      `dataset/SAOI/saoi_train_<half>_bygeom.h5` (a second full copy of each
      training file), the held-out parts and this method's configs for them.
-     The two runners take turns under a lock; the second reuses what the
-     first wrote.
-   - Both nodes: every dataset a config names exists, with the case as written.
-3. **Preflight.** The launcher `--check` passes on every config, 8 at a time
-   per runner. On the SAOI node that is up to 80 checks per method: 8 train
-   configs, 24 official inference configs and up to 48 held-out ones. On the
-   ex3 node it is 16.
+     If the two nodes share a filesystem, the two runners take turns under a
+     lock and the second reuses what the first wrote.
+   - Both studies: every dataset a config names exists, with the case as
+     written.
+3. **Preflight.** The launcher `--check` passes on every config, 8 at a
+   time: up to 80 for SAOI (8 train configs, 24 official inference configs
+   and up to 48 held-out ones) and 16 for ex3.
 
-The jobs then start. Each job trains and then runs its inference configs one
-after another. A failed inference does not stop the next one. A slot that
-finishes takes the next unclaimed job of its own method, so a node with fewer
-GPUs (`GPUS="0 1 2 3"`) also works, only slower.
+When the checks pass, the jobs go to the background on their own and the
+terminal can close. Follow them with
 
-Overrides:
+```bash
+tail -f output/b300_r2/run_sweep_chi.out      # run_sweep_mgnv.out on node 2
+```
+
+Each job trains and then runs its inference configs one after another. A
+failed inference does not stop the next one. A slot that finishes takes the
+next unclaimed job of its own study, so a node with fewer GPUs
+(`GPUS="0 1 2 3"`) also works, only slower. A second `./run_sweep.sh` while
+the first is still running is refused; `output/b300_r2/run_sweep_chi.pid`
+holds the running driver's pid.
+
+Overrides go in front of the command, e.g. `GPUS="0 1 2 3" ./run_sweep.sh`:
 
 | override | effect |
 | --- | --- |
+| `./run_sweep.sh SAOI` (or `probabilistic`) | one study only |
 | `GPUS="0 1 2 3"` | which cards to use (default: every visible card) |
-| `JOBS_PER_GPU=2` | jobs per card; use 2 when this method runs alone on the node |
-| `JOBS="c_grp.bot c_grp.top"` | run only these jobs, in this order (SAOI job = `<arm>.<half>`, ex3 job = `<arm>`) |
+| `JOBS_PER_GPU=2` | jobs per card, per study (default 1) |
+| `JOBS="c_grp.bot c_grp.top" ./run_sweep.sh SAOI` | only these jobs of one study, in this order (SAOI job = `<arm>.<half>`, ex3 job = `<arm>`) |
 | `THREADS_PER_JOB=4` | the torch thread pool per job; BLAS is pinned to one thread. 16 jobs x (4 + 4 loader workers) = 128 cores |
 | `TRAIN=0` | inference only, on existing checkpoints; the run hours stay those of the training run |
 | `INFER=0`, `PREFLIGHT=0` | skip that stage |
+| `DETACH=0` | keep the jobs in this terminal instead of the background (the default when stdout is not a terminal, e.g. under `nohup`) |
 | `PYTHON=`, `METHOD_PYTHON=` | the launcher and this method's interpreter |
 | `PROBE_TIMEOUT=900` | seconds the environment probe may take |
 
-There is no resume: a killed job restarts from epoch 0. To run one job again,
-use `JOBS=c_grp.bot bash configs/HI_MGNFlow/hyperparameter_sweep/run_sweep.sh SAOI`.
+There is no resume: a killed job restarts from epoch 0. To run one job
+again: `JOBS=c_grp.bot ./run_sweep.sh SAOI`.
 
 ## Reading the block
 
-Each runner prints its block at the end, so a node gives two: one for cHI
-(`R2 <node> chi ...`) and one for MGN-V (`R2 <node> mgnv ...`). `brief.py`
-prints the same block at any time:
+The end of `run_sweep_chi.out` holds one block for both studies: the SAOI
+header and its arm lines, then the ex3 header and its arm lines. Each node
+gives one block. `brief.py` prints the same block at any time:
 
 ```bash
-python configs/HI_MGNFlow/hyperparameter_sweep/brief.py SAOI            # or probabilistic
-python configs/HI_MGNFlow/hyperparameter_sweep/brief.py r1              # round 1, both studies
+python configs/HI_MGNFlow/hyperparameter_sweep/brief.py         # both studies (or SAOI / probabilistic)
+python configs/HI_MGNFlow/hyperparameter_sweep/brief.py r1      # round 1, both studies
 ```
 
 Every number is multiplied by 100 and rounded, so `23` means 0.23.
@@ -182,15 +196,19 @@ R2 saoi chi 31h D8/8 F0 | bot G120 v12 t12 H6 | top G118 v11 t12 H6
 c_smp 41 62 18 12 88 6 14
 c_grp 37 70 15 33 74 11 15
 ...
+R2 ex3 chi 22h D8/8 F0
+c_full_g512 9 81 -12 31 74 21
+...
 ==== END ====
 ```
 
 The lines in the example are invented to show the format.
 
-**Header.** `31h` is the runner's wall time and `D8/8` the finished jobs.
+**Header.** `31h` is the study's wall time and `D8/8` its finished jobs.
 `F0` counts the jobs that failed. On SAOI, each half then lists its
 geometries (`G`), validation geometries (`v`), test geometries (`t`) and the
-held-out parts that were cut (`H`).
+held-out parts that were cut (`H`). A study whose checks failed shows only
+`R2 <saoi|ex3> chi ABORT <reason>`: nothing of it ran.
 
 **SAOI line.** It reads `arm Ow Os Ob Hw Hs Hb h`, with O and H as defined above:
 
@@ -218,15 +236,17 @@ reading on the node, not for typing.
 ## Output
 
 ```text
+output/b300_r2/run_sweep_chi.{out,pid}                                 the run's log (ends with the block); pid while it runs
 output/b300_r2/<saoi|ex3>/<arm>/[<half>/]model.pth, train.log, infer/<eval set>/
 output/b300_r2/<saoi|ex3>/run_logs/chi/<job>.{train,infer_<tag>}.out   stdout per stage
 output/b300_r2/<saoi|ex3>/run_logs/chi/status/                         what brief.py reads
-output/b300_r2/<saoi|ex3>/run_logs/chi/sweep_<timestamp>.out           the runner's own log
+output/b300_r2/<saoi|ex3>/run_logs/chi/sweep_<timestamp>.out           one study's log
 output/b300_r2/saoi/heldout/{data,configs/chi,split_<half>.json}       the held-out parts
 ```
 
-The MGN-V runner writes the same tree with `mgnv` in place of `chi`; the two
-share only `heldout/data` and the `_bygeom.h5` copies.
+The MGN-V node writes the same tree with `mgnv` in place of `chi`. If the
+two nodes share a filesystem, they share only `heldout/data` and the
+`_bygeom.h5` copies.
 
 ## Time
 

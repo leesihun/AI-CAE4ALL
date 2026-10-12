@@ -1,28 +1,32 @@
 # MeshGraphNets-V parametric study (B300 round 2)
 
-Round 2 runs on two 8-GPU B300 nodes, one study per node. Each node runs
-this method's runner and the cHI-MGNflow runner side by side, so every card
-holds one MGN-V job and one cHI job:
+Round 2 runs on two 8-GPU B300 nodes, one method per node. Each node runs
+both studies at once, so every card holds one SAOI job and one
+shell-buckling job:
 
-| node | study | data | MGN-V jobs | cHI-MGNflow jobs |
+| node | method | directory | SAOI jobs | ex3 jobs |
 | --- | --- | --- | --- | --- |
-| 1 | [`SAOI/`](SAOI/) | `dataset/SAOI/saoi_train_{bot,top}.h5` | 4 arms x 2 board halves | 4 arms x 2 board halves |
-| 2 | [`probabilistic/`](probabilistic/) | `dataset/probabilistic/ex3_shell_buckling{,_infer}.h5` | 8 arms | 8 arms |
+| 1 | cHI-MGNflow | [`configs/HI_MGNFlow/hyperparameter_sweep/`](../../HI_MGNFlow/hyperparameter_sweep/) | 4 arms x 2 board halves | 8 arms |
+| 2 | MeshGraphNets-V | this one | 4 arms x 2 board halves | 8 arms |
 
-The cHI-MGNflow half of each study lives in
-[`configs/HI_MGNFlow/hyperparameter_sweep/`](../../HI_MGNFlow/hyperparameter_sweep/),
-with a byte-identical copy of every script here. Its README also has the
-full run instructions, the overrides and how to read the type-back block;
-they apply to this runner unchanged, with `mgnv` in place of `chi`.
+| study | data (needed on **both** nodes) |
+| --- | --- |
+| [`SAOI/`](SAOI/) | `dataset/SAOI/saoi_train_{bot,top}.h5` and the official eval parts |
+| [`probabilistic/`](probabilistic/) | `dataset/probabilistic/ex3_shell_buckling{,_infer}.h5` |
 
-The results come back as **typed text only**. Each runner ends with a block
-of short lines between `==== TYPE THIS BACK ====` and `==== END ====` that
-holds its whole result.
+The cHI-MGNflow directory holds a byte-identical copy of every script here.
+Its README also has the full run instructions, the overrides and how to read
+the type-back block; they apply to this node unchanged, with `mgnv` in place
+of `chi`.
+
+The results come back as **typed text only**. The run ends with one block of
+short lines between `==== TYPE THIS BACK ====` and `==== END ====` that holds
+both studies' results.
 
 | File | Purpose |
 | --- | --- |
-| `run_sweep.sh SAOI\|probabilistic` | one method on one node, end to end: checks, data, preflight, the 8 jobs, the summary |
-| `brief.py SAOI\|probabilistic` | prints the type-back block at any time, during or after the run |
+| `run_sweep.sh [SAOI\|probabilistic]` | this method on one node, end to end: checks, data, preflight, the 16 jobs, the summary, the block. No argument runs both studies |
+| `brief.py [SAOI\|probabilistic]` | prints the type-back block at any time, during or after the run. No argument prints both studies |
 | `SAOI/saoi_heldout.py` | SAOI only: geometry labels, the held-out parts and their inference configs |
 | `SAOI/*.txt`, `probabilistic/*.txt` | the configs; every header names the arm's change and its question |
 
@@ -84,38 +88,36 @@ subset it was what let `z` rise above the z-free floor.
 | `v_mp8_w256` | `v_mp8` + `latent_dim 256` | is the decoder too narrow to turn `z` into amplitude? |
 
 Inference draws 64 samples per scene of `ex3_shell_buckling_infer.h5`. The
-MGN-V jobs go lightest first and the cHI jobs heaviest first, so the two
-biggest jobs never share a card.
+ex3 jobs go lightest first, and job k of each study runs on card k.
 
 ## Run
 
-From the repo root, both runners of a node together:
+One command on node 2, with no argument and no `nohup`:
 
 ```bash
-# node 1 (SAOI)
-nohup bash configs/HI_MGNFlow/hyperparameter_sweep/run_sweep.sh SAOI > output/b300_r2_saoi_chi.out 2>&1 &
-nohup bash configs/MeshGraphNets_Variational/hyperparameter_sweep/run_sweep.sh SAOI > output/b300_r2_saoi_mgnv.out 2>&1 &
-
-# node 2 (shell buckling)
-nohup bash configs/HI_MGNFlow/hyperparameter_sweep/run_sweep.sh probabilistic > output/b300_r2_ex3_chi.out 2>&1 &
-nohup bash configs/MeshGraphNets_Variational/hyperparameter_sweep/run_sweep.sh probabilistic > output/b300_r2_ex3_mgnv.out 2>&1 &
+cd configs/MeshGraphNets_Variational/hyperparameter_sweep && ./run_sweep.sh
 ```
 
-The MGN-V runner needs a MeshGraphNets-V interpreter with a Blackwell torch
-(sm_100, CUDA 12.8 or newer), set in `ai_cae4all.local.toml` or through
-`METHOD_PYTHON=`, and a checkout with `split_group_attr`. Prerequisites,
-abort stages and overrides are in the
-[cHI-MGNflow README](../../HI_MGNFlow/hyperparameter_sweep/README.md#run).
-To run one job again:
-`JOBS=v_grp.bot bash configs/MeshGraphNets_Variational/hyperparameter_sweep/run_sweep.sh SAOI`.
+(`bash run_sweep.sh` if `./run_sweep.sh` answers "Permission denied".) The
+checks of both studies run in the terminal; when they pass, the jobs go to
+the background on their own and the terminal can close. Follow them with
+`tail -f output/b300_r2/run_sweep_mgnv.out`.
 
-The block at the end of this runner reads `R2 <saoi|ex3> mgnv ...`, and
-`python configs/MeshGraphNets_Variational/hyperparameter_sweep/brief.py SAOI`
-(or `probabilistic`) prints it at any time. The columns are explained in
+The node needs a MeshGraphNets-V interpreter with a Blackwell torch (sm_100,
+CUDA 12.8 or newer), set in `ai_cae4all.local.toml` or through
+`METHOD_PYTHON=`, a checkout with `split_group_attr`, and the data of both
+studies. Prerequisites, abort stages and overrides are in the
+[cHI-MGNflow README](../../HI_MGNFlow/hyperparameter_sweep/README.md#run).
+To run one job again: `JOBS=v_grp.bot ./run_sweep.sh SAOI`.
+
+The end of `run_sweep_mgnv.out` holds one block, `R2 saoi mgnv ...` and
+`R2 ex3 mgnv ...` with their arm lines, and
+`python configs/MeshGraphNets_Variational/hyperparameter_sweep/brief.py`
+prints it at any time. The columns are explained in
 [Reading the block](../../HI_MGNFlow/hyperparameter_sweep/README.md#reading-the-block).
 
 Outputs go to `output/b300_r2/<saoi|ex3>/<arm>/[<half>/]`, with this
-runner's logs and status under `output/b300_r2/<saoi|ex3>/run_logs/mgnv/`
+method's logs and status under `output/b300_r2/<saoi|ex3>/run_logs/mgnv/`
 and its held-out inference configs under
 `output/b300_r2/saoi/heldout/configs/mgnv/`.
 

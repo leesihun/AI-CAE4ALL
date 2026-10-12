@@ -1,23 +1,20 @@
 #!/usr/bin/env bash
-# B300 round 2 of this method's sweep: one study per 8-GPU node, one job per
-# card. The same file sits, byte for byte, in
-#   configs/HI_MGNFlow/hyperparameter_sweep/                 (cHI-MGNflow)
-#   configs/MeshGraphNets_Variational/hyperparameter_sweep/  (MeshGraphNets-V)
-# and the directory it runs from picks the method. A node runs both methods'
-# runners on the same study, so every card holds one job of each:
+# B300 round 2 of this method's sweep. One 8-GPU node per method, both studies
+# at once, so every card holds one SAOI job and one shell-buckling job:
 #
-#   node 1 (SAOI):
-#     nohup bash configs/HI_MGNFlow/hyperparameter_sweep/run_sweep.sh SAOI > output/b300_r2_saoi_chi.out 2>&1 &
-#     nohup bash configs/MeshGraphNets_Variational/hyperparameter_sweep/run_sweep.sh SAOI > output/b300_r2_saoi_mgnv.out 2>&1 &
-#   node 2 (shell buckling, ex3):
-#     nohup bash configs/HI_MGNFlow/hyperparameter_sweep/run_sweep.sh probabilistic > output/b300_r2_ex3_chi.out 2>&1 &
-#     nohup bash configs/MeshGraphNets_Variational/hyperparameter_sweep/run_sweep.sh probabilistic > output/b300_r2_ex3_mgnv.out 2>&1 &
+#   node 1:  cd configs/HI_MGNFlow/hyperparameter_sweep && ./run_sweep.sh
+#   node 2:  cd configs/MeshGraphNets_Variational/hyperparameter_sweep && ./run_sweep.sh
 #
-# The last thing each runner prints is a block of a few short lines between
-# "==== TYPE THIS BACK ====" and "==== END ====" (brief.py): that method's
-# whole result, short enough to retype. Two blocks per node, one per method.
-# `python configs/<method>/hyperparameter_sweep/brief.py SAOI|probabilistic`
-# prints the same block at any time while the run goes.
+# The same file sits, byte for byte, in both directories, and the directory it
+# runs from picks the method. No argument and no nohup: the checks (stages 1-3
+# below, both studies) run in the terminal, and when they pass the jobs go to
+# the background on their own, so the terminal can close.
+#   progress:  tail -f output/b300_r2/run_sweep_<chi|mgnv>.out
+#   result:    python configs/<method>/hyperparameter_sweep/brief.py
+# The run log ends with one block between "==== TYPE THIS BACK ====" and
+# "==== END ====" (brief.py): both studies of this method, short enough to
+# retype. brief.py prints the same block at any time while the run goes.
+# `./run_sweep.sh SAOI` or `./run_sweep.sh probabilistic` runs one study only.
 #
 # THE JOBS (README.md has the questions; every config header names its change)
 #   SAOI           arm x board half, configs in SAOI/:
@@ -26,12 +23,10 @@
 #   probabilistic  one job per arm (ex3.h5 -> ex3_infer.h5), configs in probabilistic/:
 #     c_full_g512 c_full c_full_rep c_full_b4 c_full_g256 c_full_w128 c_full_short c_tok
 #     v_base v_rep v_mp8 v_mp8_pmin01 v_mp8_aux100 v_mp8_mmd10 v_mp12 v_mp8_w256
-#   Job k runs on card k: cHI jobs go heaviest first, MGN-V jobs lightest
-#   first, so with both runners on one node the two biggest jobs never share
-#   a card. A slot that finishes takes the next unclaimed job of its own
-#   method, so fewer GPUs also work.
+#   Job k of each study runs on card k. A slot that finishes takes the next
+#   unclaimed job of its own study, so fewer GPUs also work.
 #
-# ORDER OF WORK
+# ORDER OF WORK, per study
 #   1. environment  launcher python imports cae_suite; this method's
 #                   interpreter imports torch / torch_geometric / h5py and runs
 #                   a bf16 matmul and a scatter on this GPU; this checkout has
@@ -43,48 +38,56 @@
 #   3. --check      the launcher's full preflight on every config, 8 at a time
 #                   (inference configs without the path layer while their
 #                   checkpoint does not exist yet).
-#   Any failure in 1-3 aborts before a GPU-hour is spent, and says why.
+#   Any failure in 1-3 aborts before a GPU-hour is spent, says why, and prints
+#   a one-line block to type back.
 #   4. jobs         per job: train, then every inference config of that job
 #                   (official eval parts first, then held-out parts). A failed
 #                   inference does not stop the next one.
-#   5. summary      ok / the failed stage per job, with its log tail; then the
-#                   type-back block.
+#   5. summary      ok / the failed stage per job, with its log tail.
 #
 # Status for brief.py: output/b300_r2/<saoi|ex3>/run_logs/<chi|mgnv>/status/
-# <job>.{state,err,train_start,train_end,inferfail}. Stdout per stage:
-# run_logs/<chi|mgnv>/<job>.<stage>.out. The two runners on a node share
-# nothing they write but the SAOI held-out parts, which saoi_heldout.py
-# writes under a lock.
+# <job>.{state,err,train_start,train_end,inferfail} and _abort. Stdout per
+# stage: run_logs/<chi|mgnv>/<job>.<stage>.out; each study's whole log:
+# run_logs/<chi|mgnv>/sweep_<time>.out.
 #
-# Useful overrides:
+# Useful overrides, in front of the command (GPUS="0 1 2 3" ./run_sweep.sh):
 #   PYTHON (launcher), METHOD_PYTHON (this method), GPUS (default: every GPU
-#   visible), JOBS_PER_GPU=1 (2 when this method runs alone on the node),
-#   JOBS="c_grp.bot c_grp.top ..." (a subset, in this order),
-#   THREADS_PER_JOB=4, PROBE_TIMEOUT=900, PREFLIGHT=1, TRAIN=1, INFER=1
-# Inference-only rerun:  TRAIN=0 bash configs/HI_MGNFlow/hyperparameter_sweep/run_sweep.sh probabilistic
-# One job again:         JOBS=c_grp.bot bash configs/HI_MGNFlow/hyperparameter_sweep/run_sweep.sh SAOI
+#   visible), JOBS_PER_GPU=1 (per study), THREADS_PER_JOB=4,
+#   PROBE_TIMEOUT=900, PREFLIGHT=1, TRAIN=1, INFER=1,
+#   DETACH=1 (0 keeps the jobs in this terminal; the default when stdout is
+#   not a terminal, e.g. under nohup),
+#   JOBS="c_grp.bot c_grp.top" (a subset of one study, in this order)
+# Inference-only rerun:  TRAIN=0 ./run_sweep.sh probabilistic
+# One job again:         JOBS=c_grp.bot ./run_sweep.sh SAOI
+#
+# The script calls itself: R2_PHASE=check runs stages 1-3 of one study in the
+# terminal, R2_PHASE=run is the background driver, and R2_PHASE=jobs runs
+# stages 1, 2, 4 and 5 of one study under it.
 set -uo pipefail
 
 case "${1:-}" in
+    "")                     SWEEP="";              NODE="" ;;
     SAOI|saoi)              SWEEP="SAOI";          NODE="saoi" ;;
     probabilistic|ex3)      SWEEP="probabilistic"; NODE="ex3" ;;
-    *) echo "usage: bash $0 SAOI|probabilistic   (one study per 8-GPU node)"; exit 2 ;;
+    *) echo "usage: ./run_sweep.sh [SAOI|probabilistic]   (no argument: both studies)"; exit 2 ;;
 esac
+PHASE="${R2_PHASE:-}"
 
 PYTHON="${PYTHON:-python}"
 export PYTHONUNBUFFERED=1
 export CUDA_DEVICE_ORDER=PCI_BUS_ID
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
-# 8 trainers here + 8 from the other method's runner, each with 4 torch
-# threads + 4 loader workers = 128 threads on a 128-core node. Without the caps
-# every pool starts one thread per core and the CPU sits at 100% while the
-# GPUs wait (round 1, two sweeps per node).
+# 8 trainers per study, both studies at once, each with 4 torch threads + 4
+# loader workers = 128 threads on a 128-core node. Without the caps every pool
+# starts one thread per core and the CPU sits at 100% while the GPUs wait
+# (round 1, two sweeps per node).
 THREADS_PER_JOB="${THREADS_PER_JOB:-4}"
 export OMP_NUM_THREADS="${OMP_NUM_THREADS:-$THREADS_PER_JOB}"
 export MKL_NUM_THREADS="${MKL_NUM_THREADS:-1}"
 export OPENBLAS_NUM_THREADS="${OPENBLAS_NUM_THREADS:-1}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT="$SCRIPT_DIR/$(basename "${BASH_SOURCE[0]}")"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 cd "$REPO_ROOT" || exit 1
 
@@ -92,27 +95,15 @@ case "$(basename "$(dirname "$SCRIPT_DIR")")" in
     HI_MGNFlow)
         M="chi"; LABEL="cHI-MGNflow"; MODEL_ID="chi-mgnflow"; SPEC_ID="chi-mgnflow"
         METHOD_DIR="methods/HI_MGNFlow"
-        if [ "$NODE" = "saoi" ]; then
-            ARMS="c_smp c_grp c_grp_rep c_nopart"
-        else
-            ARMS="c_full_g512 c_full c_full_rep c_full_b4 c_full_g256 c_full_w128 c_full_short c_tok"
-        fi ;;
+        SAOI_ARMS="c_smp c_grp c_grp_rep c_nopart"
+        EX3_ARMS="c_full_g512 c_full c_full_rep c_full_b4 c_full_g256 c_full_w128 c_full_short c_tok" ;;
     MeshGraphNets_Variational)
         M="mgnv"; LABEL="MGN-V"; MODEL_ID="meshgraphnets-v"; SPEC_ID="meshgraphnets_variational"
         METHOD_DIR="methods/MeshGraphNets_Variational"
-        if [ "$NODE" = "saoi" ]; then
-            ARMS="v_smp v_grp v_grp_rep v_nopart"
-        else
-            ARMS="v_base v_rep v_mp8 v_mp8_pmin01 v_mp8_aux100 v_mp8_mmd10 v_mp12 v_mp8_w256"
-        fi ;;
+        SAOI_ARMS="v_smp v_grp v_grp_rep v_nopart"
+        EX3_ARMS="v_base v_rep v_mp8 v_mp8_pmin01 v_mp8_aux100 v_mp8_mmd10 v_mp12 v_mp8_w256" ;;
     *) echo "run_sweep.sh must sit in configs/HI_MGNFlow/ or configs/MeshGraphNets_Variational/hyperparameter_sweep/"; exit 2 ;;
 esac
-CFG_DIR="configs/$(basename "$(dirname "$SCRIPT_DIR")")/hyperparameter_sweep/$SWEEP"
-if [ "$NODE" = "saoi" ]; then HALVES="bot top"; else HALVES=""; fi
-OUT_ROOT="output/b300_r2/$NODE"
-LOG_ROOT="$OUT_ROOT/run_logs/$M"
-STATUS_DIR="$LOG_ROOT/status"
-HELDOUT_CFG="output/b300_r2/saoi/heldout/configs/$M"
 
 GPUS="${GPUS:-}"
 JOBS_PER_GPU="${JOBS_PER_GPU:-1}"
@@ -120,8 +111,77 @@ PREFLIGHT="${PREFLIGHT:-1}"
 TRAIN="${TRAIN:-1}"
 INFER="${INFER:-1}"
 
-TS="$(date +%Y%m%d_%H%M%S)"
+# ---------------------------------------------- the command, and the driver
+if [ "$PHASE" != "check" ] && [ "$PHASE" != "jobs" ]; then
+    STUDIES="${SWEEP:-SAOI probabilistic}"
+    RUN_LOG="output/b300_r2/run_sweep_$M.out"
+    PID_FILE="output/b300_r2/run_sweep_$M.pid"
+    if [ -z "$PHASE" ]; then
+        if [ -n "${JOBS:-}" ] && [ -z "$SWEEP" ]; then
+            echo "JOBS names jobs of one study: JOBS=\"$JOBS\" ./run_sweep.sh SAOI|probabilistic"
+            exit 2
+        fi
+        mkdir -p output/b300_r2
+        if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
+            echo "A $LABEL sweep is already running here (pid $(cat "$PID_FILE")): tail -f $RUN_LOG"
+            echo "If it is not, delete $PID_FILE and start again."
+            exit 2
+        fi
+        R2_TS="$(date +%Y%m%d_%H%M%S)"
+        export R2_TS
+        for st in $STUDIES; do
+            R2_PHASE=check bash "$SCRIPT" "$st" || exit 1
+        done
+        { [ "$TRAIN" = "1" ] || [ "$INFER" = "1" ]; } || exit 0
+        if [ -z "${DETACH:-}" ]; then
+            if [ -t 1 ]; then DETACH=1; else DETACH=0; fi
+        fi
+        if [ "$DETACH" = "1" ]; then
+            SETSID=""
+            command -v setsid >/dev/null 2>&1 && SETSID="setsid"
+            R2_PHASE=run nohup $SETSID bash "$SCRIPT" $SWEEP >> "$RUN_LOG" 2>&1 < /dev/null &
+            echo
+            echo "Checks passed. The jobs now run in the background; this terminal can close."
+            echo "  progress : tail -f $RUN_LOG"
+            echo "  result   : python ${SCRIPT_DIR#"$REPO_ROOT"/}/brief.py   (also the end of $RUN_LOG)"
+            exit 0
+        fi
+        R2_PHASE=run exec bash "$SCRIPT" $SWEEP
+    fi
+    # R2_PHASE=run: the studies' jobs at once, then one block for all of them.
+    echo "$$" > "$PID_FILE"
+    trap 'rm -f "$PID_FILE"' EXIT
+    echo "=================================================================="
+    echo " $(date '+%F %T')  $LABEL  ${SWEEP:-SAOI + probabilistic}  (run $R2_TS, host $(hostname))"
+    echo "=================================================================="
+    pids=""
+    for st in $STUDIES; do
+        if [ "$st" = "SAOI" ]; then tag="saoi"; else tag="ex3"; fi
+        ( R2_PHASE=jobs PREFLIGHT=0 bash "$SCRIPT" "$st" 2>&1 | sed -u "s/^/[$tag] /"
+          exit "${PIPESTATUS[0]}" ) &
+        pids="$pids $!"
+        sleep 1
+    done
+    rc=0
+    for pid in $pids; do wait "$pid" || rc=1; done
+    echo "Finished with rc=$rc   $(date '+%F %T')"
+    echo
+    "$PYTHON" -B "$SCRIPT_DIR/brief.py" $SWEEP
+    exit "$rc"
+fi
+
+# ------------------------------------------------- one study: check or jobs
+if [ "$NODE" = "saoi" ]; then ARMS="$SAOI_ARMS"; else ARMS="$EX3_ARMS"; fi
+CFG_DIR="configs/$(basename "$(dirname "$SCRIPT_DIR")")/hyperparameter_sweep/$SWEEP"
+if [ "$NODE" = "saoi" ]; then HALVES="bot top"; else HALVES=""; fi
+OUT_ROOT="output/b300_r2/$NODE"
+LOG_ROOT="$OUT_ROOT/run_logs/$M"
+STATUS_DIR="$LOG_ROOT/status"
+HELDOUT_CFG="output/b300_r2/saoi/heldout/configs/$M"
+
+TS="${R2_TS:-$(date +%Y%m%d_%H%M%S)}"
 mkdir -p "$LOG_ROOT" "$STATUS_DIR"
+rm -f "$STATUS_DIR/_abort"
 MASTER_LOG="$LOG_ROOT/sweep_$TS.out"
 exec > >(tee -a "$MASTER_LOG") 2>&1
 
@@ -129,14 +189,17 @@ die() {
     echo
     echo "ABORT: $*"
     echo "Nothing was trained. Full log: $MASTER_LOG"
-    echo "==== TYPE THIS BACK ===="
-    echo "R2 $NODE $M ABORT $(printf '%s' "$*" | head -1 | cut -c1-70)"
-    echo "==== END ===="
+    printf '%s\n' "$*" | head -1 | cut -c1-80 > "$STATUS_DIR/_abort"
+    if [ "$PHASE" = "check" ]; then
+        echo "==== TYPE THIS BACK ===="
+        echo "R2 $NODE $M ABORT $(cat "$STATUS_DIR/_abort")"
+        echo "==== END ===="
+    fi
     exit 1
 }
 
 echo "=================================================================="
-echo " B300 round 2, $SWEEP, $LABEL   ($TS, host $(hostname))"
+echo " B300 round 2, $SWEEP, $LABEL, $PHASE   ($TS, host $(hostname))"
 echo " CPU threads per job: torch $OMP_NUM_THREADS, BLAS $OPENBLAS_NUM_THREADS ($(nproc) CPUs)"
 echo "=================================================================="
 
@@ -215,7 +278,7 @@ printf '  %-15s : %s\n' "$LABEL" "$METHOD_PYTHON"
 echo "                    $METHOD_INFO"
 echo "  commit          : $(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
 echo "  GPUs            : $GPUS  x $JOBS_PER_GPU jobs each  ($NG of $NGPU_SEEN on this machine)"
-if command -v nvidia-smi >/dev/null 2>&1; then
+if [ "$PHASE" = "check" ] && command -v nvidia-smi >/dev/null 2>&1; then
     timeout -k 5 60 nvidia-smi --query-gpu=index,name,memory.used,memory.total,utilization.gpu \
         --format=csv,noheader | sed 's/^/      /' || echo "      (nvidia-smi did not answer; skipped)"
 fi
@@ -223,7 +286,7 @@ fi
 # ---------------------------------------------------------------- job table
 # One job = one training config + its inference configs, in ARMS order: slot
 # i of the first round takes job i, and slot order is card-major per round,
-# so job k lands on card k next to the other method's job k.
+# so job k lands on card k next to the other study's job k.
 JOB_IDS=(); JOB_TRAIN=(); JOB_INFER=()
 add_job() {   # jid train_cfg infer_cfg...
     JOB_IDS+=("$1"); JOB_TRAIN+=("$2"); shift 2; JOB_INFER+=("$*")
@@ -331,7 +394,6 @@ if [ "$PREFLIGHT" = "1" ] && { [ "$TRAIN" = "1" ] || [ "$INFER" = "1" ]; }; then
     }
     export -f check_one
     export PYTHON METHOD_PYTHON TRAIN CHECK_DIR
-    # 8 here + 8 from the other method's runner, started at the same time.
     xargs -P 8 -I{} bash -c 'check_one "$@"' _ {} < "$CFG_LIST" > "$CHECK_DIR/_results.txt"
     n_ok="$(grep -c '^OK ' "$CHECK_DIR/_results.txt")"
     echo "  $n_ok OK of $(wc -l < "$CFG_LIST")   (logs: $CHECK_DIR/)"
@@ -343,14 +405,17 @@ if [ "$PREFLIGHT" = "1" ] && { [ "$TRAIN" = "1" ] || [ "$INFER" = "1" ]; }; then
         done
         first="$(printf '%s\n' $bad | head -1)"
         err="$(grep -m1 -oE '\[[A-Z]+-[A-Z0-9-]+\].*' "$CHECK_DIR/$(basename "$first" .txt).log" | cut -c1-60)"
-        die "preflight failed for $(printf '%s\n' $bad | wc -l) config(s): $(basename "$first") $err"
+        die "preflight failed ($(printf '%s\n' $bad | wc -l | tr -d ' ')): $(basename "$first" .txt | sed 's/^config_//') $err"
     fi
 fi
+if [ "$PHASE" = "check" ]; then
+    echo "  [$(date +%T)] $SWEEP checks passed"
+    exit 0
+fi
 
-# The hierarchy caches are sweep-private, one per method and coarsening
-# (mscache/<chi|mgnv>_<coarsening>). A cache left by an aborted run may hold a
-# half-written variant; start clean. Only this method's: the other runner on
-# this node may already be building its own.
+# The hierarchy caches are sweep-private, one per study, method and coarsening
+# (<saoi|ex3>/mscache/<chi|mgnv>_<coarsening>). A cache left by an aborted run
+# may hold a half-written variant; start clean.
 if [ "$TRAIN" = "1" ]; then
     for d in "$OUT_ROOT/mscache/${M}"_*; do
         [ -e "$d" ] || continue
@@ -468,7 +533,7 @@ if [ "$TRAIN" = "1" ] || [ "$INFER" = "1" ]; then
 
     # ------------------------------------------------------------- 5. summary
     echo "=================================================================="
-    echo " summary"
+    echo " summary, $SWEEP"
     echo "=================================================================="
     for jid in "${JOB_IDS[@]}"; do
         state="$(cat "$STATUS_DIR/$jid.state" 2>/dev/null || echo 'did not run')"
@@ -478,7 +543,5 @@ if [ "$TRAIN" = "1" ] || [ "$INFER" = "1" ]; then
         { [ "$state" = "done" ] && [ -z "$extra" ]; } || rc=1
     done
 fi
-echo "Finished with rc=$rc   (log: $MASTER_LOG)"
-echo
-"$PYTHON" -B "$SCRIPT_DIR/brief.py" "$SWEEP"
+echo "$SWEEP finished with rc=$rc   (log: $MASTER_LOG)"
 exit "$rc"

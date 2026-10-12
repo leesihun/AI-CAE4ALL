@@ -5,11 +5,11 @@ The same file sits, byte for byte, in configs/HI_MGNFlow/hyperparameter_sweep/
 and configs/MeshGraphNets_Variational/hyperparameter_sweep/; the directory it
 runs from picks the method of the round-2 block.
 
-    python configs/HI_MGNFlow/hyperparameter_sweep/brief.py SAOI           # round 2, cHI-MGNflow, SAOI node
-    python configs/HI_MGNFlow/hyperparameter_sweep/brief.py probabilistic  # round 2, cHI-MGNflow, buckling node
-    python configs/MeshGraphNets_Variational/hyperparameter_sweep/brief.py SAOI   # the same for MGN-V
+    python configs/HI_MGNFlow/hyperparameter_sweep/brief.py                # round 2, cHI-MGNflow, both studies
+    python configs/MeshGraphNets_Variational/hyperparameter_sweep/brief.py # the same for MGN-V
+    python configs/HI_MGNFlow/hyperparameter_sweep/brief.py SAOI           # one study (or probabilistic)
     python configs/HI_MGNFlow/hyperparameter_sweep/brief.py r1             # round 1 (both datasets, cHI-MGNflow only)
-    python configs/HI_MGNFlow/hyperparameter_sweep/brief.py SAOI --long    # every number, not for typing
+    python configs/HI_MGNFlow/hyperparameter_sweep/brief.py --long         # every number, not for typing
 
 Standard library only; run it with any Python 3.8+, while the sweep runs or
 after it. It reads the checked-in configs for where each arm writes, then the
@@ -30,7 +30,8 @@ ex3 line    arm  w1 sd bias crps skill h
     bias is signed (negative = generated mean below truth); skill = spread_skill.
 
 A failure appends F:<stage>.<half> and the first error line; an arm still
-training prints "run NN%" (epochs done over the configured total).
+training prints "run NN%" (epochs done over the configured total). A study
+whose checks aborted prints only its header, ending in "ABORT <reason>".
 """
 import argparse
 import glob
@@ -307,10 +308,29 @@ def split_header():
     return " | ".join(parts)
 
 
+def r2_block(which, long):
+    """Header plus one line per arm for one round-2 study of this method."""
+    status_dir = os.path.join(REPO, CAMPAIGNS[which]["status"])
+    abort = read_text(os.path.join(status_dir, "_abort"))
+    if abort:
+        # Nothing ran this time; the counts and arm lines would be an older run's.
+        return [f"R2 {which} {M} ABORT {abort.splitlines()[0]}"]
+    if which == "saoi":
+        lines, n, d, f = brief_saoi("saoi", status_dir, long)
+        tail = f" | {split_header()}"
+    else:
+        lines, n, d, f = brief_ex3("ex3", status_dir, long)
+        tail = ""
+    h = run_hours(status_dir)
+    head = f"R2 {which} {M} {'-' if h is None else f'{h:.0f}'}h D{d}/{n} F{f}"
+    return [head + tail] + lines
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("which", type=str.lower, choices=["saoi", "probabilistic", "ex3", "r1"],
-                    help="SAOI | probabilistic (= ex3) for round 2 of this method; r1 for round 1")
+    ap.add_argument("which", nargs="?", type=str.lower, choices=["saoi", "probabilistic", "ex3", "r1"],
+                    help="SAOI | probabilistic (= ex3) for one study of round 2, r1 for round 1; "
+                         "none: both round-2 studies of this method")
     ap.add_argument("--long", action="store_true", help="print every metric per eval set first")
     args = ap.parse_args()
     which = "ex3" if args.which == "probabilistic" else args.which
@@ -323,15 +343,9 @@ def main():
         if M is None:
             sys.exit(f"brief.py must sit in configs/<HI_MGNFlow|MeshGraphNets_Variational>/hyperparameter_sweep/, "
                      f"not {HERE}")
-        status_dir = os.path.join(REPO, CAMPAIGNS[which]["status"])
-        if which == "saoi":
-            lines, n, d, f = brief_saoi("saoi", status_dir, args.long)
-            head = f"R2 saoi {M} {{}}h D{d}/{n} F{f} | {split_header()}"
-        else:
-            lines, n, d, f = brief_ex3("ex3", status_dir, args.long)
-            head = f"R2 ex3 {M} {{}}h D{d}/{n} F{f}"
-        h = run_hours(status_dir)
-        block = [head.format("-" if h is None else f"{h:.0f}")] + lines
+        block = []
+        for study in ([which] if which else ["saoi", "ex3"]):
+            block += r2_block(study, args.long)
     print("==== TYPE THIS BACK ====")
     print("\n".join(block))
     print("==== END ====")
