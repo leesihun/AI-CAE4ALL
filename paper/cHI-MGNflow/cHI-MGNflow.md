@@ -405,8 +405,11 @@ cHI-MGNflow가 4개(하강 2, 상승 2)다. HI-MGN-V는 7개(V-cycle 4 + 조건 
   `training_epochs`(ex3: 120) 동안 prior를 학습한다. 이 모드에서는 **마지막 epoch의**
   AE가 메모리에서 동결되며(best가 아님), 두 단계가 같은 `modelpath`에 덮어쓴다.
 
-`training_seed`는 어디에서도 읽지 않는다. 같은 설정을 반복하면 그것이 곧 노이즈
-바닥 arm이다.
+`training_seed`는 2026-10-12부터 읽는다. 지정하면 python·numpy·torch·CUDA 난수를
+고정하고, DDP에서는 rank마다 seed+rank를 쓰며 `DistributedSampler`에도 같은 기준
+seed를 준다. 지정하지 않으면 `os.urandom`으로 seed를 하나 뽑아 출력한다. 이 논문의
+수치는 그 이전, seed를 전혀 고정하지 않던 학습에서 나왔다. 노이즈 바닥 arm
+(`tok_seed`, `c_full_rep`)은 이제 기준 arm(42)과 다른 `training_seed 43`을 쓴다.
 
 **검증 지표**(`val_num_samples 8`, `val_flow_steps 30`).
 
@@ -859,8 +862,9 @@ arm(`tok_grp`)을 만들었고, 아직 실행하지 않았다.
   없고, 동결 시점의 $z$ 표준화가 이를 대신한다.
 - **PV 보조 손실과 평가 통계량이 다르다.** 보조 손실은 $u_z$의 peak-to-valley에
   걸리지만, 평가는 $\max\|u\|$로 한다.
-- **단일 시드.** `training_seed`는 쓰이지 않는다. 모든 수치는 학습 1회분이다.
-  노이즈 바닥은 같은 설정을 반복해야만 얻을 수 있다.
+- **단일 시드.** 모든 수치는 학습 1회분이고, `training_seed`가 배선되기
+  (2026-10-12) 전의 고정되지 않은 학습에서 나왔다. 노이즈 바닥은 seed만 바꾼 반복
+  arm으로 얻는다.
 - **입력은 공칭 형상뿐이다.** 결함이 입력에 없다는 것이 문제 정의이므로, 결함
   정보를 쓰는 비교(조건부 결정론 모델)는 하지 않았다.
 - **잠재 정규화가 없다.** LDGN과 달리 cHI-MGNflow의 잠재에는 정규화 층이 없다. KL
@@ -979,7 +983,8 @@ V는 HI-MGN-V다. "바닥"은 그 형상의 FEA 반-대-반 W1/sd다. $n_{\text{
    필드 공간에서 평균해야 한다는 점, 자기회귀에서 매 스텝 새 $z_0$를 뽑는다는 점을
    추가했다.
 8. **학습 모드.** `train`의 순서(AE → prior), 마지막 epoch AE가 동결된다는 점,
-   `modelpath`를 덮어쓴다는 점, `training_seed`가 쓰이지 않는다는 점을 추가했다.
+   `modelpath`를 덮어쓴다는 점을 추가했다. `training_seed`가 읽히지 않던 문제는
+   코드에서 고쳤다(2026-10-12).
 9. **검증 지표.** "recon"은 표본 0번의 MSE다. "spread"의 분모는 참 분포의 표준편차가
    아니라 정답 필드 하나의 공간 표준편차다.
 10. **skip 우회 붕괴.** "LDGN VGAE collapse와 동일"은 과장이다. VGAE에는 skip이

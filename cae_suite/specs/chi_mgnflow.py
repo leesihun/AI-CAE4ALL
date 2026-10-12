@@ -106,6 +106,14 @@ REMOVED_LATENT_KEYS = frozenset(
         "prior_type", "use_conditional_prior", "prior_family", "prior_nll_weight",
         "prior_fm_steps", "prior_fm_solver", "prior_mp_layers", "prior_hidden_dim",
         "prior_temperature", "prior_kl_reg_weight", "prior_cov_rank",
+        # Architecture of the variational conditional FM prior (velocity net,
+        # moment head, calibration tail). cHI-MGNflow's prior is configured by
+        # prior_blocks / prior_global alone.
+        "prior_velocity_hidden_dim", "prior_fm_moments",
+        "prior_condition_hidden_dim", "prior_fm_velocity_arch", "prior_fm_blocks",
+        "prior_fm_moment_hidden_dim", "prior_fm_moment_weight",
+        "prior_fm_moment_min_scale", "prior_fm_moment_max_scale",
+        "prior_moment_calibration_epochs",
         # Inference-only latent inflation for the FM prior; flow has no latent.
         "latent_inflation",
         "prior_min_std", "prior_mixture_components", "prior_grad_to_encoder",

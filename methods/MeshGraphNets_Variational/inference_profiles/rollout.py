@@ -836,7 +836,8 @@ def run_rollout(config, config_filename='config.txt'):
         if conditional_prior is not None:
             if getattr(conditional_prior, 'family', 'gmm') == 'fm':
                 sampler_desc = (f"conditional flow-matching prior "
-                                f"({conditional_prior.num_steps} Euler steps, temp={prior_temperature:g})")
+                                f"({conditional_prior.num_steps} {conditional_prior.solver.capitalize()} steps, "
+                                f"temp={prior_temperature:g})")
             else:
                 sampler_desc = (f"conditional mixture prior "
                                 f"({conditional_prior.num_components} components, temp={prior_temperature:g})")

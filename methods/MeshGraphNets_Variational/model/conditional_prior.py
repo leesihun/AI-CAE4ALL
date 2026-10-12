@@ -186,15 +186,20 @@ class ConditionalFMPrior(_ConditionalPriorBase):
     the LFMGN sampler in tum-pbs/dgn4cfd). Training is plain MSE regression on
     straight-line interpolation paths — no logsumexp, no components, hence none
     of the mixture's collapse machinery (min-std floors, KL anchor, Gumbel
-    reparameterization). Sampling integrates the ODE with fixed Euler steps.
+    reparameterization). Sampling integrates the ODE with `prior_fm_steps`
+    fixed steps of `prior_fm_solver` (Heun by default, Euler optional).
 
     The num_z slots are modeled jointly as one flat vector, so cross-level
     correlations between per-level latents are captured — the mixture treated
     each slot as an independent mixture.
 
-    z is consumed at its native scale: the MMD regularizer already holds the
-    aggregate posterior near unit scale, and avoiding running-stat buffers
-    keeps EMA/DDP snapshots exact.
+    z is consumed at its native scale unless the run has a prior-only tail
+    (`prior_freeze_epoch`): at the freeze, the z_shift / z_scale buffers are
+    fitted once from the frozen posterior (fit_standardization) and the flow
+    runs on (z - shift)/scale from then on. They are fitted, not running
+    statistics, so EMA/DDP snapshots stay exact; the freeze copies them into
+    the EMA shadow explicitly. Without a freeze (or with the conditional
+    moment head) they stay at the identity.
     """
 
     family = 'fm'

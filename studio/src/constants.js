@@ -54,7 +54,10 @@ KEY_CATALOGS.simulgenvae = [...new Set([...KEY_CATALOGS.simulgenvae, "fsdp_min_p
   .sort();
 KEY_CATALOGS.meshgraphnetsV = [...new Set([
   ...KEY_CATALOGS.meshgraphnetsV,
-  ...keys(`gamma_es es_samples es_steps es_noise_source es_start_epoch`)
+  ...keys(`gamma_es es_samples es_steps es_noise_source es_start_epoch`),
+  // Conditional FM prior architecture (cae_suite/specs/meshgraphnets_variational.py
+  // VAR_KEYS, persisted by training_profiles/setup.py::build_model_config).
+  ...keys(`prior_velocity_hidden_dim prior_fm_moments prior_condition_hidden_dim prior_fm_velocity_arch prior_fm_blocks prior_fm_moment_hidden_dim prior_fm_moment_weight prior_fm_moment_min_scale prior_fm_moment_max_scale prior_moment_calibration_epochs training_seed`)
 ])].sort();
 // SDFFlow v3 recipe + `evaluate` mode (cae_suite/specs/sdfflow.py SDFFLOW_KEYS):
 // FPS encoder queries, relative posterior-std floor, parent-grouped split,
@@ -438,9 +441,10 @@ export const CHOICES = {
   // cHI-MGNflow's list; MeshGraphNets-V narrows it (MODEL_CHOICES below).
   best_by: ["recon", "crps", "det"],
   // MeshGraphNets-V enums, each a spec validator: MGNV-PRIOR-FAMILY, the
-  // prior_fm_solver check, the z_conditioning check, and spread_stat.
+  // prior_fm_solver check, MGNV-FM-ARCH, the z_conditioning check, and spread_stat.
   prior_family: ["fm", "gmm"],
   prior_fm_solver: ["heun", "euler"],
+  prior_fm_velocity_arch: ["mlp", "residual_film"],
   z_conditioning: ["concat", "adaln"],
   spread_stat: ["range", "mean", "std", "mag_max"]
 };
@@ -476,7 +480,7 @@ export const MGN_NATIVE_REMOVED = new Set(keys(`alpha_recon beta_aux fit_latent_
 export const MGN_VARIATIONAL_IGNORED = new Set(keys(`eval_dataset hierarchy_cache_build_workers hierarchy_cache_dir hierarchy_cache_keep hierarchy_cache_wait_timeout histogram_bins histogram_clip_quantile make_histogram mmd_bandwidth prior_cov_rank prior_family prior_fm_steps prior_kl_reg_weight prior_nll_weight prior_type recon_loss show_histogram static_cache_per_worker vae_batch_size vae_batch_size_max vae_batch_size_min vae_batch_vram_fraction`));
 
 export const VARIATIONAL_REMOVED = new Set(keys(`alpha_prior_max bipartite_unpool fit_latent_gmm free_bits gmm_components gmm_covariance_type gmm_reg_covar lambda_det lambda_kl positional_encoding residual_scale gamma_es es_samples es_steps es_noise_source es_start_epoch`));
-export const CHI_FLOW_REMOVED = new Set(keys(`use_vae vae_latent_dim vae_mp_layers vae_graph_aware posterior_min_std num_z z_conditioning mmd_bandwidth mmd_gather_ranks lambda_mmd beta_aux alpha_recon recon_loss prior_type use_conditional_prior prior_family prior_nll_weight prior_fm_steps prior_fm_solver prior_mp_layers prior_hidden_dim prior_temperature latent_inflation prior_kl_reg_weight prior_cov_rank prior_min_std prior_mixture_components prior_grad_to_encoder prior_freeze_epoch pv_channel vae_valid_prior_samples gamma_es es_samples es_steps es_noise_source es_start_epoch pipeline_microbatches std_noise noise_gamma noise_std_ratio flow_head flow_head_eps`));
+export const CHI_FLOW_REMOVED = new Set(keys(`use_vae vae_latent_dim vae_mp_layers vae_graph_aware posterior_min_std num_z z_conditioning mmd_bandwidth mmd_gather_ranks lambda_mmd beta_aux alpha_recon recon_loss prior_type use_conditional_prior prior_family prior_nll_weight prior_fm_steps prior_fm_solver prior_mp_layers prior_hidden_dim prior_temperature latent_inflation prior_kl_reg_weight prior_cov_rank prior_min_std prior_mixture_components prior_grad_to_encoder prior_freeze_epoch prior_velocity_hidden_dim prior_fm_moments prior_condition_hidden_dim prior_fm_velocity_arch prior_fm_blocks prior_fm_moment_hidden_dim prior_fm_moment_weight prior_fm_moment_min_scale prior_fm_moment_max_scale prior_moment_calibration_epochs pv_channel vae_valid_prior_samples gamma_es es_samples es_steps es_noise_source es_start_epoch pipeline_microbatches std_noise noise_gamma noise_std_ratio flow_head flow_head_eps`));
 VARIATIONAL_REMOVED.forEach(key => CHI_FLOW_REMOVED.add(key));
 
 // SDFFlow's `opt_*` keys are post-training settings: no training mode reads
@@ -1293,6 +1297,9 @@ export const HELP = {
   use_vae: "Turn on the variational latent. MeshGraphNets-V defaults it False natively, which silently trains a deterministic model.",
   prior_family: "Conditional prior over the latent: fm (flow matching) or gmm (Gaussian mixture).",
   prior_fm_solver: "ODE solver for the flow-matching prior: heun (2nd order, default) or euler.",
+  prior_fm_velocity_arch: "Velocity network of the flow-matching prior: mlp (default) or residual_film (prior_fm_blocks residual blocks, FiLM-conditioned on the graph context and t). Fixed by the checkpoint.",
+  prior_fm_moments: "Give the FM prior a condition-dependent Gaussian base (mean/scale head) instead of N(0, I). Fixed by the checkpoint.",
+  prior_moment_calibration_epochs: "With prior_fm_moments, the first N epochs of the prior-only tail (from prior_freeze_epoch) fit only the moment head; the remaining tail epochs fit only the velocity field. 0 = both together.",
   z_conditioning: "How the latent enters the processor: concat (legacy fuser) or adaln (AdaLN-Zero modulation).",
   spread_stat: "How spread_channel is reduced to one number per realization for the spread histogram: range (max - min), mean or std of one channel, or mag_max — the largest per-node vector magnitude over a list of channels (spread_channel 0, 1, 2 = max total displacement). range is degenerate on displacement-driven fields.",
   kl_weight: "SDFFlow VAE KL weight. Too high collapses the posterior toward the prior (reconstructions lose detail); too low makes the latent space hard for the flow model to cover.",

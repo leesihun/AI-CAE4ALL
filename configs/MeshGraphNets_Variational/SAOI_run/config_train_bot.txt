@@ -103,7 +103,7 @@ alpha_recon	1000  # Reconstruction-loss multiplier
 lambda_mmd	1  # Aggregate-posterior MMD loss multiplier
 mmd_bandwidth	median  # MMD bandwidth mode (fixed or median)
 vae_graph_aware	True  # Include graph/input context when encoding the posterior
-beta_aux	10  # Auxiliary latent-statistics prediction loss weight
+beta_aux	10  # Weight of the peak-to-valley MSE on the decoded pv_channel field (MeshGraphNets._pv_loss)
 posterior_min_std	0.05  # Posterior standard-deviation floor
 z_conditioning	adaln  # AdaLN-Zero z modulation (identity at init) instead of the
 %   legacy concat fuser Linear([x, z]). The fuser could only add ONE constant

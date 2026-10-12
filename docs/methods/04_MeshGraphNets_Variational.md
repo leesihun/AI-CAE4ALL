@@ -33,8 +33,9 @@ added on top.
 
 - **Stochastic generation**: sample `N` plausible output fields per scene from the
   conditional prior (or `N(0,I)`), each a valid rollout.
-- **Spread reproduction**: aggregate-posterior matching (MMD) + an auxiliary latent
-  decoder reproduce the training distribution's per-graph output mean/std.
+- **Spread reproduction**: aggregate-posterior matching (MMD) + a peak-to-valley
+  MSE on the decoded `pv_channel` field (`beta_aux`) tie each latent draw to its
+  own realization's extremes.
 - **Two conditional-prior families**:
   - **`fm`** (default): conditional **flow matching** — a velocity field transporting
     `N(0,I)` onto the posterior of `z` per graph; sampled by a Heun (default) or
@@ -45,15 +46,17 @@ added on top.
   (`prior_type gnn_e2e`), living as a `prior.*` submodule saved in the checkpoint.
 - **Per-level latents** for multiscale runs (`num_z = multiscale_levels + 1`).
 - **Inline spread histogram** comparison to a ground-truth `eval_dataset` at rollout.
-- All HI-MGN multiscale + world-edge capabilities.
+- HI-MGN's bi-stride/Voronoi V-cycle and world edges. Not carried over: attention
+  pool/unpool (`pool_type`, `unpool_type`), `voronoi_branches`,
+  `learned_interpolation`, and broadcast unpool.
 
 ## Strengths
 
 - **Only method here that produces a distribution**, not a point estimate — the right
   tool when the quantity of interest is variability itself (yield, tolerance).
-- **Avoids posterior collapse** by design: MMD-InfoVAE regularizer + auxiliary
-  statistics anchor keep `z` informative (documented tuning: `lambda_mmd ≈ 0.1` low,
-  `beta_aux ≈ 1.0` high).
+- **Avoids posterior collapse** by design: MMD-InfoVAE regularizer (no per-sample
+  KL) + the peak-to-valley term keep `z` informative (documented tuning:
+  `lambda_mmd ≈ 0.1` low, `beta_aux ≈ 1.0` high).
 - **Flow-matching prior** avoids the mixture's mode-collapse machinery (no min-std
   floors, KL anchors, Gumbel tricks) and captures cross-level latent correlations.
 - **Extrapolative sampling**: can draw more variants than training samples.
@@ -79,7 +82,7 @@ added on top.
 ```mermaid
 flowchart TD
     subgraph TRAIN["Training path"]
-        Y["target Δy [N, output_var]"] --> POST["GNN Variational Encoder\n(posterior q(z|y,graph))"]
+        Y["target y [N, output_var]\n(Δ per step if T>1; absolute field if T=1)"] --> POST["GNN Variational Encoder\n(posterior q(z|y,graph))"]
         XIN["graph x (if graph_aware)"] --> POST
         EA["edge_attr"] --> POST
         POST --> Z["z ~ N(mu, sigma)\n[B, num_z, vae_latent_dim]"]
@@ -94,17 +97,17 @@ flowchart TD
     Z -. FM/NLL target .-> PRIOR
     PRIOR -. sample z at inference .-> FUSE
 
-    Z --> AUX["Auxiliary decoder\nz → per-graph output mean/std"]
-
     PRED --> L1["recon loss (huber/mse)"]
     Z --> L2["MMD(q(z), N(0,I))"]
-    AUX --> L3["auxiliary stats loss"]
+    PRED --> L3["peak-to-valley MSE on pv_channel"]
     PRIOR --> L4["prior FM-MSE / mixture-NLL"]
 ```
 
 ### Posterior encoder — `GNNVariationalEncoder` (`model/vae.py`)
 
-Encodes the **target delta** into a graph-level latent:
+Encodes the **target** `graph.y` into a graph-level latent. `graph.y` is the
+per-step delta when the dataset has `T > 1` timesteps and the absolute field in
+the static (`T = 1`) case:
 
 1. `node_encoder` MLP on `y` → `[N, latent]`. If `vae_graph_aware True`, also encode
    input `x` and fuse (`node_fuse`), so `z` encodes only the residual the graph
@@ -162,10 +165,22 @@ A shared graph **trunk** (`node_encoder`, `edge_encoder`, `prior_mp_layers`
   analytical-KL anchor (`prior_kl_reg_weight`). Temperature divides logits, scales
   stds by `√T`.
 
-### Auxiliary decoder
+### Peak-to-valley term (`beta_aux`)
 
-Predicts per-graph output **mean and std** from `z`; its loss (`beta_aux`) prevents
-the encoder from collapsing all spread into a tiny subspace.
+`MeshGraphNets._pv_loss`: per graph, MSE between the predicted and true
+`max − min` of the **decoded** field's `pv_channel`. Each posterior sample comes
+from a different realization, so matching that realization's own peak-to-valley
+is what makes the decoded spread depend on `z`. It replaced an auxiliary head
+that regressed per-graph mean/std *from* `z`, which never touched the field the
+rollout writes.
+
+Two scope limits. It is the scored statistic only on SAOI (part peak-to-valley
+of `z_disp`); on ex3, scored by the peak displacement magnitude `max|u|`, it is
+an auxiliary on one component. And it equals the field's peak-to-valley only in
+the static (`T = 1`) case; for `T > 1` `graph.y` is a step delta, so it fits the
+increment's peak-to-valley (the training loop warns but does not refuse).
+`parallel_mode model_split` cannot evaluate it and is rejected with
+`beta_aux > 0` (`MGNV-AUX-PIPELINE`).
 
 ---
 
@@ -174,7 +189,7 @@ the encoder from collapsing all spread into a tiny subspace.
 ```text
 loss = alpha_recon      · recon_loss(huber|mse)      # simulator fit
      + lambda_mmd       · MMD(q(z), N(0,I))          # AGGREGATE rate: shape/scale of the latent
-     + beta_aux         · auxiliary_stats_loss       # I(z;y) floor
+     + beta_aux         · pv_loss(decoded field)     # I(z;y) floor
      + prior_nll_weight · prior_objective            # CONDITIONAL rate: fm-MSE or gmm-NLL
 ```
 
@@ -191,8 +206,9 @@ At `0.0` (historical default) the posterior is detached, so the prior chases a
 `q` that never moves toward it and the rate term is absent. At `1.0` the loop is
 closed. Opening it adds pressure toward a `z` predictable from the graph alone,
 and MMD does NOT guard against that (a deterministic `z = h(g)` distributed as
-`N(0,I)` satisfies MMD perfectly) — `beta_aux`'s I(z;y) floor does, so it must
-stay `> 0`. A rising `aux` loss is the signal that this collapse is under way.
+`N(0,I)` satisfies MMD perfectly) — `beta_aux`'s I(z;y) floor does (a `z`
+independent of `y` cannot reproduce each realization's own peak-to-valley), so it
+must stay `> 0`. A rising `aux` loss is the signal that this collapse is under way.
 
 All three regularizer weights are only meaningful RELATIVE to `alpha_recon`: at
 `alpha_recon 1000` with the others at 1, each is ~0.1% of the objective and
@@ -211,9 +227,9 @@ effectively off. Watch `mmd` and `fm_p` against `total` on the progress bar.
 All flat-MGN and multiscale (HI-MGN) keys apply. Canonical example:
 [`configs/MeshGraphNets_Variational/probabilistic/ex1/baseline/config_train_himgn_v.txt`](../../configs/MeshGraphNets_Variational/probabilistic/ex1/baseline/config_train_himgn_v.txt).
 The trees are `probabilistic/exN/baseline/` (the baseline roster), `SAOI_run/`,
-and the B300 round-2 arms in `probabilistic/ex3/b300_r2/` and
-`hyperparameter_sweep/b300_r2/` (design in
-[`configs/campaigns/b300_r2/README.md`](../../configs/campaigns/b300_r2/README.md)). The
+and the B300 round-2 arms in `hyperparameter_sweep/{SAOI,probabilistic}/`
+(design, runner and type-back format in
+[`hyperparameter_sweep/README.md`](../../configs/MeshGraphNets_Variational/hyperparameter_sweep/README.md)). The
 `b8_all_warpage_input/` tree this doc used to cite no longer exists. The live
 [`cae_suite/specs/meshgraphnets_variational.py`](../../cae_suite/specs/meshgraphnets_variational.py)
 is the authoritative key catalog.
@@ -230,7 +246,8 @@ is the authoritative key catalog.
 | `alpha_recon` | Reconstruction-loss weight |
 | `lambda_mmd` | Aggregate-posterior MMD weight (keep low ≈0.1) |
 | `mmd_bandwidth` | `fixed` or `median` (median stays sensitive at high latent dim) |
-| `beta_aux` | Auxiliary latent-stats weight (keep high ≈1.0) |
+| `beta_aux` | Weight of the peak-to-valley MSE on the decoded `pv_channel` field (keep high ≈1.0) |
+| `pv_channel` | Output channel the peak-to-valley term reads (default 2, the displacement layout's `z_disp`) |
 | `posterior_min_std` | Floor on posterior std (≈0.05) |
 | `num_z` | Per-level z slots (default `multiscale_levels + 1`, else 1) |
 | `z_conditioning` | `concat` (legacy fuser) or `adaln` (AdaLN-Zero, identity at init). Renames parameters; stored in the checkpoint |
@@ -241,14 +258,22 @@ is the authoritative key catalog.
 | Key | Meaning |
 | --- | --- |
 | `prior_type` | `gnn_e2e` — jointly trained graph-conditional prior submodule |
-| `use_conditional_prior` | Inference: sample `z` from the prior (default True; False → `N(0,I)`) |
+| `use_conditional_prior` | Sample `z` from the prior at inference (False → `N(0,I)`). Training default False; it is saved in `model_config`, which overrides the inference config, so set it at **training** time. The inference-side default True applies only to a checkpoint with no `model_config` |
 | `prior_family` | `fm` (flow matching, default) or `gmm` (mixture, legacy) |
 | `prior_nll_weight` | Prior density-matching weight (default 1.0; read it relative to `alpha_recon`) |
 | `prior_grad_to_encoder` | How much of the FM gradient reaches the encoder. 0 = detached (no CVAE rate term), 1 = end-to-end. **Requires `beta_aux > 0`** |
-| `prior_mp_layers` | Prior trunk message-passing depth |
+| `prior_mp_layers` | Prior trunk message-passing depth (default 10) |
 | `prior_hidden_dim` | Prior hidden width (defaults to `latent_dim`) |
 | `prior_fm_steps` | ODE steps for FM sampling (default 20). Sampling-only, never affects training |
 | `prior_fm_solver` | `heun` (default, 2nd-order) or `euler`. Heun@30 ≈ 27x more accurate than Euler@100, and cheaper |
+| `prior_velocity_hidden_dim` | (`fm`) velocity-network width (defaults to `prior_hidden_dim`) |
+| `prior_fm_velocity_arch` | (`fm`) `mlp` (default) or `residual_film` (`prior_fm_blocks` pre-norm residual blocks, FiLM-conditioned on graph context + t) |
+| `prior_fm_blocks` | (`fm`, `residual_film`) number of residual blocks (default 4) |
+| `prior_condition_hidden_dim` | Condition-encoder width (defaults to `prior_hidden_dim`) |
+| `prior_fm_moments` | (`fm`) condition-dependent Gaussian base (mean/scale head) instead of `N(0,I)`; FM transports the residual (default False) |
+| `prior_fm_moment_hidden_dim` / `prior_fm_moment_weight` / `prior_fm_moment_min_scale` / `prior_fm_moment_max_scale` | Moment-head width, loss weight (1.0), and scale clamp (0.03–20) |
+| `prior_freeze_epoch` | Epoch at which the simulator freezes and only the prior trains (latent standardization fitted once, fresh cosine). 0 = never; single GPU only |
+| `prior_moment_calibration_epochs` | With `prior_fm_moments`, the first N epochs of that prior-only tail fit only the moment head; the rest fit only the velocity field (0 = both together) |
 | `prior_temperature` | Inference spread control (scales noise/covariance) |
 | `prior_mixture_components` | (`gmm`) mixture components (default 50) |
 | `prior_min_std` | (`gmm`) min component std (default 0.1) |

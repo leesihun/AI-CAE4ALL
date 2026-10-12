@@ -59,7 +59,9 @@ class MeshGraphNets(nn.Module):
         Expects pre-normalized inputs from the dataloader:
             - graph.x: normalized node features [N, input_var]
             - graph.edge_attr: normalized edge features [E, edge_var]
-            - graph.y: normalized target delta (y_t+1 - x_t) [N, output_var]
+            - graph.y: normalized target [N, output_var] -- the step delta
+              (y_t+1 - x_t) when num_timesteps > 1, the absolute field in the
+              static (num_timesteps == 1) case
 
         compute_prior_path: when True and a GNN conditional prior exists, runs
             the prior network on the graph and returns what its density loss
@@ -103,9 +105,10 @@ class MeshGraphNets(nn.Module):
 
         prior_outputs = None
         if compute_prior_path and self.prior is not None:
-            # Prior reads raw (post-encoder MLP) graph features, NOT the encoded
-            # latents — graph.x is unchanged across both forwards because the
-            # simulator's encoder builds a fresh Data inside (does not mutate input).
+            # The prior reads the raw normalized graph.x / edge_attr through its
+            # OWN node/edge encoders, NOT the simulator's encoded latents --
+            # graph.x is unchanged across both forwards because the simulator's
+            # encoder builds a fresh Data inside (does not mutate input).
             if self.prior.family == 'fm':
                 prior_outputs = {'pooled': self.prior.condition(graph)}
             else:
@@ -355,9 +358,12 @@ class EncoderProcessorDecoder(nn.Module):
     def _pv_loss(self, predicted, original_y, batch, B):
         """MSE on the per-graph PEAK-TO-VALLEY of the DECODED field.
 
-        The scored statistic is max(z_disp) - min(z_disp) over a part's nodes.
-        This puts gradient directly on it rather than hoping a node-wise MSE
-        reaches the extremes on its own.
+        On SAOI the scored statistic is max(z_disp) - min(z_disp) over a part's
+        nodes, and this puts gradient directly on it rather than hoping a
+        node-wise MSE reaches the extremes on its own. Elsewhere it is only an
+        auxiliary: it acts on the single `pv_channel`, so on ex3 (scored by the
+        peak displacement magnitude max|u| over all components) it is not the
+        scored statistic.
 
         It replaces a head that regressed per-graph [mean, std] FROM z. That
         head could not move the measured dispersion for three reasons, and this
@@ -374,11 +380,12 @@ class EncoderProcessorDecoder(nn.Module):
         denormalization needed, and no extra forward: `predicted` is already
         materialised for the reconstruction term.
 
-        Valid only where the model predicts the ABSOLUTE field, i.e. the static
-        (num_timesteps == 1) case where mesh_dataset sets
-        `target_delta = y_raw.copy()`. For T > 1 `graph.y` is a step delta and
-        its peak-to-valley is not the field's; the training loop refuses that
-        combination rather than scoring the wrong quantity.
+        It equals the field's peak-to-valley only where the model predicts the
+        ABSOLUTE field, i.e. the static (num_timesteps == 1) case where
+        mesh_dataset sets `target_delta = y_raw.copy()`. For T > 1 `graph.y` is
+        a step delta, so the term fits the INCREMENT's peak-to-valley; the
+        training loop prints a warning for that combination but does not
+        refuse it.
         """
         if original_y is None or not self.training:
             return 0.0

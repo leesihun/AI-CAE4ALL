@@ -509,16 +509,23 @@ substantially extended.
 `model meshgraphnets-v` → `methods/MeshGraphNets_Variational/MeshGraphNets_main.py`.
 Modes: `train`, `inference`.
 
-A probabilistic superset of the deterministic simulator. It keeps all the graph,
-hierarchy, world-edge, and runtime machinery from Method 1 and adds a
-**variational latent path** so it can model a *distribution* of plausible
-trajectories, not a single deterministic one.
+A probabilistic variant of the deterministic simulator. It keeps the graph,
+world-edge, and runtime machinery and the bi-stride/Voronoi V-cycle from
+Method 1, and adds a **variational latent path** so it can model a
+*distribution* of plausible trajectories, not a single deterministic one. It is
+not a strict superset: the hierarchy has no attention pool/unpool
+(`pool_type`, `unpool_type`, `pool_heads`), no `voronoi_branches`, no
+`learned_interpolation`, and no broadcast unpool -- every level unpools through
+the bipartite `UnpoolBlock`.
 
 - **VAE path** ([model/vae.py](../methods/MeshGraphNets_Variational/model/vae.py)):
   `use_vae True` activates a posterior graph-encoder, a stochastic latent `z`,
   and variational losses — reconstruction (`huber`/`mse`), aggregate-posterior
-  **MMD** (`lambda_mmd`, `mmd_bandwidth`), an auxiliary latent-stats term
-  (`beta_aux`), and KL. Latent width/depth via `vae_latent_dim`/`vae_mp_layers`.
+  **MMD** to N(0, I) (`lambda_mmd`, `mmd_bandwidth`), and a peak-to-valley MSE
+  on the *decoded* `pv_channel` field (`beta_aux`, `MeshGraphNets._pv_loss`).
+  There is no per-sample KL term: MMD is the only latent regularizer (the
+  `gmm` prior family adds its own KL anchor, `prior_kl_reg_weight`). Latent
+  width/depth via `vae_latent_dim`/`vae_mp_layers`.
 - **Learned conditional prior**
   ([model/conditional_prior.py](../methods/MeshGraphNets_Variational/model/conditional_prior.py)):
   instead of sampling `z ~ N(0,I)`, a graph-conditional prior can be jointly
@@ -529,9 +536,12 @@ trajectories, not a single deterministic one.
   auto-batching path (`vae_batch_size auto` + `vae_batch_vram_fraction`) and an
   optional inline generated-vs-ground-truth displacement-spread histogram
   (`eval_dataset`, `make_histogram`).
-- **Time integration under the VAE** (§9.1): the latent is **resampled at every
-  unrolled step**; per-step gradient checkpointing preserves RNG so the backward
-  draw matches the forward. Loss composition is unchanged and averaged over the
+- **Time integration under the VAE** (§9.1): in `ar_rt` *training* the
+  posterior latent is **resampled at every unrolled step**; per-step gradient
+  checkpointing preserves RNG so the backward draw matches the forward. Inference
+  is different: each trajectory draws its `z` once, at step 0 (from the
+  conditional prior, or N(0, I) without one), and keeps it for the whole
+  rollout. Loss composition is unchanged and averaged over the
   trajectory. The posterior encoder conditions on `graph.y`, which the rollout
   writes per step so the encoder sees the correction the model is actually being
   asked to make.
@@ -539,11 +549,13 @@ trajectories, not a single deterministic one.
   distribution-modeling research, VRAM/perf optimization, world edges,
   multiscale coarsening, adaptive-remeshing plan, config reference).
 
-> **Known perf gap** (from prior investigation): the variational training tree
-> lags the vanilla one on several hot-path optimizations (per-batch `.item()`
-> sync, hardcoded `pin_memory`, older concat-style blocks, per-block `Data`
-> objects). It uses `torch.optim.Adam`; configured `weight_decay` is coupled L2
-> decay and defaults to zero when omitted.
+> **Perf parity with Method 1.** Most of the hot-path gap has been closed:
+> loss accumulators stay on the GPU with one `.item()` sync per epoch (the
+> progress bar reads a few every 10 batches), `pin_memory` is a config key, and
+> `EdgeBlock` uses the split-linear first layer. What remains is the
+> `UnpoolBlock`, which still materializes the `[E_up, 2D+3]` concat that the
+> deterministic tree's split form avoids. It uses `torch.optim.Adam`; configured
+> `weight_decay` is coupled L2 decay and defaults to zero when omitted.
 
 ---
 
@@ -873,7 +885,8 @@ a single config key: `time_integration ar_ot` (default) or `ar_rt`.
 - Under `ar_rt`: `std_noise`/`noise_gamma` are inert; MeshGraphNets rebuilds mesh
   edge features, world edges, and coarse features per step from each predicted
   state (`coarse_world_edges True` is rejected); DDP forces `static_graph=True`;
-  and variational MGN resamples the latent every step (Appendix, §7).
+  and variational MGN resamples the posterior latent every step during
+  training (inference draws it once per trajectory; §7).
 
 ## Appendix B — Cross-cutting feature: parallelism modes
 

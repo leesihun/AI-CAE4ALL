@@ -101,7 +101,7 @@ def single_worker(config, config_filename='config.txt'):
     use_fused = torch.cuda.is_available()
     print(f"Optimizer: AdamW (fused={use_fused}, weight_decay={float(config.get('weight_decay', 0.0))})")
     print(f"Scheduler: LinearLR warmup ({warmup_epochs} epochs) -> "
-          f"CosineAnnealingWarmRestarts (T_0={cosine_T0}, T_mult=2, eta_min=1e-8)")
+          f"CosineAnnealingWarmRestarts (T_0={cosine_T0}, T_mult=1, eta_min=1e-8)")
 
     if torch.cuda.is_available():
         print(f'After optimizer creation: {torch.cuda.memory_allocated()/1e9:.2f}GB')

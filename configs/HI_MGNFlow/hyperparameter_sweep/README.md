@@ -1,246 +1,236 @@
-# cHI-MGNflow SAOI parametric study (one 8-GPU B300 node)
+# cHI-MGNflow parametric study (B300 round 2)
 
-Eight arms on the SAOI warpage data, one GPU per arm. Each arm trains both
-board halves (`bot`, `top`) and scores each half on its three evaluation sets.
-Every arm is the SAOI_run recipe (`configs/HI_MGNFlow/SAOI_run/`) plus the
-shared sweep layout plus the change listed below. Each config's `%` header
-names its change and its question; in a train config the changed lines are
-marked `SWEPT`.
+Round 2 runs on two 8-GPU B300 nodes, one study per node. Each node runs
+this method's runner and the MeshGraphNets-V runner side by side, so every
+card holds one cHI job and one MGN-V job:
 
-| arm | change on top of SAOI_run | question |
-| --- | --- | --- |
-| `ctrl` | none | Reference: the local-only prior, whose ensembles were ~2x too narrow and whose bias flipped sign across parts |
-| `tok` | `prior_global token` | Does a global token give the prior the cross-node coherence it lacked on ex3, and with it the missing width? |
-| `tok_seed` | tok, repeated unchanged | Run-to-run noise. HI_MGNFlow sets no seed, so each launch draws a fresh init and data order. An arm gap smaller than tok vs tok_seed is noise |
-| `tok_recon` | tok + `best_by recon` | Does selecting on sampled CRPS keep mean-collapsed (too narrow) checkpoints? |
-| `tok_kl` | tok + `ae_kl_weight 1e-3` | A smoother, better-scaled latent (1000x the KL). It is the largest value without the launcher's `FLOW-AEKL-LARGE` warning |
-| `tok_c8` | tok + `latent_ch 8` | Is `latent_ch 4` a ceiling? Sweep 1 put the knee at 8 for both halves |
-| `tok_g50` | tok + `voronoi_clusters 1000, 50` + `latent_ch 8` | Same latent size (50 x 8 = 100 x 4) on half as many coarse nodes: is the narrowness a coordination problem? |
-| `tok_w256` | tok + `latent_dim 256` | Twice the trunk width in both stages: is either stage capacity-bound? |
+| node | study | data | cHI-MGNflow jobs | MGN-V jobs |
+| --- | --- | --- | --- | --- |
+| 1 | [`SAOI/`](SAOI/) | `dataset/SAOI/saoi_train_{bot,top}.h5` | 4 arms x 2 board halves | 4 arms x 2 board halves |
+| 2 | [`probabilistic/`](probabilistic/) | `dataset/probabilistic/ex3_shell_buckling{,_infer}.h5` | 8 arms | 8 arms |
 
-Shared layout, which changes nothing about what is learned:
+The MGN-V half of each study lives in
+[`configs/MeshGraphNets_Variational/hyperparameter_sweep/`](../../MeshGraphNets_Variational/hyperparameter_sweep/),
+with a byte-identical copy of every script here.
 
-- `gpu_ids 0`: the runner assigns the card through `CUDA_VISIBLE_DEVICES`.
-- Outputs go under `output/chi-mgnflow/saoi_b300_sweep/<arm>/<half>/`, one
-  directory per half, so each half's periodic pictures stay with its own log.
-- `write_preprocessing False`: 16 jobs read the same two training files, and
-  none of them opens one for writing. Normalization travels in the
-  checkpoint.
-- A sweep-private hierarchy cache under `saoi_b300_sweep/mscache/`, one
-  directory per coarsening (`v1000_100`, and `v1000_50` for `tok_g50`). It
-  sits out of reach of SAOI_run's cache beside the dataset. Its lock lets one
-  job build it while the others wait.
-- `hierarchy_cache_keep False`, and the runner removes any leftover at the end.
-
-Everything else (600 compressor epochs, 2000 prior epochs, b16, val every 25,
-`best_by crps`, 30 Heun steps, 2000 draws per part) is SAOI_run's, unchanged.
-
-## Files
+The results come back as **typed text only**. Nothing is copied off the
+nodes. Each runner therefore ends with a block of short lines (see "Reading
+the block") that holds its whole result and is short enough to retype.
 
 | File | Purpose |
 | --- | --- |
-| `config_train_<arm>_<half>.txt` | 16 = 8 arms x 2 halves |
-| `config_infer_<arm>_<half>_<eval set>.txt` | 48 = 16 x 3 eval sets (`s26fe_main`, `s26fe_sec`, `sm_l345u_main`) |
-| `run_sweep.sh` | preflight, train, infer, report |
-| `train_parts/` | the train-part check, run after the sweep (see "Train-part check") |
-| `b300_r2/` | round 2's cHI-MGNflow arms, run by `configs/campaigns/b300_r2/run_node.sh` (see the last section) |
+| `run_sweep.sh SAOI\|probabilistic` | one method on one node, end to end: checks, data, preflight, the 8 jobs, the summary |
+| `brief.py SAOI\|probabilistic\|r1` | prints the type-back block at any time, during or after the run |
+| `SAOI/saoi_heldout.py` | SAOI only: geometry labels, the held-out parts and their inference configs |
+| `SAOI/*.txt`, `probabilistic/*.txt` | round 2 configs; every header names the arm's change and its question |
+| `SAOI/r1/`, `probabilistic/r1/` | round 1, with its own runner and README |
 
-The eval-pair check is SAOI_run's `check_eval_inputs.py`, run against this
-directory. There is no copy here.
+## SAOI: does the model carry a part's scatter to a new geometry?
 
-This directory used to hold the earlier SAOI sweeps (sweeps 1-3). They are in
-git history: `git show 5b61f5b:configs/HI_MGNFlow/hyperparameter_sweep/README.md`.
+Round 1 ([`SAOI/r1/`](SAOI/r1/)) found that the `prior_global token` arm fits
+parts it trained on. It misses unseen parts in both width and shape, even
+though most of those parts lie inside the training range. Every round-1 arm
+split **samples** 80/10/10. Validation therefore held more realizations of
+the training parts, and `best_by crps` kept the epoch that reproduced those
+parts best.
+
+Round 2 asks why the unseen parts miss, and asks it of both methods:
+
+| arm (cHI / MGN-V) | change | question |
+| --- | --- | --- |
+| `c_smp` / `v_smp` | none: round-1 `tok` / MGN-V `SAOI_run`, sample split | the reference |
+| `c_grp` / `v_grp` | `split_group_attr geometry_id` on the labelled `_bygeom.h5` copy | does selecting the checkpoint on **unseen geometries** help on unseen parts? |
+| `c_grp_rep` / `v_grp_rep` | `c_grp` repeated / `v_grp` + `training_seed 20261012` | the noise floor; `c_grp` leaves `training_seed` unset, so the cHI repeat draws a fresh seed per launch (printed at start) |
+| `c_nopart` / `v_nopart` | `*_grp` + `cond_var 2` (the Part No. row is no longer read) | is the arbitrary part ID, fed in as a scalar, what lets the model memorize parts? |
+
+A geometry is the node coordinates plus the mesh. Variants that differ only in
+thickness or part number stay on one side of the split.
+
+Each job is scored on two families of parts:
+
+- **O**: the three official eval parts (`s26fe_main`, `s26fe_sec`,
+  `sm_l345u_main`). They are unseen by every arm.
+- **H**: up to 6 test-role parts per half, cut by `saoi_heldout.py`. They are
+  SEEN by `*_smp`, which trained on about 80% of their realizations
+  (`split_<half>.json` records the exact share). They are UNSEEN by `*_grp` and
+  `*_nopart`, which trained on none. The parts are the same for every arm and
+  both methods, so `H(smp) - H(grp)` is the generalization gap at fixed parts.
+
+Reading the SAOI results:
+
+| result | meaning |
+| --- | --- |
+| `c_grp` beats `c_smp` on O by more than the `c_grp` vs `c_grp_rep` gap | checkpoint selection on seen parts was part of the miss |
+| H of `*_grp` close to H of `*_smp` | a new in-range geometry costs nothing; the official parts are hard for another reason |
+| H of `*_grp` far worse than H of `*_smp` | the model does not transfer scatter to a new geometry, so more geometries are needed, or conditions that say what separates parts |
+| `*_nopart` beats `*_grp` | the part-ID row is a memorization channel; drop it from the recipe |
+| MGN-V vs cHI on the same arm | which method transfers better, under identical splits |
+
+Every cHI arm differs from `configs/HI_MGNFlow/SAOI_run/` only by its change
+and the shared layout: `gpu_ids 0`, outputs under
+`output/b300_r2/saoi/<arm>/<half>/`, `write_preprocessing False`, and a
+private hierarchy cache. It runs 600 compressor epochs plus 2000 prior
+epochs. Inference draws 2000 samples per official part and 500 per held-out
+part.
+
+## probabilistic (ex3 buckling): what does each capacity change buy?
+
+Round 1 ([`probabilistic/r1/`](probabilistic/r1/)) added one change to `tok`
+per arm. Round 2 adds all of them at once (`c_full`), then removes one change
+per arm:
+
+| arm | relative to `c_tok` | question |
+| --- | --- | --- |
+| `c_tok` | none | does round 1's `tok` reproduce on this node? Ties the rounds together |
+| `c_full` | `prior_blocks 8`, `latent_dim 256`, `voronoi_clusters 4096,64` + `latent_ch 16`, `ae_epochs 120` + `training_epochs 240` | is the round-1 gain additive? |
+| `c_full_rep` | `c_full` with `training_seed 43` (c_full: 42) | the noise floor for every leave-one-out difference |
+| `c_full_b4` | `c_full` with `prior_blocks 4` | what the deeper prior contributes |
+| `c_full_w128` | `c_full` with `latent_dim 128` | what the wider network contributes |
+| `c_full_g256` | `c_full` with `voronoi_clusters 4096,256` + `latent_ch 4` | what the coarser latent grid contributes (same latent size) |
+| `c_full_g512` | `c_full` with `voronoi_clusters 4096,512` + `latent_ch 4` | the other direction: a finer grid, twice the latent size |
+| `c_full_short` | `c_full` with 60 + 120 epochs | what the doubled epochs contribute |
+
+Inference draws 64 samples per scene of `ex3_shell_buckling_infer.h5`. The
+cHI jobs go heaviest first and the MGN-V jobs lightest first, so card k pairs
+the k-th heaviest cHI job with the k-th lightest MGN-V job and the two
+biggest jobs never share a card.
 
 ## Run
 
-Prerequisites on the node:
+Prerequisites on each node:
 
-- **The SAOI data under `dataset/SAOI/`, named exactly as the configs spell
-  it.** Linux opens only that case:
-  - `saoi_train_{bot,top}.h5`
-  - `test_{S26FE-MAIN,S26FE-SEC,SM-L345U-MAIN}_{infer,compare}_{bot,top}.h5`
-- **A cHI-MGNflow Python environment.** Point at it with
-  `ai_cae4all.local.toml` or `METHOD_PYTHON=`. The interpreter needs torch
-  built for Blackwell (sm_100, CUDA 12.8 or newer).
-- **A checkout that has `prior_global`** (commit 5b61f5b or later).
+- A checkout of `main` with `prior_global` and `split_group_attr`. The runner
+  checks both.
+- The data, named exactly as the configs spell it, because Linux opens only
+  that case:
+  - SAOI node: `dataset/SAOI/saoi_train_{bot,top}.h5` and
+    `test_{S26FE-MAIN,S26FE-SEC,SM-L345U-MAIN}_{infer,compare}_{bot,top}.h5`.
+  - ex3 node: `dataset/probabilistic/ex3_shell_buckling.h5` and
+    `ex3_shell_buckling_infer.h5`.
+- A cHI-MGNflow and a MeshGraphNets-V interpreter, set in
+  `ai_cae4all.local.toml` or through `METHOD_PYTHON=` on each runner. Each
+  needs torch built for Blackwell (sm_100, CUDA 12.8 or newer).
+
+From the repo root:
 
 ```bash
-nohup bash configs/HI_MGNFlow/hyperparameter_sweep/run_sweep.sh \
-    > output/chi-mgnflow/saoi_b300_sweep.out 2>&1 &
+# node 1 (SAOI)
+nohup bash configs/HI_MGNFlow/hyperparameter_sweep/run_sweep.sh SAOI > output/b300_r2_saoi_chi.out 2>&1 &
+nohup bash configs/MeshGraphNets_Variational/hyperparameter_sweep/run_sweep.sh SAOI > output/b300_r2_saoi_mgnv.out 2>&1 &
+
+# node 2 (shell buckling)
+nohup bash configs/HI_MGNFlow/hyperparameter_sweep/run_sweep.sh probabilistic > output/b300_r2_ex3_chi.out 2>&1 &
+nohup bash configs/MeshGraphNets_Variational/hyperparameter_sweep/run_sweep.sh probabilistic > output/b300_r2_ex3_mgnv.out 2>&1 &
 ```
 
-Before any GPU time is spent, the runner checks these things and stops on the
-first one that fails:
+Start both runners of a node together. Each runner stops before any GPU time
+is spent if any of the following fails, and prints the reason as a type-back
+block (`R2 <saoi|ex3> <chi|mgnv> ABORT <reason>`):
 
-1. The environment can import torch, torch_geometric and h5py, and can run a
-   bf16 matmul and a scatter on the card.
-2. Every GPU index in `GPUS` exists on the node.
-3. The checkout has `prior_global`. Otherwise every `tok*` arm would quietly
-   train the `ctrl` prior.
-4. All 14 dataset files (2 training, 12 eval) exist with the case written in
-   the configs.
-5. Each `_infer_` file and its `_compare_` file describe the same part.
-6. The launcher `--check` passes on all 64 configs.
+1. **Environment.** The launcher Python imports `cae_suite`. This method's
+   interpreter imports torch, torch_geometric and h5py, and runs a bf16 matmul
+   and a scatter on a GPU.
+2. **Data.**
+   - SAOI node: `SAOI/saoi_heldout.py` writes
+     `dataset/SAOI/saoi_train_<half>_bygeom.h5` (a second full copy of each
+     training file), the held-out parts and this method's configs for them.
+     The two runners take turns under a lock; the second reuses what the
+     first wrote.
+   - Both nodes: every dataset a config names exists, with the case as written.
+3. **Preflight.** The launcher `--check` passes on every config, 8 at a time
+   per runner. On the SAOI node that is up to 80 checks per method: 8 train
+   configs, 24 official inference configs and up to 48 held-out ones. On the
+   ex3 node it is 16.
 
-Each card then takes the next unclaimed arm and runs that arm's two halves
-side by side. Each half trains, then runs its three eval sets in series. With
-fewer than 8 GPUs the remaining arms wait for a free card.
+The jobs then start. Each job trains and then runs its inference configs one
+after another. A failed inference does not stop the next one. A slot that
+finishes takes the next unclaimed job of its own method, so a node with fewer
+GPUs (`GPUS="0 1 2 3"`) also works, only slower.
 
 Overrides:
 
-- `GPUS="0 1 2 3"`
-- `ARMS="tok ctrl"`
-- `HALVES=bot`
-- `INFER_TAGS=s26fe_main`
-- `PARALLEL_HALVES=0`: the two halves of an arm run one after the other.
-- `KEEP_CACHE=1`: keep the hierarchy caches after the run.
-- `PYTHON=`: the launcher interpreter.
-- `METHOD_PYTHON=`: the cHI-MGNflow interpreter, instead of the one
-  `ai_cae4all.local.toml` names.
-- `PROBE_TIMEOUT=900`: how many seconds the environment probe may take. Its
-  steps print as they run, so a stall shows the step it is stuck in.
-- `THREADS_PER_JOB=4`: the CPU threads of each trainer's own torch pool. BLAS
-  (numpy and torch matmuls) runs on one thread in every process. Without
-  these caps, every process starts about one thread per core, and two sweeps
-  on one node keep the CPU at 100% while the GPUs wait.
-- `PREFLIGHT=0`, `EVAL_PREFLIGHT=0`, `TRAIN=0`, `INFER=0` or `REPORT=0` skips
-  that stage.
+| override | effect |
+| --- | --- |
+| `GPUS="0 1 2 3"` | which cards to use (default: every visible card) |
+| `JOBS_PER_GPU=2` | jobs per card; use 2 when this method runs alone on the node |
+| `JOBS="c_grp.bot c_grp.top"` | run only these jobs, in this order (SAOI job = `<arm>.<half>`, ex3 job = `<arm>`) |
+| `THREADS_PER_JOB=4` | the torch thread pool per job; BLAS is pinned to one thread. 16 jobs x (4 + 4 loader workers) = 128 cores |
+| `TRAIN=0` | inference only, on existing checkpoints; the run hours stay those of the training run |
+| `INFER=0`, `PREFLIGHT=0` | skip that stage |
+| `PYTHON=`, `METHOD_PYTHON=` | the launcher and this method's interpreter |
+| `PROBE_TIMEOUT=900` | seconds the environment probe may take |
 
-To rebuild the report without running anything, use
-`TRAIN=0 INFER=0 bash .../run_sweep.sh`. To re-score one arm on its existing
-checkpoints, use `ARMS=tok TRAIN=0 bash .../run_sweep.sh`.
+There is no resume: a killed job restarts from epoch 0. To run one job again,
+use `JOBS=c_grp.bot bash configs/HI_MGNFlow/hyperparameter_sweep/run_sweep.sh SAOI`.
 
-There is no resume, so a killed half restarts from epoch 0. The runner only
-accepts a checkpoint newer than that half's launch marker, so an old
-`model.pth` never flows into inference.
+## Reading the block
 
-## Time
+Each runner prints its block at the end, so a node gives two: one for cHI
+(`R2 <node> chi ...`) and one for MGN-V (`R2 <node> mgnv ...`). `brief.py`
+prints the same block at any time:
 
-**Unknown.** There are no SAOI timing logs, neither from SAOI_run nor from the
-old sweep. Each half is 600 compressor epochs plus 2000 prior epochs at b16,
-with a sampled validation every 25 prior epochs. Inference is 2000 draws per
-part, three parts per half.
+```bash
+python configs/HI_MGNFlow/hyperparameter_sweep/brief.py SAOI            # or probabilistic
+python configs/HI_MGNFlow/hyperparameter_sweep/brief.py r1              # round 1, both studies
+```
 
-Two halves share each card, and 16 jobs share the node's CPUs and disk, which
-can stretch every arm. `tok_w256` is the slowest arm. Read the first epoch
-lines in `<arm>/<half>/train.log` and extrapolate from them.
+Every number is multiplied by 100 and rounded, so `23` means 0.23.
+
+```text
+==== TYPE THIS BACK ====
+R2 saoi chi 31h D8/8 F0 | bot G120 v12 t12 H6 | top G118 v11 t12 H6
+c_smp 41 62 18 12 88 6 14
+c_grp 37 70 15 33 74 11 15
+...
+==== END ====
+```
+
+The lines in the example are invented to show the format.
+
+**Header.** `31h` is the runner's wall time and `D8/8` the finished jobs.
+`F0` counts the jobs that failed. On SAOI, each half then lists its
+geometries (`G`), validation geometries (`v`), test geometries (`t`) and the
+held-out parts that were cut (`H`).
+
+**SAOI line.** It reads `arm Ow Os Ob Hw Hs Hb h`, with O and H as defined above:
+
+| column | meaning | target |
+| --- | --- | --- |
+| `w` | mean `w1_norm`, the distribution distance divided by the truth sd | 0 |
+| `s` | geometric-mean `sd_ratio`, generated width over true width | 100 |
+| `b` | mean `abs(dmean_norm)`, the mean offset divided by the truth sd | 0 |
+| `h` | training hours of the slower half | |
+
+**ex3 line.** It reads `arm w1 sd bias crps skill h`. Here `bias` is signed:
+negative means the generated mean sits below the truth. `skill` is
+`spread_skill`.
+
+**Suffixes.**
+
+- `F:<stage>.<half> <error>`: the first failure. `+N` means more failures.
+- `run NN%`: still training, with that share of epochs done.
+- `wait`: queued, or still building its hierarchy cache.
+- `inf`: running inference.
+
+`brief.py SAOI --long` prints every number per eval set. That output is for
+reading on the node, not for typing.
 
 ## Output
 
-Everything lands under `output/chi-mgnflow/saoi_b300_sweep/`:
-
 ```text
-<arm>/<half>/model.pth                       kept checkpoint (compressor + prior)
-<arm>/<half>/train.log                       per-epoch AE/prior lines (+ periodic pictures)
-<arm>/<half>/infer/<eval set>/
-    spread_values.npz                        125 FEA truths + 2000 generated values
-    histogram_compare.png                    FEA truth vs generated
-    spread_metrics.json                      pooled scores (see below)
-run_logs/<arm>_<half>.{train,infer_<eval set>}.out   launcher + trainer stdout
-run_logs/checks/*.log                        preflight reports
-run_logs/report.txt                          the tables below
-run_logs/histograms.png                      arms x 6 cells, truth vs generated
-run_logs/sweep_<timestamp>.out               the runner's own log
+output/b300_r2/<saoi|ex3>/<arm>/[<half>/]model.pth, train.log, infer/<eval set>/
+output/b300_r2/<saoi|ex3>/run_logs/chi/<job>.{train,infer_<tag>}.out   stdout per stage
+output/b300_r2/<saoi|ex3>/run_logs/chi/status/                         what brief.py reads
+output/b300_r2/<saoi|ex3>/run_logs/chi/sweep_<timestamp>.out           the runner's own log
+output/b300_r2/saoi/heldout/{data,configs/chi,split_<half>.json}       the held-out parts
 ```
 
-Each eval set is one part, so its `_infer_` file and its `_compare_` file
-carry different sample IDs. `rollout.py` therefore pairs no scenes and
-`spread_metrics.json` holds only the pooled scores (`sd_ratio`, `w1_norm`,
-`dmean_norm`). The report computes the rest from `spread_values.npz`. Every
-draw and every truth describe the same part, so the pooled ranks are the
-calibration.
+The MGN-V runner writes the same tree with `mgnv` in place of `chi`; the two
+share only `heldout/data` and the `_bygeom.h5` copies.
 
-`report.txt` has two tables:
+## Time
 
-- **One row per arm x half x eval set**, with these columns:
-
-  | column | meaning | target |
-  | --- | --- | --- |
-  | `sd_ratio` | sd(generated) / sd(truth) | 1 |
-  | `W1` | 1-Wasserstein / sd(truth) | 0 |
-  | `dmean` | mean bias / sd(truth) | 0 |
-  | `CRPS` | of each truth against the full ensemble, / sd(truth) | low |
-  | `tails` | share of truths in the outer 2% of the draws | 0.04 |
-  | `pit_ks` | KS distance of the truth ranks from uniform | 0 |
-
-- **One row per arm, ranked by mean W1 over the 6 cells.** It also shows the
-  mean |log sd_ratio| (width error) and the mean |dmean| (bias). For each half
-  it gives the kept prior epoch, with that epoch's validation CRPS and spread,
-  and the training hours.
-
-  The last line gives the tok vs tok_seed gap. That gap is the noise floor
-  for every other comparison.
-
-## Train-part check (`train_parts/`, after the sweep)
-
-The three eval sets are parts no model saw. When an arm misses them, there are
-two possible causes:
-
-- the prior cannot reproduce a part's process scatter at all;
-- the prior reproduces it on parts it trained on but does not carry it to a new part.
-
-The check scores every arm on parts from its **own training file**, where
-generalization cannot be the excuse. It trains nothing, and each job takes
-minutes.
-
-```bash
-bash configs/HI_MGNFlow/hyperparameter_sweep/train_parts/run_train_parts.sh
-```
-
-1. `make_train_parts.py` groups `saoi_train_<half>.h5` into parts. A part is
-   the samples with identical coordinates, mesh and condition rows, which is
-   the same definition `check_eval_inputs.py` enforces. It writes the census,
-   then cuts the two largest parts of each half into
-   `dataset/SAOI/train_part<k>_{infer,compare}_<half>.h5`. The `_compare_`
-   file holds every realization of the part, including the ones the split
-   sent to validation. If no part has `--min-size` (10) realizations, it stops
-   and the census shows which ingredient splits them.
-2. `check_eval_inputs.py` checks the new pairs.
-3. One inference runs per arm × half × part, on every `model.pth` whose
-   training finished, i.e. one that `.train.seconds` postdates.
-   `ALLOW_UNFINISHED=1` also scores runs still in progress. Each job uses 500
-   draws against the part's tens of realizations.
-4. `train_parts/report.txt` puts each training part beside the arm's three
-   unseen sets, scored exactly as above. It also gives the validation
-   `[FlowDiag]` ratio `1-draw MSE / det MSE` at the kept epoch, from
-   `run_logs/<arm>_<half>.train.out`.
-   - The validation split holds other realizations of training parts, so the
-     ratio is a node-wise calibration check that needs no new run.
-   - About 2 means the draws scatter as widely as the realizations.
-   - About 1 means the draws sit on the mean, as does a mean that misses the
-     part; an `sd_ratio` of 0.5 reads about 1.25.
-   - `spread/gt` in that line is divided by the field's spatial sd, so it is
-     not this ratio.
-
-Reading the result:
-
-| training parts | unseen parts | meaning |
-| --- | --- | --- |
-| match | miss | the prior learned the scatter but does not transfer it to a new part: part coverage / conditioning |
-| narrow | narrow | the prior's own failure; the arm-to-arm differences on the training parts say which change helps |
-
-Overrides: `ARMS`, `HALVES`, `PARTS="1 2"`, `GPUS`, `MAKE=0`, `INFER=0`,
-`REPORT=0`, and `MAKE_ARGS` (passed to `make_train_parts.py`, for example
-`--decimals 3`). To get the census alone, use
-`MAKE_ARGS=--census-only INFER=0 REPORT=0 bash .../run_train_parts.sh`.
-
-Output goes under `output/chi-mgnflow/saoi_b300_sweep/`:
-
-- `train_parts/{census_<half>.json, report.txt, histograms.png, run_logs/}`
-- `<arm>/<half>/infer/train_part<k>/`
-
-## Round 2 (geometry split, both methods)
-
-The train-part check found that `tok` matches the parts it trained on and
-misses unseen ones, and that most of the unseen parts lie inside the training
-range. Every arm here splits **samples** 80/10/10. Its validation set
-therefore holds more realizations of the parts it trains on, and
-`best_by crps` keeps the epoch that reproduces those parts best.
-
-Round 2 follows this up with geometry-grouped validation
-(`split_group_attr geometry_id`), a no-part-ID arm, held-out SEEN versus
-UNSEEN parts, and MeshGraphNets-V beside cHI-MGNflow. Its arms are in
-[`b300_r2/`](b300_r2/), and the design and run command are in
-[`configs/campaigns/b300_r2/README.md`](../../campaigns/b300_r2/README.md).
-It replaces the single-arm `tok_grp` / `part_split/` kit, which was never
-run.
+**Unknown.** No SAOI timing log exists from any round. Round 1 ran two sweeps
+per node without thread caps, so its hours are not comparable. Read the first
+epoch lines of each `train.log`, or the `run NN%` suffix, and extrapolate from
+those.

@@ -94,6 +94,15 @@ VAR_KEYS = frozenset(
         # condition-dependent mean/scale head of the FM base; both persist in
         # the checkpoint model_config.
         "prior_velocity_hidden_dim", "prior_fm_moments",
+        # The rest of the conditional-prior architecture persisted by
+        # training_profiles/setup.py::build_model_config: condition-encoder width,
+        # the FM velocity network ('mlp' or 'residual_film') and its depth, the
+        # moment head's width / loss weight / scale clamp, and the number of
+        # moment-only calibration epochs that follow prior_freeze_epoch.
+        "prior_condition_hidden_dim", "prior_fm_velocity_arch", "prior_fm_blocks",
+        "prior_fm_moment_hidden_dim", "prior_fm_moment_weight",
+        "prior_fm_moment_min_scale", "prior_fm_moment_max_scale",
+        "prior_moment_calibration_epochs",
         # Weight on the flow-matching gradient that reaches the ENCODER
         # (0 = legacy detached one-way coupling, 1 = full CVAE rate term).
         "prior_grad_to_encoder",
@@ -143,7 +152,8 @@ def validate_variational(ctx: SpecValidationContext) -> None:
                 )
         validate_positive_fields(ctx, ("vae_latent_dim", "vae_mp_layers"), "MGNV-VAE-POSITIVE")
 
-        prior_type = str(values.get("prior_type", "none")).lower()
+        # Same default as the runtime's resolve_prior_type (training_profiles/setup.py).
+        prior_type = str(values.get("prior_type") or "gnn_e2e").lower()
         if prior_type == "gnn_e2e":
             for name in ("prior_family", "prior_mp_layers", "prior_hidden_dim"):
                 if name not in values:
@@ -169,6 +179,15 @@ def validate_variational(ctx: SpecValidationContext) -> None:
                     Severity.ERROR,
                     "prior_fm_solver must be 'heun' (2nd-order, default) or 'euler'.",
                     field_name="prior_fm_solver",
+                )
+
+            arch = str(values.get("prior_fm_velocity_arch", "mlp")).lower()
+            if arch not in {"mlp", "residual_film"}:
+                ctx.add(
+                    "MGNV-FM-ARCH",
+                    Severity.ERROR,
+                    "prior_fm_velocity_arch must be 'mlp' (default) or 'residual_film'.",
+                    field_name="prior_fm_velocity_arch",
                 )
 
         try:

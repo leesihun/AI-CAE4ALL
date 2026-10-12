@@ -22,19 +22,21 @@ python MeshGraphNets_main.py --config path\to\config.txt
 | `parallel_mode` | launcher | Optional. `ddp` by default; `model_split` enables the experimental pipeline split path. |
 | `pipeline_microbatches` | model_split | Optional. Batches pipelined per optimizer step under the 1F1B schedule (default `2 * num_stages`; `1` = legacy sequential). Effective batch = `batch_size * pipeline_microbatches`; VRAM does not grow with it. |
 | `modelpath` | training, inference, prior | Checkpoint path to save to or load from. |
-| `log_file_dir` | training | Relative path under `outputs/` for epoch logs. |
+| `log_file_dir` | training | Epoch-log path, cwd-relative like every other path key (`../../output/...`). |
 
 Mode behavior:
 
 - `train`: trains the simulator. With `use_vae True`, the mesh-conditioned prior (`prior_type gnn_e2e`) trains jointly inside the same loop.
-- `inference`: runs autoregressive rollout using the checkpoint and writes rollout HDF5 files. Samples z from the conditional prior in the checkpoint by default (set `use_conditional_prior False` to fall back to N(0,I)).
+- `inference`: runs autoregressive rollout using the checkpoint and writes rollout HDF5 files. Whether z comes from the conditional prior or N(0,I) is decided by the checkpoint's `use_conditional_prior` (see below). Each trajectory draws its z once, at step 0, and keeps it for the whole rollout.
 
-Important caveat: inference loads `checkpoint['model_config']` and overwrites many
-architecture keys from the config file before it checks `use_conditional_prior`.
-If the checkpoint's `model_config` says `use_conditional_prior False`, then a
-config-file `use_conditional_prior True` can be overwritten. For conditional-prior
-inference, prefer a checkpoint saved from a conditional-prior-aware run, or patch
-that model_config field deliberately.
+Important caveat: inference loads `checkpoint['model_config']` and overwrites
+the config-file values of every key in it -- `use_conditional_prior` included --
+before it reads `use_conditional_prior`. Training saves that key with its
+training default `False`, so a checkpoint trained without
+`use_conditional_prior True` samples N(0,I) at inference whatever the inference
+config says. Set it in the **training** config, or patch that model_config field
+deliberately. The inference-side default `True` only applies to a checkpoint
+that has no `model_config`.
 
 ## Dataset Keys
 
@@ -137,7 +139,8 @@ same mesh topology. For this objective, keep `lambda_mmd` low (≈ 0.1) and
 | `mmd_gather_ranks` | training | All-gather `z` across DDP ranks before the MMD (default `True`). MMD is a two-SAMPLE statistic evaluated inside the model forward, so without this it only ever sees the PER-RANK batch — on 4 GPUs at `Batch_size 16` the global batch is 64 but the estimator used 16. `z` is tiny, so the collective is free. No-op at `world_size 1`. |
 | `alpha_recon` | training | Reconstruction-loss weight. |
 | `lambda_mmd` | training | MMD regularizer weight matching aggregate posterior to `N(0,I)`. Keep low (≈ 0.1) for spread modeling; residual MMD > 0 is acceptable and expected. |
-| `beta_aux` | training | Weight for auxiliary latent decoder predicting per-graph output stats from `z`. Keep high (≈ 1.0) to prevent mode collapse. |
+| `beta_aux` | training | Weight of the peak-to-valley MSE on the DECODED field (`MeshGraphNets._pv_loss`): per graph, predicted vs true `max - min` of channel `pv_channel`. Keep high (≈ 1.0) to prevent mode collapse. It is the scored statistic on SAOI only; on ex3 (scored by `max\|u\|`) it is an auxiliary on one component, and for `T > 1` it fits the per-step increment's peak-to-valley (warned, not refused). Rejected with `parallel_mode model_split` (`MGNV-AUX-PIPELINE`). There is no per-sample KL term: MMD is the only latent regularizer. |
+| `pv_channel` | training | Output channel the peak-to-valley term reads. Default `2` (`z_disp` in the displacement layout). |
 | `posterior_min_std` | VAE encoder | Floor on the posterior std. ≈ 0.05 recommended so the prior cannot memorize point masses. It also sets the noise level the DECODER is trained at, which is the level it should be able to tolerate from the prior at inference. |
 | `mmd_bandwidth` | training | RBF bandwidth mode for the MMD. `fixed` uses constant sigmas tuned for ~64-D `z` and **saturates at high `vae_latent_dim`** — pairwise squared distances grow ~2D, every kernel goes to 0, and the penalty silently disappears along with its gradient. `median` sets the base scale from the median pairwise distance each step and stays sensitive at any latent width. |
 | `best_by` | training | Checkpoint-selection metric: `recon` (posterior validation loss, default) or `crps` (the learned-prior CRPS that mirrors inference). Reconstruction measures the POSTERIOR path, which a model can keep improving while its generative path rots — select on `crps` whenever the run exists to generate. |
@@ -146,7 +149,7 @@ same mesh topology. For this objective, keep `lambda_mmd` low (≈ 0.1) and
 | `vae_batch_size` | inference | Trajectories advanced together per batched forward pass. |
 | `vae_valid_prior_samples` | training | Prior samples per graph for the CRPS validation metric. Default `8`. |
 | `num_z` | model, prior | Per-level z slots. Defaults to `multiscale_levels + 1` for multiscale, else `1`. |
-| `use_conditional_prior` | inference | At inference, sample z from the joint-trained conditional prior (a model submodule). Default `True`; set `False` to force N(0,I). |
+| `use_conditional_prior` | training, inference | Sample z from the joint-trained conditional prior at inference (`False` forces N(0,I)). Training default `False`, and the value is saved in `model_config`, which overrides the inference config -- so set it when TRAINING. The inference default `True` applies only to a checkpoint with no `model_config`. |
 | `prior_type` | model, training | `gnn_e2e` (default when `use_vae True`) enables the joint graph-conditional prior submodule. |
 | `prior_family` | prior | Density family of the gnn_e2e prior: `fm` (conditional flow matching, **default**) or `gmm` (Gaussian mixture, legacy). Persisted in the checkpoint; pre-FM checkpoints load as `gmm` automatically. |
 | `prior_nll_weight` | training | Weight of the prior density-matching objective — flow-matching MSE (`fm`) or mixture NLL (`gmm`). Default `1.0`. Read it RELATIVE to `alpha_recon`: at `alpha_recon 1000` a weight of 1 makes this ~0.1% of the objective. |
@@ -154,7 +157,17 @@ same mesh topology. For this objective, keep `lambda_mmd` low (≈ 0.1) and
 | `prior_fm_steps` | prior (fm) | ODE steps when sampling from the FM prior. Default `20`. Sampling-only — it never affects training. |
 | `prior_fm_solver` | prior (fm) | ODE integrator: `heun` (default, 2nd-order trapezoid predictor-corrector, two velocity evaluations per step) or `euler` (1st order, the old behaviour). The velocity is most curved near `t = 1`, which is exactly where Euler overshoots into the `z` tails; measured on `dz/dt = z`, Heun at 30 steps is ~27x more accurate than Euler at 100 and ~40% cheaper. |
 | `prior_hidden_dim` | prior | Prior hidden width. Defaults to `latent_dim`. |
-| `prior_mp_layers` | prior | Prior graph message-passing layers. Default `3`. |
+| `prior_mp_layers` | prior | Prior graph message-passing layers. Default `10` (`build_prior_config`; the bare class default of 3 is never reached through training). |
+| `prior_condition_hidden_dim` | prior | Width of the condition encoder. Defaults to `prior_hidden_dim`. |
+| `prior_velocity_hidden_dim` | prior (fm) | Velocity-network width. Defaults to `prior_hidden_dim`. |
+| `prior_fm_velocity_arch` | prior (fm) | `mlp` (default; the legacy module layout) or `residual_film`: `prior_fm_blocks` pre-norm residual blocks, each FiLM-modulated by an embedding of (graph condition, t). Preflight `MGNV-FM-ARCH` rejects anything else. |
+| `prior_fm_blocks` | prior (fm) | Residual blocks of the `residual_film` velocity network. Default `4`. |
+| `prior_fm_moments` | prior (fm) | Condition-dependent Gaussian base: a moment head predicts a per-graph mean and diagonal scale, and FM transports only the remaining residual. Default `False` (base N(0,I)). |
+| `prior_fm_moment_hidden_dim` | prior (fm) | Moment-head width. Defaults to `prior_condition_hidden_dim`. |
+| `prior_fm_moment_weight` | training (fm) | Weight of the moment head's Gaussian likelihood term. Default `1.0`. |
+| `prior_fm_moment_min_scale` / `prior_fm_moment_max_scale` | prior (fm) | Clamp on the moment head's scale. Defaults `0.03` / `20.0`. |
+| `prior_freeze_epoch` | training | Epoch at which the simulator freezes and only the prior trains for the rest of the run: latent standardization (`z_shift`/`z_scale`) is fitted once, and a fresh cosine runs over the prior alone. `0` (default) = never. Single GPU only. |
+| `prior_moment_calibration_epochs` | training (fm) | With `prior_fm_moments`, the first N epochs of the prior-only tail fit only the moment head; the remaining tail epochs fit only the velocity field. `0` (default) trains both together. |
 | `prior_mixture_components` | prior (gmm) | Mixture components. Default `50`. |
 | `prior_min_std` | prior (gmm) | Minimum predicted component std. Default `0.1`. |
 | `prior_cov_rank` | prior (gmm) | Low-rank covariance rank per component. Default `0` (diagonal). |
@@ -180,6 +193,7 @@ flags them as `MGNV-REMOVED`).
 | `training_epochs` | training | Epoch count. Config files may write `Training_epochs`; the loader lowercases it. |
 | `batch_size` | training | Physical DataLoader batch size. |
 | `learningr` | training | Adam learning rate. Config files may write `LearningR`. |
+| `training_seed` | training | Seeds python/numpy/torch/CUDA and the DataLoader generators in single-process training. Default `42`. Separate from `split_seed`, so two runs differing only in it share a split. The DDP path does not read it. |
 | `warmup_epochs` | training | Linear warmup epochs before cosine restarts. Default `3`. |
 | `num_workers` | DataLoader | Worker count for simulator training. |
 | `std_noise` | model forward | Adds Gaussian noise to node and edge inputs during training. |
@@ -204,13 +218,14 @@ flags them as `MGNV-REMOVED`).
 | `augment_geometry` | data | Training-only random z rotation and x/y reflection. |
 | `test_max_batches` | training | Cap on test batches per visualization pass. Default `200`. |
 
-Simulator loss is Huber or MSE (`recon_loss`) on normalized deltas. With
-`use_vae True` the full objective is
+Simulator loss is Huber or MSE (`recon_loss`) on the normalized target: the
+per-step delta when `T > 1`, the absolute field in the static (`T = 1`) case.
+With `use_vae True` the full objective is
 
 ```text
 L = alpha_recon      * recon(f(z_q, g), y)          reconstruction
   + lambda_mmd       * MMD(q(z) || N(0,I))          aggregate rate: shape/scale of the latent
-  + beta_aux         * aux(z -> per-graph y stats)  I(z;y) floor, guards against collapse
+  + beta_aux         * PV(f(z_q, g), y)             peak-to-valley of the decoded field; I(z;y) floor
   + prior_nll_weight * FM(v_theta ; z_q, g)         conditional rate: where each graph lands
   [+ prior_kl_reg_weight * KL anchor]               gmm family only
 ```

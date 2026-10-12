@@ -242,6 +242,7 @@ flow-matching ODE 표면 (`FLOW_ONLY_KEYS`, 이전 필드 공간 설계와 그�
 | `flow_predict` | `sample` | `sample` / `mean` / `ensemble_mean` (위 "예측 모드" 참고) |
 | `val_flow_steps`, `val_num_samples` | —, 8 | 검증용 ODE 스텝/앙상블 크기 (`val_interval`마다 돌아서 추론보다 싸게 잡음) |
 | `best_by` | `crps` | 체크포인트 선택 지표: `recon` / `crps` / `det` |
+| `training_seed` | (실행마다 새로 뽑음) | 초기화·셔플·KL 노이즈·flow 시간/노이즈를 내는 python/numpy/torch/CUDA 전역 RNG의 시드 (2026-10-12부터 읽음, `training_profiles/setup.py::seed_training_rng`). 없으면 실행마다 새 시드를 뽑아 로그에 `Training RNG seed: N [drawn ...]`로 남긴다. DDP는 rank마다 `시드+rank`, `DistributedSampler`는 기본 시드를 공유. 데이터 분할(`split_seed`)과 coarsening(`hierarchy_seed`)과는 별개 스트림. 반복(노이즈 바닥) arm은 쌍둥이와 다른 값을 쓰거나 키를 빼야 한다 |
 
 제거된 키 (전부 known, 즉 `CFG-UNKNOWN`이 아니라 각각 정확한 진단으로 안내됨):
 

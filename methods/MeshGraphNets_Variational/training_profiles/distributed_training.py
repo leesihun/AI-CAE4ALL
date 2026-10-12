@@ -235,7 +235,7 @@ def _train_worker_inner(rank, world_size, config, gpu_ids, config_filename):
             f"weight_decay={float(config.get('weight_decay', 0.0))})"
         )
         print(f"Scheduler: LinearLR warmup ({warmup_epochs} epochs) -> "
-              f"CosineAnnealingWarmRestarts (T_0={cosine_T0}, T_mult=2, eta_min=1e-8)")
+              f"CosineAnnealingWarmRestarts (T_0={cosine_T0}, T_mult=1, eta_min=1e-8)")
 
     if torch.cuda.is_available() and rank == 0:
         print(f'After optimizer creation: {torch.cuda.memory_allocated()/1e9:.2f}GB')

@@ -33,7 +33,7 @@ Each training sample becomes a PyG `Data` or `MultiscaleData` object with:
 | Field | Shape | Meaning |
 | --- | --- | --- |
 | `x` | `[N, input_var + positional_features + optional node_types]` | normalized node input |
-| `y` | `[N, output_var]` | normalized target delta |
+| `y` | `[N, output_var]` | normalized target: step delta when `T > 1`, absolute field when static (`T = 1`) |
 | `pos` | `[N, 3]` | unnormalized reference position |
 | `edge_index` | `[2, E]` | bidirectional mesh edges |
 | `edge_attr` | `[E, 8]` | normalized mesh edge features |
@@ -65,7 +65,7 @@ Linear -> SiLU -> Linear -> SiLU -> Linear -> optional LayerNorm
 
 LayerNorm is enabled for encoders, processor blocks, coarse edge encoders,
 unpool blocks, VAE encoders, and the conditional prior. It is disabled for the
-final simulator decoder and the VAE auxiliary decoder.
+final simulator decoder.
 
 Weights are initialized with Kaiming uniform for `nn.Linear` and zero bias.
 
@@ -160,7 +160,8 @@ global latent `z` into the simulator processor.
 
 ### Posterior Encoder
 
-`GNNVariationalEncoder` encodes target delta `y` into a graph-level latent:
+`GNNVariationalEncoder` encodes the target `y` (step delta when `T > 1`,
+absolute field when static) into a graph-level latent:
 
 1. Encode `y` with an MLP.
 2. If `vae_graph_aware True`, encode graph input `x` with a second MLP and fuse
@@ -235,8 +236,13 @@ cheaper than the fuser it replaces (`3 * z_dim * D` MACs per node against
 `(D + z_dim) * D`). The modulation runs INSIDE the gradient-checkpointed region
 so its three `[N, latent_dim]` tensors are recomputed rather than stored.
 
-The auxiliary decoder predicts per-graph target mean and standard deviation from
-`z`, and its loss is weighted by `beta_aux`.
+`beta_aux` weights `MeshGraphNets._pv_loss`: per graph, the MSE between the
+predicted and true peak-to-valley (`max - min`) of the DECODED field's
+`pv_channel` (default 2). It replaced an auxiliary decoder that regressed
+per-graph target mean/std from `z`; that head never touched the field the
+rollout writes. The term is the scored statistic only on SAOI; on ex3 (scored
+by `max|u|`) it is an auxiliary on one component, and for `T > 1` it fits the
+per-step increment's peak-to-valley.
 
 ## Conditional Prior
 
@@ -259,7 +265,7 @@ density head:
 
 - `fm` (default): a conditional flow-matching velocity field. Training is MSE
   regression on straight-line interpolation paths toward fresh posterior
-  samples, resampled every step so the target is the smoothed posterior cloud
+  samples, redrawn every optimizer step so the target is the smoothed posterior cloud
   rather than fixed points. Whether those samples are detached is
   `prior_grad_to_encoder` (see the training objective below). Sampling
   integrates the ODE for `prior_fm_steps` steps with `prior_fm_solver` —
@@ -286,8 +292,8 @@ variability, the VAE must learn the spread of that output distribution and enabl
 generation of realistic new samples at inference time (potentially more samples
 than the training set).
 
-The simulator predicts normalized target deltas. Reconstruction loss is Huber
-loss with `delta=1.0`, optionally weighted per output channel by
+The simulator predicts the normalized target (step delta when `T > 1`, the
+absolute field when static). Reconstruction loss is Huber loss with `delta=1.0`, optionally weighted per output channel by
 `feature_loss_weights` after normalizing those weights to sum to 1.
 
 Without VAE:
@@ -301,7 +307,7 @@ With VAE:
 ```text
 loss = alpha_recon      * reconstruction_loss
      + lambda_mmd       * mmd_loss           # AGGREGATE rate: q(z) ↔ N(0,I)
-     + beta_aux         * auxiliary_loss     # I(z;y) floor: z → per-graph output stats
+     + beta_aux         * pv_loss            # I(z;y) floor: decoded peak-to-valley per graph
      + prior_nll_weight * prior_loss         # CONDITIONAL rate: FM (fm) or NLL (gmm)
    [ + prior_kl_reg_weight * kl_anchor ]     # gmm family only
 ```
@@ -347,9 +353,10 @@ removed from the objective; the launcher now flags those keys as
 - `lambda_mmd` should remain low (≈ 0.1). A non-zero residual MMD is acceptable
   and expected: the true aggregate posterior encodes real spread structure that does
   not match an isotropic Gaussian. Forcing MMD → 0 erases that structure.
-- `beta_aux` should remain high (≈ 1.0). The auxiliary decoder forces `z` to
-  predict per-graph output mean and standard deviation. Without this anchor the
-  encoder collapses all spread into a small z subspace (mode collapse).
+- `beta_aux` should remain high (≈ 1.0). The peak-to-valley term makes the
+  decoded field reproduce each realization's own extremes, which a `z` that
+  ignores `y` cannot do. Without this anchor the encoder collapses all spread
+  into a small z subspace (mode collapse).
 - The deterministic z=0 auxiliary pass (`lambda_det`) was removed from the code:
   it conflicts directly with the spread objective by punishing z for carrying
   information the graph cannot predict alone. Do not reintroduce it.
