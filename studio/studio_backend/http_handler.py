@@ -54,6 +54,7 @@ from studio_backend.state import STATE, PreflightFailure
 from studio_backend.suite_bridge import benchmark_roster, checkpoint_metadata, config_catalog, documentation_catalog, file_catalog
 from studio_backend.system_info import deployment_status, gpu_inventory
 from studio_backend.training_metrics import training_metrics_catalog
+from studio_backend import geometry_explorer
 
 
 EXPORT_PREFIX = "/runtime/exports/"
@@ -102,7 +103,7 @@ class StudioRequestHandler(SimpleHTTPRequestHandler):
         canonical = "/" + "/".join(part for part in parts if part)
         if canonical == "/":
             canonical = "/index.html"
-        if canonical in {"/index.html", "/styles.css"}:
+        if canonical in {"/index.html", "/styles.css", "/geometry-explorer.css"}:
             candidate = (
                 SUITE_ROOT / "studio" / "styles.css"
                 if canonical == "/styles.css"
@@ -150,8 +151,8 @@ class StudioRequestHandler(SimpleHTTPRequestHandler):
             # ``studio/`` asset directory while the public URL remains stable.
             # Serve that one explicitly; the stdlib handler is intentionally
             # rooted at ``studio/`` and must not be widened to the whole repo.
-            if canonical == "/styles.css":
-                body = (SUITE_ROOT / "studio" / "styles.css").read_bytes()
+            if canonical in {"/styles.css", "/geometry-explorer.css"}:
+                body = (SUITE_ROOT / "studio" / canonical.lstrip("/")).read_bytes()
                 self.send_response(HTTPStatus.OK)
                 self.send_header("Content-Type", "text/css; charset=utf-8")
                 self.send_header("Content-Length", str(len(body)))
@@ -343,6 +344,10 @@ class StudioRequestHandler(SimpleHTTPRequestHandler):
         try:
             if parsed.path == "/api/health":
                 self.send_json({**STATE.health(), "gpus": gpu_inventory()})
+            elif parsed.path == "/api/geometry-explorer/profiles":
+                self.send_json(geometry_explorer.profiles())
+            elif parsed.path == "/api/geometry-explorer/jobs":
+                self.send_json(geometry_explorer.job(query.get("id", [""])[0]))
             elif parsed.path == "/api/models":
                 self.send_json({"items": STATE.models()})
             elif parsed.path == "/api/configs":
@@ -531,6 +536,10 @@ class StudioRequestHandler(SimpleHTTPRequestHandler):
                 self.send_json(create_exe_build_job(), HTTPStatus.CREATED)
             elif parsed.path == "/api/optimization/run":
                 self.send_json(run_optimization(payload), HTTPStatus.CREATED)
+            elif parsed.path == "/api/geometry-explorer/generate":
+                self.send_json(geometry_explorer.generate(payload), HTTPStatus.CREATED)
+            elif parsed.path == "/api/geometry-explorer/analyze":
+                self.send_json(geometry_explorer.analyze(payload), HTTPStatus.CREATED)
             elif parsed.path == "/api/optimization/schema":
                 self.send_json(optimization_schema(payload))
             elif parsed.path == "/api/evaluation/run":

@@ -1139,6 +1139,14 @@ export const TEMPLATES = {
 };
 
 export const STUDIO_SECTIONS = {
+  geometry: {
+    label: "Geometry", icon: "cad", color: "#4c7f71", note: "Shape generation and response",
+    title: "Geometry Explorer", description: "Generate shapes from saved SDFFlow models, then mesh a DeepJEB bracket and predict its Z displacement with HI-MGN.",
+    cards: [
+      ["Continuous shape generation", "cad", "native", "Drag between two noise endpoints and generate a fresh surface with the selected Car, DeepJEB, or MCB model.", ["SDFFlow", "slider", "three profiles"]],
+      ["DeepJEB structural response", "model", "native", "Build the registered surface graph, run the saved HI-MGN checkpoint, and inspect signed Z displacement in millimeters.", ["surface graph", "HI-MGN", "u_z"]]
+    ]
+  },
   data: {
     label: "Data", icon: "data", color: "#3c7193", note: "Geometry, datasets, conditions",
     title: "Data workspace", description: "Curate every object entering a pipeline, inspect individual samples, preserve split provenance, and expose exact HDF5 contracts.",

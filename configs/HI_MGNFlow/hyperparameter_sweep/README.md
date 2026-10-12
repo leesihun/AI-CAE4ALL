@@ -42,6 +42,7 @@ Everything else (600 compressor epochs, 2000 prior epochs, b16, val every 25,
 | `config_train_<arm>_<half>.txt` | 16 = 8 arms x 2 halves |
 | `config_infer_<arm>_<half>_<eval set>.txt` | 48 = 16 x 3 eval sets (`s26fe_main`, `s26fe_sec`, `sm_l345u_main`) |
 | `run_sweep.sh` | preflight, train, infer, report |
+| `train_parts/` | the train-part check, run after the sweep (see the last section) |
 
 The eval-pair check is SAOI_run's `check_eval_inputs.py`, run against this
 directory. There is no copy here.
@@ -168,3 +169,61 @@ calibration.
 
   The last line gives the tok vs tok_seed gap. That gap is the noise floor
   for every other comparison.
+
+## Train-part check (`train_parts/`, after the sweep)
+
+The three eval sets are parts no model saw. When an arm misses them, there are
+two possible causes:
+
+- the prior cannot reproduce a part's process scatter at all;
+- the prior reproduces it on parts it trained on but does not carry it to a new part.
+
+The check scores every arm on parts from its **own training file**, where
+generalization cannot be the excuse. It trains nothing, and each job takes
+minutes.
+
+```bash
+bash configs/HI_MGNFlow/hyperparameter_sweep/train_parts/run_train_parts.sh
+```
+
+1. `make_train_parts.py` groups `saoi_train_<half>.h5` into parts. A part is
+   the samples with identical coordinates, mesh and condition rows, which is
+   the same definition `check_eval_inputs.py` enforces. It writes the census,
+   then cuts the two largest parts of each half into
+   `dataset/SAOI/train_part<k>_{infer,compare}_<half>.h5`. The `_compare_`
+   file holds every realization of the part, including the ones the split
+   sent to validation. If no part has `--min-size` (10) realizations, it stops
+   and the census shows which ingredient splits them.
+2. `check_eval_inputs.py` checks the new pairs.
+3. One inference runs per arm × half × part, on every `model.pth` whose
+   training finished, i.e. one that `.train.seconds` postdates.
+   `ALLOW_UNFINISHED=1` also scores runs still in progress. Each job uses 500
+   draws against the part's tens of realizations.
+4. `train_parts/report.txt` puts each training part beside the arm's three
+   unseen sets, scored exactly as above. It also gives the validation
+   `[FlowDiag]` ratio `1-draw MSE / det MSE` at the kept epoch, from
+   `run_logs/<arm>_<half>.train.out`.
+   - The validation split holds other realizations of training parts, so the
+     ratio is a node-wise calibration check that needs no new run.
+   - About 2 means the draws scatter as widely as the realizations.
+   - About 1 means the draws sit on the mean, as does a mean that misses the
+     part; an `sd_ratio` of 0.5 reads about 1.25.
+   - `spread/gt` in that line is divided by the field's spatial sd, so it is
+     not this ratio.
+
+Reading the result:
+
+| training parts | unseen parts | meaning |
+| --- | --- | --- |
+| match | miss | the prior learned the scatter but does not transfer it to a new part: part coverage / conditioning |
+| narrow | narrow | the prior's own failure; the arm-to-arm differences on the training parts say which change helps |
+
+Overrides: `ARMS`, `HALVES`, `PARTS="1 2"`, `GPUS`, `MAKE=0`, `INFER=0`,
+`REPORT=0`, and `MAKE_ARGS` (passed to `make_train_parts.py`, for example
+`--decimals 3`). To get the census alone, use
+`MAKE_ARGS=--census-only INFER=0 REPORT=0 bash .../run_train_parts.sh`.
+
+Output goes under `output/chi-mgnflow/saoi_b300_sweep/`:
+
+- `train_parts/{census_<half>.json, report.txt, histograms.png, run_logs/}`
+- `<arm>/<half>/infer/train_part<k>/`

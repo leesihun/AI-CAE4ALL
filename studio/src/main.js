@@ -1,4 +1,5 @@
 import { $ } from "./dom.js";
+import "./capture-pointer.js";
 import { state } from "./state.js";
 import { BLOCK_SPECS, MODEL_CATALOG, TEMPLATES } from "./constants.js";
 import { connectRuntime } from "./api.js";

@@ -15,6 +15,8 @@ from typing import Any
 from studio_backend.paths import CONFIG_RUNTIME, RUNTIME_ROOT, SKIP_DIRS, SUITE_ROOT, relative, safe_repo_path, walk_files
 from studio_backend.system_info import PORTABLE_INFERENCE_MODELS
 
+GEOMETRY_EXPLORER_RUNTIME = RUNTIME_ROOT / "geometry_explorer"
+
 if str(SUITE_ROOT) not in sys.path:
     sys.path.insert(0, str(SUITE_ROOT))
 
@@ -103,6 +105,16 @@ def file_catalog(kind: str) -> dict[str, Any]:
             {".pth", ".pt", ".ckpt"},
             kind,
         )
+    if kind == "csv":
+        # The CSV pickers (Optimization, Compare) used to filter the capped
+        # artifact listing client-side, so a candidate table older than the
+        # newest FILE_LIMIT PNGs/STLs/logs vanished from the select.
+        return walk_files(
+            (RUNTIME_ROOT, SUITE_ROOT / "output", SUITE_ROOT / "outputs"),
+            {".csv"},
+            kind,
+            exclude=(CONFIG_RUNTIME, GEOMETRY_EXPLORER_RUNTIME),
+        )
     return walk_files(
         (RUNTIME_ROOT, SUITE_ROOT / "output", SUITE_ROOT / "outputs"),
         {".h5", ".hdf5", ".csv", ".json", ".html", ".png", ".jpg", ".jpeg", ".stl", ".ply", ".obj", ".off", ".vtk", ".vtu", ".vtp", ".msh", ".pth", ".pt", ".txt", ".log", ".md"},
@@ -111,7 +123,9 @@ def file_catalog(kind: str) -> dict[str, Any]:
         # directory outnumbers all real artifacts by an order of magnitude and,
         # being always the newest, would sit at the top of every picker. It is
         # Studio scratch, not a user artifact.
-        exclude=(CONFIG_RUNTIME,),
+        # The Geometry Explorer writes a job directory per slider frame; those
+        # drafts are superseded scratch, not artifacts.
+        exclude=(CONFIG_RUNTIME, GEOMETRY_EXPLORER_RUNTIME),
     )
 
 

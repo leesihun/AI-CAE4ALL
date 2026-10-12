@@ -9,6 +9,7 @@ import { configureViaLlm, loadConfigExample, openConfig } from "./config.js";
 import { beginCommandJob, renderRuntimeJob, reconcileFinishedJobs, canvasOwnership, markBlocksUndelivered } from "./run.js";
 import { applyGraphAutofill, autoFillCount, autoFillMeta, markManualConfigValue } from "./autofill.js";
 import { niceTicks, tickLabels, logTicks, logTickLabels } from "./axis.js";
+import { mountGeometryExplorer } from "./geometry-explorer.js";
 
 function assignManualConfig(node, values) {
   Object.assign(node.config, values);
@@ -1441,7 +1442,7 @@ function connectedOptimizationCsv(nodeId) {
 export async function renderOptimizationWorkspace(container, nodeId = null) {
   const request = beginStudioRender(container);
   if (!request) return;
-  const artifacts = await apiRequest("/api/files?kind=artifact");
+  const artifacts = await apiRequest("/api/files?kind=csv");
   if (!isCurrentStudioRender(container, request)) return;
   const q = selector => $(selector, container);
   const csvFiles = artifacts.items.filter(item => item.extension === ".csv");
@@ -2444,7 +2445,7 @@ export async function renderComparisonWorkspace(container, nodeId = null) {
   const request = beginStudioRender(container);
   if (!request) return;
   const [artifacts, metricCatalog] = await Promise.all([
-    apiRequest("/api/files?kind=artifact"),
+    apiRequest("/api/files?kind=csv"),
     apiRequest("/api/training-metrics")
   ]);
   if (!isCurrentStudioRender(container, request)) return;
@@ -2716,13 +2717,14 @@ export async function renderExportWorkspace(container, nodeId = null) {
 }
 
 export async function renderLiveWorkspace(sectionId, request = activeStudioWorkspace) {
-  if (!state.api.connected || !["models", "data", "experiments", "artifacts", "docs", "system", "benchmarks", "deploy", "optimization", "evaluation", "comparison", "export"].includes(sectionId)) return;
+  if (!state.api.connected || !["geometry", "models", "data", "experiments", "artifacts", "docs", "system", "benchmarks", "deploy", "optimization", "evaluation", "comparison", "export"].includes(sectionId)) return;
   if (!isActiveStudioRequest(request)) return;
   const section = STUDIO_SECTIONS[sectionId];
   const container = liveShell(section.title, section.description, request);
   if (!container) return;
   const nodeId = request.nodeId;
   try {
+    if (sectionId === "geometry") await mountGeometryExplorer(container);
     if (sectionId === "models") await renderModelsWorkspace(container);
     if (sectionId === "data") await renderFilesWorkspace(container, "dataset");
     if (sectionId === "experiments") await renderJobsWorkspace(container);

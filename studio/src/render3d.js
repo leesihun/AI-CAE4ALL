@@ -97,6 +97,23 @@ function finiteOr(value, fallback) {
 
 /** Order the model axes by extent so the widest pair faces the viewer. */
 function axisFrame(sample) {
+  // Interactive generators can provide a fixed physical frame. Ordinary
+  // artifact viewers keep the existing automatic framing when it is absent.
+  const supplied = sample.viewFrame;
+  if (supplied?.order?.length === 3 && supplied?.center?.length === 3
+      && supplied.order.every(name => ["x", "y", "z"].includes(name))
+      && new Set(supplied.order).size === 3
+      && supplied.center.every(Number.isFinite)) {
+    const axes = ["x", "y", "z"].map((name, index) => ({
+      name, index, center: supplied.center[index], extent: 1,
+      sign: supplied.signs?.[index] === -1 ? -1 : 1
+    }));
+    return {
+      axes, order: supplied.order.map(name => axes.find(axis => axis.name === name)),
+      planar: Boolean(supplied.planar),
+      radius: Number.isFinite(supplied.radius) && supplied.radius > 0 ? supplied.radius : null
+    };
+  }
   const axes = ["x", "y", "z"].map((name, index) => {
     const values = sample[name] || [];
     let low = Infinity;
@@ -133,9 +150,9 @@ function buildGeometry(sample) {
   const nodeValues = new Float32Array(nodeCount);
   let radius = 0;
   for (let index = 0; index < nodeCount; index += 1) {
-    const h = finiteOr(source[horizontal.name][index], horizontal.center) - horizontal.center;
-    const v = finiteOr(source[vertical.name][index], vertical.center) - vertical.center;
-    const d = finiteOr(source[depth.name][index], depth.center) - depth.center;
+    const h = (finiteOr(source[horizontal.name][index], horizontal.center) - horizontal.center) * (horizontal.sign || 1);
+    const v = (finiteOr(source[vertical.name][index], vertical.center) - vertical.center) * (vertical.sign || 1);
+    const d = (finiteOr(source[depth.name][index], depth.center) - depth.center) * (depth.sign || 1);
     positions[index * 3] = h;
     positions[index * 3 + 1] = v;
     positions[index * 3 + 2] = d;
@@ -210,7 +227,7 @@ function buildGeometry(sample) {
     faceValues,
     faceCount,
     edgeIndices,
-    radius: radius || 1,
+    radius: frame.radius || radius || 1,
     constant,
     domain: [statLow, statHigh],
     range: constant ? [statLow - 0.5, statLow + 0.5] : [statLow, statHigh]

@@ -42,7 +42,7 @@ class StaticAllowlistTests(unittest.TestCase):
             return exc.code, exc.headers
 
     def test_public_app_assets_and_export_download_are_served(self) -> None:
-        for path in ("/", "/index.html", "/styles.css", "/src/main.js", "/runtime/exports/static-allowlist-test.txt"):
+        for path in ("/", "/index.html", "/styles.css", "/geometry-explorer.css", "/src/main.js", "/src/geometry-explorer.js", "/runtime/exports/static-allowlist-test.txt"):
             status, headers = self.status(path)
             self.assertEqual(status, 200, path)
             self.assertEqual(headers["X-Frame-Options"], "DENY")
@@ -74,6 +74,23 @@ class StaticAllowlistTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, 500)
         self.assertEqual(body["error"], "RuntimeError: probe failed")
         self.assertNotIn("trace", body)
+
+    def test_geometry_routes_dispatch_without_running_a_model(self) -> None:
+        routes = [
+            ("GET", "/api/geometry-explorer/profiles", "profiles", None, 200),
+            ("GET", "/api/geometry-explorer/jobs?id=native-job", "job", "native-job", 200),
+            ("POST", "/api/geometry-explorer/generate", "generate", {"profile": "car", "alpha": .137}, 201),
+            ("POST", "/api/geometry-explorer/analyze", "analyze", {"generation_id": "native-job"}, 201),
+        ]
+        for method, path, function, payload, status in routes:
+            with self.subTest(path=path), patch(f"studio_backend.http_handler.geometry_explorer.{function}", return_value={"ok": True}) as call:
+                request = Request(self.base + path, method=method,
+                                  data=json.dumps(payload).encode() if method == "POST" else None,
+                                  headers={"Content-Type": "application/json"} if method == "POST" else {})
+                with urlopen(request, timeout=3) as response:
+                    self.assertEqual(response.status, status)
+                    self.assertEqual(json.loads(response.read()), {"ok": True})
+                call.assert_called_once_with(*([] if payload is None else [payload]))
 
 
 if __name__ == "__main__":
