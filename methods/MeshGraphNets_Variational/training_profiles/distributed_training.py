@@ -260,6 +260,7 @@ def _train_worker_inner(rank, world_size, config, gpu_ids, config_filename):
 
     modelname = config.get('modelpath')
     use_vae = config.get('use_vae', False)
+    reg_name = str(config.get('latent_reg', 'mmd')).lower().strip()
     # Number of prior samples per graph used for the CRPS validation score
     # (consumed inside evaluate_vae_learned_prior_epoch); validate it here.
     if use_vae and int(config.get('vae_valid_prior_samples', 8)) < 1:
@@ -298,10 +299,10 @@ def _train_worker_inner(rank, world_size, config, gpu_ids, config_filename):
         dist.all_reduce(train_totals, op=dist.ReduceOp.SUM)
         train_loss = (train_totals[0] / train_totals[1]).item()
 
-        if use_vae and 'mmd_mean' in train_metrics:
-            mmd_tensor = torch.tensor([train_metrics['mmd_mean']], device=device, dtype=torch.float64)
-            dist.all_reduce(mmd_tensor, op=dist.ReduceOp.SUM)
-            train_metrics['mmd_mean'] = (mmd_tensor[0] / world_size).item()
+        if use_vae and 'reg_mean' in train_metrics:
+            reg_tensor = torch.tensor([train_metrics['reg_mean']], device=device, dtype=torch.float64)
+            dist.all_reduce(reg_tensor, op=dist.ReduceOp.SUM)
+            train_metrics['reg_mean'] = (reg_tensor[0] / world_size).item()
         if use_vae and 'total_mean' in train_metrics:
             total_tensor = torch.tensor(
                 [train_metrics['total_mean'] * train_metrics['count']],
@@ -364,8 +365,8 @@ def _train_worker_inner(rank, world_size, config, gpu_ids, config_filename):
                     crps_str = f" | CRPS  {valid_learned_prior_metrics['crps']:.2e}"
                 print(
                     f"Epoch {epoch}/{config['training_epochs']} LR: {current_lr:.2e} | "
-                    f"Train  recon={train_loss:.2e} mmd={train_metrics.get('mmd_mean', 0.0):.2e} total={train_metrics.get('total_mean', train_loss):.2e} | "
-                    f"Valid  recon={valid_loss:.2e} mmd={valid_metrics.get('mmd_mean', 0.0):.2e} total={valid_metrics.get('total_mean', valid_loss):.2e}"
+                    f"Train  recon={train_loss:.2e} {reg_name}={train_metrics.get('reg_mean', 0.0):.2e} total={train_metrics.get('total_mean', train_loss):.2e} | "
+                    f"Valid  recon={valid_loss:.2e} {reg_name}={valid_metrics.get('reg_mean', 0.0):.2e} total={valid_metrics.get('total_mean', valid_loss):.2e}"
                     f"{crps_str}{vram_str}"
                 )
             else:
@@ -415,8 +416,8 @@ def _train_worker_inner(rank, world_size, config, gpu_ids, config_filename):
                     f.write(
                         f"Elapsed: {time.time() - start_time:.2f}s "
                         f"Epoch {epoch} LR: {current_lr:.4e} | "
-                        f"Train recon={train_loss:.4e} mmd={train_metrics.get('mmd_mean', 0.0):.4e} total={train_metrics.get('total_mean', train_loss):.4e} | "
-                        f"Valid recon={valid_loss:.4e} mmd={valid_metrics.get('mmd_mean', 0.0):.4e} total={valid_metrics.get('total_mean', valid_loss):.4e}"
+                        f"Train recon={train_loss:.4e} {reg_name}={train_metrics.get('reg_mean', 0.0):.4e} total={train_metrics.get('total_mean', train_loss):.4e} | "
+                        f"Valid recon={valid_loss:.4e} {reg_name}={valid_metrics.get('reg_mean', 0.0):.4e} total={valid_metrics.get('total_mean', valid_loss):.4e}"
                         f"{crps_str}{vram_str}\n"
                     )
                 else:

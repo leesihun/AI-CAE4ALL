@@ -11,8 +11,9 @@ def build_parser() -> argparse.ArgumentParser:
         prog="run_inference",
         description="Stand-alone CPU inference for the packaged AI-CAE4ALL checkpoints "
                      "(point_deeponet, deeponet, fno, transolver, "
-                     "meshgraphnets, meshgraphnets-v, sdfflow). cHI-MGNflow, "
-                     "MLP, and SimulGen-VAE use their native suite inference. The family is "
+                     "meshgraphnets, meshgraphnets-v with latent_type global, sdfflow). "
+                     "Local/hybrid-latent MGN-V, MLP, and SimulGen-VAE use their native "
+                     "suite inference. The family is "
                      "auto-detected from the checkpoint -- just point it at a .pth.",
     )
     p.add_argument("--checkpoint", required=True, help="Path to the .pth checkpoint.")

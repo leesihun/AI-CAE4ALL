@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
-# B300 round 2 of this method's sweep. One 8-GPU node per method, both studies
-# at once, so every card holds one SAOI job and one shell-buckling job:
+# B300 round 2 of the MGN-V sweep. One 8-GPU node, both studies at once, so
+# every card holds one SAOI job and one shell-buckling job:
 #
-#   node 1:  cd configs/HI_MGNFlow/hyperparameter_sweep && ./run_sweep.sh
-#   node 2:  cd configs/MeshGraphNets_Variational/hyperparameter_sweep && ./run_sweep.sh
+#   cd configs/MeshGraphNets_Variational/hyperparameter_sweep && ./run_sweep.sh
 #
-# The same file sits, byte for byte, in both directories, and the directory it
-# runs from picks the method. No argument and no nohup: the checks (stages 1-3
+# (The HI-MGNflow twin of this script went with that route on 2026-10-19: it
+# was merged into meshgraphnets-v as latent_type local, and its old repo and
+# configs are in junk/legacy_HI_MGNFlow/.)
+# No argument and no nohup: the checks (stages 1-3
 # below, both studies) run in the terminal, and when they pass the jobs go to
 # the background on their own, so the terminal can close.
-#   progress:  tail -f output/b300_r2/run_sweep_<chi|mgnv>.out
-#   result:    python configs/<method>/hyperparameter_sweep/brief.py
+#   progress:  tail -f output/b300_r2/run_sweep_mgnv.out
+#   result:    python configs/MeshGraphNets_Variational/hyperparameter_sweep/brief.py
 # The run log ends with one block between "==== TYPE THIS BACK ====" and
 # "==== END ====" (brief.py): both studies of this method, short enough to
 # retype. brief.py prints the same block at any time while the run goes.
@@ -18,10 +19,8 @@
 #
 # THE JOBS (README.md has the questions; every config header names its change)
 #   SAOI           arm x board half, configs in SAOI/:
-#     c_smp c_grp c_grp_rep c_nopart  x {bot,top}    cHI-MGNflow
 #     v_smp v_grp v_grp_rep v_nopart  x {bot,top}    MeshGraphNets-V
 #   probabilistic  one job per arm (ex3.h5 -> ex3_infer.h5), configs in probabilistic/:
-#     c_full_g512 c_full c_full_rep c_full_b4 c_full_g256 c_full_w128 c_full_short c_tok
 #     v_base v_rep v_mp8 v_mp8_pmin01 v_mp8_aux100 v_mp8_mmd10 v_mp12 v_mp8_w256
 #   Job k of each study runs on card k. A slot that finishes takes the next
 #   unclaimed job of its own study, so fewer GPUs also work.
@@ -30,7 +29,7 @@
 #   1. environment  launcher python imports cae_suite; this method's
 #                   interpreter imports torch / torch_geometric / h5py and runs
 #                   a bf16 matmul and a scatter on this GPU; this checkout has
-#                   split_group_attr (and prior_global, for cHI-MGNflow).
+#                   split_group_attr.
 #   2. data         (SAOI) SAOI/saoi_heldout.py: geometry labels -> the
 #                   *_bygeom.h5 training copies, held-out part files and this
 #                   method's configs for them; then every dataset a config
@@ -45,10 +44,10 @@
 #                   inference does not stop the next one.
 #   5. summary      ok / the failed stage per job, with its log tail.
 #
-# Status for brief.py: output/b300_r2/<saoi|ex3>/run_logs/<chi|mgnv>/status/
+# Status for brief.py: output/b300_r2/<saoi|ex3>/run_logs/mgnv/status/
 # <job>.{state,err,train_start,train_end,inferfail} and _abort. Stdout per
-# stage: run_logs/<chi|mgnv>/<job>.<stage>.out; each study's whole log:
-# run_logs/<chi|mgnv>/sweep_<time>.out.
+# stage: run_logs/mgnv/<job>.<stage>.out; each study's whole log:
+# run_logs/mgnv/sweep_<time>.out.
 #
 # Useful overrides, in front of the command (GPUS="0 1 2 3" ./run_sweep.sh):
 #   PYTHON (launcher), METHOD_PYTHON (this method), GPUS (default: every GPU
@@ -56,9 +55,9 @@
 #   PROBE_TIMEOUT=900, PREFLIGHT=1, TRAIN=1, INFER=1,
 #   DETACH=1 (0 keeps the jobs in this terminal; the default when stdout is
 #   not a terminal, e.g. under nohup),
-#   JOBS="c_grp.bot c_grp.top" (a subset of one study, in this order)
+#   JOBS="v_grp.bot v_grp.top" (a subset of one study, in this order)
 # Inference-only rerun:  TRAIN=0 ./run_sweep.sh probabilistic
-# One job again:         JOBS=c_grp.bot ./run_sweep.sh SAOI
+# One job again:         JOBS=v_grp.bot ./run_sweep.sh SAOI
 #
 # The script calls itself: R2_PHASE=check runs stages 1-3 of one study in the
 # terminal, R2_PHASE=run is the background driver, and R2_PHASE=jobs runs
@@ -92,17 +91,12 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 cd "$REPO_ROOT" || exit 1
 
 case "$(basename "$(dirname "$SCRIPT_DIR")")" in
-    HI_MGNFlow)
-        M="chi"; LABEL="cHI-MGNflow"; MODEL_ID="chi-mgnflow"; SPEC_ID="chi-mgnflow"
-        METHOD_DIR="methods/HI_MGNFlow"
-        SAOI_ARMS="c_smp c_grp c_grp_rep c_nopart"
-        EX3_ARMS="c_full_g512 c_full c_full_rep c_full_b4 c_full_g256 c_full_w128 c_full_short c_tok" ;;
     MeshGraphNets_Variational)
         M="mgnv"; LABEL="MGN-V"; MODEL_ID="meshgraphnets-v"; SPEC_ID="meshgraphnets_variational"
         METHOD_DIR="methods/MeshGraphNets_Variational"
         SAOI_ARMS="v_smp v_grp v_grp_rep v_nopart"
         EX3_ARMS="v_base v_rep v_mp8 v_mp8_pmin01 v_mp8_aux100 v_mp8_mmd10 v_mp12 v_mp8_w256" ;;
-    *) echo "run_sweep.sh must sit in configs/HI_MGNFlow/ or configs/MeshGraphNets_Variational/hyperparameter_sweep/"; exit 2 ;;
+    *) echo "run_sweep.sh must sit in configs/MeshGraphNets_Variational/hyperparameter_sweep/"; exit 2 ;;
 esac
 
 GPUS="${GPUS:-}"
@@ -266,10 +260,6 @@ case "$JOBS_PER_GPU" in ''|*[!0-9]*|0) die "JOBS_PER_GPU='$JOBS_PER_GPU' is not 
 GPU_ARR=($GPUS)
 NG=${#GPU_ARR[@]}
 
-if [ "$M" = "chi" ]; then
-    grep -q "PRIOR_GLOBAL_MODES" "$METHOD_DIR/model/autoencoder.py" \
-        || die "this checkout has no prior_global ($METHOD_DIR/model/autoencoder.py): every token arm would train without it. Pull first."
-fi
 grep -q "split_group_attr" "$METHOD_DIR/general_modules/mesh_dataset.py" \
     || die "this checkout's $METHOD_DIR has no split_group_attr: the grouped arms would split by sample. Pull first."
 
@@ -414,7 +404,7 @@ if [ "$PHASE" = "check" ]; then
 fi
 
 # The hierarchy caches are sweep-private, one per study, method and coarsening
-# (<saoi|ex3>/mscache/<chi|mgnv>_<coarsening>). A cache left by an aborted run
+# (<saoi|ex3>/mscache/mgnv_<coarsening>). A cache left by an aborted run
 # may hold a half-written variant; start clean.
 if [ "$TRAIN" = "1" ]; then
     for d in "$OUT_ROOT/mscache/${M}"_*; do

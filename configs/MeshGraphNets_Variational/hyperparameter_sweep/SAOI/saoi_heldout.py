@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """SAOI geometry labels and held-out parts for the B300 round-2 SAOI node.
 
-The same file sits, byte for byte, in configs/HI_MGNFlow/hyperparameter_sweep/SAOI/
-and configs/MeshGraphNets_Variational/hyperparameter_sweep/SAOI/. Each
-method's run_sweep.sh runs it with --method chi|mgnv before any preflight;
-the two runners of one node may start it at the same moment, so it holds a
-lock on output/b300_r2/saoi/heldout/ and leaves every file that is already
-right untouched. Safe to rerun.
+run_sweep.sh runs it with --method mgnv before any preflight. (Its
+HI-MGNflow twin went with that route on 2026-10-19: it was merged into
+meshgraphnets-v as latent_type local, and its old repo and configs are in
+junk/legacy_HI_MGNFlow/.) Two runners may still start it at the same moment,
+so it holds a lock on output/b300_r2/saoi/heldout/ and leaves every file that
+is already right untouched. Safe to rerun.
 
 Per board half this script
 
@@ -28,17 +28,17 @@ Per board half this script
      rows -- the infer/compare contract of every SAOI eval pair;
   5. writes, for every arm of the chosen method(s), one inference config per
      cut part into
-         output/b300_r2/saoi/heldout/configs/<chi|mgnv>/
+         output/b300_r2/saoi/heldout/configs/mgnv/
      derived from that arm's s26fe_main config (part, output dir and draw
      count change; nothing else), and the plan into heldout/split_<half>.json.
 
-The same parts are read by every arm. For c_smp / v_smp (random sample split)
+The same parts are read by every arm. For v_smp (random sample split)
 they are SEEN parts -- about 80% of their realizations were trained on, and
 split_<half>.json records the exact share. For the grp and nopart arms they
 are UNSEEN geometries. That pairing is the generalization gap at fixed parts.
 
-    python saoi_heldout.py                # both halves, both methods' configs
-    python saoi_heldout.py --method chi   # both halves, cHI-MGNflow configs only (what run_sweep.sh does)
+    python saoi_heldout.py                # both halves, MGN-V configs
+    python saoi_heldout.py --method mgnv  # the same (what run_sweep.sh does)
     python saoi_heldout.py --plan-only    # grouping and split only; writes no HDF5
 """
 import argparse
@@ -64,17 +64,13 @@ CUT_DIR = OUT_DIR / "data"
 CONFIG_OUT = OUT_DIR / "configs"     # one subdirectory per method
 CUT_REL = "../../output/b300_r2/saoi/heldout/data"     # as a config spells it (cwd = methods/<Name>/)
 
-SPLIT_SRC = {"chi": REPO_ROOT / "methods" / "HI_MGNFlow" / "general_modules" / "grouped_split.py",
-             "mgnv": REPO_ROOT / "methods" / "MeshGraphNets_Variational" / "general_modules" / "grouped_split.py"}
-CFG_DIRS = {"chi": REPO_ROOT / "configs" / "HI_MGNFlow" / "hyperparameter_sweep" / "SAOI",
-            "mgnv": REPO_ROOT / "configs" / "MeshGraphNets_Variational" / "hyperparameter_sweep" / "SAOI"}
-ARMS = {"chi": ["c_smp", "c_grp", "c_grp_rep", "c_nopart"],
-        "mgnv": ["v_smp", "v_grp", "v_grp_rep", "v_nopart"]}
-SMP_ARMS = {"c_smp", "v_smp"}
-GRP_REF = {"chi": "c_grp", "mgnv": "v_grp"}  # whose train config the split is read from
+SPLIT_SRC = {"mgnv": REPO_ROOT / "methods" / "MeshGraphNets_Variational" / "general_modules" / "grouped_split.py"}
+CFG_DIRS = {"mgnv": REPO_ROOT / "configs" / "MeshGraphNets_Variational" / "hyperparameter_sweep" / "SAOI"}
+ARMS = {"mgnv": ["v_smp", "v_grp", "v_grp_rep", "v_nopart"]}
+SMP_ARMS = {"v_smp"}
 
-sys.path.insert(0, str(SPLIT_SRC["chi"].parent))
-from grouped_split import grouped_split_ids  # noqa: E402  the function both trainers call
+sys.path.insert(0, str(SPLIT_SRC["mgnv"].parent))
+from grouped_split import grouped_split_ids  # noqa: E402  the function the trainer calls
 
 ATTR = "geometry_id"
 TRAIN_RATIO, VAL_RATIO = 0.8, 0.1    # mesh_dataset.build_dataset_splits hardcodes 0.8 / 0.1 / 0.1
@@ -196,8 +192,8 @@ def subset_matches(src, dst, sample_ids):
 def write_subset(src, dst, sample_ids):
     """Copy the chosen samples (and the file's metadata) into a new HDF5, atomically.
 
-    An existing cut that already holds them stays as it is: the other method's
-    runner may be about to read it.
+    An existing cut that already holds them stays as it is: another runner
+    may be about to read it.
     """
     if subset_matches(src, dst, sample_ids):
         return
@@ -269,7 +265,7 @@ def derive_config(method, arm, half, es, draws):
 
 @contextlib.contextmanager
 def heldout_lock():
-    """One writer at a time: both methods' runners start this script together."""
+    """One writer at a time: two runners may start this script together."""
     with open(OUT_DIR / ".lock", "a+") as fh:
         try:
             import fcntl
@@ -311,14 +307,11 @@ def main():
     ap.add_argument("--decimals", type=int, default=5,
                     help="rounding of coordinates/conditions in the grouping key")
     ap.add_argument("--plan-only", action="store_true", help="group and split only: no copy, no cuts, no configs")
-    ap.add_argument("--method", choices=["chi", "mgnv", "both"], default="both",
-                    help="whose inference configs to write (the cuts and the split are shared)")
+    ap.add_argument("--method", choices=["mgnv", "both"], default="both",
+                    help="whose inference configs to write; 'both' (kept for old command lines) "
+                         "means every method in ARMS, now MGN-V only")
     args = ap.parse_args()
     args.methods = list(ARMS) if args.method == "both" else [args.method]
-
-    if SPLIT_SRC["chi"].read_bytes() != SPLIT_SRC["mgnv"].read_bytes():
-        sys.exit("SAOI_HELDOUT FAIL grouped_split.py differs between HI_MGNFlow and MeshGraphNets_Variational: "
-                 "the two methods would hold out different geometries")
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     with heldout_lock():

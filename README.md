@@ -104,7 +104,7 @@ results by path; they do not embed datasets or model weights. The library has
 | Training controls | Configure architecture, feature selection/loss weights, normalization, split seeds, epoch/batch/LR schedules, validation cadence, and output paths where supported. |
 | Efficiency controls | Select supported AMP, EMA, activation checkpointing, compilation, or query chunking settings. |
 | Multi-GPU training | Use each runtime's supported DDP, model/node partitioning, or FSDP modes; the accepted modes differ by family. |
-| Multi-stage training | Run SDFFlow VAE → FM, cHI-MGNflow AE → latent flow, or SimulGenVAE VAE → latent conditioner together or as separate stages. |
+| Multi-stage training | Run SDFFlow VAE → FM or SimulGenVAE VAE → latent conditioner together or as separate stages. |
 | Training resume | Supported runtimes restore optimizer, scheduler, RNG, and stage state from resume sidecars in single-process training. MLP and multiprocess resume are outside this support. |
 | Smoke runs | Apply short-run settings; the SimulGenVAE smoke recipe can create a real fixed-geometry CPU fixture. |
 | Preflight and repair | Validate the effective config in the selected method's interpreter; follow diagnostics to the failing block or field. |
@@ -332,8 +332,9 @@ format or package every model family.
 
 The portable bundle supports **seven model IDs through five drivers**:
 `point_deeponet`, `deeponet`, `fno`, `transolver`, `meshgraphnets`,
-`meshgraphnets-v`, and `sdfflow`. It is CPU-only and supports one family per
-process. cHI-MGNflow, MLP, and SimulGenVAE use their native routes. The local
+`meshgraphnets-v` (`latent_type global` only), and `sdfflow`. It is CPU-only
+and supports one family per process. Local/hybrid-latent `meshgraphnets-v`,
+MLP, and SimulGenVAE use their native routes. The local
 inference API starts a batch job; see the [portable inference guide](docs/guides/inference-bundle.md)
 for packaging and compatibility requirements.
 
@@ -397,7 +398,7 @@ in a clone. Design-generation templates need compatible trained checkpoints.
 
 ## Models
 
-The launcher exposes **11 model IDs and 32 operation routes across nine native
+The launcher exposes **10 model IDs and 28 operation routes across eight native
 runtimes**. `geometry_ingest` prepares data; it does not train a model. HI-MGN
 is the multiscale configuration of the `meshgraphnets` route.
 
@@ -408,8 +409,7 @@ is the multiscale configuration of the `meshgraphnets` route.
 | Neural operators | DeepONet (`deeponet`) | `train`, `inference` |
 | Neural operators | Point-DeepONet (`point_deeponet`) | `train`, `inference` |
 | Neural operators | FNO (`fno`) | `train`, `inference` |
-| Conditional field generation | MeshGraphNets-V (`meshgraphnets-v`) | `train`, `inference` |
-| Conditional field generation | [cHI-MGNflow](methods/HI_MGNFlow/) (`chi-mgnflow`) | `train`, `train_ae`, `train_prior`, `inference` |
+| Conditional field generation | MeshGraphNets-V / HI-MGN-V / HI-MGNflow / HI-MGN-hybrid (`meshgraphnets-v`, `latent_type global`/`local`/`hybrid`) | `train`, `inference` |
 | Fixed-geometry fields | SimulGenVAE (`simulgenvae`) | `train`, `train_vae`, `train_lc`, `reconstruct` |
 | Geometry generation | SDFFlow (`sdfflow`) | `train`, `train_vae`, `train_fm`, `sample`, `reconstruct`, `interpolate`, `optimize`, `evaluate` |
 | Tabular response prediction | MLP (`mlp`) | `train`, `inference` |
@@ -420,8 +420,7 @@ is the multiscale configuration of the `meshgraphnets` route.
 | Family | Supported choices |
 | --- | --- |
 | MeshGraphNets / HI-MGN / BSMS | Flat or multilevel graph processing; FPS/Voronoi or BFS bi-stride coarsening; per-level depths and cluster budgets; mean/attention pooling, sum/attention lifting, broadcast ablations, world edges, and hierarchy caches. Static fields and compatible temporal rollouts. |
-| MeshGraphNets-V | Graph-aware posterior encoding, latent conditioning, multiscale backbones, conditional flow-matching or supported legacy priors, and multiple predicted field samples. |
-| cHI-MGNflow | Hierarchical field autoencoding followed by conditional flow matching; separate AE/prior stages and deterministic or ensemble readout. |
+| MeshGraphNets-V | Graph-aware posterior encoding, latent conditioning, multiscale backbones, conditional flow-matching or supported legacy priors, and multiple predicted field samples. `latent_type` places the latent: one global vector (HI-MGN-V), `latent_ch` channels per coarsest node with a coarse-node flow prior (HI-MGNflow), or both (HI-MGN-hybrid); `latent_reg` is `mmd` or `kl`. HI-MGNflow (`chi-mgnflow`) was merged into `meshgraphnets-v` as `latent_type local` on 2026-10-19; the old repo is in `junk/legacy_HI_MGNFlow/`. |
 | DeepONet | Fixed-sensor branch and coordinate trunk for field prediction, with supported branch/condition choices. |
 | Point-DeepONet | PointNet branch, SIREN coordinate trunk, and point/query decoding with supported sampling/refinement choices. |
 | FNO | Fourier field operators with mesh/grid adapters and configurable grid, modes, width, and depth. |
@@ -438,7 +437,7 @@ or architecture controls interchangeable.
 
 | Data kind | Stored content | Used by |
 | --- | --- | --- |
-| Mesh fields | Per-sample `nodal_data[F,T,N]` and mesh connectivity; coordinate rows precede physical fields and input-only conditions. | MeshGraphNets families, cHI-MGNflow, operators, Transolver; fixed-size constraints also apply to SimulGenVAE. |
+| Mesh fields | Per-sample `nodal_data[F,T,N]` and mesh connectivity; coordinate rows precede physical fields and input-only conditions. | MeshGraphNets families, operators, Transolver; fixed-size constraints also apply to SimulGenVAE. |
 | SDF geometry | Shape surface points/normals, SDF queries/values, and optional conditions. | SDFFlow |
 | Scalar tables | `X[samples,inputs]`, `Y[samples,outputs]`, and optional column names. | MLP |
 

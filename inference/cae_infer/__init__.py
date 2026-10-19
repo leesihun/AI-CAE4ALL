@@ -31,8 +31,10 @@ def detect_family(checkpoint_path: str) -> str:
     - 'model_config' present (MGN-shaped, no
       'use_vae')                                 -> meshgraphnets
 
-    cHI-MGNflow and SimulGen-VAE are rejected rather than being routed through
-    the superficially similar MGN and stage='vae' signatures respectively.
+    Legacy HI-MGNflow (`chi-mgnflow`) checkpoints, MeshGraphNets-V checkpoints
+    with a non-global `latent_type` (HI-MGNflow / HI-MGN-hybrid placement), and
+    SimulGen-VAE are rejected rather than being routed through the
+    superficially similar MGN-V and stage='vae' signatures respectively.
     """
     ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
 
@@ -59,9 +61,18 @@ def detect_family(checkpoint_path: str) -> str:
         flow_keys = {"flow_time_freqs", "flow_t_sampling", "flow_solver"}
         if model_id == "chi-mgnflow" or flow_keys.intersection(model_config):
             raise ValueError(
-                "This is a cHI-MGNflow checkpoint. The portable CPU bundle does "
-                "not contain the cHI flow driver; run it through AI-CAE4ALL's "
-                "native cHI-MGNflow Inference block instead."
+                "This is a legacy HI-MGNflow (chi-mgnflow) checkpoint. That route "
+                "was merged into meshgraphnets-v (latent_type local) and its old "
+                "repo is archived in junk/legacy_HI_MGNFlow/; the portable CPU "
+                "bundle cannot run it."
+            )
+        latent_type = str(model_config.get("latent_type", "global")).lower().strip()
+        if latent_type != "global":
+            raise ValueError(
+                f"This is a MeshGraphNets-V checkpoint with latent_type "
+                f"'{latent_type}' (coarse-node latents + CoarseFMPrior). The "
+                "portable CPU bundle supports latent_type global only; run it "
+                "through AI-CAE4ALL's native meshgraphnets-v inference instead."
             )
         return "meshgraphnets_v" if "use_vae" in model_config else "meshgraphnets"
 

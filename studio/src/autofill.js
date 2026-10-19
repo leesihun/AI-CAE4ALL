@@ -351,7 +351,11 @@ function modelAutofill(desired, node) {
     const source = checkpointLink.node;
     const path = checkpointPaths(source).checkpoint_path;
     const filename = path.split(/[\\/]/).at(-1)?.toLowerCase() || "";
-    if (path && accepted.has("modelpath")) {
+    if (path && spec.modelId === "sar" && (/vae/.test(filename) || mode === "train_sar")) {
+      // SAR's train_sar stage reads a trained VAE and writes modelpath; a VAE
+      // checkpoint fed in is never the SAR model itself.
+      put(desired, node, "vae_modelpath", candidate(toMethodPath(path, spec.modelId), source, "VAE checkpoint from graph", checkpointLink.edge.fromPort));
+    } else if (path && accepted.has("modelpath")) {
       put(desired, node, "modelpath", candidate(toMethodPath(path, spec.modelId), source, "resume checkpoint from graph", checkpointLink.edge.fromPort));
     } else if (path && spec.modelId === "simulgenvae") {
       const key = /(?:^|[_-])lc(?:[_-]|\.)|condition/.test(filename)

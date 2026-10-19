@@ -90,6 +90,9 @@ def main():
         run_rollout(config, args.config)
 
     elif parallel_mode == 'model_split':
+        if str(config.get('latent_type', 'global')).lower().strip() != 'global':
+            raise ValueError("parallel_mode model_split supports latent_type global only: "
+                             "its stages carry z as a [B, num_z, D] tensor")
         from parallelism.launcher import launch_model_split
         launch_model_split(config, args.config)
 

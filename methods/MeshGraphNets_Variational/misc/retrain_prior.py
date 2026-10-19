@@ -233,6 +233,10 @@ def main():
     model = _load_model_from_checkpoint(c2, ck, dev)
     if getattr(model, 'prior', None) is None:
         raise SystemExit('checkpoint has no joint conditional prior to retrain')
+    if str(c2.get('latent_type', 'global')).lower().strip() != 'global':
+        raise SystemExit('retrain_prior caches [num_z, D] posteriors per sample; '
+                         'latent_type local/hybrid is not supported -- use '
+                         'prior_freeze_epoch in the training run instead')
 
     # ---- optionally rebuild the trunk at a larger size --------------------
     rebuilt = {}

@@ -1,15 +1,13 @@
 #!/usr/bin/env python3
 """A results block short enough to retype by hand, for the B300 sweeps.
 
-The same file sits, byte for byte, in configs/HI_MGNFlow/hyperparameter_sweep/
-and configs/MeshGraphNets_Variational/hyperparameter_sweep/; the directory it
-runs from picks the method of the round-2 block.
+The HI-MGNflow twin of this file (and round 1, which ran HI-MGNflow only)
+went with that route on 2026-10-19: it was merged into meshgraphnets-v as
+latent_type local, and its old repo and configs are in junk/legacy_HI_MGNFlow/.
 
-    python configs/HI_MGNFlow/hyperparameter_sweep/brief.py                # round 2, cHI-MGNflow, both studies
-    python configs/MeshGraphNets_Variational/hyperparameter_sweep/brief.py # the same for MGN-V
-    python configs/HI_MGNFlow/hyperparameter_sweep/brief.py SAOI           # one study (or probabilistic)
-    python configs/HI_MGNFlow/hyperparameter_sweep/brief.py r1             # round 1 (both datasets, cHI-MGNflow only)
-    python configs/HI_MGNFlow/hyperparameter_sweep/brief.py --long         # every number, not for typing
+    python configs/MeshGraphNets_Variational/hyperparameter_sweep/brief.py         # round 2, MGN-V, both studies
+    python configs/MeshGraphNets_Variational/hyperparameter_sweep/brief.py SAOI    # one study (or probabilistic)
+    python configs/MeshGraphNets_Variational/hyperparameter_sweep/brief.py --long  # every number, not for typing
 
 Standard library only; run it with any Python 3.8+, while the sweep runs or
 after it. It reads the checked-in configs for where each arm writes, then the
@@ -20,8 +18,7 @@ SAOI line   arm  Ow Os Ob  Hw Hs Hb  h
     O = the three official eval parts (s26fe_main, s26fe_sec, sm_l345u_main)
         on both board halves -- unseen parts for every arm.
     H = the held-out parts cut by saoi_heldout.py: SEEN parts for the
-        *_smp arms, UNSEEN geometries for the others (r1: T = the r1
-        train_parts kit, seen parts).
+        *_smp arms, UNSEEN geometries for the others.
     w = mean w1_norm          (distribution distance / truth sd; 0 is perfect)
     s = geometric-mean sd_ratio (generated width / true width; 100 is right)
     b = mean |dmean_norm|     (mean offset / truth sd; 0 is perfect)
@@ -44,29 +41,23 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.normpath(os.path.join(HERE, "..", "..", ".."))
-METHOD_DIR = os.path.basename(os.path.dirname(HERE))    # HI_MGNFlow | MeshGraphNets_Variational
-M = {"HI_MGNFlow": "chi", "MeshGraphNets_Variational": "mgnv"}.get(METHOD_DIR)
+METHOD_DIR = os.path.basename(os.path.dirname(HERE))    # MeshGraphNets_Variational
+M = {"MeshGraphNets_Variational": "mgnv"}.get(METHOD_DIR)
 OFFICIAL = ("s26fe_main", "s26fe_sec", "sm_l345u_main")
 HALVES = ("bot", "top")
 SWEEP = f"configs/{METHOD_DIR}/hyperparameter_sweep"
-R1 = "configs/HI_MGNFlow/hyperparameter_sweep"           # round 1 ran cHI-MGNflow only
 
 CAMPAIGNS = {
     "saoi": {"dirs": [f"{SWEEP}/SAOI"],
-             "order": ["c_smp", "c_grp", "c_grp_rep", "c_nopart", "v_smp", "v_grp", "v_grp_rep", "v_nopart"],
+             "order": ["v_smp", "v_grp", "v_grp_rep", "v_nopart"],
              "status": f"output/b300_r2/saoi/run_logs/{M}/status", "split": "output/b300_r2/saoi/heldout"},
     "ex3": {"dirs": [f"{SWEEP}/probabilistic"],
-            "order": ["c_tok", "c_full", "c_full_rep", "c_full_b4", "c_full_w128", "c_full_g256",
-                      "c_full_g512", "c_full_short", "v_base", "v_rep", "v_mp8", "v_mp12",
+            "order": ["v_base", "v_rep", "v_mp8", "v_mp12",
                       "v_mp8_pmin01", "v_mp8_aux100", "v_mp8_mmd10", "v_mp8_w256"],
             "status": f"output/b300_r2/ex3/run_logs/{M}/status"},
-    "r1_ex3": {"dirs": [f"{R1}/probabilistic/r1"],
-               "order": ["ctrl", "tok", "tok_b8", "tok_g64", "tok_kl", "tok_long", "tok_seed", "tok_w256"]},
-    "r1_saoi": {"dirs": [f"{R1}/SAOI/r1"],
-                "order": ["ctrl", "tok", "tok_c8", "tok_g50", "tok_kl", "tok_recon", "tok_seed", "tok_w256"]},
 }
 
-EPOCH_RE = re.compile(r"^(?:\[(AE|Prior)\] )?Elapsed: ([\d.]+)s Epoch (\d+)")
+EPOCH_RE = re.compile(r"^Elapsed: ([\d.]+)s Epoch (\d+)")
 
 
 def cfg(path):
@@ -137,9 +128,7 @@ class Job:
         self.model = method_path(c["modelpath"])
         self.root = os.path.dirname(self.model)
         self.log = method_path(c["log_file_dir"])
-        self.is_chi = c.get("model") == "chi-mgnflow"
-        self.ae_epochs = int(c.get("ae_epochs", 0)) if self.is_chi else 0
-        self.epochs = int(c.get("training_epochs", 0)) + self.ae_epochs
+        self.epochs = int(c.get("training_epochs", 0))
         jid = arm if half is None else f"{arm}.{half}"
         self.status = {}
         if status_dir:
@@ -152,9 +141,9 @@ class Job:
         for line in reversed(read_tail(self.log)):
             m = EPOCH_RE.match(line)
             if m:
-                done = int(m.group(3)) + 1 + (self.ae_epochs if m.group(1) == "Prior" else 0)
+                done = int(m.group(2)) + 1
                 frac = done / self.epochs if self.epochs else None
-                hours = float(m.group(2)) / 3600
+                hours = float(m.group(1)) / 3600
                 break
         return frac, hours
 
@@ -172,7 +161,7 @@ class Job:
         if st:
             return st
         if os.path.isfile(self.model):
-            return "done"   # round 1 kept no state file: a model means training finished
+            return "done"   # no state file: a model means training finished
         return "train" if os.path.isfile(self.log) else "pending"
 
     def failure(self):
@@ -265,13 +254,7 @@ def brief_saoi(camp, status_dir, long):
                         if k in m))
         hrs = [j.hours() for j in jobs]
         hrs = [h for h in hrs if h is not None]
-        cols = score_saoi_sets(O)
-        if camp == "r1_saoi":
-            cols += score_saoi_sets(T)
-            if H:
-                cols += ["H"] + score_saoi_sets(H)
-        else:
-            cols += score_saoi_sets(H)
+        cols = score_saoi_sets(O) + score_saoi_sets(H)
         cols.append(f"{max(hrs):.0f}" if hrs else "-")
         lines.append(f"{arm} " + " ".join(cols) + tail_flags(jobs))
     return lines, n_jobs, n_done, n_fail
@@ -328,24 +311,19 @@ def r2_block(which, long):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("which", nargs="?", type=str.lower, choices=["saoi", "probabilistic", "ex3", "r1"],
-                    help="SAOI | probabilistic (= ex3) for one study of round 2, r1 for round 1; "
-                         "none: both round-2 studies of this method")
+    ap.add_argument("which", nargs="?", type=str.lower, choices=["saoi", "probabilistic", "ex3"],
+                    help="SAOI | probabilistic (= ex3) for one study of round 2; "
+                         "none: both round-2 studies")
     ap.add_argument("--long", action="store_true", help="print every metric per eval set first")
     args = ap.parse_args()
     which = "ex3" if args.which == "probabilistic" else args.which
 
-    if which == "r1":
-        a, na, da, fa = brief_ex3("r1_ex3", None, args.long)
-        b, nb, db, fb = brief_saoi("r1_saoi", None, args.long)
-        block = [f"R1 ex3 D{da}/{na} F{fa}"] + a + [f"R1 saoi D{db}/{nb} F{fb} (Ow Os Ob Tw Ts Tb h)"] + b
-    else:
-        if M is None:
-            sys.exit(f"brief.py must sit in configs/<HI_MGNFlow|MeshGraphNets_Variational>/hyperparameter_sweep/, "
-                     f"not {HERE}")
-        block = []
-        for study in ([which] if which else ["saoi", "ex3"]):
-            block += r2_block(study, args.long)
+    if M is None:
+        sys.exit(f"brief.py must sit in configs/MeshGraphNets_Variational/hyperparameter_sweep/, "
+                 f"not {HERE}")
+    block = []
+    for study in ([which] if which else ["saoi", "ex3"]):
+        block += r2_block(study, args.long)
     print("==== TYPE THIS BACK ====")
     print("\n".join(block))
     print("==== END ====")

@@ -35,8 +35,10 @@ output/meshgraphnets-v/saoi_run/
 | `run_all.sh` | preflight → train → infer |
 | `check_eval_inputs.py` | verifies each `_infer_`/`_compare_` pair before any GPU work |
 
-Eval tags are `s26fe_main`, `s26fe_sec`, `sm_l345u_main`, matching
-`configs/HI_MGNFlow/SAOI_run/` so the two methods stay directly comparable.
+Eval tags are `s26fe_main`, `s26fe_sec`, `sm_l345u_main`, matching the
+retired HI-MGNflow `SAOI_run` (merged into `meshgraphnets-v` as
+`latent_type local` on 2026-10-19; old configs in `junk/legacy_HI_MGNFlow/`)
+so results stay directly comparable.
 
 These configs are written directly — there is no generator. The
 `SAOI_all_input` production profile they used to be rendered from is gone, so

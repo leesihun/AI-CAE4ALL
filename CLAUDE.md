@@ -19,20 +19,26 @@ live in [cae_suite/specs/](cae_suite/specs/):
 | --- | --- | --- | --- |
 | `meshgraphnets` | `methods/MeshGraphNets/` | `MeshGraphNets_main.py` | — |
 | `meshgraphnets-v` | `methods/MeshGraphNets_Variational/` | `MeshGraphNets_main.py` | — |
-| `chi-mgnflow` | `methods/HI_MGNFlow/` | `CHiMGNFlow_main.py` | — (see its README.md) |
 | `point_deeponet`, `deeponet`, `fno` | `methods/Neural_Operator/` | `main.py` | [yes](methods/Neural_Operator/CLAUDE.md) |
 | `transolver` | `methods/Transolver/` | `Transolver_main.py` | — |
 | `sdfflow` | `methods/SDFFlow/` | `SDFFlow_main.py` | [yes](methods/SDFFlow/CLAUDE.md) |
 | `simulgenvae` | `methods/SimulGenVAE/` | `SimulGenVAE_main.py` | [yes](methods/SimulGenVAE/CLAUDE.md) |
 | `mlp` | `methods/MLP/` | `MLP_main.py` | [yes](methods/MLP/CLAUDE.md) |
+| `sar` | `methods/SAR/` | `SAR_main.py` | — (see its [README.md](methods/SAR/README.md)) |
 | `geometry_ingest` | `methods/GeometryIngest/` | `main.py` | — (see its [README.md](methods/GeometryIngest/README.md)) |
 
 **Model ID and directory name do not always match**, because model IDs are
-frozen by every checked-in config: `chi-mgnflow` lives in `HI_MGNFlow/`,
-`sdfflow` in `SDFFlow/` (formerly `Geometry_generation/`), `meshgraphnets-v` in
-`MeshGraphNets_Variational/`. The spec's `repository=` field is the mapping.
+frozen by every checked-in config: `sdfflow` lives in `SDFFlow/` (formerly
+`Geometry_generation/`), `meshgraphnets-v` in `MeshGraphNets_Variational/`.
+The spec's `repository=` field is the mapping. Display names follow the latent
+placement, not the IDs: `meshgraphnets-v` with `use_multiscale` is
+**HI-MGN-V** (`latent_type global`, the default), **HI-MGNflow**
+(`latent_type local`, formerly "cHI-MGNflow") or **HI-MGN-hybrid**
+(`latent_type hybrid`). HI-MGNflow (`chi-mgnflow`) was merged into
+`meshgraphnets-v` as `latent_type local` on 2026-10-19; the old repo is in
+`junk/legacy_HI_MGNFlow/`, and the `chi-mgnflow` model ID no longer routes.
 
-The first eight are the ML methods. **`simulgenvae`** is a hierarchical VAE +
+All but `geometry_ingest` are ML methods. **`simulgenvae`** is a hierarchical VAE +
 latent conditioner for parametric simulation fields; structurally it mirrors
 `sdfflow` (a VAE stage + a second stage), with modes `train` (VAE→LC pipeline),
 `train_vae`, `train_lc`, and `reconstruct`, in-process multi-GPU via `mp.spawn`,
@@ -41,6 +47,14 @@ and stage-prefixed `vae_*`/`lc_*` config keys. It reads the **shared mesh HDF5**
 the physical field rows into a dense `[samples, channels, time]` tensor, so every
 sample must share the same node and timestep counts. See
 [methods/SimulGenVAE/CLAUDE.md](methods/SimulGenVAE/CLAUDE.md).
+
+**`sar`** is a port of the upstream SAR code (Lino & Thuerey 2026,
+scale-autoregressive flow matching in a graph-VAE latent; Apache-2.0, vendored
+in `methods/SAR/sar/`), kept as a one-to-many baseline beside MGN-V. A system is
+one geometry (`split_group_attr`, `shape_idx` on ex3) and its states are that
+geometry's draws; modes `train`/`train_vae`/`train_sar`/`inference`, the last
+writing MGN-V's spread files and rollout layout. Its README lists every
+deviation from upstream.
 
 **`mlp` is the odd one out among them**: a parametric surrogate (N scalar inputs →
 M scalar outputs) that is **tabular, not mesh** — it reads an `X[S,N]`/`Y[S,M]`
@@ -89,7 +103,8 @@ AI-CAE4ALL/
 ```
 
 > The `output/` **subdirectory** names are historical and deliberately left
-> alone: `output/geometry_generation/` (SDFFlow), `output/chi-mgnflow/`,
+> alone: `output/geometry_generation/` (SDFFlow), `output/chi-mgnflow/`
+> (runs of the retired HI-MGNflow route, kept as history),
 > `output/meshgraphnets-v/`. They name runs, not directories in the tree.
 
 ## Commands
@@ -245,8 +260,8 @@ resuming trainer calls `iter(loader)` on each one *before* `resume.restore_rng()
 and before restoring any loader generator; otherwise that draw consumes the
 restored stream and every later shuffle shifts. RNG used *inside* workers is not
 restored, so two cases resume statistically equivalent, not bit-identical:
-SDFFlow's VAE surface subsampling with `vae_num_workers > 0`, and the MGN-V /
-HI_MGNFlow `_pick_hierarchy_variant` draw with `num_workers > 0` and
+SDFFlow's VAE surface subsampling with `vae_num_workers > 0`, and the MGN-V
+`_pick_hierarchy_variant` draw (every `latent_type`) with `num_workers > 0` and
 `hierarchy_variants > 1`.
 
 ### Periodic visualization (every method that trains)
@@ -260,9 +275,10 @@ the method predicts:
 
 | method | picture |
 | --- | --- |
-| MeshGraphNets, MGN-V, HI-MGNflow, Neural_Operator, **Transolver** | mesh HDF5 + a 2×2 PNG (predicted vs truth × normalized vs denormalized) on the reconstructed surface, coloured by `plot_feature_idx` |
+| MeshGraphNets, MGN-V (every `latent_type`), Neural_Operator, **Transolver** | mesh HDF5 + a 2×2 PNG (predicted vs truth × normalized vs denormalized) on the reconstructed surface, coloured by `plot_feature_idx` |
 | MLP | parity plot of the held-out split, one panel per output column |
 | SimulGenVAE | truth / reconstruction / \|error\| field images (VAE) and a latent parity plot (LC) |
+| SAR | VAE parity scatter per output channel; SAR spread histogram (FEA draws vs samples) for one system |
 | SDFFlow | a strip of the reconstructed (VAE) or generated (FM) shapes, beside the STLs |
 | GeometryIngest | `preview` renders the first ingested samples; in `mode inspect` it is the only output |
 
@@ -362,8 +378,8 @@ Rules that are load-bearing, not style:
 - **Templates are default profiles, not demos.** Every live route has one in
   `TEMPLATES`, each mirroring a checked-in config, and each must pass Validate
   on a fresh checkout. A new route needs a template too — a spec added after the
-  last GUI audit is invisible to it (this is exactly how `chi-mgnflow` shipped
-  with none).
+  last GUI audit is invisible to it (this is exactly how the since-retired
+  `chi-mgnflow` route shipped with none).
 - **The held-out split is its own source block.** Wiring the training dataset
   into an Inference block makes the graph say "predict what you trained on", and
   the graph wins over the trainer's `infer_dataset`.

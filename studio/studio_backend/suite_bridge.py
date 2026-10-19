@@ -196,7 +196,6 @@ def benchmark_roster() -> dict[str, Any]:
 STANDALONE_INFERENCE_MODELS = (
     "meshgraphnets",
     "meshgraphnets-v",
-    "chi-mgnflow",
     "transolver",
     "fno",
     "deeponet",
@@ -214,8 +213,6 @@ _REPOSITORY_MODEL_HINTS = {
     "meshgraphnets - variational": "meshgraphnets-v",
     "meshgraphnets-v": "meshgraphnets-v",
     "hi_meshgraphnets": "meshgraphnets",
-    "chi-mgnflow": "chi-mgnflow",
-    "chi_mgnflow": "chi-mgnflow",
     "geometry_generation": "sdfflow",
     "simulgenvae": "simulgenvae",
     "transolver": "transolver",
@@ -223,6 +220,7 @@ _REPOSITORY_MODEL_HINTS = {
     "fno": "fno",
     "deeponet": "deeponet",
     "point_deeponet": "point_deeponet",
+    "sar": "sar",
 }
 
 
@@ -239,11 +237,12 @@ def _model_from_path(path: Path) -> str:
 def _model_from_architecture(model_config: dict[str, Any]) -> str:
     """Guess the model family from architecture keys only that family writes."""
     keys = set(model_config)
-    # cHI-MGNflow shares the whole HI-MGN backbone with MeshGraphNets, so its
-    # flow keys must be checked first or an old checkpoint that predates the
-    # explicit `model` identity is silently classified as deterministic MGN.
+    # A checkpoint of the retired flow-prior route carries the whole HI-MGN
+    # backbone plus these flow keys. No live route can load it (MeshGraphNets-V
+    # `latent_type local` is a different architecture), so it is left
+    # unidentified rather than silently classified as deterministic MGN below.
     if {"flow_time_freqs", "flow_t_sampling", "flow_solver"} & keys:
-        return "chi-mgnflow"
+        return ""
     if {"slice_num", "attention_kernel"} & keys:
         return "transolver"
     if {"fno_modes", "fno_hidden_channels"} & keys:
@@ -256,7 +255,7 @@ def _model_from_architecture(model_config: dict[str, Any]) -> str:
         return "mlp"
     if {"edge_var", "message_passing_num"} & keys:
         # The variational tree adds its own keys on top of the vanilla set.
-        return "meshgraphnets-v" if {"vae_latent_dim", "num_vae_samples", "prior_type"} & keys else "meshgraphnets"
+        return "meshgraphnets-v" if {"vae_latent_dim", "num_vae_samples", "prior_type", "latent_type"} & keys else "meshgraphnets"
     return ""
 
 

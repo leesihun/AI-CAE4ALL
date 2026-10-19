@@ -21,27 +21,26 @@
 
 ## 1. What this repository is
 
-**AI-CAE4ALL is a monorepo of nine independent machine-learning-for-CAE
+**AI-CAE4ALL is a monorepo of eight independent machine-learning-for-CAE
 (Computer-Aided Engineering) method repositories, unified by a single
 config-driven launcher.** The intent is that an engineer picks a method by
 writing one word in a text config, and one command validates and runs it — no
-matter which of eight very different ML codebases actually executes.
+matter which of seven very different ML codebases actually executes.
 
-The eight methods span the major families of ML surrogate modeling for
+The seven methods span the major families of ML surrogate modeling for
 simulation:
 
 | Family | Method | What it predicts |
 | --- | --- | --- |
 | Graph neural network simulator | MeshGraphNets (deterministic) | Time evolution of physical fields on a mesh |
-| Probabilistic GNN simulator | MeshGraphNets (variational) | A *distribution* of plausible mesh trajectories (VAE + learned prior) |
-| Conditional flow GNN | cHI-MGNflow | Conditional distributions of mesh fields without the retired VAE/prior branch |
+| Probabilistic GNN simulator | MeshGraphNets (variational) | A *distribution* of plausible mesh trajectories (VAE + learned prior); `latent_type` global / local / hybrid = HI-MGN-V / HI-MGNflow / HI-MGN-hybrid |
 | Neural operators | Neural_Operator (4 architectures) | Field-to-field mappings that generalize across discretizations |
 | Transformer surrogate | Transolver | Mesh fields via learned "physics slices" + attention |
 | Generative geometry | SDFFlow | *New 3D shapes* via an SDF-VAE and flow matching |
 | Fixed-geometry latent model | SimulGenVAE | Parametric static/transient fields plus a latent conditioner |
 | Parametric regression | MLP | **N scalar inputs → M scalar outputs** (tabular DOE surrogate, no mesh) |
 
-Six of the eight predict **fields on a mesh** and share related HDF5 contracts.
+Five of the seven predict **fields on a mesh** and share related HDF5 contracts.
 The exceptions are geometry-generating SDFFlow and **MLP**, a tabular
 parameters→outputs regressor
 (`MLP/`, modes `train`/`inference`) that reads a separate `X[S,N]`/`Y[S,M]` HDF5,
@@ -82,8 +81,8 @@ File and line totals drift with every implementation pass, so this guide does
 not preserve an old snapshot. Use `git ls-files '*.py'` for tracked Python
 files, `git ls-files 'configs/**/config*.txt'` for checked-in templates, and
 `python AI_CAE4ALL_main.py --audit-configs --no-color` for the authoritative
-live config audit. The route registry currently exposes 11 model IDs across
-eight ML repositories plus `geometry_ingest`.
+live config audit. The route registry currently exposes 10 model IDs across
+seven ML repositories plus `geometry_ingest`. HI-MGNflow (`chi-mgnflow`) was merged into `meshgraphnets-v` as `latent_type local` on 2026-10-19; the old repo is in `junk/legacy_HI_MGNFlow/`.
 
 ---
 
@@ -114,14 +113,12 @@ AI-CAE4ALL/
 │       ├── base.py               #     MethodSpec, PathRule, shared validators
 │       ├── meshgraphnets.py            meshgraphnets_variational.py
 │       ├── neural_operator.py          transolver.py
-│       ├── sdfflow.py                  chi_mgnflow.py
-│       ├── simulgenvae.py              geometry_ingest.py
-│       └── mlp.py
+│       ├── sdfflow.py                  simulgenvae.py
+│       └── geometry_ingest.py          mlp.py
 │
-├── methods/                      # THE NINE NATIVE RUNTIMES (each standalone)
+├── methods/                      # THE EIGHT NATIVE RUNTIMES (each standalone)
 │   ├── MeshGraphNets/            #   model = meshgraphnets
 │   ├── MeshGraphNets_Variational/#   model = meshgraphnets-v
-│   ├── HI_MGNFlow/               #   model = chi-mgnflow      (entrypoint CHiMGNFlow_main.py)
 │   ├── Neural_Operator/          #   model = point_deeponet | deeponet | fno
 │   ├── Transolver/               #   model = transolver
 │   ├── SDFFlow/                  #   model = sdfflow          (generative + `optimize` loop)
@@ -132,8 +129,8 @@ AI-CAE4ALL/
 ├── configs/                      # one directory per method, mirroring methods/
 │   ├── MeshGraphNets/{ex1..ex9}/       MeshGraphNets_Variational/
 │   ├── Neural_Operator/{ex1..ex9}/     Transolver/{ex1..ex9}/
-│   ├── HI_MGNFlow/                     SDFFlow/
-│   ├── SimulGenVAE/                    MLP/            GeometryIngest/
+│   ├── SDFFlow/                        SimulGenVAE/
+│   ├── MLP/                            GeometryIngest/
 │   └── campaigns/                #   cross-method campaign: dataset_matrix (manifest.json)
 │
 ├── dataset/                      # shared HDF5 data (payloads are git-ignored)
@@ -377,7 +374,7 @@ sources without copying a drift-prone per-key snapshot.
 
 ## 5. Conventions shared across the method repos
 
-Five method repos — deterministic and variational MeshGraphNets, cHI-MGNflow,
+Four method repos — deterministic and variational MeshGraphNets,
 Neural Operator, and Transolver — share the same broad *structural skeleton*
 and **mesh HDF5 data contract**. SimulGenVAE consumes a related fixed-geometry
 field contract through a different loader; SDFFlow is generative and MLP is
@@ -523,9 +520,18 @@ the bipartite `UnpoolBlock`.
   and variational losses — reconstruction (`huber`/`mse`), aggregate-posterior
   **MMD** to N(0, I) (`lambda_mmd`, `mmd_bandwidth`), and a peak-to-valley MSE
   on the *decoded* `pv_channel` field (`beta_aux`, `MeshGraphNets._pv_loss`).
-  There is no per-sample KL term: MMD is the only latent regularizer (the
-  `gmm` prior family adds its own KL anchor, `prior_kl_reg_weight`). Latent
-  width/depth via `vae_latent_dim`/`vae_mp_layers`.
+  With the default `latent_reg mmd` there is no per-sample KL term: MMD is
+  the only latent regularizer (the `gmm` prior family adds its own KL anchor,
+  `prior_kl_reg_weight`); `latent_reg kl` swaps in a per-sample KL
+  (`kl_weight`, default `1e-3`). Latent width/depth via
+  `vae_latent_dim`/`vae_mp_layers`.
+- **Latent placement** (`latent_type`, persisted in `model_config`): `global`
+  (default, `num_z` per-graph slots; HI-MGN-V with `use_multiscale`), `local`
+  (`latent_ch` channels per coarsest-level node, a `vae_local_mp_layers`-deep
+  coarse-node posterior head, and a coarse-node flow-matching prior; HI-MGNflow),
+  or `hybrid` (both; HI-MGN-hybrid). `local`/`hybrid` train single-stage and
+  jointly, need `use_multiscale True` and `prior_family fm`, and are rejected
+  with `parallel_mode model_split`. HI-MGNflow (`chi-mgnflow`) was merged into `meshgraphnets-v` as `latent_type local` on 2026-10-19; the old repo is in `junk/legacy_HI_MGNFlow/`.
 - **Learned conditional prior**
   ([model/conditional_prior.py](../methods/MeshGraphNets_Variational/model/conditional_prior.py)):
   instead of sampling `z ~ N(0,I)`, a graph-conditional prior can be jointly
@@ -742,7 +748,6 @@ dataset/campaign. Counts drift; use
 | --- | --- |
 | `configs/MeshGraphNets/deterministic/ex1` … `ex9` | Deterministic and Hi-MGN train/inference profiles, including the ex1 ablation (§11.1) |
 | `configs/MeshGraphNets_Variational/` | B8 and SAOI variational training/inference campaigns |
-| `configs/HI_MGNFlow/` | DeepJEB, ex9, SAOI, and wave0 flow campaigns |
 | `configs/Neural_Operator/deterministic/ex1` … `ex9` | Point-DeepONet, DeepONet, and FNO profiles |
 | `configs/Transolver/deterministic/ex1` … `ex9` | Transolver training/inference profiles |
 | `configs/SDFFlow/` | SDFFlow train (ex1 / v2 / v3 / 8-GPU b300 / FEA-conditioned ex5), evaluate (reconstruction, descriptor calibration, conditional benchmark), sample (unconditional, extrapolation, partial conditional), interpolate (slerp, condition sweep), and optimize profiles, plus the `arms/` VAE ablation sweep (`A0`..`A9`, mostly single-axis) |

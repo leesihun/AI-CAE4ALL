@@ -4,7 +4,7 @@ import { state, snapshot } from "./state.js";
 import {
   ICONS, BLOCK_SPECS, MODEL_CATALOG, REQUIRED, CHOICES, BOOLEAN_KEYS,
   OPERATOR_REMOVED, TRANSOLVER_REJECTED, VARIATIONAL_REMOVED,
-  CHI_FLOW_REMOVED, SIMULGEN_REMOVED_NOOPS, PARALLEL_MODE_CHOICES, MODEL_CHOICES,
+  SIMULGEN_REMOVED_NOOPS, PARALLEL_MODE_CHOICES, MODEL_CHOICES,
   MGN_NATIVE_REMOVED, MGN_VARIATIONAL_IGNORED,
   CONFIG_SECTIONS, HELP, PRESET_SOURCES, SDFFLOW_STRUCTURAL_KEYS
 } from "./constants.js";
@@ -81,6 +81,18 @@ export function backendDefaultsFor(modelId, mode) {
   };
 }
 
+/** The keys the MGN-V spec warns are ignored for the chosen latent variant
+ * (MGNV-LATENT-INACTIVE, MGNV-LATENT-KL-WEIGHT, MGNV-LATENT-MMD-WEIGHT in
+ * cae_suite/specs/meshgraphnets_variational.py); unset means the spec default
+ * (latent_type global, latent_reg mmd). */
+function mgnvLatentInactive(key, config) {
+  const pick = (name, fallback) => String(config?.[name] ?? "").trim().toLowerCase() || fallback;
+  if (["latent_ch", "vae_local_mp_layers"].includes(key)) return pick("latent_type", "global") === "global";
+  if (key === "kl_weight") return pick("latent_reg", "mmd") !== "kl";
+  if (key === "lambda_mmd") return pick("latent_reg", "mmd") === "kl";
+  return false;
+}
+
 export function keyDisposition(modelId, key, config = null) {
   // The multiscale trainer prints "[message_passing_num is IGNORED when
   // use_multiscale=True]" and then obeys mp_per_level instead, but the sheet
@@ -94,7 +106,7 @@ export function keyDisposition(modelId, key, config = null) {
   }
   if (modelId === "transolver" && TRANSOLVER_REJECTED.has(key)) return "removed";
   if (modelId === "meshgraphnets-v" && VARIATIONAL_REMOVED.has(key)) return "removed";
-  if (modelId === "chi-mgnflow" && CHI_FLOW_REMOVED.has(key)) return "removed";
+  if (modelId === "meshgraphnets-v" && mgnvLatentInactive(key, config)) return "inactive";
   if (modelId === "simulgenvae" && SIMULGEN_REMOVED_NOOPS.has(key)) return "removed";
   if (["point_deeponet", "deeponet", "fno"].includes(modelId)) {
     if (OPERATOR_REMOVED.has(key)) return "removed";
@@ -147,7 +159,7 @@ function isTruthyConfigValue(value) {
  */
 function conditionallyMissing(modelId, config) {
   const notes = [];
-  const isMesh = ["meshgraphnets", "meshgraphnets-v", "chi-mgnflow"].includes(modelId);
+  const isMesh = ["meshgraphnets", "meshgraphnets-v"].includes(modelId);
   if (isMesh && isTruthyConfigValue(config.use_multiscale)) {
     const needed = ["coarsening_type", "multiscale_levels", "voronoi_clusters", "mp_per_level"]
       .filter(key => String(config[key] ?? "").trim() === "");
@@ -173,17 +185,19 @@ export function sectionFor(modelId, key, required, config = null) {
   if (keyDisposition(modelId, key, config) !== "active") return "Inactive / rejected";
   if (required.has(key)) return "Required";
   if (key.startsWith("opt_")) return "Optimization";
-  if (/dataset|modelpath|output_dir|log_file|pipeline_log|param_dir|input_mesh|sidecar|split_seed/.test(key)) return "Data & output";
-  if (/^(point_|pointnet_|deeponet_|fno_|encoder_|decoder_|fm_arch|fm_blocks|fm_hidden|fm_cond_hidden|flow_time_freqs|latent_|latent_dim|message_passing|slice_num|num_layers|num_heads|attention_kernel|mlp_ratio|coarsening|multiscale|mp_per_level|positional|fourier|operator_dim|global_condition|num_filter|lc_filter|network_size)/.test(key)) return "Architecture";
+  if (/dataset|modelpath|output_dir|log_file|pipeline_log|param_dir|input_mesh|sidecar|split_seed|split_group_attr/.test(key)) return "Data & output";
+  if (/^(point_|pointnet_|deeponet_|fno_|encoder_|decoder_|fm_arch|fm_blocks|fm_hidden|fm_cond_hidden|latent_|latent_dim|vae_local_mp_layers|message_passing|slice_num|num_layers|num_heads|attention_kernel|mlp_ratio|coarsening|multiscale|mp_per_level|positional|fourier|operator_dim|global_condition|num_filter|lc_filter|network_size)/.test(key)) return "Architecture";
+  // SAR's stage-prefixed network shapes (vae_* graph VAE, sar_* Transolvers).
+  if (/^(vae_num_layers|vae_d_model|vae_latent_features|sar_num_iters|sar_num_cond_layers|sar_num_ar_layers|sar_num_sampler_layers|sar_d_model|sar_num_slices|sar_num_heads)$/.test(key)) return "Architecture";
   // Network-shape keys the prefix-anchored test above misses. Without these,
   // MLP showed an "Architecture / 0" tab while hidden_layers, activation,
   // output_activation, and norm sat in "Advanced", and every mesh route filed
   // its auxiliary encoder/prior sizes there too. Each name is matched exactly
   // so the later Training / Resources / Inference tests keep the keys they own.
   if (/^(hidden_layers|activation|output_activation|norm|pool_type|unpool_type|pool_heads|bipartite_unpool|residual_scale|use_spatial_attention|fm_heads|vae_latent_dim|vae_mp_layers|prior_hidden_dim|prior_mp_layers)$/.test(key)) return "Architecture";
-  if (/training_epochs|learningr|weight_decay|warmup|batch_size|loss|dropout|grad_|noise|ema|kl_|beta|eikonal|surface_weight|normal_weight|alpha|lambda_|free_bits|mmd|recon_loss|recon_iter|flow_t_|flow_loss_weighting|flow_det_prob/.test(key)) return "Training";
-  if (/gpu|parallel|worker|prefetch|amp|compile|checkpointing|cache|profile|fsdp|pipeline_microbatches|chunk_size|load_all/.test(key)) return "Resources & runtime";
-  if (/^infer|^test|^val_|display|plot|histogram|num_samples|candidate_multiplier|cfg_scale|condition_|cond_|ode_steps|flow_steps|flow_solver|flow_predict|best_by|mc_resolution|sample_index|source_num_samples|posterior_noise|timesteps_reduced/.test(key)) return "Inference & evaluation";
+  if (/training_epochs|learningr|_lr_|weight_decay|warmup|batch_size|loss|dropout|grad_|noise|ema|kl_|beta|eikonal|surface_weight|normal_weight|alpha|lambda_|free_bits|mmd|recon_loss|recon_iter|draws_per_epoch/.test(key)) return "Training";
+  if (/gpu|parallel|worker|prefetch|amp|compile|checkpointing|cache|profile|fsdp|pipeline_microbatches|chunk_size|load_all|dense_attention/.test(key)) return "Resources & runtime";
+  if (/^infer|^test|^val_|^sample_|^spread_|save_rollouts|display|plot|histogram|num_samples|candidate_multiplier|cfg_scale|condition_|cond_|ode_steps|best_by|mc_resolution|sample_index|source_num_samples|posterior_noise|timesteps_reduced/.test(key)) return "Inference & evaluation";
   return "Advanced";
 }
 
@@ -196,8 +210,7 @@ export function choicesFor(modelId, key, config = null) {
     // single|ddp|fsdp ("single" being the right pick on a one-GPU box);
     // Transolver takes ddp|node_shard (TRANS-PARALLEL-001 rejects model_split);
     // model_split is fno-only among the operators (NOVAR-PARALLEL-002),
-    // so deeponet/point_deeponet/cHI-MGNflow are ddp-only. cHI's historical
-    // model_split directory is a non-executable variational-MGN copy.
+    // so deeponet/point_deeponet are ddp-only.
     return PARALLEL_MODE_CHOICES[modelId] || ["ddp"];
   }
   return MODEL_CHOICES[modelId]?.[key] || CHOICES[key] || null;
@@ -367,6 +380,8 @@ export function presetOptions(modelId) {
   // different set of keys.
   if (modelId === "sdfflow") options.push(["sdfflow_vae", "VAE only"], ["sdfflow_fm", "Flow matching only"]);
   if (modelId === "simulgenvae") options.push(["simulgen_vae", "VAE only"], ["simulgen_lc", "LC only"], ["simulgen_reconstruct", "Reconstruct fields"]);
+  // SAR's two stages; train_sar reads the VAE at vae_modelpath.
+  if (modelId === "sar") options.push(["sar_vae", "VAE only"], ["sar_stage", "SAR stage only (needs trained VAE)"]);
   return options;
 }
 
@@ -487,6 +502,9 @@ export function renderConfig() {
     // is the whole reason nobody noticed the trainer ignores it under multiscale.
     const dispositionHelp = key === "message_passing_num" && disposition === "inactive"
       ? "Ignored while use_multiscale is True — the trainer prints this and uses mp_per_level for depth instead. Set use_multiscale False for this value to take effect."
+      : spec.modelId === "meshgraphnets-v" && disposition === "inactive" && ["latent_ch", "vae_local_mp_layers"].includes(key) ? "Ignored with latent_type global (the default) — set latent_type local or hybrid for this value to take effect."
+      : spec.modelId === "meshgraphnets-v" && disposition === "inactive" && key === "kl_weight" ? "Ignored unless latent_reg is kl — the default regularizer is mmd, weighted by lambda_mmd."
+      : spec.modelId === "meshgraphnets-v" && disposition === "inactive" && key === "lambda_mmd" ? "Ignored with latent_reg kl — kl_weight weights the regularizer instead."
       : disposition === "unknown" ? "This key is not accepted by the selected model. Clear its value to remove it before running preflight again."
       : disposition === "removed" ? "Known by a shared diagnostic schema, but rejected for this selected model."
       : disposition === "inactive" ? "Accepted by the shared family schema but configures a different variant."
@@ -584,7 +602,8 @@ export async function applyPreset() {
   if (preset === "repository") values = { ...model.defaults };
   if (preset === "smoke") values = {
     training_epochs: "2", batch_size: "1", vae_training_epochs: "2", lc_training_epochs: "2", fm_training_epochs: "2",
-    vae_batch_size: "1", lc_batch_size: "2", fm_batch_size: "2", test_max_batches: "1", num_test_shapes: "2"
+    vae_batch_size: "1", lc_batch_size: "2", fm_batch_size: "2", test_max_batches: "1", num_test_shapes: "2",
+    sar_training_epochs: "2", sar_batch_size: "1"
   };
   if (preset === "high_performance" || preset === "low_vram") {
     source = PRESET_SOURCES[spec.modelId]?.[preset === "high_performance" ? "high" : "low"];
@@ -597,13 +616,13 @@ export async function applyPreset() {
       toast(`Could not load ${source.path}: ${error.message}`, "error");
       return;
     }
-    // The smallest checked-in MGN-V and cHI-MGNflow configs still train at
+    // The smallest checked-in MGN-V configs still train at
     // batch 16 and roll out 16 trajectories at once (vae_batch_size, read only
     // by their rollout, so it changes memory and speed, never the result).
     // SDFFlow and SimulGen-VAE train their stages with vae_/fm_/lc_batch_size,
     // taken as the source file has them.
     if (preset === "low_vram" && !["sdfflow", "simulgenvae"].includes(spec.modelId)) {
-      const floors = ["meshgraphnets-v", "chi-mgnflow"].includes(spec.modelId) ? ["batch_size", "vae_batch_size"] : ["batch_size"];
+      const floors = spec.modelId === "meshgraphnets-v" ? ["batch_size", "vae_batch_size"] : ["batch_size"];
       floors.forEach(key => {
         const current = values[key] ?? node.config[key];
         if (Number(current) > 1) {
@@ -633,6 +652,8 @@ export async function applyPreset() {
   };
   if (preset === "sdfflow_vae") values = { mode: "train_vae" };
   if (preset === "sdfflow_fm") values = { mode: "train_fm" };
+  if (preset === "sar_vae") values = { mode: "train_vae" };
+  if (preset === "sar_stage") values = { mode: "train_sar" };
   if (preset === "simulgen_vae") values = { mode: "train_vae", training_epochs: model.defaults.vae_training_epochs, batch_size: model.defaults.vae_batch_size, learningr: model.defaults.vae_learningr };
   if (preset === "simulgen_lc") values = { mode: "train_lc", training_epochs: model.defaults.lc_training_epochs, batch_size: model.defaults.lc_batch_size, learningr: model.defaults.lc_learningr };
   if (preset === "simulgen_reconstruct") values = { mode: "reconstruct", batch_size: "16", output_dir: "../../output/simulgenvae/ex1/reconstruct" };

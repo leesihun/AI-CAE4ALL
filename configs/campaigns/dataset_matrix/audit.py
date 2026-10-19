@@ -87,12 +87,12 @@ def audit_specs():
         print(f'{problem}\n  {len(paths)} files; first: {paths[0]}')
     if problems:
         raise SystemExit(f'{len(problems)} distinct warnings/errors')
-    print('150 configs: launcher schemas clean (filesystem/checkpoints/GPU intentionally not claimed).')
+    print(f"{sum(n.endswith('.txt') for n in build())} configs: launcher schemas clean (filesystem/checkpoints/GPU intentionally not claimed).')
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--native', choices=['MeshGraphNets', 'MeshGraphNets_Variational', 'HI_MGNFlow',
+    parser.add_argument('--native', choices=['MeshGraphNets', 'MeshGraphNets_Variational',
                                            'Neural_Operator', 'Transolver', 'SimulGenVAE', 'SDFFlow'])
     parser.add_argument('--data', action='store_true')
     args = parser.parse_args()

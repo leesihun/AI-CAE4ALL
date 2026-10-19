@@ -1236,7 +1236,6 @@ function connectedNodeValue(nodeId, targetPort, keys, suffixes = []) {
 }
 
 function portableInferenceAlternative(modelId) {
-  if (modelId === "chi-mgnflow") return "Use a cHI-MGNflow model connected to the native Inference block.";
   if (modelId === "simulgenvae") return "Use the SimulGen-VAE reconstruct workflow.";
   if (modelId === "mlp") return "Use the MLP model's native inference and evaluation workflow.";
   return "Use that method's native inference or reconstruction workflow.";

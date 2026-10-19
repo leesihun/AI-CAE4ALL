@@ -9,8 +9,16 @@ from model.checkpointing import process_with_checkpointing
 from model.coarsening import pool_features
 from model.conditional_prior import build_conditional_prior
 from model.encoder_decoder import Decoder, Encoder, GnBlock
+from model.latent import (
+    LATENT_REGS, LATENT_TYPES, Latent, coarsest_parent_maps, coarsest_view,
+    kl_to_standard_normal,
+)
 from model.mlp import build_mlp, init_weights
 from model.vae import GNNVariationalEncoder, gather_across_ranks
+
+# z_l rows entering one MMD estimate. MMD is O(rows^2); a 16-graph batch of
+# 256-cluster meshes is already 4096 rows, and more adds cost, not signal.
+LOCAL_MMD_MAX_ROWS = 4096
 
 
 class MeshGraphNets(nn.Module):
@@ -263,6 +271,27 @@ class EncoderProcessorDecoder(nn.Module):
             self.num_z = int(config.get('num_z', self.multiscale_levels + 1))
         else:
             self.num_z = int(config.get('num_z', 1))
+        # Where z lives (model/latent.py): one per graph (global, HI-MGN-V), C
+        # channels per coarsest-level node (local, HI-MGNflow's placement), or
+        # both (hybrid). Everything else -- the V-cycle, the conditioning
+        # modules, the objective -- is shared, so latent_type is the only
+        # difference between the three.
+        self.latent_type = str(config.get('latent_type', 'global')).lower().strip()
+        if self.latent_type not in LATENT_TYPES:
+            raise ValueError(f"latent_type must be one of {LATENT_TYPES}, got '{self.latent_type}'")
+        if self.latent_type != 'global' and not self.use_multiscale:
+            raise ValueError(f"latent_type '{self.latent_type}' places z on the coarsest "
+                             f"V-cycle level and needs use_multiscale True")
+        self.latent_ch = int(config.get('latent_ch', 4))
+        self.latent_reg = str(config.get('latent_reg', 'mmd')).lower().strip()
+        if self.latent_reg not in LATENT_REGS:
+            raise ValueError(f"latent_reg must be one of {LATENT_REGS}, got '{self.latent_reg}'")
+        # Width of the vector each conditioning module reads per node.
+        self.z_cond_dim = {
+            'global': self.vae_latent_dim,
+            'local': self.latent_ch,
+            'hybrid': self.latent_ch + self.vae_latent_dim,
+        }[self.latent_type]
         self.vae_encoder = GNNVariationalEncoder(
             self.node_output_size, self.edge_input_size,
             self.latent_dim, self.vae_latent_dim, num_mp_layers=vae_mp_layers,
@@ -270,8 +299,14 @@ class EncoderProcessorDecoder(nn.Module):
             graph_aware=self.vae_graph_aware,
             posterior_min_std=self.vae_posterior_min_std,
             num_z=self.num_z,
+            latent_type=self.latent_type,
+            latent_ch=self.latent_ch,
+            local_mp_layers=int(config.get('vae_local_mp_layers', 2)),
         )
-        print(f"  VAE z slots: {self.num_z}")
+        print(f"  VAE latent: {self.latent_type}"
+              + ("" if self.latent_type == 'local' else f" (z_g {self.num_z} slots x {self.vae_latent_dim})")
+              + ("" if self.latent_type == 'global' else f" (z_l {self.latent_ch} ch per coarsest node)")
+              + f", regularizer {self.latent_reg}")
         if self.vae_graph_aware:
             print(f"  VAE encoder: graph-aware (x [N,{self.node_input_size}] fused with y [N,{self.node_output_size}])")
         print(f"  VAE posterior σ floor: {self.vae_posterior_min_std}")
@@ -311,10 +346,10 @@ class EncoderProcessorDecoder(nn.Module):
         """
         if self.z_conditioning == 'adaln':
             return nn.ModuleList([
-                AdaLNZero(self.latent_dim, self.vae_latent_dim) for _ in range(count)
+                AdaLNZero(self.latent_dim, self.z_cond_dim) for _ in range(count)
             ])
         return nn.ModuleList([
-            nn.Linear(self.latent_dim + self.vae_latent_dim, self.latent_dim)
+            nn.Linear(self.latent_dim + self.z_cond_dim, self.latent_dim)
             for _ in range(count)
         ])
 
@@ -328,11 +363,21 @@ class EncoderProcessorDecoder(nn.Module):
         return fuse_layer(torch.cat([x, z_per_node], dim=-1))
 
     def _encode_vae(self, original_y, original_x, original_edge_index, original_edge_attr,
-                    original_batch, N, device, dtype, use_posterior, fixed_z=None):
-        """Produce z [B, num_z, D]: posterior sample, external z, or N(0,I)."""
+                    original_batch, N, device, dtype, use_posterior, fixed_z=None,
+                    coarse=None):
+        """Produce z: posterior sample, external z, or N(0,I).
+
+        global: a plain [B, num_z, D] tensor. local/hybrid: a Latent(g, l)
+        (model/latent.py), which needs `coarse` = coarsest_view(...).
+
+        The losses dict always carries both 'mmd' and 'kl'; the one `latent_reg`
+        does not select is a zero, so callers that only read 'mmd' keep working.
+        """
         zero = torch.zeros((), device=device, dtype=torch.float32)
-        empty_losses = {'mmd': zero, 'mu': None, 'logvar': None}
+        empty_losses = {'mmd': zero, 'kl': zero, 'mu': None, 'logvar': None}
         if fixed_z is not None:
+            if isinstance(fixed_z, Latent):
+                return fixed_z.to(device=device, dtype=dtype), empty_losses
             z = fixed_z.to(device=device, dtype=dtype)
             # External callers (rollout with N(0,I)) may pass [B, D]; expand to
             # [B, num_z, D] by replicating the same z across all per-level slots.
@@ -345,15 +390,102 @@ class EncoderProcessorDecoder(nn.Module):
             z, mu, logvar = self.vae_encoder(
                 original_y, original_edge_index, original_edge_attr, batch,
                 x=(original_x if self.vae_graph_aware else None),
+                coarse=coarse,
             )
+            losses = {'mmd': zero, 'kl': zero, 'mu': mu, 'logvar': logvar}
+            if self.latent_reg == 'kl':
+                losses['kl'] = self._kl(mu, logvar)
+            else:
+                losses['mmd'] = self._mmd(z)
+            return z, losses
+        B = int(original_batch.max().item()) + 1 if original_batch is not None else 1
+        return self._standard_normal_z(B, coarse, device, dtype), empty_losses
+
+    def _standard_normal_z(self, B, coarse, device, dtype):
+        """A draw from N(0, I) in this model's latent layout."""
+        if self.latent_type == 'global':
+            return torch.randn(B, self.num_z, self.vae_latent_dim, device=device, dtype=dtype)
+        z_l = torch.randn(coarse['n_c'], self.latent_ch, device=device, dtype=dtype)
+        z_g = (torch.randn(B, self.num_z, self.vae_latent_dim, device=device, dtype=dtype)
+               if self.latent_type == 'hybrid' else None)
+        return Latent(z_g, z_l)
+
+    def _mmd(self, z):
+        """MMD(q(z), N(0,I)) per part, summed.
+
+        z_g (one row per graph) is gathered across ranks as before. z_l has a
+        row per coarsest node -- its own aggregate posterior over every cluster
+        of the batch -- and is NOT gathered: the row count differs per rank, and
+        a single batch already holds hundreds of rows. Above
+        LOCAL_MMD_MAX_ROWS it is subsampled, since MMD costs rows^2.
+        """
+        if not isinstance(z, Latent):
             z_mmd = z.float()
             if self.mmd_gather_ranks:
                 z_mmd = gather_across_ranks(z_mmd)
-            mmd = GNNVariationalEncoder.mmd_loss(z_mmd, bandwidth=self.mmd_bandwidth)
-            return z, {'mmd': mmd, 'mu': mu, 'logvar': logvar}
-        B = int(original_batch.max().item()) + 1 if original_batch is not None else 1
-        z = torch.randn(B, self.num_z, self.vae_latent_dim, device=device, dtype=dtype)
-        return z, empty_losses
+            return GNNVariationalEncoder.mmd_loss(z_mmd, bandwidth=self.mmd_bandwidth)
+        total = torch.zeros((), device=z.l.device, dtype=torch.float32)
+        if z.g is not None:
+            total = total + self._mmd(z.g)
+        z_l = z.l.float()
+        if z_l.shape[0] > LOCAL_MMD_MAX_ROWS:
+            keep = torch.randperm(z_l.shape[0], device=z_l.device)[:LOCAL_MMD_MAX_ROWS]
+            z_l = z_l[keep]
+        return total + GNNVariationalEncoder.mmd_loss(z_l, bandwidth=self.mmd_bandwidth)
+
+    @staticmethod
+    def _kl(mu, logvar):
+        """Per-sample KL(q(z|y) || N(0,I)), per-coordinate mean, summed over parts."""
+        if not isinstance(mu, Latent):
+            return kl_to_standard_normal(mu, logvar)
+        return sum(kl_to_standard_normal(m, lv)
+                   for m, lv in zip(mu, logvar) if m is not None)
+
+    def posterior(self, graph):
+        """q(z | y): (z, mu, logvar) for a raw (pre-encoder) normalized graph.
+
+        What _encode_vae computes on the posterior path, without the rest of
+        the forward -- used to fit / train the prior against the posterior.
+        """
+        batch = getattr(graph, 'batch', None)
+        if batch is None:
+            batch = torch.zeros(graph.x.shape[0], dtype=torch.long, device=graph.x.device)
+        coarse = (coarsest_view(graph, self.multiscale_levels)
+                  if self.latent_type != 'global' else None)
+        return self.vae_encoder(
+            graph.y, graph.edge_index, graph.edge_attr, batch,
+            x=(graph.x if self.vae_graph_aware else None), coarse=coarse,
+        )
+
+    def standard_normal_z(self, graph):
+        """N(0, I) in this model's latent layout for a raw batched graph."""
+        coarse = (coarsest_view(graph, self.multiscale_levels)
+                  if self.latent_type != 'global' else None)
+        B = int(getattr(graph, 'num_graphs', 1) or 1)
+        return self._standard_normal_z(B, coarse, graph.x.device, graph.x.dtype)
+
+    def _level_z(self, z, level, batch_level, maps):
+        """z broadcast onto the nodes of V-cycle `level` (0 = fine).
+
+        global: slot min(level, num_z-1) of z_g, per graph. local: z_l of each
+        node's coarsest ancestor (the coarsest level reads z_l directly).
+        hybrid: [z_l(ancestor) | z_g slot].
+        """
+        if not isinstance(z, Latent):
+            return z[:, min(level, z.shape[1] - 1), :][batch_level]
+        z_l = z.l[maps[level]] if level in maps else z.l
+        if z.g is None:
+            return z_l
+        z_g = z.g[:, min(level, z.g.shape[1] - 1), :][batch_level]
+        return torch.cat([z_l, z_g], dim=-1)
+
+    @staticmethod
+    def _num_graphs(z, batch):
+        if not isinstance(z, Latent):
+            return z.shape[0]
+        if z.g is not None:
+            return z.g.shape[0]
+        return int(batch.max().item()) + 1
 
     def _pv_loss(self, predicted, original_y, batch, B):
         """MSE on the per-graph PEAK-TO-VALLEY of the DECODED field.
@@ -408,12 +540,14 @@ class EncoderProcessorDecoder(nn.Module):
         return torch.nn.functional.mse_loss(pv_pred, pv_true)
 
     def _prepare_z(self, graph, original_y, original_x, original_edge_index,
-                   original_edge_attr, original_batch, use_posterior, fixed_z):
+                   original_edge_attr, original_batch, use_posterior, fixed_z,
+                   coarse=None, maps=None):
         """Shared VAE step for both processor paths.
 
-        Returns (z [B, num_z, D], z_per_node for slot 0, batch index,
-        vae_losses dict). The peak-to-valley term needs the decoded field, so
-        it is computed by the callers after `self.decoder(...)`, not here.
+        Returns (z, z_per_node for the fine level, batch index, vae_losses
+        dict). z is [B, num_z, D] for global, a Latent for local/hybrid. The
+        peak-to-valley term needs the decoded field, so it is computed by the
+        callers after `self.decoder(...)`, not here.
         """
         N = graph.x.shape[0]
         device = graph.x.device
@@ -422,8 +556,12 @@ class EncoderProcessorDecoder(nn.Module):
         z, vae_losses = self._encode_vae(
             original_y, original_x, original_edge_index, original_edge_attr,
             original_batch, N, device, graph.x.dtype, use_posterior, fixed_z=fixed_z,
+            coarse=coarse,
         )
-        z_per_node = z[:, 0, :][batch_bc] if z.dim() == 3 else z[batch_bc]
+        if isinstance(z, Latent):
+            z_per_node = self._level_z(z, 0, batch_bc, maps)
+        else:
+            z_per_node = z[:, 0, :][batch_bc] if z.dim() == 3 else z[batch_bc]
         return z, z_per_node, batch_bc, vae_losses
 
     # ── Forward ──────────────────────────────────────────────────────────────
@@ -485,6 +623,13 @@ class EncoderProcessorDecoder(nn.Module):
 
         level_data = self._extract_level_data(graph, L)
         actual_levels = len(level_data)
+        # local/hybrid: the coarsest level's topology (for the posterior's local
+        # heads) and each level's map to its coarsest ancestor (for injection),
+        # read before the encoder drops the custom attributes.
+        coarse = maps = None
+        if self.use_vae and self.latent_type != 'global':
+            coarse = coarsest_view(graph, L)
+            maps = coarsest_parent_maps(level_data)
 
         graph = self.encoder(graph)
 
@@ -501,6 +646,7 @@ class EncoderProcessorDecoder(nn.Module):
             z, current_z_per_node, current_batch, vae_losses = self._prepare_z(
                 graph, original_y, original_x, original_edge_index,
                 original_edge_attr, original_batch, use_posterior, fixed_z,
+                coarse=coarse, maps=maps,
             )
             fine_batch = current_batch
 
@@ -538,9 +684,9 @@ class EncoderProcessorDecoder(nn.Module):
 
             if self.use_vae and z is not None:
                 current_batch = scatter(current_batch, ld['ftc'], dim=0, dim_size=ld['n_c'], reduce='min')
-                # Advance to the next z slot (level i+1, or the coarsest slot when i == L-1).
-                next_slot = min(i + 1, z.shape[1] - 1)
-                current_z_per_node = z[:, next_slot, :][current_batch]
+                # Advance to the next z slot (level i+1, or the coarsest slot when
+                # i == L-1); local/hybrid also re-index z_l onto level i+1.
+                current_z_per_node = self._level_z(z, i + 1, current_batch, maps or {})
 
         # Coarsest level
         z_fusers_coarsest = self.ms_z_fusers_coarsest if (self.use_vae and current_z_per_node is not None) else None
@@ -576,7 +722,8 @@ class EncoderProcessorDecoder(nn.Module):
 
         predicted = self.decoder(current_graph)
         if self.use_vae:
-            aux_loss = self._pv_loss(predicted, original_y, fine_batch, z.shape[0])
+            aux_loss = self._pv_loss(predicted, original_y, fine_batch,
+                                     self._num_graphs(z, fine_batch))
         return predicted, vae_losses, aux_loss
 
     def _extract_level_data(self, graph, L):

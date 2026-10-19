@@ -969,29 +969,11 @@
     },
     {
       "category": "probabilistic",
-      "example": "ex1",
-      "method": "chi_mgnflow",
-      "train": "configs/HI_MGNFlow/probabilistic/ex1/baseline/config_train_chi_mgnflow.txt",
-      "infer": "configs/HI_MGNFlow/probabilistic/ex1/baseline/config_infer_chi_mgnflow.txt",
-      "updates": 357000,
-      "updates_note": "AE 178.5k + flow 178.5k"
-    },
-    {
-      "category": "probabilistic",
       "example": "ex2",
       "method": "himgn_v",
       "train": "configs/MeshGraphNets_Variational/probabilistic/ex2/baseline/config_train_himgn_v.txt",
       "infer": "configs/MeshGraphNets_Variational/probabilistic/ex2/baseline/config_infer_himgn_v.txt",
       "updates": 1663000
-    },
-    {
-      "category": "probabilistic",
-      "example": "ex2",
-      "method": "chi_mgnflow",
-      "train": "configs/HI_MGNFlow/probabilistic/ex2/baseline/config_train_chi_mgnflow.txt",
-      "infer": "configs/HI_MGNFlow/probabilistic/ex2/baseline/config_infer_chi_mgnflow.txt",
-      "updates": 1663000,
-      "updates_note": "AE 831.5k + flow 831.5k"
     },
     {
       "category": "geometry_generation",

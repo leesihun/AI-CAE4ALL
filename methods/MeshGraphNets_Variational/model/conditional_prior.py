@@ -5,8 +5,11 @@ import torch
 import torch.nn as nn
 from torch_geometric.data import Data
 from torch_geometric.nn import AttentionalAggregation
+from torch_geometric.utils import scatter
 
+from model.blocks import AdaLNZero, apply_adaln
 from model.encoder_decoder import GnBlock
+from model.latent import Latent, coarsest_view
 from model.mlp import build_mlp, init_weights
 
 
@@ -21,7 +24,7 @@ class _ConditionalPriorBase(nn.Module):
     identical state_dict keys.
     """
 
-    def __init__(self, config):
+    def __init__(self, config, build_pool=True):
         super().__init__()
         self.config = dict(config)
         self.z_dim = int(config.get('vae_latent_dim', 32))
@@ -56,7 +59,10 @@ class _ConditionalPriorBase(nn.Module):
             for _ in range(self.num_mp_layers)
         ])
         # State-dict compatible with the deprecated GlobalAttention (same gate_nn keys).
-        self.pool = AttentionalAggregation(nn.Linear(self.hidden_dim, 1))
+        # Not built when nothing reads it (latent_type local), so no parameter
+        # sits unused under DDP.
+        if build_pool:
+            self.pool = AttentionalAggregation(nn.Linear(self.hidden_dim, 1))
 
     def condition(self, graph):
         """Encode graph → pooled conditioning vector [B, hidden_dim]."""
@@ -479,13 +485,312 @@ class ConditionalFMPrior(_ConditionalPriorBase):
         return z.view(B, n, self.num_z, self.z_dim).to(cond.dtype)
 
 
+class CoarseFMPrior(_ConditionalPriorBase):
+    """Flow-matching prior for latent_type local / hybrid.
+
+    p(z_l | graph) lives on the coarsest V-cycle level, one C-vector per
+    coarsest node, so its velocity field is a GNN over that level's graph
+    rather than an MLP over a flat vector:
+
+      trunk:  the shared prior trunk on the fine mesh, node features
+              mean-pooled into the coarsest clusters  -> cond_x [n_c, H]
+      v_l:    [z_l_t | cond_x] -> in_proj -> prior_fm_blocks GnBlocks, each
+              AdaLN-Zero-modulated by the time embedding -> out_head -> [n_c, C]
+
+    hybrid models (z_g, z_l) JOINTLY: a per-graph token starts from
+    [z_g_t | attention-pooled trunk], and before every block it reads the
+    mean of the node stream and writes back into it, so the two parts see
+    each other through the whole integration. g_head reads [token | node mean]
+    and emits v_g [B, num_z*D].
+
+    The path, solver, temperature and `inflation` follow ConditionalFMPrior.
+    z_l is standardized per channel (zl_shift / zl_scale), z_g per flat
+    coordinate (z_shift / z_scale) -- fitted at the prior freeze, identity
+    otherwise.
+
+    condition(graph) returns a context dict, not a pooled vector; every other
+    method takes that dict where the global prior takes `cond`.
+    """
+
+    family = 'fm'
+    sigma_min = 1e-4
+    use_conditional_moments = False
+    velocity_arch = 'coarse_gnn'
+
+    def __init__(self, config):
+        latent_type = str(config.get('latent_type', 'local')).lower().strip()
+        if latent_type not in ('local', 'hybrid'):
+            raise ValueError(f"CoarseFMPrior is for latent_type local/hybrid, got '{latent_type}'")
+        super().__init__(config, build_pool=(latent_type == 'hybrid'))
+        self.latent_type = latent_type
+        self.hybrid = latent_type == 'hybrid'
+        self.latent_ch = int(config.get('latent_ch', 4))
+        self.levels = int(config.get('multiscale_levels', 1))
+        self.num_steps = int(config.get('prior_fm_steps', 20))
+        self.solver = str(config.get('prior_fm_solver', 'heun')).lower().strip()
+        if self.solver not in ('heun', 'euler'):
+            raise ValueError(
+                f"prior_fm_solver must be 'heun' or 'euler', got '{self.solver}'")
+        self.flat_dim = self.num_z * self.z_dim
+        H = self.hidden_dim
+        Hv = int(config.get('prior_velocity_hidden_dim',
+                            config.get('prior_hidden_dim', H)))
+        self.velocity_hidden_dim = Hv
+        self.velocity_blocks = int(config.get('prior_fm_blocks', 4))
+        if self.velocity_blocks < 1:
+            raise ValueError('prior_fm_blocks must be >= 1')
+        freqs = (2.0 ** torch.arange(16, dtype=torch.float32)) * math.pi
+        self.register_buffer('t_freqs', freqs, persistent=False)
+        t_dim = 2 * freqs.numel()
+
+        self.coarse_edge_encoder = build_mlp(int(config.get('edge_var')), Hv, Hv)
+        self.in_proj = nn.Linear(self.latent_ch + H, Hv)
+        self.blocks = nn.ModuleList([
+            GnBlock(Hv, use_world_edges=False) for _ in range(self.velocity_blocks)
+        ])
+        self.time_mod = nn.ModuleList([
+            AdaLNZero(Hv, t_dim) for _ in range(self.velocity_blocks)
+        ])
+        self.out_head = nn.Linear(Hv, self.latent_ch)
+        if self.hybrid:
+            self.g_in = nn.Linear(self.flat_dim + H, Hv)
+            self.g_update = nn.ModuleList([
+                build_mlp(2 * Hv + t_dim, Hv, Hv) for _ in range(self.velocity_blocks)
+            ])
+            self.g_out = nn.ModuleList([
+                nn.Linear(Hv, Hv) for _ in range(self.velocity_blocks)
+            ])
+            self.g_head = nn.Linear(2 * Hv, self.flat_dim)
+            self.register_buffer('z_shift', torch.zeros(self.flat_dim))
+            self.register_buffer('z_scale', torch.ones(self.flat_dim))
+        self.register_buffer('zl_shift', torch.zeros(self.latent_ch))
+        self.register_buffer('zl_scale', torch.ones(self.latent_ch))
+
+        self.apply(init_weights)
+        with torch.no_grad():
+            for m in self.time_mod:
+                m.reset_identity()
+            # Near-zero velocity at init; the token's write-back starts closed.
+            self.out_head.weight.mul_(0.01)
+            if self.hybrid:
+                self.g_head.weight.mul_(0.01)
+                for lin in self.g_out:
+                    nn.init.zeros_(lin.weight)
+                    nn.init.zeros_(lin.bias)
+
+    # -- conditioning ---------------------------------------------------------
+
+    def condition(self, graph):
+        """Trunk on the fine mesh -> coarsest-level context dict."""
+        batch = getattr(graph, 'batch', None)
+        if batch is None:
+            batch = torch.zeros(graph.x.shape[0], dtype=torch.long, device=graph.x.device)
+        g = Data(x=self.node_encoder(graph.x), edge_attr=self.edge_encoder(graph.edge_attr),
+                 edge_index=graph.edge_index)
+        for block in self.mp_layers:
+            g = block(g)
+        cv = coarsest_view(graph, self.levels)
+        B = int(getattr(graph, 'num_graphs', 0) or (int(batch.max().item()) + 1))
+        ctx = {
+            'x': scatter(g.x, cv['parent'], dim=0, dim_size=cv['n_c'], reduce='mean'),
+            'e': self.coarse_edge_encoder(cv['c_ea']),
+            'c_ei': cv['c_ei'],
+            'batch': cv['batch'],
+            'B': B,
+        }
+        if self.hybrid:
+            ctx['pooled'] = self.pool(g.x, batch)
+        return ctx
+
+    @staticmethod
+    def _replicate(ctx, n):
+        """n disjoint copies of the coarse graph, draw-major (copy k = rows k*n_c...)."""
+        if n == 1:
+            return ctx
+        n_c = ctx['x'].shape[0]
+        B = ctx['B']
+        E = ctx['c_ei'].shape[1]
+        dev = ctx['x'].device
+        node_off = (torch.arange(n, device=dev) * n_c).repeat_interleave(E)
+        graph_off = (torch.arange(n, device=dev) * B).repeat_interleave(n_c)
+        out = {
+            'x': ctx['x'].repeat(n, 1),
+            'e': ctx['e'].repeat(n, 1),
+            'c_ei': ctx['c_ei'].repeat(1, n) + node_off.unsqueeze(0),
+            'batch': ctx['batch'].repeat(n) + graph_off,
+            'B': B * n,
+        }
+        if 'pooled' in ctx:
+            out['pooled'] = ctx['pooled'].repeat(n, 1)
+        return out
+
+    @staticmethod
+    def _float_ctx(ctx):
+        return {k: (v.float() if torch.is_tensor(v) and v.is_floating_point() else v)
+                for k, v in ctx.items()}
+
+    # -- velocity -------------------------------------------------------------
+
+    def _t_embed(self, t):
+        ang = t * self.t_freqs.view(1, -1)
+        return torch.cat([torch.sin(ang), torch.cos(ang)], dim=-1)
+
+    def velocity(self, zl_t, zg_t, t, ctx):
+        """(v_l [n_c, C], v_g [B, flat] or None) at per-graph time t [B, 1]."""
+        batch, B = ctx['batch'], ctx['B']
+        t_emb = self._t_embed(t)
+        t_node = t_emb[batch]
+        x = self.in_proj(torch.cat([zl_t, ctx['x']], dim=-1))
+        tok = self.g_in(torch.cat([zg_t, ctx['pooled']], dim=-1)) if self.hybrid else None
+        graph = Data(x=x, edge_attr=ctx['e'], edge_index=ctx['c_ei'])
+        for j, block in enumerate(self.blocks):
+            if self.hybrid:
+                x_mean = scatter(graph.x, batch, dim=0, dim_size=B, reduce='mean')
+                tok = tok + self.g_update[j](torch.cat([tok, x_mean, t_emb], dim=-1))
+                graph.x = graph.x + self.g_out[j](tok)[batch]
+            graph = apply_adaln(block, graph, self.time_mod[j], t_node)
+        v_l = self.out_head(graph.x)
+        if not self.hybrid:
+            return v_l, None
+        x_mean = scatter(graph.x, batch, dim=0, dim_size=B, reduce='mean')
+        return v_l, self.g_head(torch.cat([tok, x_mean], dim=-1))
+
+    # -- standardization ------------------------------------------------------
+
+    @torch.no_grad()
+    def fit_standardization(self, mu, logvar, eps=1e-6):
+        """Fit the shift/scale buffers from posterior parameters over a dataset.
+
+        mu, logvar: Latent with l [rows, C] (and g [N, num_z, D] for hybrid).
+        Same moment matching as ConditionalFMPrior; z_l per channel, pooling
+        every coarsest node of every graph. Returns (shift, scale) flattened
+        [z_g coords..., z_l channels] for logging.
+        """
+        l_mu = mu.l.double()
+        shift_l = l_mu.mean(dim=0)
+        scale_l = (l_mu.var(dim=0, unbiased=False)
+                   + logvar.l.double().exp().mean(dim=0)).sqrt().clamp(min=eps)
+        self.zl_shift.copy_(shift_l.to(self.zl_shift))
+        self.zl_scale.copy_(scale_l.to(self.zl_scale))
+        shifts, scales = [shift_l], [scale_l]
+        if self.hybrid:
+            g_mu = mu.g.reshape(mu.g.shape[0], -1).double()
+            g_var = logvar.g.reshape(logvar.g.shape[0], -1).double().exp()
+            shift_g = g_mu.mean(dim=0)
+            scale_g = (g_mu.var(dim=0, unbiased=False) + g_var.mean(dim=0)).sqrt().clamp(min=eps)
+            self.z_shift.copy_(shift_g.to(self.z_shift))
+            self.z_scale.copy_(scale_g.to(self.z_scale))
+            shifts.insert(0, shift_g)
+            scales.insert(0, scale_g)
+        return torch.cat(shifts).float(), torch.cat(scales).float()
+
+    # -- training -------------------------------------------------------------
+
+    def fm_loss(self, cond, target_z, target_mu=None, target_logvar=None,
+                objective='all'):
+        """Conditional flow-matching MSE on a detached posterior sample Latent.
+
+        One t per graph, shared by z_g and every coarsest node of that graph.
+        hybrid sums the z_l and z_g regressions.
+        """
+        if objective == 'moment':
+            raise ValueError('the coarse FM prior has no moment head')
+        if objective not in ('all', 'flow'):
+            raise ValueError("FM objective must be 'all', 'moment' or 'flow'")
+        with _autocast_disabled_for(cond['x']):
+            ctx = self._float_ctx(cond)
+            s = 1.0 - self.sigma_min
+            t = torch.rand(ctx['B'], 1, device=ctx['x'].device)
+            t_l = t[ctx['batch']]
+            z1_l = (target_z.l.float() - self.zl_shift) / self.zl_scale
+            z0_l = torch.randn_like(z1_l)
+            zl_t = (1.0 - s * t_l) * z0_l + t_l * z1_l
+            zg_t = tgt_g = None
+            if self.hybrid:
+                z1_g = target_z.g.reshape(target_z.g.shape[0], -1).float()
+                z1_g = (z1_g - self.z_shift) / self.z_scale
+                z0_g = torch.randn_like(z1_g)
+                zg_t = (1.0 - s * t) * z0_g + t * z1_g
+                tgt_g = z1_g - s * z0_g
+            v_l, v_g = self.velocity(zl_t, zg_t, t, ctx)
+            loss = torch.nn.functional.mse_loss(v_l, z1_l - s * z0_l)
+            if self.hybrid:
+                loss = loss + torch.nn.functional.mse_loss(v_g, tgt_g)
+            return loss
+
+    # -- sampling -------------------------------------------------------------
+
+    def _integrate(self, zl, zg, ctx, steps):
+        dt = 1.0 / steps
+        for k in range(steps):
+            t = torch.full((ctx['B'], 1), k * dt, device=zl.device)
+            v1_l, v1_g = self.velocity(zl, zg, t, ctx)
+            if self.solver == 'euler':
+                zl = zl + dt * v1_l
+                zg = None if zg is None else zg + dt * v1_g
+                continue
+            v2_l, v2_g = self.velocity(
+                zl + dt * v1_l, None if zg is None else zg + dt * v1_g, t + dt, ctx)
+            zl = zl + 0.5 * dt * (v1_l + v2_l)
+            zg = None if zg is None else zg + 0.5 * dt * (v1_g + v2_g)
+        return zl, zg
+
+    @torch.no_grad()
+    def sample_n_from_pooled(self, cond, n, steps=None, temperature=1.0, inflation=1.0):
+        """n draws from a context dict: Latent(g [B, n, num_z, D], l [n_c, n, C])."""
+        steps = int(steps or self.num_steps)
+        dtype = cond['x'].dtype
+        n_c, B = cond['x'].shape[0], cond['B']
+        with _autocast_disabled_for(cond['x']):
+            ctx = self._replicate(self._float_ctx(cond), n)
+            dev = ctx['x'].device
+            amp = math.sqrt(max(float(temperature), 1e-6))
+            zl = torch.randn(ctx['x'].shape[0], self.latent_ch, device=dev) * amp
+            zg = (torch.randn(ctx['B'], self.flat_dim, device=dev) * amp
+                  if self.hybrid else None)
+            zl, zg = self._integrate(zl, zg, ctx, steps)
+            inflation = float(inflation)
+            if inflation != 1.0:
+                cl, cg = self._integrate(torch.zeros_like(zl),
+                                         None if zg is None else torch.zeros_like(zg),
+                                         ctx, steps)
+                zl = cl + inflation * (zl - cl)
+                zg = None if zg is None else cg + inflation * (zg - cg)
+            zl = zl * self.zl_scale + self.zl_shift
+            l = zl.view(n, n_c, self.latent_ch).transpose(0, 1).to(dtype)
+            g = None
+            if self.hybrid:
+                zg = zg * self.z_scale + self.z_shift
+                g = zg.view(n, B, self.num_z, self.z_dim).transpose(0, 1).to(dtype)
+        return Latent(g, l)
+
+    @torch.no_grad()
+    def sample_n(self, graph, n, temperature=1.0, inflation=1.0):
+        """n draws per graph: Latent(g [B, n, num_z, D] or None, l [n_c, n, C])."""
+        return self.sample_n_from_pooled(self.condition(graph), n,
+                                         temperature=temperature, inflation=inflation)
+
+    @torch.no_grad()
+    def sample(self, graph, temperature=1.0, inflation=1.0):
+        """One draw per graph: Latent(g [B, num_z, D] or None, l [n_c, C])."""
+        z = self.sample_n(graph, 1, temperature=temperature, inflation=inflation)
+        return Latent(None if z.g is None else z.g[:, 0], z.l[:, 0])
+
+
 def build_conditional_prior(config):
     """Instantiate the conditional prior selected by `prior_family`.
 
     'fm' (default) → ConditionalFMPrior; 'gmm' → ConditionalMixturePrior.
+    latent_type local/hybrid → CoarseFMPrior.
     """
     prior_config = build_prior_config(config)
     family = prior_config.get('prior_family', 'fm')
+    if prior_config.get('latent_type', 'global') != 'global':
+        # local / hybrid: z has a coarse-node part, so the prior is a GNN on the
+        # coarsest level. Only the fm family exists for it.
+        if family != 'fm':
+            raise ValueError(f"latent_type '{prior_config['latent_type']}' needs prior_family fm")
+        return CoarseFMPrior(prior_config)
     if family == 'gmm':
         return ConditionalMixturePrior(prior_config)
     if family != 'fm':
@@ -672,6 +977,8 @@ def build_prior_config(config):
         'use_multiscale': use_multiscale,
         'multiscale_levels': config.get('multiscale_levels', 1),
         'num_z': int(config.get('num_z', default_num_z)),
+        'latent_type': str(config.get('latent_type', 'global')).lower().strip(),
+        'latent_ch': int(config.get('latent_ch', 4)),
         'prior_family': str(config.get('prior_family', 'fm')).lower().strip(),
         'prior_hidden_dim': config.get('prior_hidden_dim', config.get('latent_dim')),
         'prior_condition_hidden_dim': config.get(

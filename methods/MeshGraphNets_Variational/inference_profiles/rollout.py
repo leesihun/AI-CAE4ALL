@@ -988,21 +988,22 @@ def run_rollout(config, config_filename='config.txt'):
                     if step == 0:
                         graphs = [ctx.build_step_graph(states[0])] * B
                         if use_vae:
+                            prior_batch = Batch.from_data_list(graphs)
                             if conditional_prior is not None:
-                                prior_batch = Batch.from_data_list(graphs)
                                 z_batch = conditional_prior.sample(
                                     prior_batch, temperature=prior_temperature,
                                     inflation=batch_index['lam'],
                                 ).to(device)
                             else:
-                                # Independent noise PER z-slot, matching how
-                                # training draws z everywhere ([B, num_z, D]);
-                                # a single [B, D] z replicated across slots is a
-                                # distribution the decoder never trained on.
-                                num_z = int(getattr(getattr(model, 'model', model),
-                                                    'num_z', 1))
-                                z_batch = torch.randn(B, num_z, vae_latent_dim,
-                                                      device=device)
+                                # Independent noise PER z-slot (and per coarse
+                                # node for latent_type local/hybrid), matching
+                                # how training draws z; a single [B, D] z
+                                # replicated across slots is a distribution the
+                                # decoder never trained on. The coarse-node rows
+                                # stay valid for every step: the hierarchy is
+                                # fixed within a batch.
+                                z_batch = getattr(model, 'model', model).standard_normal_z(
+                                    prior_batch.to(device))
                     else:
                         graphs = [ctx.build_step_graph(states[b]) for b in range(B)]
 

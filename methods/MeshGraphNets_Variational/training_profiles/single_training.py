@@ -312,7 +312,7 @@ def single_worker(config, config_filename='config.txt'):
             in_prior_tail = bool(prior_freeze and epoch >= prior_freeze)
             if in_prior_tail:
                 # The tail optimises ONLY the prior's flow-matching loss, so the
-                # recon / mmd / aux slots are genuinely not being trained. Printing
+                # recon / latent-regularizer / aux slots are genuinely not being trained. Printing
                 # them as 0.00e+00 on the joint line would read as "reconstruction
                 # is perfect" to anyone tailing the log.
                 crps_str = ''
@@ -333,11 +333,12 @@ def single_worker(config, config_filename='config.txt'):
                     f"{val_str}{crps_str}{vram_str}"
                 )
             elif use_vae:
-                train_mmd   = train_metrics.get('mmd_mean', 0.0)
+                reg_name    = str(config.get('latent_reg', 'mmd')).lower().strip()
+                train_reg   = train_metrics.get('reg_mean', 0.0)
                 train_aux   = train_metrics.get('aux_mean', 0.0)
                 train_total = train_metrics.get('total_mean', train_loss)
                 if do_val:
-                    valid_mmd   = valid_metrics.get('mmd_mean', 0.0)
+                    valid_reg   = valid_metrics.get('reg_mean', 0.0)
                     valid_total = valid_metrics.get('total_mean', valid_loss)
                     crps_str = ''
                     if (valid_learned_prior_metrics is not None
@@ -345,14 +346,14 @@ def single_worker(config, config_filename='config.txt'):
                         crps_str = f" | CRPS  {valid_learned_prior_metrics['crps']:.2e}"
                     print(
                         f"Epoch {epoch}/{total_epochs} LR: {current_lr:.2e} | "
-                        f"Train  recon={train_loss:.2e} mmd={train_mmd:.2e} aux={train_aux:.2e} total={train_total:.2e} | "
-                        f"Valid  recon={valid_loss:.2e} mmd={valid_mmd:.2e} total={valid_total:.2e}"
+                        f"Train  recon={train_loss:.2e} {reg_name}={train_reg:.2e} aux={train_aux:.2e} total={train_total:.2e} | "
+                        f"Valid  recon={valid_loss:.2e} {reg_name}={valid_reg:.2e} total={valid_total:.2e}"
                         f"{crps_str}{vram_str}"
                     )
                 else:
                     print(
                         f"Epoch {epoch}/{total_epochs} LR: {current_lr:.2e} | "
-                        f"Train  recon={train_loss:.2e} mmd={train_mmd:.2e} aux={train_aux:.2e} total={train_total:.2e}"
+                        f"Train  recon={train_loss:.2e} {reg_name}={train_reg:.2e} aux={train_aux:.2e} total={train_total:.2e}"
                         f"{vram_str}"
                     )
             else:
@@ -397,8 +398,9 @@ def single_worker(config, config_filename='config.txt'):
                 with open(log_file, 'a') as f:
                     elapsed = time.time() - start_time
                     if use_vae:
+                        reg_name = str(config.get('latent_reg', 'mmd')).lower().strip()
                         val_str = (
-                            f"Valid recon={valid_loss:.4e} mmd={valid_metrics.get('mmd_mean',0):.4e} "
+                            f"Valid recon={valid_loss:.4e} {reg_name}={valid_metrics.get('reg_mean',0):.4e} "
                             f"total={valid_metrics.get('total_mean',valid_loss):.4e}"
                         ) if do_val else "Valid skipped"
                         if (do_val and valid_learned_prior_metrics is not None
@@ -408,7 +410,7 @@ def single_worker(config, config_filename='config.txt'):
                             )
                         f.write(
                             f"Elapsed: {elapsed:.2f}s Epoch {epoch} LR: {current_lr:.4e} | "
-                            f"Train recon={train_loss:.4e} mmd={train_metrics.get('mmd_mean',0):.4e} "
+                            f"Train recon={train_loss:.4e} {reg_name}={train_metrics.get('reg_mean',0):.4e} "
                             f"total={train_metrics.get('total_mean',train_loss):.4e} | "
                             f"{val_str}{vram_str}\n"
                         )

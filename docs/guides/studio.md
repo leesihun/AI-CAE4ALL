@@ -8,10 +8,11 @@
 This folder contains the local AI-CAE4ALL block-pipeline Studio. Its Python
 server connects the browser to the existing suite registry, preflight system,
 native launcher, repository files, HDF5 datasets, jobs, logs, documentation,
-and output artifacts. The Studio itself remains under `studio/`; two narrow
-compatibility fixes outside it make cHI-MGNflow checkpoints self-identifying
-and prevent the portable inference classifier from accepting unsupported
-checkpoint families.
+and output artifacts. The Studio itself remains under `studio/`; one narrow
+compatibility fix outside it prevents the portable inference classifier from
+accepting unsupported checkpoint families. HI-MGNflow (`chi-mgnflow`) was
+merged into `meshgraphnets-v` as `latent_type local` on 2026-10-19; the old
+repo is in `junk/legacy_HI_MGNFlow/`.
 
 ## Open the studio
 
@@ -59,7 +60,7 @@ If a terminal still prints `Serving HTTP on 127.0.0.1 port 8080`, that is the
 wrong static server. Stop it with `Ctrl+C`, then run `START_STUDIO.bat`.
 The correct console starts with `AI-CAE4ALL Studio is ready`. The top-right
 badge reports repository/entrypoint discovery dynamically (for example,
-`11/11 entrypoints found`); both numbers must match the current
+`10/10 entrypoints found`); both numbers must match the current
 `GET /api/models` response. This is not an environment or data validation:
 run Preflight on a concrete block before execution.
 
@@ -80,11 +81,11 @@ do not exist yet (see below):
 - **Mesh field surrogates** — all on ex9 plasticity (`dataset/deterministic/ex9_plasticity.h5` to train,
   `dataset/deterministic/ex9_plasticity_infer.h5` held out; 900 / 87 samples, 20 steps, 3131 nodes):
   HI-MGN multiscale (the default), MeshGraphNets flat, MeshGraphNets-V,
-  cHI-MGNflow, Transolver, FNO, DeepONet, Point-DeepONet. They wire
+  Transolver, FNO, DeepONet, Point-DeepONet. They wire
   dataset → trainer → Train Metrics, with the held-out file — not the training
   file — feeding Inference and Evaluate. Each mirrors its own checked-in
   training config: the two MeshGraphNets pipelines follow
-  `configs/MeshGraphNets/deterministic/ex9/`, cHI-MGNflow `configs/HI_MGNFlow/ex9/`,
+  `configs/MeshGraphNets/deterministic/ex9/`,
   Transolver `configs/Transolver/deterministic/ex9/`, and the three operators
   `configs/Neural_Operator/deterministic/ex9/`. MeshGraphNets-V has no checked-in ex9 config —
   it was deliberately left out of the ex4–ex9 roster as a one-to-many method —
@@ -137,12 +138,9 @@ not controls.
   changes. Editing one creates a persistent manual override; clearing it resumes
   graph following, and disconnecting removes only values still owned by the
   removed connection
-- Every current live AI-CAE4ALL route, including `chi-mgnflow` and the
-  geometry-ingest tool; newly registered trainable routes receive a usable
-  generic model block until richer frontend metadata is added
-- cHI-MGNflow as a first-class block with flow solver, time embedding,
-  training sampler/weighting, deterministic-readout, validation ensemble, and
-  checkpoint-selection controls; stale VAE/prior keys are visibly rejected
+- Every current live AI-CAE4ALL route, including the geometry-ingest tool;
+  newly registered trainable routes receive a usable generic model block until
+  richer frontend metadata is added
 - SimulGen-VAE as a first-class block with `train`, `train_vae`, `train_lc`,
   and `reconstruct` modes
 - All registered SimulGen-VAE configuration keys, mode-specific required fields,
@@ -207,8 +205,9 @@ not controls.
 - Portable CPU inference through `POST /api/inference/run`, persistent job
   logs, cancellation, checkpoint-metadata support gating, and the existing or
   newly built Windows executable. The portable bundle exposes eight model
-  types through five drivers; cHI-MGNflow, MLP, and SimulGen-VAE are directed
-  to their native inference/reconstruction routes before a job is created
+  types through five drivers; MeshGraphNets-V checkpoints with `latent_type`
+  `local`/`hybrid`, MLP, and SimulGen-VAE are directed to their native
+  inference/reconstruction routes before a job is created
 - Visible maturity labels (`native`, `adapter`, or `roadmap`) so future
   integration work is not presented as already implemented
 
@@ -245,9 +244,9 @@ a separate production-service and security design.
 The local bridge is implemented by `studio_server.py`. Runtime configurations,
 job metadata, and logs are written only under the ignored `studio/runtime/`
 directory. Existing model/training algorithms are imported or launched without
-redesign. The only method/portable-boundary edits are checkpoint family metadata
-for future cHI-MGNflow saves and explicit unsupported-family rejection in the
-portable classifier; native cHI-MGNflow inference remains the owning route.
+redesign. The only portable-boundary edit is explicit unsupported-family
+rejection in the portable classifier; native MeshGraphNets-V inference remains
+the owning route for `latent_type local`/`hybrid` checkpoints.
 
 Architecture and testing boundaries are maintained in
 [`../ARCHITECTURE.md`](../ARCHITECTURE.md) and

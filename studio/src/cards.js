@@ -125,10 +125,17 @@ export function modelVariant(node) {
   const spec = BLOCK_SPECS[node.type];
   const id = spec?.modelId;
   if (!id) return "";
-  if (id === "meshgraphnets" || id === "meshgraphnets-v" || id === "chi-mgnflow") {
+  if (id === "meshgraphnets" || id === "meshgraphnets-v") {
     const levels = value(node, "multiscale_levels");
     const hier = truthy(value(node, "use_multiscale"));
-    const base = id === "meshgraphnets" ? (hier ? "HI-MGN" : "Flat MGN") : MODEL_CATALOG[id].label;
+    // MGN-V's display name follows where its latent lives (latent_type):
+    // local = HI-MGNflow, hybrid = HI-MGN-hybrid, global on a hierarchy = HI-MGN-V.
+    const latentType = value(node, "latent_type").toLowerCase() || "global";
+    const variational = !hier ? MODEL_CATALOG[id].label
+      : latentType === "local" ? "HI-MGNflow"
+      : latentType === "hybrid" ? "HI-MGN-hybrid"
+      : "HI-MGN-V";
+    const base = id === "meshgraphnets" ? (hier ? "HI-MGN" : "Flat MGN") : variational;
     return hier && levels ? `${base} · ${levels}-level V-cycle` : base;
   }
   if (id === "sdfflow") return `VecSet VAE + ${value(node, "fm_arch") === "dit" ? "DiT" : "MLP"} flow`;
@@ -143,11 +150,16 @@ function modelRows(node) {
     const text = value(node, key);
     if (text) rows.push([label, `${text}${suffix}`]);
   };
-  if (["meshgraphnets", "meshgraphnets-v", "chi-mgnflow"].includes(id)) {
+  if (["meshgraphnets", "meshgraphnets-v"].includes(id)) {
     if (truthy(value(node, "use_multiscale")) && value(node, "mp_per_level")) add("MP per level", "mp_per_level");
     else add("message passing", "message_passing_num", " steps");
     add("latent width", "latent_dim");
-    if (id === "meshgraphnets-v") add("VAE latent", "vae_latent_dim");
+    if (id === "meshgraphnets-v") {
+      const latentType = value(node, "latent_type").toLowerCase() || "global";
+      if (latentType !== "global") add("latent", "latent_type");
+      if (latentType !== "local") add("VAE latent", "vae_latent_dim");
+      if (latentType !== "global") add("latent channels", "latent_ch");
+    }
   } else if (id === "transolver") {
     add("layers × heads", "num_layers");
     if (rows.length && value(node, "num_heads")) rows[rows.length - 1][1] += ` × ${value(node, "num_heads")}`;
@@ -163,6 +175,8 @@ function modelRows(node) {
     add("hidden layers", "hidden_layers"); add("activation", "activation");
   } else if (id === "simulgenvae") {
     add("latent", "latent_dim"); add("hier. latent", "latent_dim_end");
+  } else if (id === "sar") {
+    add("scales", "sar_num_iters"); add("SAR width", "sar_d_model");
   }
   const mode = value(node, "mode").toLowerCase() || "train";
   if (id === "sdfflow") {
@@ -179,6 +193,11 @@ function modelRows(node) {
       rows.push(["epochs", `VAE ${value(node, "vae_training_epochs") || "?"} · FM ${value(node, "fm_training_epochs") || "?"}`]);
     } else if (id === "simulgenvae" && mode === "train") {
       rows.push(["epochs", `VAE ${value(node, "vae_training_epochs") || "?"} · LC ${value(node, "lc_training_epochs") || "?"}`]);
+    } else if (id === "sar" && mode === "train") {
+      rows.push(["epochs", `VAE ${value(node, "vae_training_epochs") || "?"} · SAR ${value(node, "sar_training_epochs") || "?"}`]);
+    } else if (id === "sar" && mode === "train_sar") {
+      const sarLr = value(node, "sar_learningr");
+      rows.push(["epochs · lr", `${value(node, "sar_training_epochs") || "?"}${sarLr ? ` · ${sarLr}` : ""}`]);
     } else if (epochs) rows.push(["epochs · lr", `${epochs}${lr ? ` · ${lr}` : ""}`]);
   } else if (id === "sdfflow") {
     // Every non-training mode decodes through the VAE; only these read the FM

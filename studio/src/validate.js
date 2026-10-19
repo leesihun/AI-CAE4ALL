@@ -99,7 +99,7 @@ export function inferenceModel(node) {
 // not record (latent_dim_end, lc_filter, num_filter_enc, ...), so their
 // non-training modes still require the model block that owns those values.
 export const STANDALONE_INFERENCE_MODEL_IDS = [
-  "meshgraphnets", "meshgraphnets-v", "chi-mgnflow", "transolver", "fno", "deeponet", "point_deeponet", "mlp"
+  "meshgraphnets", "meshgraphnets-v", "transolver", "fno", "deeponet", "point_deeponet", "mlp"
 ];
 const STANDALONE_INFERENCE_MODELS = new Set(STANDALONE_INFERENCE_MODEL_IDS);
 
@@ -305,7 +305,7 @@ export function standaloneInferenceConfig(node, modelId, facts) {
   });
   // The Inference block owns run-time choices. Apply every field the resolved
   // model actually accepts, while keeping identity and graph-linked artifact
-  // paths authoritative below. This makes cHI ODE controls, MGN-V ensemble
+  // paths authoritative below. This makes MGN-V ensemble
   // size, Transolver chunks, and operator query chunks real rather than inert
   // Inspector fields.
   const reserved = new Set(["model", "mode", "modelpath", "dataset_dir", "infer_dataset"]);
@@ -392,7 +392,7 @@ export function executableSteps(targetId = null) {
     }
     if (spec?.isModel) {
       const mode = String(node.config?.mode || "train").toLowerCase();
-      const trainingMode = ["train", "train_vae", "train_fm", "train_lc"].includes(mode);
+      const trainingMode = ["train", "train_vae", "train_fm", "train_lc", "train_sar"].includes(mode);
       if (node.id !== target?.id && runtimeProviderIds.has(node.id) && !trainingMode) return;
       steps.push({
         label: `${spec.label} · ${node.config.mode || "train"}`,
@@ -538,6 +538,15 @@ export function executableSteps(targetId = null) {
       const trainingDataset = upstream.config.dataset_dir;
       const configuredSplit = upstream.config.infer_dataset;
       if (!(configuredSplit && wired === trainingDataset)) overrides.infer_dataset = wired;
+    }
+    if (modelId === "sar" && mode === "inference") {
+      // SAR's spread histogram compares its ensembles with the truth of the
+      // scenes it sampled, which are the infer_dataset ones -- so the file the
+      // graph feeds the run is also the one it scores against. Left to the
+      // trainer block, eval_dataset was simply absent and the run skipped the
+      // comparison.
+      const split = overrides.infer_dataset || upstream.config.infer_dataset;
+      if (split) overrides.eval_dataset = split;
     }
     if (catalogKeys.includes("modelpath") && node.config.checkpoint_path) {
       // toMethodPath is a no-op on paths already relative to the owning

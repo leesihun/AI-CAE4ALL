@@ -181,19 +181,14 @@ def validate_meshgraphnets(ctx: SpecValidationContext) -> None:
     validate_positive_fields(ctx, ("message_passing_num",), "MGN-POSITIVE-001")
 
     parallel_mode = str(values.get("parallel_mode", "ddp")).lower().strip()
-    allowed_parallel_modes = ({"ddp"} if ctx.model_id == "chi-mgnflow"
-                              else {"ddp", "model_split"})
-    if parallel_mode not in allowed_parallel_modes:
-        message = ("parallel_mode must be 'ddp' for cHI-MGNflow."
-                   if ctx.model_id == "chi-mgnflow"
-                   else "parallel_mode must be 'ddp' or 'model_split'.")
+    if parallel_mode not in {"ddp", "model_split"}:
         ctx.add(
-            "FLOW-PARALLEL" if ctx.model_id == "chi-mgnflow" else "MGN-PARALLEL-001",
+            "MGN-PARALLEL-001",
             Severity.ERROR,
-            message,
+            "parallel_mode must be 'ddp' or 'model_split'.",
             field_name="parallel_mode",
         )
-    if parallel_mode == "model_split" and ctx.model_id != "chi-mgnflow":
+    if parallel_mode == "model_split":
         gpu_ids = as_list(values.get("gpu_ids", []))
         if len(gpu_ids) < 2:
             ctx.add(

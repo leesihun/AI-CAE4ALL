@@ -256,4 +256,4 @@ def test_train_epoch_runs_under_both_schemes(tmp_path, scheme):
 
     assert np.isfinite(metrics["mean"])
     assert metrics["count"] > 0
-    assert "mmd_mean" in metrics  # the VAE terms still reach the epoch summary
+    assert "reg_mean" in metrics  # the VAE terms still reach the epoch summary

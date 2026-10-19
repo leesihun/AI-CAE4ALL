@@ -3,7 +3,7 @@
 %   SAOI B300 round 2 (MeshGraphNets-V) -- arm v_smp, board half bot.
 %
 %   Change: none -- the SAOI_run recipe, sample split (split_seed 42).
-%   Question: MGN-V reference on the same layout as the cHI arms; the
+%   Question: MGN-V reference on the same layout as the HI-MGNflow arms; the
 %   held-out test parts are SEEN by this arm.
 %
 %   Base: configs/MeshGraphNets_Variational/SAOI_run/config_train_bot.txt

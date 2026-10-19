@@ -1,0 +1,45 @@
+SAR port for AI-CAE4ALL
+=======================
+
+The package in sar/ is derived from
+
+    SAR -- "One Scale at a Time: Scale-Autoregressive Modeling for Fluid Flow
+    Distributions", Mario Lino and Nils Thuerey (2026), arXiv:2604.11403
+    https://github.com/tum-pbs/SAR, commit 1d1609fd
+
+distributed under the Apache License, Version 2.0 (see LICENSE, copied
+unchanged from upstream). Hyperparameter defaults follow upstream's
+examples/Wing scripts.
+
+Changes made for AI-CAE4ALL (Apache-2.0 section 4(b)). Every modified file
+carries an "AI-CAE4ALL port" comment at the change.
+
+Modified
+    sar/__init__.py                         drop the datasets/plot/metrics imports
+    sar/graph.py                            drop the plot_* helpers (sar/plot.py not vendored)
+    sar/loader.py                           torchvision type hint replaced by Optional[Callable]
+    sar/nn/__init__.py                      export FlowMatchingModel instead of FlowMatchingTransolver
+    sar/nn/flow_matching/__init__.py        drop the fmt.py import
+    sar/nn/model.py                         PyTorch Lightning/wandb removed; plain-PyTorch fit loop
+                                            with the same optimisation recipe; hparams capture and
+                                            load_from_checkpoint reimplemented
+    sar/nn/training_settings.py             Lightning/wandb fields removed; loader generator added
+    sar/nn/modules/transolver.py            optional memory-lean PhysicsAttention path (same maths)
+                                            and optional activation checkpointing
+    sar/nn/scale_autoregressive/sar.py      sample_n: count samples, not batches, when splitting
+                                            num_samples into sampler batches
+    sar/nn/models/__init__.py,
+    sar/nn/scale_autoregressive/__init__.py,
+    sar/transforms/__init__.py              trailing newline / drop connect.py import
+
+Added
+    sar/nn/modules/__init__.py              empty package marker
+
+Not vendored (not needed to train or sample)
+    sar/datasets.py, sar/metrics.py, sar/plot.py, sar/nn/callbacks.py,
+    sar/nn/flow_matching/fmt.py, sar/transforms/connect.py,
+    examples/ (scripts, notebooks, checkpoints), pyproject.toml
+
+Everything outside sar/ (SAR_main.py, general_modules/, training_profiles/,
+inference_profiles/, tests/) is AI-CAE4ALL code; general_modules/resume_state.py
+is the suite's shared copy.

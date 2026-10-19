@@ -1,6 +1,6 @@
-# Enhancing MeshGraphNets-V and cHI-MGNflow
+# Enhancing MeshGraphNets-V and HI-MGNflow
 
-**The strongest strategy is to improve the two methods at their respective bottlenecks: conditional distribution transfer for MeshGraphNets-V, and representation, geometry conditioning, and sampling cost for cHI-MGNflow.** Preserve the existing HI-MGN decoder while diagnosing where MeshGraphNets-V loses variability. For cHI-MGNflow, prioritize clean-field prediction or analytic noise cancellation, mesh-consistent noise, and stronger reusable geometry features. A coarse spatial generative model with conditional fine-scale refinement is the most promising larger research direction.
+**The strongest strategy is to improve the two methods at their respective bottlenecks: conditional distribution transfer for MeshGraphNets-V, and representation, geometry conditioning, and sampling cost for HI-MGNflow.** Preserve the existing HI-MGN decoder while diagnosing where MeshGraphNets-V loses variability. For HI-MGNflow, prioritize clean-field prediction or analytic noise cancellation, mesh-consistent noise, and stronger reusable geometry features. A coarse spatial generative model with conditional fine-scale refinement is the most promising larger research direction.
 
 This report evaluates the working tree at commit 1c2beabcf1df9212d814576dded096a48ff565d7, including uncommitted code present on September 11, 2026. It distinguishes current implementation, previously recorded results, mathematical deductions, and proposals requiring experiments. The scope emphasizes static conditional warpage generation because that is the concrete application in the production configs; temporal simulation is addressed separately. The target is the distribution of physically valid fields for a specified geometry and its available conditions, including multiple valid realizations of that same condition.
 
@@ -11,8 +11,8 @@ The SAOI datasets, trained checkpoints, and generated field/spread dumps are abs
 | First, both | Evaluate the generated distribution per geometry, including field dependence and peak-to-valley | Separates mean error, lost variability, incorrect spatial structure, and numerical error | High confidence in diagnostic value; low implementation effort |
 | First, MeshGraphNets-V | Compare posterior-decoded and prior-decoded distributions; fit a prior to a frozen encoder and decoder | Locates whether compression/decoding or conditional prior fitting causes the deficit | Strong causal experiment; moderate training effort |
 | Next, MeshGraphNets-V | Calibrate generated fields with proper scores, retaining a posterior reconstruction anchor | Trains the deployment path to reproduce distributions and extremes | Well-founded objective; task improvement remains untested |
-| First, cHI-MGNflow | Compare a clean-field output head and an analytically preconditioned velocity head | Reduces the burden of carrying arbitrary fine-scale noise through a hierarchy | Relevant image-model evidence plus code-specific reasoning; moderate effort |
-| Next, cHI-MGNflow | Test Matérn source noise with area/volume-aware losses | Makes stochastic forcing and error measurement less dependent on mesh density | Direct 2026 mesh-generation evidence; moderate engineering effort |
+| First, HI-MGNflow | Compare a clean-field output head and an analytically preconditioned velocity head | Reduces the burden of carrying arbitrary fine-scale noise through a hierarchy | Relevant image-model evidence plus code-specific reasoning; moderate effort |
+| Next, HI-MGNflow | Test Matérn source noise with area/volume-aware losses | Makes stochastic forcing and error measurement less dependent on mesh density | Direct 2026 mesh-generation evidence; moderate engineering effort |
 | Next, both | Improve geometry information at coarse levels; cache invariant computations | Addresses long-range response and repeated inference cost | Mesh-surrogate evidence; moderate effort |
 | Larger research | Generate a coarse spatial field, then sample conditioned refinements | Combines efficient global variability with local detail | Closely related 2025–2026 research; substantial implementation effort |
 | After quality is established | Distill expensive field sampling or test MeanFlow | Can reduce full-mesh evaluations per draw | Established on other domains; higher risk for conditional calibration |
@@ -25,7 +25,7 @@ MeshGraphNets-V currently uses three global latent slots of width 16 in the insp
 
 Its training objective combines posterior reconstruction MSE, per-slot aggregate MMD, an auxiliary loss on the decoded field’s peak-to-valley, and conditional-prior FM loss. The prior_grad_to_encoder setting controls whether the prior objective also differentiates through the posterior target. AdaLN conditioning is implemented. The FM prior supports Euler and Heun; production requests Heun. Latent inflation is also implemented. The old auxiliary head predicting field summary statistics from z has been replaced by direct peak-to-valley loss on the reconstructed field.
 
-cHI-MGNflow predicts a velocity on an N × output_var field. It receives geometry/context and the interpolated noisy field, with flow time driving AdaLN. It currently offers uniform and logit-normal time sampling, optional extra training at exactly zero flow time, velocity- or clean-field-equivalent loss weighting, Euler/Heun integration, and single-evaluation mean readout. Its default source is independent Gaussian noise at each node and output channel. Its standard training step uses one network evaluation, without ODE integration.
+HI-MGNflow predicts a velocity on an N × output_var field. It receives geometry/context and the interpolated noisy field, with flow time driving AdaLN. It currently offers uniform and logit-normal time sampling, optional extra training at exactly zero flow time, velocity- or clean-field-equivalent loss weighting, Euler/Heun integration, and single-evaluation mean readout. Its default source is independent Gaussian noise at each node and output channel. Its standard training step uses one network evaluation, without ODE integration.
 
 | Implementation evidence | Current behavior |
 |---|---|
@@ -48,11 +48,11 @@ The code has also repaired the earlier unconditional final-checkpoint overwrite 
 |---|---:|---:|
 | MeshGraphNets-V arm 7 | 0.410 | 0.475 |
 | MeshGraphNets-V arm 3 | 0.434 | 0.526 |
-| cHI-MGNflow arm 1 | 0.896 | 0.475 |
+| HI-MGNflow arm 1 | 0.896 | 0.475 |
 
 These are measurements transcribed from that note, not recomputed results. They concern the distribution of one scalar, peak-to-valley displacement. They do not establish fidelity of the full displacement-field distribution. The 125 reference realizations estimate a conditional law; they are not the exact population distribution.
 
-The note suggests that MeshGraphNets-V mainly loses dispersion, whereas cHI-MGNflow additionally overpredicts peak-to-valley on SM-L345U-MAIN. That motivates different interventions. However, a sign change in bias across geometries does not rule out preprocessing or feature-semantic errors: geometry-dependent normalization, part encoding, alignment, or extrapolation can produce different signs. Similarly, consistent underdispersion across a small hyperparameter sweep does not prove a structural latent bottleneck.
+The note suggests that MeshGraphNets-V mainly loses dispersion, whereas HI-MGNflow additionally overpredicts peak-to-valley on SM-L345U-MAIN. That motivates different interventions. However, a sign change in bias across geometries does not rule out preprocessing or feature-semantic errors: geometry-dependent normalization, part encoding, alignment, or extrapolation can produce different signs. Similarly, consistent underdispersion across a small hyperparameter sweep does not prove a structural latent bottleneck.
 
 The earlier sweep had one missing MeshGraphNets-V arm and no seed replication. Its factor effects cannot support statistical claims of “no effect” or “real effect” without uncertainty estimates and the missing design point. Changing batch size while holding epochs fixed also changes optimizer-update count, so the reported advantage of batch 16 may partly be an update-budget effect. Preserve the observed uniform-time baseline for field flow; the recorded logit-normal result does not justify switching to an image-derived default.
 
@@ -72,7 +72,7 @@ The earlier sweep had one missing MeshGraphNets-V arm and no seed replication. I
 
 5. **The existing fair CRPS correction is useful and should be retained.** Both loops use the off-diagonal S(S-1) ensemble correction. Its interpretation assumes independently sampled members. At S=1 the implementation falls back to absolute error; that is not an unbiased distributional CRPS estimate. Fixed independent noise banks across checkpoint comparisons are appropriate. Introducing dependent antithetic members would require reconsidering the pairwise estimator. [6: Fair Scores for Ensemble Forecasts](https://empslocal.ex.ac.uk/people/staff/ferro/Publications/ferro2013.pdf).
 
-6. **The training log’s field spread ratio is not conditional calibration.** The cHI-MGNflow code divides average nodewise ensemble standard deviation by target.std(), computed over a target batch’s nodes/channels. This compares stochastic variation against spatial field variation, potentially across graphs. It is different from the SD ratio across repeated peak-to-valley realizations of one geometry. Neither a value near one nor a value near zero alone establishes calibration or collapse.
+6. **The training log’s field spread ratio is not conditional calibration.** The HI-MGNflow code divides average nodewise ensemble standard deviation by target.std(), computed over a target batch’s nodes/channels. This compares stochastic variation against spatial field variation, potentially across graphs. It is different from the SD ratio across repeated peak-to-valley realizations of one geometry. Neither a value near one nor a value near zero alone establishes calibration or collapse.
 
 7. **Latent inflation does not preserve decoded location or shape.** The code centers inflation on the prior ODE image of zero noise, which is not generally the prior mean. Even inflation around the actual latent mean can shift a nonlinear decoder’s output mean. For Z~N(0,1) and D(z)=z², doubling z increases the decoded mean from 1 to 4. Tune inflation against bias, tails, and joint field behavior; matching one SD ratio is insufficient.
 
@@ -139,7 +139,7 @@ If compression is limiting, retain a global z for board-wide modes and add a sma
 
 ---
 
-**For cHI-MGNflow, start by changing what the network must carry through the mesh hierarchy.** At low flow time, the velocity contains a large component that cancels the initial noise. A hierarchy built from pooled features must retain that node-specific information while learning global geometry response. Skip paths help, but the current architecture has no explicit analytic output path for this cancellation.
+**For HI-MGNflow, start by changing what the network must carry through the mesh hierarchy.** At low flow time, the velocity contains a large component that cancels the initial noise. A hierarchy built from pooled features must retain that node-specific information while learning global geometry response. Skip paths help, but the current architecture has no explicit analytic output path for this cancellation.
 
 A first ablation should compare the existing velocity head against a direct clean-field predictor h_theta(y_t,t,g), converted to velocity through:
 
@@ -216,7 +216,7 @@ The exact zero-time clean readout is s*z0 + v(z0,0,g) at the ideal regression op
 
 ---
 
-**A larger architectural program should distribute randomness across spatial scales and allocate computation accordingly.** MeshGraphNets-V makes the entire random state small; cHI-MGNflow updates the entire fine field at every step. A useful middle ground factorizes the field into a global/coarse sample and fine residuals:
+**A larger architectural program should distribute randomness across spatial scales and allocate computation accordingly.** MeshGraphNets-V makes the entire random state small; HI-MGNflow updates the entire fine field at every step. A useful middle ground factorizes the field into a global/coarse sample and fine residuals:
 
 \[
 p(y\mid g)
@@ -315,7 +315,7 @@ The cost distinction should guide resource allocation. A MeshGraphNets-V draw re
 
 A convincing study would compare the current global-latent model, the current full-field model, a spatial latent/coarse-to-fine model, and simpler conditional density/mean-residual references. It would publish the paired geometry/realization protocol, measure posterior-to-prior loss of variability, and show improvements across several unseen geometries under equal-update and equal-cost budgets. A new name for a combination of known components would be much weaker evidence.
 
-The practical implementation order is: establish generated-field evaluation, run the frozen-prior diagnostic for MeshGraphNets-V, test direct clean-field prediction/preconditioning for cHI-MGNflow, then investigate Matérn noise and spatial generative refinement. These steps preserve useful existing behavior while exposing whether a larger architecture is necessary.
+The practical implementation order is: establish generated-field evaluation, run the frozen-prior diagnostic for MeshGraphNets-V, test direct clean-field prediction/preconditioning for HI-MGNflow, then investigate Matérn noise and spatial generative refinement. These steps preserve useful existing behavior while exposing whether a larger architecture is necessary.
 
 ---
 

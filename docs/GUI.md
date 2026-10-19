@@ -70,7 +70,7 @@ route has a default profile.
 
 | Group | Templates |
 | --- | --- |
-| Mesh field surrogates | HI-MGN multiscale (default), MeshGraphNets flat, MeshGraphNets-V, cHI-MGNflow, Transolver, FNO, DeepONet, Point-DeepONet |
+| Mesh field surrogates | HI-MGN multiscale (default), MeshGraphNets flat, MeshGraphNets-V, Transolver, FNO, DeepONet, Point-DeepONet |
 | Fixed-geometry and tabular | SimulGen-VAE reconstruction, Parametric response estimation (MLP) |
 | Generative geometry | SDFFlow train (DeepJEB), Design optimization |
 | Data preparation | Geometry to HDF5 (ingest) |
@@ -79,7 +79,7 @@ route has a default profile.
 The mesh templates all target **ex9 plasticity**: `dataset/deterministic/ex9_plasticity.h5` to train and
 `dataset/deterministic/ex9_plasticity_infer.h5` held out (900 / 87 samples, 20 steps, 3131 nodes). Each
 mirrors its own checked-in training config — the two MeshGraphNets pipelines
-follow `configs/MeshGraphNets/deterministic/ex9/`, cHI-MGNflow `configs/HI_MGNFlow/ex9/`,
+follow `configs/MeshGraphNets/deterministic/ex9/`,
 Transolver `configs/Transolver/deterministic/ex9/`, the three operators
 `configs/Neural_Operator/deterministic/ex9/`. MeshGraphNets-V has no checked-in ex9 config
 (it was left out of the ex4–ex9 roster as a one-to-many method), so its template
@@ -106,14 +106,14 @@ physics.
 | --- | --- |
 | Sources (4) | CAD, HDF5 Dataset, Design Parameters, Saved ML Model |
 | Preparation (1) | Geometry → HDF5 Dataset |
-| Models (10) | one per live route: MeshGraphNets, MeshGraphNets-V, cHI-MGNflow, Transolver, FNO, DeepONet, Point-DeepONet, SimulGen-VAE, SDFFlow, Simple MLP |
+| Models (9) | one per live route: MeshGraphNets, MeshGraphNets-V (`latent_type` global / local / hybrid = HI-MGN-V / HI-MGNflow / HI-MGN-hybrid), Transolver, FNO, DeepONet, Point-DeepONet, SimulGen-VAE, SDFFlow, Simple MLP. HI-MGNflow (`chi-mgnflow`) was merged into `meshgraphnets-v` as `latent_type local` on 2026-10-19; the old repo is in `junk/legacy_HI_MGNFlow/` |
 | Execution (2) | Inference Run, CAD Generator |
 | Optimization (1) | Optimization |
 | Evaluation (3) | Evaluate Predictions, Train Metrics, Compare Models |
 | Outputs (1) | Export Results |
 | Deployment (1) | API Deployment |
 
-`geometry_ingest` is the eleventh live route; it is exposed as the
+`geometry_ingest` is the tenth live route; it is exposed as the
 **Geometry → HDF5 Dataset** block rather than a model block, because it prepares
 data instead of learning.
 
@@ -154,7 +154,8 @@ is linked to and flags a required input that is not, and the settings in
 between are labelled in words with the raw config key beside them. Prose rows
 that describe a block rather than configure it (`split`, `viewer`, `metrics`…)
 are not shown, and an Inference block hides the knobs its linked family cannot
-read (`infer_chunk_size` is Transolver-only, the `flow_*` keys cHI-MGNflow-only)
+read (`infer_chunk_size` is Transolver-only, `num_vae_samples` MeshGraphNets-V-only;
+the `flow_*` keys of the retired HI-MGNflow route apply to no live family)
 unless you filled one in.
 
 For a **model block**, eight rows chosen by mode, not by the order keys happen
@@ -212,7 +213,7 @@ the block has none — a flat block switched to a hierarchy gets `voronoi_cluste
 512, 64`, the HI-MGN preset's ex9 value, not the source mesh's count. A value
 equal to the block's own (`1e-6` and `0.000001`) is not listed as a change. Low
 VRAM also sets `batch_size 1` where the recipe or the block runs more, and on
-MGN-V and cHI-MGNflow `vae_batch_size 1` (trajectories rolled out together —
+MGN-V `vae_batch_size 1` (trajectories rolled out together —
 memory and speed only); SDFFlow and SimulGen-VAE keep their stage batch sizes
 as the source has them. For MeshGraphNets both presets are the HI-MGN recipe: activations are
 checkpointed per GnBlock, so memory follows the full-resolution block count

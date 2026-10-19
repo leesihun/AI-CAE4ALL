@@ -9,11 +9,14 @@ Supported checkpoints: `point_deeponet`, `deeponet`, `fno`
 geometry generator `sdfflow`. You don't need to say which one — the
 checkpoint file tells the tool.
 
-`cHI-MGNflow`, MLP, and SimulGen-VAE are intentionally not in this portable
-bundle. Use their native AI-CAE4ALL inference/reconstruction routes. In
-particular, cHI shares the MeshGraphNets backbone but has a different
-flow-matching velocity network; current detection rejects it explicitly rather
-than routing those weights into the deterministic MGN driver.
+MLP, SimulGen-VAE, and `meshgraphnets-v` checkpoints with `latent_type local`
+or `hybrid` (HI-MGNflow / HI-MGN-hybrid: coarse-node latents plus a
+coarse-level flow-matching prior) are intentionally not in this portable
+bundle. Use their native AI-CAE4ALL inference/reconstruction routes; detection
+rejects them explicitly rather than routing those weights into the global-latent
+MGN-V driver. Legacy `chi-mgnflow` checkpoints (the route was merged into
+`meshgraphnets-v` on 2026-10-19; its repo is in `junk/legacy_HI_MGNFlow/`) are
+rejected the same way.
 
 ## Quick start
 
@@ -47,13 +50,13 @@ picks the right forward pass. No filename convention, no `--model` flag:
 | `schema_version == 'deeponet_repo_v1'` | `neural_operator` | point_deeponet, deeponet, fno (`checkpoint['selected_model']` picks which) |
 | `schema_version == 'sdfflow_infer_v1'`, or an SDFFlow-identified legacy `stage in {'vae','fm'}` checkpoint | `geometry` | SDFFlow (VAE + flow-matching) |
 | `checkpoint_version` present | `transolver` | Transolver |
-| `model_config` has `use_vae` | `meshgraphnets_v` | MeshGraphNets (variational) |
+| `model_config` has `use_vae` (and `latent_type` global or absent) | `meshgraphnets_v` | MeshGraphNets (variational) |
 | `model_config` has `message_passing_num`, no `use_vae` | `meshgraphnets` | MeshGraphNets |
 
 `stage='vae'` alone is not enough: SimulGen-VAE uses the same stage label and
-must not be mistaken for SDFFlow. Likewise, cHI flow keys are detected before
-the shared MeshGraphNets keys and produce an actionable unsupported-family
-error.
+must not be mistaken for SDFFlow. Likewise, legacy HI-MGNflow flow keys and a
+non-global MGN-V `latent_type` are detected before the shared MeshGraphNets keys
+and produce an actionable unsupported-family error.
 
 ## CLI flags
 

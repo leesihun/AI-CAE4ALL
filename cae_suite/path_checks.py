@@ -19,19 +19,16 @@ _PATH_SENTINELS = {"", "none", "null", "false"}
 #
 #   methods/MeshGraphNets/general_modules/mesh_dataset.py:517
 #   methods/MeshGraphNets_Variational/general_modules/mesh_dataset.py:386
-#   methods/HI_MGNFlow/general_modules/mesh_dataset.py:386
 #       -> ``config.get('write_preprocessing', True)``   (default ON)
 #   methods/Transolver/training_profiles/{distributed,sharded}_training.py
 #       -> ``config.get('write_preprocessing', False)``  (default OFF)
 #
-# chi-MGNflow reaches the writer from every one of its training modes (they all
-# go through training_profiles/), which is why all three are listed.  The
+# The
 # Neural Operator runtime has no writer at all and its spec forbids the key, so
 # it is deliberately absent.
 _PREPROCESSING_WRITERS: dict[str, tuple[frozenset[str], bool]] = {
     "meshgraphnets": (frozenset({"train"}), True),
     "meshgraphnets_variational": (frozenset({"train"}), True),
-    "chi_mgnflow": (frozenset({"train", "train_ae", "train_prior"}), True),
     "transolver": (frozenset({"train"}), False),
 }
 

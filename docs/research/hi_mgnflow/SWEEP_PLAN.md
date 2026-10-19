@@ -1,4 +1,4 @@
-# cHI-MGNflow — SAOI 파라메트릭 스윕 설계
+# HI-MGNflow — SAOI 파라메트릭 스윕 설계
 
 MeshGraphNets-V의 SAOI wave-3(2⁴ 16 arm, GPU당 2개, `gen_sweep_configs.py`)를
 참고 골격으로 삼되, **한 가지가 구조적으로 다르다.**
@@ -36,7 +36,7 @@ Wave B   학습 축          16 arm     예산에 따라
 
 ```
 configs/HI_MGNFlow/wave0/config_wave0_det.txt     결정론 HI-MGN
-configs/HI_MGNFlow/wave0/config_wave0_flow.txt    cHI-MGNflow
+configs/HI_MGNFlow/wave0/config_wave0_flow.txt    HI-MGNflow
                                                    ← 백본·데이터·예산 동일
 
 python AI_CAE4ALL_main.py --config .../config_wave0_det.txt   > det.log
@@ -51,7 +51,7 @@ FM은 결정론 회귀보다 step이 더 든다. 목표 `y − z₀`에 환원 �
 
 ```
 arm  det   :  MeshGraphNets (결정론) — 같은 백본, 같은 데이터, 같은 batch/lr
-arm  flow  :  cHI-MGNflow          — 위와 동일 + flow matching
+arm  flow  :  HI-MGNflow          — 위와 동일 + flow matching
 ```
 
 학습 데이터의 20%만 쓰고, 두 loss 곡선이 평탄해지는 epoch을 비교한다.

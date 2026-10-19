@@ -45,8 +45,9 @@ class TrainingMetricParserTests(unittest.TestCase):
         self.assertNotIn("by_recon_validation_loss", keys)
 
     def test_tagged_stage_lines_are_parsed_and_scoped_per_tag(self) -> None:
-        # HI_MGNFlow prints `[AE]`/`[Prior]` before `Epoch`; these lines used
-        # to match nothing, so a chi-mgnflow run had no Train Metrics at all.
+        # A two-stage trainer may print `[AE]`/`[Prior]` before `Epoch` (job
+        # logs of the retired flow-prior route do); these lines used to match
+        # nothing, so such a run had no Train Metrics at all.
         result = parse_training_log(
             "[AE] Epoch 0/2 LR: 1.00e-04 | Train recon=1.2e-01 kl=3.0e-04 | "
             "Valid recon=1.3e-01 kl=2.0e-04 | VRAM peak=0.11GB reserved=0.12GB\n"
@@ -212,7 +213,7 @@ class TrainingMetricParserTests(unittest.TestCase):
         # The plain keys of a single-stage run are unchanged.
         self.assertEqual([item["key"] for item in vae_alone["metrics"]], ["trainsdf", "kl", "lr"])
 
-        # HI_MGNFlow: `[AE]`/`[Prior]` in `mode train` vs `train_ae` alone.
+        # Stage tags: `[AE]`/`[Prior]` in `mode train` vs `train_ae` alone.
         both = parse_training_log(
             "[AE] Epoch 0/1 LR: 1.0e-04 | Train recon=1.0e-01\n[Prior] Epoch 0/1 LR: 1.0e-04 | Train fm=6.0e+00\n"
         )

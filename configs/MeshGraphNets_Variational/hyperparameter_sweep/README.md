@@ -1,23 +1,20 @@
 # MeshGraphNets-V parametric study (B300 round 2)
 
-Round 2 runs on two 8-GPU B300 nodes, one method per node. Each node runs
-both studies at once, so every card holds one SAOI job and one
-shell-buckling job:
+Round 2 runs on one 8-GPU B300 node, both studies at once, so every card
+holds one SAOI job and one shell-buckling job: 4 SAOI arms x 2 board halves
+and 8 ex3 arms.
 
-| node | method | directory | SAOI jobs | ex3 jobs |
-| --- | --- | --- | --- | --- |
-| 1 | cHI-MGNflow | [`configs/HI_MGNFlow/hyperparameter_sweep/`](../../HI_MGNFlow/hyperparameter_sweep/) | 4 arms x 2 board halves | 8 arms |
-| 2 | MeshGraphNets-V | this one | 4 arms x 2 board halves | 8 arms |
-
-| study | data (needed on **both** nodes) |
+| study | data |
 | --- | --- |
 | [`SAOI/`](SAOI/) | `dataset/SAOI/saoi_train_{bot,top}.h5` and the official eval parts |
 | [`probabilistic/`](probabilistic/) | `dataset/probabilistic/ex3_shell_buckling{,_infer}.h5` |
 
-The cHI-MGNflow directory holds a byte-identical copy of every script here.
-Its README also has the full run instructions, the overrides and how to read
-the type-back block; they apply to this node unchanged, with `mgnv` in place
-of `chi`.
+Round 2 was planned on two nodes, node 1 for HI-MGNflow. On
+2026-10-19 HI-MGNflow (`chi-mgnflow`) was merged into `meshgraphnets-v` as
+`latent_type local`; the old repo and its sweep directory are in
+`junk/legacy_HI_MGNFlow/` (git-ignored; in git, `git show 9db47d6:configs/HI_MGNFlow/hyperparameter_sweep/README.md`).
+That README has the full run instructions, the overrides and how to read the
+type-back block; they apply here unchanged, with `mgnv` in place of `chi`.
 
 The results come back as **typed text only**. The run ends with one block of
 short lines between `==== TYPE THIS BACK ====` and `==== END ====` that holds
@@ -32,18 +29,17 @@ both studies' results.
 
 ## SAOI: does the model carry a part's scatter to a new geometry?
 
-cHI-MGNflow's round 1 found that its best arm fits parts it trained on and
+HI-MGNflow's round 1 found that its best arm fits parts it trained on and
 misses unseen ones, even those inside the training range. Every arm then
 split **samples** 80/10/10, so the checkpoint was selected on more
-realizations of the training parts. Round 2 asks why the unseen parts miss,
-and asks it of both methods under identical splits:
+realizations of the training parts. Round 2 asks why the unseen parts miss:
 
-| arm (MGN-V / cHI) | change | question |
+| arm | change | question |
 | --- | --- | --- |
-| `v_smp` / `c_smp` | none: [`../SAOI_run/`](../SAOI_run/) / cHI round-1 `tok`, sample split | the reference |
-| `v_grp` / `c_grp` | `split_group_attr geometry_id` on the labelled `_bygeom.h5` copy | does selecting the checkpoint on **unseen geometries** help on unseen parts? |
-| `v_grp_rep` / `c_grp_rep` | `v_grp` + `training_seed 20261012` / `c_grp` repeated | the noise floor |
-| `v_nopart` / `c_nopart` | `*_grp` + `cond_var 2` (the Part No. row is no longer read) | is the arbitrary part ID, fed in as a scalar, what lets the model memorize parts? |
+| `v_smp` | none: [`../SAOI_run/`](../SAOI_run/), sample split | the reference |
+| `v_grp` | `split_group_attr geometry_id` on the labelled `_bygeom.h5` copy | does selecting the checkpoint on **unseen geometries** help on unseen parts? |
+| `v_grp_rep` | `v_grp` + `training_seed 20261012` | the noise floor |
+| `v_nopart` | `v_grp` + `cond_var 2` (the Part No. row is no longer read) | is the arbitrary part ID, fed in as a scalar, what lets the model memorize parts? |
 
 A geometry is the node coordinates plus the mesh. Variants that differ only in
 thickness or part number stay on one side of the split.
@@ -52,7 +48,7 @@ Each job is scored on the three official eval parts (**O**, unseen by every
 arm) and on up to 6 held-out test parts per half (**H**, cut by
 `saoi_heldout.py`). H is SEEN by `v_smp`, which trained on about 80% of
 their realizations, and UNSEEN by `v_grp` and `v_nopart`. The parts are the
-same for every arm and both methods, so `H(smp) - H(grp)` is the
+same for every arm, so `H(smp) - H(grp)` is the
 generalization gap at fixed parts.
 
 | result | meaning |
@@ -61,7 +57,6 @@ generalization gap at fixed parts.
 | H of `v_grp` close to H of `v_smp` | a new in-range geometry costs nothing; the official parts are hard for another reason |
 | H of `v_grp` far worse than H of `v_smp` | the model does not transfer scatter to a new geometry |
 | `v_nopart` beats `v_grp` | the part-ID row is a memorization channel; drop it from the recipe |
-| MGN-V vs cHI on the same arm | which method transfers better |
 
 Every arm differs from `SAOI_run` only by its change and the shared layout:
 `gpu_ids 0`, outputs under `output/b300_r2/saoi/<arm>/<half>/`,
@@ -92,7 +87,7 @@ ex3 jobs go lightest first, and job k of each study runs on card k.
 
 ## Run
 
-One command on node 2, with no argument and no `nohup`:
+One command on the node, with no argument and no `nohup`:
 
 ```bash
 cd configs/MeshGraphNets_Variational/hyperparameter_sweep && ./run_sweep.sh
@@ -106,15 +101,17 @@ the background on their own and the terminal can close. Follow them with
 The node needs a MeshGraphNets-V interpreter with a Blackwell torch (sm_100,
 CUDA 12.8 or newer), set in `ai_cae4all.local.toml` or through
 `METHOD_PYTHON=`, a checkout with `split_group_attr`, and the data of both
-studies. Prerequisites, abort stages and overrides are in the
-[cHI-MGNflow README](../../HI_MGNFlow/hyperparameter_sweep/README.md#run).
+studies. Prerequisites, abort stages and overrides are in the header of
+`run_sweep.sh` and in the archived HI-MGNflow README's "Run" section
+(`git show 9db47d6:configs/HI_MGNFlow/hyperparameter_sweep/README.md`).
 To run one job again: `JOBS=v_grp.bot ./run_sweep.sh SAOI`.
 
 The end of `run_sweep_mgnv.out` holds one block, `R2 saoi mgnv ...` and
 `R2 ex3 mgnv ...` with their arm lines, and
 `python configs/MeshGraphNets_Variational/hyperparameter_sweep/brief.py`
-prints it at any time. The columns are explained in
-[Reading the block](../../HI_MGNFlow/hyperparameter_sweep/README.md#reading-the-block).
+prints it at any time. The columns are explained in the docstring of
+`brief.py` and in the archived HI-MGNflow README's "Reading the block"
+section (`git show 9db47d6:configs/HI_MGNFlow/hyperparameter_sweep/README.md`).
 
 Outputs go to `output/b300_r2/<saoi|ex3>/<arm>/[<half>/]`, with this
 method's logs and status under `output/b300_r2/<saoi|ex3>/run_logs/mgnv/`

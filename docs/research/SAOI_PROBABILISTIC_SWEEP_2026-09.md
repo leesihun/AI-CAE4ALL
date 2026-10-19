@@ -1,4 +1,4 @@
-# SAOI probabilistic warpage: MeshGraphNets-V vs cHI-MGNflow
+# SAOI probabilistic warpage: MeshGraphNets-V vs HI-MGNflow
 
 > ## Note on the eval design, 2026-09
 >

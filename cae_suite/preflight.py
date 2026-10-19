@@ -203,10 +203,11 @@ def _probe_dataset(
         return
     # `evaluate` (SDFFlow) reads its held-out split from `dataset_dir` like the
     # training modes; without it here the sdf_hdf5 schema probe never runs and a
-    # wrong-contract dataset only fails deep inside the native run.
+    # wrong-contract dataset only fails deep inside the native run. `train_sar`
+    # (SAR's second stage) trains on dataset_dir too.
     field_name = (
         "dataset_dir"
-        if result.mode in {"train", "train_vae", "train_fm", "evaluate"}
+        if result.mode in {"train", "train_vae", "train_fm", "train_sar", "evaluate"}
         else "infer_dataset"
     )
     path = result.resolved_paths.get(field_name)
@@ -319,8 +320,10 @@ def _validate_dataset_against_config(result: PreflightResult, field_name: str) -
         return
     feature_count, timesteps, _nodes = nodal_shape
     values = result.parsed.values
-    input_var = values.get("input_var")
     output_var = values.get("output_var")
+    # A generative route (SAR) has no input state block: it reads only the
+    # output rows, so they alone size the state block.
+    input_var = values.get("input_var", output_var)
     try:
         cond_var = int(values.get("cond_var", 0) or 0)
     except (TypeError, ValueError):
@@ -333,7 +336,8 @@ def _validate_dataset_against_config(result: PreflightResult, field_name: str) -
     except (TypeError, ValueError):
         return
     if feature_count < required_features:
-        detail = (f"3 coords + max(input_var={input_var}, output_var={output_var})"
+        detail = ((f"3 coords + max(input_var={input_var}, output_var={output_var})"
+                   if "input_var" in values else f"3 coords + output_var={output_var}")
                   + (f" + cond_var={cond_var}" if cond_var else ""))
         result.report.add(
             "DATASET-FEATURES-001",

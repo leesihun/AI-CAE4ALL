@@ -7,7 +7,6 @@
 # Relative paths are resolved from the AI-CAE4ALL repository root.
 # meshgraphnets = "methods/MeshGraphNets/.venv/bin/python"
 # meshgraphnets-v = "methods/MeshGraphNets_Variational/.venv/bin/python"
-# chi-mgnflow = "methods/HI_MGNFlow/.venv/bin/python"
 # neural_operator = "methods/Neural_Operator/.venv/bin/python"
 # transolver = "methods/Transolver/.venv/bin/python"
 # sdfflow = "methods/SDFFlow/.venv/bin/python"

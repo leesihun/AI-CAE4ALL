@@ -80,6 +80,13 @@ VAR_KEYS = frozenset(
         # 'adaln' (AdaLN-Zero modulation, identity at init). It changes the
         # parameter names, so a checkpoint is tied to the value it trained with.
         "z_conditioning",
+        # Where z lives on the V-cycle (model/latent.py): 'global' (num_z
+        # per-graph slots, HI-MGN-V), 'local' (latent_ch channels per coarsest
+        # node, HI-MGNflow), or 'hybrid' (both). Architecture-defining, persisted
+        # in the checkpoint. vae_local_mp_layers is the depth of the coarse-node
+        # posterior head. latent_reg picks the regularizer pulling the posterior
+        # toward N(0, I): 'mmd' (lambda_mmd) or per-sample 'kl' (kl_weight).
+        "latent_type", "latent_ch", "vae_local_mp_layers", "latent_reg", "kl_weight",
         # All-gather z across DDP ranks before MMD so the two-sample estimator
         # sees the GLOBAL batch instead of the per-rank one (default True).
         "mmd_gather_ranks",
@@ -279,8 +286,10 @@ def validate_variational(ctx: SpecValidationContext) -> None:
                 field_name="z_conditioning",
             )
 
+        validate_latent_placement(ctx)
+
     # The native trainers branch only on 'crps' and rank everything else by the
-    # reconstruction loss, so 'det' (a cHI-MGNflow criterion) was accepted here
+    # reconstruction loss, so 'det' (a HI-MGNflow criterion) was accepted here
     # and then silently trained as 'recon' while the log said "best by det".
     if "best_by" in values and str(values["best_by"]).lower().strip() not in {"recon", "crps"}:
         ctx.add(
@@ -322,6 +331,96 @@ def validate_variational(ctx: SpecValidationContext) -> None:
     validate_spread_keys(ctx)
 
 
+# Mirror of LATENT_TYPES / LATENT_REGS in the runtime's model/latent.py.
+LATENT_TYPES = ("global", "local", "hybrid")
+LATENT_REGS = ("mmd", "kl")
+
+
+def validate_latent_placement(ctx: SpecValidationContext) -> None:
+    """latent_type / latent_reg and the features only the global latent has.
+
+    local and hybrid put z_l on the coarsest V-cycle level and swap the prior
+    for CoarseFMPrior, a GNN flow over that level. It has no GMM family, no
+    conditional-moment base, and no residual_film velocity; the runtime raises
+    on the first and silently ignores the other two, so all three are errors
+    here rather than a run that is not the one configured.
+    """
+    values = ctx.values
+    latent_type = str(values.get("latent_type", "global")).lower().strip()
+    if latent_type not in LATENT_TYPES:
+        ctx.add("MGNV-LATENT-TYPE", Severity.ERROR,
+                "latent_type must be 'global' (per-graph slots), 'local' (per coarsest "
+                "node) or 'hybrid' (both).",
+                field_name="latent_type")
+        return
+    reg = str(values.get("latent_reg", "mmd")).lower().strip()
+    if reg not in LATENT_REGS:
+        ctx.add("MGNV-LATENT-REG", Severity.ERROR,
+                "latent_reg must be 'mmd' (weight lambda_mmd) or 'kl' (per-sample KL, "
+                "weight kl_weight).",
+                field_name="latent_reg")
+    if reg == "kl" and "kl_weight" not in values:
+        ctx.add("MGNV-LATENT-KL-DEFAULT", Severity.NOTICE,
+                "kl_weight is absent; the native default of 1e-3 will be used.",
+                field_name="kl_weight")
+    if "kl_weight" in values:
+        w = numeric(values["kl_weight"])
+        if w is None or w < 0:
+            ctx.add("MGNV-LATENT-KL-WEIGHT", Severity.ERROR,
+                    "kl_weight must be a non-negative number.", field_name="kl_weight")
+        elif reg != "kl":
+            ctx.add("MGNV-LATENT-KL-WEIGHT", Severity.WARNING,
+                    "kl_weight is set but latent_reg is not 'kl'; it is ignored.",
+                    field_name="kl_weight", promote_in_strict=True)
+    if reg == "kl" and "lambda_mmd" in values:
+        ctx.add("MGNV-LATENT-MMD-WEIGHT", Severity.WARNING,
+                "lambda_mmd is set but latent_reg is 'kl'; it is ignored (kl_weight "
+                "weights the KL term).",
+                field_name="lambda_mmd", promote_in_strict=True)
+
+    if latent_type == "global":
+        for name in ("latent_ch", "vae_local_mp_layers"):
+            if name in values:
+                ctx.add("MGNV-LATENT-INACTIVE", Severity.WARNING,
+                        f"{name} only applies to latent_type local/hybrid; it is ignored "
+                        f"with latent_type global.",
+                        field_name=name, promote_in_strict=True)
+        return
+
+    validate_positive_fields(ctx, ("latent_ch", "vae_local_mp_layers"), "MGNV-LATENT-POSITIVE")
+    if ctx.mode != "train":
+        # Inference rebuilds the architecture from the checkpoint model_config.
+        return
+    why = f"latent_type {latent_type} "
+    if values.get("use_multiscale", False) is not True:
+        ctx.add("MGNV-LATENT-MULTISCALE", Severity.ERROR,
+                why + "places z_l on the coarsest V-cycle level, which needs "
+                      "use_multiscale True.",
+                field_name="use_multiscale")
+    if str(values.get("prior_family", "fm")).lower() != "fm":
+        ctx.add("MGNV-LATENT-PRIOR", Severity.ERROR,
+                why + "has only the flow-matching coarse-level prior; prior_family must be fm.",
+                field_name="prior_family")
+    if values.get("prior_fm_moments", False) is True:
+        ctx.add("MGNV-LATENT-PRIOR", Severity.ERROR,
+                why + "has no conditional-moment base; prior_fm_moments would be ignored.",
+                field_name="prior_fm_moments")
+    if str(values.get("prior_fm_velocity_arch", "mlp")).lower() != "mlp":
+        ctx.add("MGNV-LATENT-PRIOR", Severity.ERROR,
+                why + "uses a coarse-level GNN velocity; prior_fm_velocity_arch would be "
+                      "ignored. Its depth is prior_fm_blocks.",
+                field_name="prior_fm_velocity_arch")
+    if (integer(values.get("prior_moment_calibration_epochs", 0)) or 0) > 0:
+        ctx.add("MGNV-LATENT-PRIOR", Severity.ERROR,
+                why + "has no moment head to calibrate; prior_moment_calibration_epochs "
+                      "must be 0.",
+                field_name="prior_moment_calibration_epochs")
+    if str(values.get("parallel_mode", "ddp")).lower().strip() == "model_split":
+        ctx.add("MGNV-LATENT-PIPELINE", Severity.ERROR,
+                why + "is not wired through the model_split pipeline (global only).",
+                field_name="parallel_mode")
+
+
 # Mirror of SPREAD_STATS / VECTOR_SPREAD_STATS in both trees'
 # inference_profiles/rollout.py (the launcher imports no method code).
 SPREAD_STATS = ("range", "mean", "std", "mag_max")
@@ -331,11 +430,9 @@ VECTOR_SPREAD_STATS = ("mag_max",)
 def validate_spread_keys(ctx: SpecValidationContext) -> None:
     """Shared checks for the spread-histogram keys.
 
-    Called by both this spec and chi_mgnflow: the two routes run the same
-    `inference_profiles/rollout.py` comparison and read the same four keys, so
-    a check that lived in only one of them would pass a broken config on the
-    other. Not gated on use_vae -- chi-mgnflow sets that in the runtime rather
-    than the config.
+    Not gated on use_vae: the spread comparison in
+    `inference_profiles/rollout.py` reads these keys whenever eval_dataset is
+    set.
     """
     values = ctx.values
     if ctx.mode == "inference":

@@ -204,9 +204,10 @@ def create_inference_job(payload: dict[str, Any]) -> dict[str, Any]:
     if not checkpoint.is_file() or checkpoint.suffix.lower() not in {".pth", ".pt", ".ckpt"}:
         raise ValueError("Select an existing .pth, .pt, or .ckpt checkpoint.")
     # Do the same safe, weights_only metadata probe shown by the GUI before a
-    # job is created.  In particular, a cHI-MGNflow checkpoint has the common
-    # MGN backbone keys and the portable classifier used to route it into the
-    # deterministic MGN driver, where it could only fail after launch.
+    # job is created.  In particular, a checkpoint of the retired flow-prior
+    # route has the common MGN backbone keys and the portable classifier used to
+    # route it into the deterministic MGN driver, where it could only fail after
+    # launch; the probe now leaves it unidentified, so it is refused here.
     from studio_backend.suite_bridge import checkpoint_metadata
 
     facts = checkpoint_metadata(checkpoint, STATE.registry, STATE.settings)
@@ -217,11 +218,7 @@ def create_inference_job(payload: dict[str, Any]) -> dict[str, Any]:
         )
     if not facts.get("portable_inference"):
         model = facts.get("model") or "unknown model"
-        guidance = (
-            "Use a cHI-MGNflow model plus the native Inference block instead."
-            if model == "chi-mgnflow"
-            else "Use that method's native inference or reconstruction block instead."
-        )
+        guidance = "Use that method's native inference or reconstruction block instead."
         raise ValueError(
             f"{model} checkpoints are not supported by the portable CPU bundle. {guidance}"
         )

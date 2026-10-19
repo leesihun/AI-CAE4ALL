@@ -22,45 +22,54 @@ from studio_backend.system_info import deployment_status
 
 class _Registry:
     model_ids = (
-        "meshgraphnets", "meshgraphnets-v", "chi-mgnflow", "transolver",
+        "meshgraphnets", "meshgraphnets-v", "transolver",
         "fno", "deeponet", "point_deeponet", "mlp",
         "simulgenvae", "sdfflow",
     )
 
 
 class CheckpointSupportContractTests(unittest.TestCase):
-    def test_chi_flow_keys_win_over_the_shared_mgn_backbone(self) -> None:
+    def test_retired_flow_keys_are_not_read_as_the_shared_mgn_backbone(self) -> None:
+        # The flow-prior route was merged into MeshGraphNets-V (latent_type);
+        # its old checkpoints carry the MGN backbone plus flow keys and must not
+        # be classified as deterministic MGN, nor routed by their old location.
         architecture = {
             "message_passing_num": 15,
             "edge_var": 8,
             "flow_time_freqs": 16,
             "flow_solver": "heun",
         }
-        self.assertEqual(_model_from_architecture(architecture), "chi-mgnflow")
-        self.assertEqual(_model_from_path(Path("output/chi_mgnflow/best.pth")), "chi-mgnflow")
+        self.assertEqual(_model_from_architecture(architecture), "")
+        self.assertEqual(_model_from_path(Path("output/chi_mgnflow/best.pth")), "")
 
-    def test_old_chi_checkpoint_is_native_standalone_but_not_portable(self) -> None:
-        probe = {
-            "ok": True,
-            "model_config": {
-                "message_passing_num": 15,
-                "edge_var": 8,
-                "flow_time_freqs": 16,
-                "flow_solver": "heun",
-            },
-            "data_config": {},
-        }
-        completed = subprocess.CompletedProcess([], 0, stdout=json.dumps(probe) + "\n", stderr="")
-        with tempfile.TemporaryDirectory() as directory:
-            checkpoint = Path(directory) / "legacy-flow.pth"
-            checkpoint.touch()
-            with patch("subprocess.run", return_value=completed):
-                facts = checkpoint_metadata(checkpoint, _Registry(), None)
-        self.assertTrue(facts["ok"])
-        self.assertEqual(facts["model"], "chi-mgnflow")
-        self.assertTrue(facts["standalone_inference"])
-        self.assertFalse(facts["portable_inference"])
-        self.assertIn("chi-mgnflow", STANDALONE_INFERENCE_MODELS)
+    def test_local_latent_mgnv_checkpoint_is_variational(self) -> None:
+        architecture = {"message_passing_num": 15, "edge_var": 8, "latent_type": "local"}
+        self.assertEqual(_model_from_architecture(architecture), "meshgraphnets-v")
+
+    def test_retired_flow_checkpoint_is_neither_standalone_nor_portable(self) -> None:
+        for extra in ({}, {"model_config_model": "chi-mgnflow"}):
+            probe = {
+                "ok": True,
+                "model_config": {
+                    "message_passing_num": 15,
+                    "edge_var": 8,
+                    "flow_time_freqs": 16,
+                    "flow_solver": "heun",
+                },
+                "data_config": {},
+                **extra,
+            }
+            completed = subprocess.CompletedProcess([], 0, stdout=json.dumps(probe) + "\n", stderr="")
+            with self.subTest(extra=extra), tempfile.TemporaryDirectory() as directory:
+                checkpoint = Path(directory) / "legacy-flow.pth"
+                checkpoint.touch()
+                with patch("subprocess.run", return_value=completed):
+                    facts = checkpoint_metadata(checkpoint, _Registry(), None)
+                self.assertTrue(facts["ok"])
+                self.assertEqual(facts["model"], "")
+                self.assertFalse(facts["standalone_inference"])
+                self.assertFalse(facts["portable_inference"])
+        self.assertNotIn("chi-mgnflow", STANDALONE_INFERENCE_MODELS)
         self.assertNotIn("chi-mgnflow", PORTABLE_INFERENCE_MODELS)
 
     def test_deployment_inventory_distinguishes_models_from_drivers(self) -> None:
@@ -86,7 +95,7 @@ class CheckpointSupportContractTests(unittest.TestCase):
         self.assertEqual(facts["model_source"], "checkpoint schema")
         self.assertTrue(facts["portable_inference"])
 
-    def test_portable_job_rejects_chi_before_creating_a_process(self) -> None:
+    def test_portable_job_rejects_an_unidentified_checkpoint_before_creating_a_process(self) -> None:
         with tempfile.TemporaryDirectory(dir=RUNTIME_ROOT) as directory:
             checkpoint = Path(directory) / "flow.pth"
             checkpoint.touch()
@@ -94,12 +103,13 @@ class CheckpointSupportContractTests(unittest.TestCase):
                 "studio_backend.suite_bridge.checkpoint_metadata",
                 return_value={
                     "ok": True,
-                    "model": "chi-mgnflow",
+                    "model": "",
                     "portable_inference": False,
                 },
-            ):
-                with self.assertRaisesRegex(ValueError, "native Inference block"):
+            ), patch("studio_backend.native_jobs.STATE.create_command_job") as create_job:
+                with self.assertRaisesRegex(ValueError, "not supported by the portable CPU bundle"):
                     create_inference_job({"checkpoint": str(checkpoint)})
+                create_job.assert_not_called()
 
     def test_non_geometry_portable_jobs_require_input_before_creating_a_process(self) -> None:
         models = (
@@ -152,7 +162,7 @@ class CheckpointSupportContractTests(unittest.TestCase):
                 "flow_time_freqs": 16,
             },
         }):
-            with self.assertRaisesRegex(ValueError, "cHI-MGNflow"):
+            with self.assertRaisesRegex(ValueError, "HI-MGNflow"):
                 detect_family("flow.pth")
         with patch("cae_infer.torch.load", return_value={
             "stage": "fm",

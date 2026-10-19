@@ -32,10 +32,11 @@ python AI_CAE4ALL_main.py --audit-configs        # structural lint of every chec
 python AI_CAE4ALL_main.py --config <path> --check # full layered preflight for one config
 ```
 
-`--audit-configs` parses and route-checks all 315 checked-in configs (measured
-2026-09-23: `errors=0, warnings=30`, every warning a `FLOW-COST` advisory on the
-deliberately expensive `configs/HI_MGNFlow/{SAOI_run,hyperparameter_sweep}/`
-inference arms). A single
+`--audit-configs` parses and route-checks all 233 checked-in configs (measured
+2026-10-19: `errors=0, warnings=0`; the 30 `FLOW-COST` advisories of 2026-09-23
+belonged to the HI-MGNflow `chi-mgnflow` configs, which were merged into
+`meshgraphnets-v` as `latent_type local` on 2026-10-19; the old repo is in
+`junk/legacy_HI_MGNFlow/`). A single
 `--check` goes further: it also runs the filesystem, environment, dataset, and
 native-probe layers, the last three inside the *target method's* interpreter.
 
@@ -58,7 +59,6 @@ Each runs in that method's environment, from that method's directory:
 cd methods/Neural_Operator          && python -m pytest -q tests/
 cd methods/MeshGraphNets            && python -m pytest -q tests/
 cd methods/MeshGraphNets_Variational && python -m pytest -q tests/
-cd methods/HI_MGNFlow               && python -m pytest -q tests/
 cd methods/SDFFlow                  && python -m pytest -q tests/
 cd methods/SimulGenVAE              && python -m pytest -q tests/
 cd methods/MLP                      && python -m pytest -q tests/

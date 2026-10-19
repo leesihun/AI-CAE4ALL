@@ -86,7 +86,11 @@ def log_model_summary(model, config, ema_model=None):
     if ema_model is not None:
         print(f"EMA: ENABLED (decay={config.get('ema_decay', 0.999)})")
     if config.get('use_vae', False):
-        print(f"VAE (MMD): ENABLED (z_dim={config.get('vae_latent_dim', 32)}, lambda_mmd={config.get('lambda_mmd', 1.0)})")
+        from training_profiles.training_loop import latent_reg_weight
+        reg, w = latent_reg_weight(config)
+        print(f"VAE ({reg.upper()}): ENABLED (latent_type={config.get('latent_type', 'global')}, "
+              f"z_dim={config.get('vae_latent_dim', 32)}, "
+              f"{'kl_weight' if reg == 'kl' else 'lambda_mmd'}={w})")
     else:
         print("VAE: disabled")
     total_params = sum(p.numel() for p in model.parameters())
@@ -215,6 +219,14 @@ def build_model_config(config) -> dict:
         'vae_mp_layers':     config.get('vae_mp_layers', 5),
         'vae_graph_aware':   config.get('vae_graph_aware', False),
         'posterior_min_std': config.get('posterior_min_std', 0),
+        # Latent placement (model/latent.py). Architecture-defining: local /
+        # hybrid add coarse-node heads to the encoder and swap the prior for
+        # CoarseFMPrior. Absent in older checkpoints, which are all 'global'.
+        'latent_type':       str(config.get('latent_type', 'global')).lower().strip(),
+        'latent_ch':         config.get('latent_ch', 4),
+        'vae_local_mp_layers': config.get('vae_local_mp_layers', 2),
+        # Provenance only: which regularizer shaped the posterior.
+        'latent_reg':        str(config.get('latent_reg', 'mmd')).lower().strip(),
         # Architecture-defining: 'adaln' renames every per-block conditioning
         # parameter, so a checkpoint only loads under the value it trained with.
         # Absent in pre-AdaLN checkpoints, where the native default 'concat' is

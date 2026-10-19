@@ -447,10 +447,10 @@ const MODEL_INSPECTOR_PRIORITY = [
   // non-training modes write (and is required by sdfflow evaluate/sample/
   // reconstruct/interpolate/optimize), so it belongs with them.
   "modelpath", "vae_modelpath", "fm_modelpath", "lc_modelpath", "output_dir",
-  // The training trio, plus the per-stage spellings SDFFlow/SimulGen-VAE use.
-  "training_epochs", "vae_training_epochs", "fm_training_epochs", "lc_training_epochs",
-  "batch_size", "vae_batch_size", "fm_batch_size", "lc_batch_size",
-  "learningr", "vae_learningr", "fm_learningr", "lc_learningr",
+  // The training trio, plus the per-stage spellings SDFFlow/SimulGen-VAE/SAR use.
+  "training_epochs", "vae_training_epochs", "fm_training_epochs", "lc_training_epochs", "sar_training_epochs",
+  "batch_size", "vae_batch_size", "fm_batch_size", "lc_batch_size", "sar_batch_size",
+  "learningr", "vae_learningr", "fm_learningr", "lc_learningr", "sar_learningr",
   // Generative run knobs: for sdfflow sample/interpolate these *are* the job.
   "num_samples", "seed", "ode_steps", "mc_resolution",
   "gpu_ids"
@@ -475,17 +475,17 @@ const KEY_LABELS = {
   modelpath: "Checkpoint", vae_modelpath: "VAE checkpoint", fm_modelpath: "Flow checkpoint",
   lc_modelpath: "LC checkpoint", output_dir: "Output folder",
   training_epochs: "Epochs", vae_training_epochs: "VAE epochs", fm_training_epochs: "Flow epochs",
-  lc_training_epochs: "LC epochs", batch_size: "Batch size", fm_batch_size: "Flow batch size",
+  lc_training_epochs: "LC epochs", sar_training_epochs: "SAR epochs", batch_size: "Batch size",
+  vae_batch_size: "VAE batch size", fm_batch_size: "Flow batch size", sar_batch_size: "SAR batch size",
   lc_batch_size: "LC batch size", learningr: "Learning rate", vae_learningr: "VAE learning rate",
-  fm_learningr: "Flow learning rate", lc_learningr: "LC learning rate",
-  num_samples: "Shapes to generate", ode_steps: "ODE steps", mc_resolution: "Mesh resolution",
+  fm_learningr: "Flow learning rate", lc_learningr: "LC learning rate", sar_learningr: "SAR learning rate",
+  num_samples: "Samples to generate", ode_steps: "ODE steps", mc_resolution: "Mesh resolution",
   cfg_scale: "Guidance scale", cond_values: "Condition values", opt_analysis: "Analysis backend", opt_vertical_disp_max: "Vertical deflection limit (mm)", opt_load_cases: "Load cases",
   opt_budget: "Search budget (0 = screening)", opt_baseline_size: "Designs screened first", opt_popsize: "Designs per generation",
   opt_stress_margin: "Stress margin (× baseline)", opt_fea_verify: "FEA re-check",
   infer_timesteps: "Rollout steps", inference_output_dir: "Results folder", num_workers: "Loader workers",
   infer_chunk_size: "Node chunk", infer_query_chunk_size: "Query chunk",
-  num_vae_samples: "Ensemble draws", flow_steps: "Flow steps", flow_solver: "Flow solver",
-  flow_predict: "Flow output", reader: "Reader", mesh_type: "Mesh type", emit: "Writes",
+  num_vae_samples: "Ensemble draws", reader: "Reader", mesh_type: "Mesh type", emit: "Writes",
   num_fields: "Field rows", num_points: "Points per sample", resample_method: "Resampling",
   mesh_size_min: "Min element size", mesh_size_max: "Max element size",
   output_dataset: "Output dataset", limit: "File limit", export_label: "Export name",
@@ -530,15 +530,18 @@ function isStatementRow(node, key) {
  * run.inference carries every family's inference knobs, because which family
  * runs is decided by the link, not the block. Mirrors the specs' known_keys:
  * transolver alone reads infer_chunk_size, the operators infer_query_chunk_size,
- * the stochastic MGN pair the ensemble keys, cHI-MGNflow the flow keys. A key
- * the linked family cannot read is hidden unless the user filled it in.
+ * MeshGraphNets-V the ensemble keys. A key the linked family cannot read is
+ * hidden unless the user filled it in. The flow_* keys belonged to the retired
+ * flow-prior route and no live route reads them; they stay listed (read by no
+ * family) only so a saved graph's leftover value surfaces to be cleared.
  */
 const INFERENCE_KEY_FAMILIES = {
   infer_chunk_size: ["transolver"],
   infer_query_chunk_size: ["fno", "deeponet", "point_deeponet"],
-  num_vae_samples: ["meshgraphnets-v", "chi-mgnflow"],
-  vae_batch_size: ["meshgraphnets-v", "chi-mgnflow"],
-  flow_steps: ["chi-mgnflow"], flow_solver: ["chi-mgnflow"], flow_predict: ["chi-mgnflow"]
+  num_vae_samples: ["meshgraphnets-v"],
+  vae_batch_size: ["meshgraphnets-v"],
+  num_samples: ["sar"],
+  flow_steps: [], flow_solver: [], flow_predict: []
 };
 
 function inferenceKeyApplies(node, key, resolved) {
@@ -585,7 +588,7 @@ function modelInspectorEntries(node, modelId, limit) {
   // Keying on that, rather than on a list of inference-ish names, is what keeps
   // sdfflow's `evaluate` / `sample` / `interpolate` / `optimize` correct: they
   // showed three epoch budgets each while the artifact they write did not fit.
-  const TRAINING_MODES = new Set(["train", "train_vae", "train_fm", "train_lc"]);
+  const TRAINING_MODES = new Set(["train", "train_vae", "train_fm", "train_lc", "train_sar"]);
   const isRunMode = Boolean(mode) && !TRAINING_MODES.has(mode);
   const readsHeldOut = mode === "inference" || mode === "reconstruct";
   // The live spec's per-mode required set decides between competing spellings,
@@ -604,7 +607,7 @@ function modelInspectorEntries(node, modelId, limit) {
   // decode loop with it (inference_profiles/reconstruct.py reads
   // config['batch_size']), so hiding it there would hide a live control.
   // Epochs, learning rate, warm-up and weight decay are optimizer-only.
-  const trainingOnly = key => isRunMode && /^(?:vae_|fm_|lc_)?(?:training_epochs|learningr|warmup_epochs|weight_decay)$/.test(key);
+  const trainingOnly = key => isRunMode && /^(?:vae_|fm_|lc_|sar_)?(?:training_epochs|learningr|warmup_epochs|weight_decay)$/.test(key);
   const applicable = MODEL_INSPECTOR_PRIORITY.filter(key => {
     if (!(key in config)) return false;
     // Both dataset keys are usually present; show the one this mode reads.
@@ -708,9 +711,7 @@ export function renderInspector() {
       // Only the families whose checkpoints record enough to rebuild the model
       // without their training config; the rest still need their model block.
       ? {
-          model_id: ["", ...STANDALONE_INFERENCE_MODEL_IDS],
-          flow_solver: ["", "heun", "euler"],
-          flow_predict: ["", "sample", "mean", "ensemble_mean"]
+          model_id: ["", ...STANDALONE_INFERENCE_MODEL_IDS]
         }
       // mapping_confirmed is NOT offered here. It gates whether a positional
       // field mapping may score, and its entire meaning is "a human looked at
@@ -740,7 +741,7 @@ export function renderInspector() {
         // Model blocks: reuse the config sheet's own choice table rather than a
         // second hand-written one. Only `mode` used to become a <select> here,
         // so parallel_mode, activation, coordinate_normalization, lc_data_type,
-        // coarsening_type, flow_solver, best_by and every boolean were free-text
+        // coarsening_type, best_by and every boolean were free-text
         // in the inspector while the Full config sheet offered a dropdown for
         // the exact same key -- the inspector happily accepted values the
         // launcher rejects.

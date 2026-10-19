@@ -22,6 +22,7 @@ from model.conditional_prior import (
     sample_from_mixture,
 )
 from general_modules.time_integration import resolve_rollout_window
+from model.latent import Latent, latent_parts, lmap, select_draw
 from training_profiles.ar_rollout import (
     RolloutContext,
     ar_rt_enabled,
@@ -202,7 +203,10 @@ class _ObjectiveTerms:
 
         self.use_vae = config.get('use_vae', False)
         self.alpha_recon = float(config.get('alpha_recon', 1.0))
-        self.lambda_mmd = float(config.get('lambda_mmd', 1.0))
+        # Latent regularizer: 'mmd' pins the AGGREGATE posterior to N(0,I)
+        # (weight lambda_mmd); 'kl' is the per-sample KL(q(z|y) || N(0,I)) of a
+        # beta-VAE, as a per-coordinate mean (weight kl_weight).
+        self.latent_reg, self.reg_weight = latent_reg_weight(config)
         # beta_aux weights a peak-to-valley loss on the DECODED field
         # (MeshGraphNets._pv_loss), replacing the z-readout head that regressed
         # per-graph [mean, std]. Prediction and target are the same
@@ -247,17 +251,46 @@ class _ObjectiveTerms:
         )
 
 
+def latent_reg_weight(config):
+    """(latent_reg, its weight): ('mmd', lambda_mmd) or ('kl', kl_weight)."""
+    reg = str(config.get('latent_reg', 'mmd')).lower().strip()
+    if reg == 'kl':
+        return reg, float(config.get('kl_weight', 1e-3))
+    return reg, float(config.get('lambda_mmd', 1.0))
+
+
+def _reg_term(vae_losses, latent_reg):
+    """The active latent regularizer out of the model's losses dict."""
+    if latent_reg == 'kl':
+        return vae_losses.get('kl', vae_losses['mmd'])
+    return vae_losses['mmd']
+
+
+def _cat_latents(chunks):
+    """torch.cat over batches, part-wise for Latent (z_g rows and z_l rows apart)."""
+    if isinstance(chunks[0], Latent):
+        return Latent(*(None if parts[0] is None else torch.cat(parts)
+                        for parts in zip(*chunks)))
+    return torch.cat(chunks)
+
+
+def _reparam(mu, logvar):
+    """mu + sigma * eps, part-wise."""
+    return lmap(lambda m, lv: m + torch.exp(0.5 * lv) * torch.randn_like(m), mu, logvar)
+
+
 def _compose_loss(model, graph, terms):
     """Evaluate the full objective on one forward pass.
 
-    Returns `(prediction, loss, recon_sum, mmd, aux, kl_anchor, prior_loss)` --
-    all tensors, so an AR-RT step can be gradient-checkpointed wholesale.
+    Returns `(prediction, loss, recon_sum, reg, aux, kl_anchor, prior_loss)` --
+    all tensors, so an AR-RT step can be gradient-checkpointed wholesale. `reg`
+    is the active latent regularizer (MMD or per-sample KL).
     """
     with torch.amp.autocast('cuda', dtype=terms.amp_dtype, enabled=terms.use_amp):
         predicted_acc, target_acc, vae_losses, aux_loss_val, prior_outputs = model(
             graph, compute_prior_path=terms.compute_prior_path,
         )
-        mmd_loss_val = vae_losses['mmd']
+        reg_loss_val = _reg_term(vae_losses, terms.latent_reg)
 
     # KL anchor for the gmm prior family. Computed in fp32 outside the autocast
     # region because analytical_prior_kl_loss does exp(log_var_k) and 1/var_k
@@ -284,18 +317,20 @@ def _compose_loss(model, graph, terms):
     if (prior_outputs is not None
             and terms.prior_loss_weight > 0.0
             and vae_losses.get('mu') is not None):
-        mu_q = vae_losses['mu'].float()
-        logvar_q = vae_losses['logvar'].float()
+        # Part-wise (lmap) so a Latent(z_g, z_l) posterior goes through the
+        # same steps as the plain global tensor.
+        mu_q = lmap(lambda t: t.float(), vae_losses['mu'])
+        logvar_q = lmap(lambda t: t.float(), vae_losses['logvar'])
         g_enc = terms.prior_grad_to_encoder
         if g_enc <= 0.0:
-            mu_q, logvar_q = mu_q.detach(), logvar_q.detach()
+            mu_q, logvar_q = lmap(torch.Tensor.detach, mu_q), lmap(torch.Tensor.detach, logvar_q)
         elif g_enc != 1.0:
             # Straight-through gradient scaling: the forward value is unchanged,
             # the backward pass through the encoder is multiplied by g_enc. Lets
             # the coupling be annealed or held weak without touching the loss.
-            mu_q = g_enc * mu_q + (1.0 - g_enc) * mu_q.detach()
-            logvar_q = g_enc * logvar_q + (1.0 - g_enc) * logvar_q.detach()
-        z_fresh = mu_q + torch.exp(0.5 * logvar_q) * torch.randn_like(mu_q)
+            scale = lambda t: g_enc * t + (1.0 - g_enc) * t.detach()  # noqa: E731
+            mu_q, logvar_q = lmap(scale, mu_q), lmap(scale, logvar_q)
+        z_fresh = _reparam(mu_q, logvar_q)
         if prior_outputs.get('pooled') is not None:
             prior_loss_val = terms.inner_model.prior.fm_loss(
                 prior_outputs['pooled'], z_fresh,
@@ -312,7 +347,7 @@ def _compose_loss(model, graph, terms):
         recon_loss, batch_loss_sum, _ = _loss_from_errors(errors, terms.loss_weights)
         if terms.use_vae:
             loss = (terms.alpha_recon * recon_loss
-                    + terms.lambda_mmd * mmd_loss_val
+                    + terms.reg_weight * reg_loss_val
                     + terms.beta_aux * aux_loss_val)
             # Joint GNN E2E prior contribution: density matching (mixture NLL or
             # flow-matching MSE; + small KL anchor for gmm).
@@ -325,7 +360,7 @@ def _compose_loss(model, graph, terms):
 
     aux_tensor = torch.as_tensor(aux_loss_val, device=predicted_acc.device, dtype=torch.float32)
     return (predicted_acc, loss, batch_loss_sum,
-            mmd_loss_val, aux_tensor, kl_anchor_val, prior_loss_val)
+            reg_loss_val, aux_tensor, kl_anchor_val, prior_loss_val)
 
 
 def _build_rollout_context(config, device):
@@ -336,15 +371,15 @@ def _build_rollout_context(config, device):
 def _objective_for_batch(model, graph, terms, rollout_ctx, training=True):
     """Apply the objective under whichever time-integration scheme is active.
 
-    Returns `(loss, recon_sum, recon_count, mmd, aux, kl_anchor, prior_loss)`.
+    Returns `(loss, recon_sum, recon_count, reg, aux, kl_anchor, prior_loss)`.
     Under AR-RT every returned term is the trajectory average of the per-step
     term, so downstream logging and gradient scaling are unchanged.
     """
     if rollout_ctx is None:
-        prediction, loss, recon_sum, mmd, aux, kl_anchor, prior_loss = _compose_loss(
+        prediction, loss, recon_sum, reg, aux, kl_anchor, prior_loss = _compose_loss(
             model, graph, terms
         )
-        return loss, recon_sum, prediction.shape[0], mmd, aux, kl_anchor, prior_loss
+        return loss, recon_sum, prediction.shape[0], reg, aux, kl_anchor, prior_loss
 
     loss, _, recon_sum, recon_count, extras = rollout_loss(
         model, graph, rollout_ctx,
@@ -387,11 +422,13 @@ def log_training_config(config):
     if config.get('use_vae', False):
         z_dim   = config.get('vae_latent_dim', 32)
         mp_enc  = config.get('vae_mp_layers', 5)
-        lam     = config.get('lambda_mmd', 1.0)
+        reg, w  = latent_reg_weight(config)
         b_aux   = config.get('beta_aux', 1.0)
         alpha   = config.get('alpha_recon', 1.0)
-        print(f"VAE (MMD): ENABLED (z_dim={z_dim}, vae_mp_layers={mp_enc}, "
-              f"lambda_mmd={lam}, beta_aux={b_aux}, alpha_recon={alpha})")
+        w_name  = 'kl_weight' if reg == 'kl' else 'lambda_mmd'
+        print(f"VAE ({reg.upper()}): ENABLED (latent_type={config.get('latent_type', 'global')}, "
+              f"z_dim={z_dim}, vae_mp_layers={mp_enc}, "
+              f"{w_name}={w}, beta_aux={b_aux}, alpha_recon={alpha})")
         if str(config.get('prior_type', '')).lower().strip() == 'gnn_e2e':
             p_family = str(config.get('prior_family', 'fm')).lower().strip()
             p_w = config.get('prior_nll_weight', 1.0)
@@ -442,7 +479,8 @@ def freeze_for_prior_fit(model, ema_model, dataloader, device, config, remaining
          so the prior fits a FIXED target instead of chasing one that drifts
          under reconstruction gradients for the whole run.
 
-      2. z_shift / z_scale are fitted from the frozen posterior over the
+      2. z_shift / z_scale (zl_shift / zl_scale for a coarse-node latent)
+         are fitted from the frozen posterior over the
          training set. MMD pins the AGGREGATE q(z) to N(0,I); with many
          realizations of a few parts that aggregate is a mixture, and unit total
          variance is compatible with every per-part cloud -- what the prior must
@@ -486,14 +524,9 @@ def freeze_for_prior_fit(model, ema_model, dataloader, device, config, remaining
         mus, lvs = [], []
         for g in dataloader:
             g = _move_graph_to_device(g, device, config)
-            batch = g.batch if getattr(g, 'batch', None) is not None else \
-                torch.zeros(g.x.shape[0], dtype=torch.long, device=device)
-            _, mu, lv = inner.vae_encoder(
-                g.y, g.edge_index, g.edge_attr, batch,
-                x=(g.x if inner.vae_graph_aware else None),
-            )
-            mus.append(mu.float())
-            lvs.append(lv.float())
+            _, mu, lv = inner.posterior(g)
+            mus.append(lmap(lambda t: t.float(), mu))
+            lvs.append(lmap(lambda t: t.float(), lv))
         if was_training:
             bare.train()
         if getattr(prior, 'use_conditional_moments', False):
@@ -507,15 +540,16 @@ def freeze_for_prior_fit(model, ema_model, dataloader, device, config, remaining
             scale = prior.z_scale.detach().cpu()
             standardization_note = 'conditional moment base active; global transform kept identity'
         else:
-            shift, scale = prior.fit_standardization(torch.cat(mus), torch.cat(lvs))
+            shift, scale = prior.fit_standardization(_cat_latents(mus), _cat_latents(lvs))
             standardization_note = (
-                f'global |shift| rms {float(shift.norm() / shift.numel() ** 0.5):.4f}, '
+                f'fitted |shift| rms {float(shift.norm() / shift.numel() ** 0.5):.4f}, '
                 f'scale min {float(scale.min()):.4f} max {float(scale.max()):.4f}'
             )
         if ema_model is not None:
             ema_prior = _bare(ema_model.module).prior
-            ema_prior.z_shift.copy_(prior.z_shift)
-            ema_prior.z_scale.copy_(prior.z_scale)
+            for name in ('z_shift', 'z_scale', 'zl_shift', 'zl_scale'):
+                if hasattr(prior, name):
+                    getattr(ema_prior, name).copy_(getattr(prior, name))
 
     optimizer, scheduler, _, _ = build_optimizer_scheduler(
         config, prior.parameters(), max(int(remaining_epochs), 1))
@@ -604,14 +638,9 @@ def train_prior_epoch(model, dataloader, optimizer, device, config, epoch, ema_m
     pbar = tqdm.tqdm(dataloader, desc=f'PriorFit {epoch}', disable=_progress_disabled())
     for batch_idx, g in enumerate(pbar):
         g = _move_graph_to_device(g, device, config)
-        batch = g.batch if getattr(g, 'batch', None) is not None else \
-            torch.zeros(g.x.shape[0], dtype=torch.long, device=device)
         with torch.no_grad():
-            _, mu, lv = inner.vae_encoder(
-                g.y, g.edge_index, g.edge_attr, batch,
-                x=(g.x if inner.vae_graph_aware else None),
-            )
-            z1 = mu + torch.exp(0.5 * lv) * torch.randn_like(mu)
+            _, mu, lv = inner.posterior(g)
+            z1 = _reparam(mu, lv)
         loss = weight * prior.fm_loss(
             prior.condition(g), z1, target_mu=mu, target_logvar=lv,
             objective=objective,
@@ -630,7 +659,7 @@ def train_prior_epoch(model, dataloader, optimizer, device, config, epoch, ema_m
     peak_gb, reserved_gb = _mem_gb()
     fm = float(total) / max(len(dataloader), 1)
     return {'mean': 0.0, 'total_mean': fm, 'sum': 0.0, 'count': max(n_graphs, 1),
-            'mmd_mean': 0.0, 'aux_mean': 0.0, 'prior_loss_mean': fm,
+            'reg_mean': 0.0, 'aux_mean': 0.0, 'prior_loss_mean': fm,
             'peak_gb': peak_gb, 'reserved_gb': reserved_gb}
 
 
@@ -638,7 +667,7 @@ def train_epoch(model, dataloader, optimizer, device, config, epoch, ema_model=N
     model.train()
     total_loss_sum = 0.0
     total_loss_count = 0
-    mmd_count = 0
+    reg_count = 0
 
     loss_weights = _build_loss_weights(config, device)
     use_amp = config.get('use_amp', True)
@@ -646,10 +675,10 @@ def train_epoch(model, dataloader, optimizer, device, config, epoch, ema_model=N
     scaler = build_grad_scaler(amp_dtype, use_amp)
     recon_loss_kind = config.get('recon_loss', 'huber')
 
-    # VAE config (MMD objective: InfoVAE-style aggregate-posterior matching)
+    # VAE config (latent regularizer: MMD to N(0,I) or per-sample KL)
     use_vae = config.get('use_vae', False)
     alpha_recon = float(config.get('alpha_recon', 1.0))
-    lambda_mmd = float(config.get('lambda_mmd', 1.0))
+    latent_reg, reg_weight = latent_reg_weight(config)
     beta_aux = float(config.get('beta_aux', 1.0))
 
     # Joint GNN E2E prior config — only active when prior_type='gnn_e2e' and the
@@ -683,7 +712,7 @@ def train_epoch(model, dataloader, optimizer, device, config, epoch, ema_model=N
     )
     # GPU accumulators: avoid per-batch .item() syncs (sync once per epoch at result).
     total_opt_loss_gpu = torch.zeros((), device=device, dtype=torch.float32)
-    total_mmd_gpu     = torch.zeros((), device=device, dtype=torch.float32) if use_vae else None
+    total_reg_gpu     = torch.zeros((), device=device, dtype=torch.float32) if use_vae else None
     total_aux_gpu     = torch.zeros((), device=device, dtype=torch.float32) if use_vae else None
     total_kl_anchor_gpu  = torch.zeros((), device=device, dtype=torch.float32) if has_gnn_prior else None
     total_prior_loss_gpu = torch.zeros((), device=device, dtype=torch.float32) if has_gnn_prior else None
@@ -719,7 +748,7 @@ def train_epoch(model, dataloader, optimizer, device, config, epoch, ema_model=N
     for batch_idx, graph in enumerate(pbar):
         graph = _move_graph_to_device(graph, device, config)
 
-        (loss, batch_loss_sum, batch_loss_count, mmd_loss_val, aux_loss_val,
+        (loss, batch_loss_sum, batch_loss_count, reg_loss_val, aux_loss_val,
          kl_anchor_val, prior_loss_val) = _objective_for_batch(
             model, graph, objective_terms, rollout_ctx, training=True,
         )
@@ -741,9 +770,9 @@ def train_epoch(model, dataloader, optimizer, device, config, epoch, ema_model=N
         # Accumulate on GPU; .item() deferred to epoch end (one sync per metric).
         total_opt_loss_gpu += loss.detach().float() * batch_loss_count
         if use_vae:
-            total_mmd_gpu += mmd_loss_val.detach().float()
+            total_reg_gpu += reg_loss_val.detach().float()
             total_aux_gpu += aux_loss_val.detach().float()
-            mmd_count += 1
+            reg_count += 1
             if compute_prior_path:
                 total_kl_anchor_gpu  += kl_anchor_val.detach()
                 total_prior_loss_gpu += prior_loss_val.detach()
@@ -766,9 +795,9 @@ def train_epoch(model, dataloader, optimizer, device, config, epoch, ema_model=N
         if batch_idx % 10 == 0:
             postfix = {'rec': f'{loss_val:.2e}', 'mem': _mem_str()}
             if use_vae:
-                postfix['mmd'] = f'{float(mmd_loss_val):.2e}'
+                postfix[latent_reg] = f'{float(reg_loss_val):.2e}'
                 postfix['aux'] = f'{float(aux_loss_val):.2e}'
-                postfix['λ']   = f'{lambda_mmd:.1e}'
+                postfix['λ']   = f'{reg_weight:.1e}'
                 if compute_prior_path:
                     p_key = 'fm_p' if prior_family == 'fm' else 'nll_p'
                     postfix[p_key] = f'{prior_loss_val.item():.2e}'
@@ -787,13 +816,13 @@ def train_epoch(model, dataloader, optimizer, device, config, epoch, ema_model=N
         'peak_gb': peak_gb,
         'reserved_gb': reserved_gb,
     }
-    if use_vae and mmd_count > 0:
-        result['mmd_mean'] = total_mmd_gpu.item() / mmd_count
-        result['aux_mean'] = total_aux_gpu.item() / mmd_count
+    if use_vae and reg_count > 0:
+        result['reg_mean'] = total_reg_gpu.item() / reg_count
+        result['aux_mean'] = total_aux_gpu.item() / reg_count
         if has_gnn_prior:
-            result['prior_loss_mean'] = total_prior_loss_gpu.item() / mmd_count
+            result['prior_loss_mean'] = total_prior_loss_gpu.item() / reg_count
             if prior_kl_reg_weight > 0.0:
-                result['kl_anchor_mean'] = total_kl_anchor_gpu.item() / mmd_count
+                result['kl_anchor_mean'] = total_kl_anchor_gpu.item() / reg_count
     return result
 
 
@@ -808,49 +837,49 @@ def _evaluate_epoch(model, dataloader, device, config, epoch=0, *,
 
     use_vae = config.get('use_vae', False)
     alpha_recon = float(config.get('alpha_recon', 1.0))
-    lambda_mmd = float(config.get('lambda_mmd', 1.0))
+    latent_reg, reg_weight = latent_reg_weight(config)
     # Validation follows the training scheme: under AR-RT the reported loss is
     # the rollout loss, so best-checkpoint selection optimizes the quantity the
     # run is actually training for.
     rollout_ctx = _build_rollout_context(config, device)
 
     def compose_eval(g):
-        """Validation's objective (reconstruction + MMD) on one forward pass."""
+        """Validation's objective (reconstruction + latent regularizer) on one forward pass."""
         with torch.amp.autocast('cuda', dtype=amp_dtype, enabled=use_amp):
             predicted, target, vae_losses, _, _ = model(
                 g, add_noise=False, use_posterior=use_posterior,
             )
             errors = _recon_errors(predicted, target, recon_loss_kind)
-        mmd = vae_losses['mmd']
+        reg = _reg_term(vae_losses, latent_reg)
         recon_loss, recon_sum, _ = _loss_from_errors(errors, loss_weights)
-        opt = alpha_recon * recon_loss + lambda_mmd * mmd if use_vae else recon_loss
-        return predicted, opt, recon_sum, mmd
+        opt = alpha_recon * recon_loss + reg_weight * reg if use_vae else recon_loss
+        return predicted, opt, recon_sum, reg
 
     with torch.no_grad():
         total_loss_sum = 0.0
         total_loss_count = 0
         # GPU accumulators: avoid per-batch .item() syncs; sync once at epoch end.
         total_opt_loss_gpu = torch.zeros((), device=device, dtype=torch.float32)
-        total_mmd_gpu = torch.zeros((), device=device, dtype=torch.float32) if use_vae else None
-        mmd_count = 0
+        total_reg_gpu = torch.zeros((), device=device, dtype=torch.float32) if use_vae else None
+        reg_count = 0
 
         pbar = tqdm.tqdm(dataloader, desc=progress_name, disable=_progress_disabled())
         for batch_idx, graph in enumerate(pbar):
             graph = _move_graph_to_device(graph, device, config)
 
             if rollout_ctx is None:
-                predicted, opt_loss, batch_loss_sum, mmd_loss_val = compose_eval(graph)
+                predicted, opt_loss, batch_loss_sum, reg_loss_val = compose_eval(graph)
                 batch_loss_count = predicted.shape[0]
             else:
                 opt_loss, _, batch_loss_sum, batch_loss_count, extras = rollout_loss(
                     model, graph, rollout_ctx, compose_eval, training=False,
                 )
-                mmd_loss_val = extras[0]
+                reg_loss_val = extras[0]
 
             total_opt_loss_gpu += opt_loss.detach() * batch_loss_count
             if use_vae:
-                total_mmd_gpu += mmd_loss_val.detach().float()
-                mmd_count += 1
+                total_reg_gpu += reg_loss_val.detach().float()
+                reg_count += 1
 
             total_loss_sum += batch_loss_sum
             total_loss_count += batch_loss_count
@@ -860,7 +889,7 @@ def _evaluate_epoch(model, dataloader, device, config, epoch=0, *,
                 postfix = {'rec': f'{batch_loss_sum / max(batch_loss_count, 1):.2e}',
                            'mem': _mem_str()}
                 if use_vae:
-                    postfix['mmd'] = f'{float(mmd_loss_val):.2e}'
+                    postfix[latent_reg] = f'{float(reg_loss_val):.2e}'
                     postfix['total'] = f'{float(opt_loss):.2e}'
                 pbar.set_postfix(postfix)
 
@@ -870,8 +899,8 @@ def _evaluate_epoch(model, dataloader, device, config, epoch=0, *,
         'sum': total_loss_sum,
         'count': total_loss_count,
     }
-    if use_vae and mmd_count > 0:
-        result['mmd_mean'] = total_mmd_gpu.item() / mmd_count
+    if use_vae and reg_count > 0:
+        result['reg_mean'] = total_reg_gpu.item() / reg_count
     return result
 
 
@@ -909,7 +938,8 @@ def evaluate_vae_learned_prior_epoch(model, dataloader, device, config, epoch=0,
     inner = _unwrap_for_submodule(model)
     if getattr(inner, 'prior', None) is None:
         return None
-    vae_encoder = getattr(getattr(inner, 'model', None), 'vae_encoder', None)
+    sim = getattr(inner, 'model', None)
+    has_posterior = getattr(sim, 'vae_encoder', None) is not None
     is_fm_prior = getattr(inner.prior, 'family', 'gmm') == 'fm'
     # Prior samples drawn per graph, used for (a) the CRPS estimate and (b) the
     # prior-spread diagnostic (fm has no closed-form variance, so it is estimated
@@ -926,9 +956,10 @@ def evaluate_vae_learned_prior_epoch(model, dataloader, device, config, epoch=0,
     total_loss_count = 0
     total_crps_sum = 0.0
     total_crps_count = 0
-    mu_q_all = []          # posterior means per sample [B, num_z, D]
-    var_q_all = []         # posterior variances per sample [B, num_z, D]
-    prior_var_all = []     # prior total variance per graph [B, num_z, D]
+    # Per latent part ('z' global, or 'g' / 'l' of a Latent): posterior means,
+    # posterior variances and prior variance, each [rows, slots, D]. z_l rows
+    # are coarsest nodes and count as one slot.
+    mu_q_all, var_q_all, prior_var_all = {}, {}, {}
 
     # Generated-amplitude tail tracking (matches compare_histograms' metric):
     # per-graph max-min of denormalized z_disp from prior-sampled predictions.
@@ -948,7 +979,7 @@ def evaluate_vae_learned_prior_epoch(model, dataloader, device, config, epoch=0,
                 if is_fm_prior:
                     z_cloud = inner.prior.sample_n(
                         graph, num_prior_samples, temperature=prior_temperature,
-                    )  # [B, S, num_z, D]
+                    )  # [B, S, num_z, D], or Latent(g [B, S, ...], l [n_c, S, C])
                 else:
                     prior_params = inner.prior(graph)
                     z_cloud = torch.stack(
@@ -963,29 +994,25 @@ def evaluate_vae_learned_prior_epoch(model, dataloader, device, config, epoch=0,
                 for s in range(num_prior_samples):
                     predicted, target, _, _, _ = model(
                         graph, add_noise=False, use_posterior=False,
-                        fixed_z=z_cloud[:, s],
+                        fixed_z=select_draw(z_cloud, s),
                     )
                     pred_samples.append(predicted.float())
                 predicted = pred_samples[0]
                 errors = _recon_errors(predicted, target, config.get('recon_loss', 'huber'))
 
                 # Posterior cloud sample (encoder sees the true target y).
-                if vae_encoder is not None and getattr(graph, 'y', None) is not None:
-                    batch = getattr(graph, 'batch', None)
-                    if batch is None:
-                        batch = torch.zeros(graph.x.shape[0], dtype=torch.long,
-                                            device=graph.x.device)
-                    x_in = graph.x if vae_encoder.graph_aware else None
-                    _, mu_q, logvar_q = vae_encoder(
-                        graph.y, graph.edge_index, graph.edge_attr, batch, x=x_in,
-                    )
-                    mu_q_all.append(mu_q.float().cpu())
-                    var_q_all.append(logvar_q.float().exp().cpu())
+                if has_posterior and getattr(graph, 'y', None) is not None:
+                    _, mu_q, logvar_q = sim.posterior(graph)
+                    for name, t in latent_parts(mu_q):
+                        mu_q_all.setdefault(name, []).append(_as_slots(t.float()).cpu())
+                    for name, t in latent_parts(logvar_q):
+                        var_q_all.setdefault(name, []).append(_as_slots(t.float().exp()).cpu())
 
                 if is_fm_prior:
-                    # Per-graph prior variance from the sample cloud [B, S, num_z, D].
-                    prior_var_all.append(
-                        z_cloud.float().var(dim=1, unbiased=False).cpu())
+                    # Per-row prior variance from the sample cloud (draws on dim 1).
+                    for name, t in latent_parts(z_cloud):
+                        prior_var_all.setdefault(name, []).append(
+                            _as_slots(t.float().var(dim=1, unbiased=False)).cpu())
                 else:
                     # Prior mixture total variance per dim:
                     #   Var = Σ_k π_k (σ_k² + μ_k²) − (Σ_k π_k μ_k)²
@@ -997,7 +1024,7 @@ def evaluate_vae_learned_prior_epoch(model, dataloader, device, config, epoch=0,
                         var_p = var_p + prior_params['cov_factor'].float().pow(2).sum(dim=-1)
                     mean_mix = (pi * mu_p).sum(dim=-2)
                     var_mix = (pi * (var_p + mu_p.pow(2))).sum(dim=-2) - mean_mix.pow(2)
-                    prior_var_all.append(var_mix.clamp(min=0).cpu())
+                    prior_var_all.setdefault('z', []).append(var_mix.clamp(min=0).cpu())
 
             _, batch_loss_sum, batch_loss_count = _loss_from_errors(errors, loss_weights)
             total_loss_sum += batch_loss_sum
@@ -1034,19 +1061,25 @@ def evaluate_vae_learned_prior_epoch(model, dataloader, device, config, epoch=0,
     }
 
     if mu_q_all and prior_var_all:
-        mu_q = torch.cat(mu_q_all, dim=0)        # [N, num_z, D]
-        var_q = torch.cat(var_q_all, dim=0)      # [N, num_z, D]
-        prior_var = torch.cat(prior_var_all, dim=0)
-        # Aggregate posterior variance per dim: Var(μ_q) + E[σ_q²]
-        posterior_var = mu_q.var(dim=0, unbiased=False) + var_q.mean(dim=0)  # [num_z, D]
-        posterior_std = posterior_var.mean(dim=-1).sqrt()                    # [num_z]
-        prior_std = prior_var.mean(dim=0).mean(dim=-1).sqrt()                # [num_z]
-        ratio = prior_std / posterior_std.clamp(min=1e-8)
+        labels, posterior_std, prior_std = [], [], []
+        for name in mu_q_all:
+            if name not in prior_var_all:
+                continue
+            mu_q = torch.cat(mu_q_all[name], dim=0)        # [N, slots, D]
+            var_q = torch.cat(var_q_all[name], dim=0)      # [N, slots, D]
+            prior_var = torch.cat(prior_var_all[name], dim=0)
+            # Aggregate posterior variance per dim: Var(μ_q) + E[σ_q²]
+            part_var = mu_q.var(dim=0, unbiased=False) + var_q.mean(dim=0)  # [slots, D]
+            posterior_std += part_var.mean(dim=-1).sqrt().tolist()
+            prior_std += prior_var.mean(dim=0).mean(dim=-1).sqrt().tolist()
+            labels += (['local'] if name == 'l'
+                       else [f'slot{i}' for i in range(part_var.shape[0])])
+        ratio = [p / max(q, 1e-8) for p, q in zip(prior_std, posterior_std)]
         result['posterior_std'] = [round(float(v), 4) for v in posterior_std]
         result['prior_std'] = [round(float(v), 4) for v in prior_std]
         result['spread_ratio'] = [round(float(v), 4) for v in ratio]
         ratio_str = ', '.join(
-            f"slot{i}: q={result['posterior_std'][i]:.3f} p={result['prior_std'][i]:.3f} "
+            f"{labels[i]}: q={result['posterior_std'][i]:.3f} p={result['prior_std'][i]:.3f} "
             f"ratio={result['spread_ratio'][i]:.2f}"
             for i in range(len(result['spread_ratio']))
         )
@@ -1074,6 +1107,11 @@ def evaluate_vae_learned_prior_epoch(model, dataloader, device, config, epoch=0,
             pass
 
     return result
+
+
+def _as_slots(t):
+    """[rows, slots, D] view: a z_l block [n_c, C] is one slot per coarse node."""
+    return t.unsqueeze(1) if t.dim() == 2 else t
 
 
 def run_periodic_test(model, test_loader, device, config, epoch, train_dataset):

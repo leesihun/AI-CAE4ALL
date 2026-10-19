@@ -1,0 +1,49 @@
+{
+  "date": "2026-10-19 Asia/Seoul",
+  "pdf_sha256": "fc0d54460b3ef8a1e8fdd77b57cf5d80449b238d8f89ee19d7605fe11fa33d50",
+  "source_hash_mismatches": [],
+  "manuscript_hash_mismatches": [],
+  "pdf_matches_build_and_records": true,
+  "cached_render_hash_mismatches": [],
+  "zip_crc_failure": null,
+  "zip_entries": 27,
+  "zip_live_mismatches": [],
+  "fresh_structural_checks": {
+    "missing_citations": [],
+    "uncited_entries": [],
+    "missing_cross_references": [],
+    "duplicate_labels": [],
+    "placeholders": [],
+    "numbered_sections": [
+      "Introduction",
+      "Methodology"
+    ],
+    "citation_count": 28,
+    "equation_labels": 44,
+    "figure_count": 1,
+    "algorithm_count": 2
+  },
+  "markdown_reproduces_exactly": true,
+  "helper_syntax_errors": [],
+  "missing_local_markdown_targets": [],
+  "pages": 32,
+  "replacement_characters": [],
+  "text_outside_page": [],
+  "fresh_render_differs_from_cache": [],
+  "pdf_unresolved_placeholders": [],
+  "tex_fatal_or_reference_warnings": [],
+  "tex_underfull_count": 2,
+  "unchanged_sources_after_check": true,
+  "backup_checks": [
+    {
+      "directory": "before_2026-10-17_hybrid_novelty_revision",
+      "files": 16,
+      "mismatches": []
+    },
+    {
+      "directory": "before_2026-10-19_recheck",
+      "files": 28,
+      "mismatches": []
+    }
+  ]
+}

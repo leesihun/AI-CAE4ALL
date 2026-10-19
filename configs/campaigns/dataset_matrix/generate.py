@@ -16,15 +16,17 @@ METHODS = ['deeponet', 'point_deeponet', 'fno', 'transolver3', 'meshgraphnets', 
 REPOSITORIES = {**{m: 'Neural_Operator' for m in METHODS[:3]},
                 'transolver3': 'Transolver', 'meshgraphnets': 'MeshGraphNets',
                 'himgn': 'MeshGraphNets', 'himgn_v': 'MeshGraphNets_Variational',
-                'chi_mgnflow': 'HI_MGNFlow', 'lsh_vae': 'SimulGenVAE', 'sdfflow': 'SDFFlow'}
+                'lsh_vae': 'SimulGenVAE', 'sdfflow': 'SDFFlow'}
 # Lane assignment: one GPU per method group on an 8-card box, cheap routes
 # sharing a lane and the few-example generative routes bundled two per lane.
 # configs/run_all_135.sh and configs/run_all_136.sh drive these lanes. No
 # arm sits on lane 2 (the hand-maintained geometry ex4, Thingi10K, was
-# removed on 2026-10-07); its worker takes over other lanes' arms.
+# removed on 2026-10-07); its worker takes over other lanes' arms. Lane 7
+# lost its chi_mgnflow arms when that route was merged into meshgraphnets-v
+# (latent_type local) on 2026-10-19; it keeps sdfflow.
 LANE_GPU = {'deeponet': 0, 'fno': 0, 'point_deeponet': 1, 'transolver3': 3,
             'meshgraphnets': 4, 'himgn': 5, 'himgn_v': 6, 'lsh_vae': 6,
-            'chi_mgnflow': 7, 'sdfflow': 7}
+            'sdfflow': 7}
 # SDFFlow geometry examples whose configs are written by hand, not by build();
 # manifest.json lists them (generated: false) so run_matrix.py runs them.
 HAND_GEOMETRY = ('ex2', 'ex3')
@@ -36,7 +38,6 @@ PAPERS = {
     'fno': 'https://arxiv.org/abs/2010.08895',
     'transolver3': 'https://arxiv.org/abs/2602.04940',
     'himgn_v': 'https://arxiv.org/abs/1706.02262',
-    'chi_mgnflow': 'https://arxiv.org/abs/2504.02843',
     'lsh_vae': 'https://doi.org/10.1007/s00366-023-01916-6',
     'sdfflow': 'https://arxiv.org/abs/2301.11445 ; https://arxiv.org/abs/2210.02747',
 }
@@ -196,7 +197,7 @@ for _c in CASES:
 def mesh_config(c, method):
     run = f"../../output/dataset_matrix/{c['category']}/{c['key']}/{method}"
     cfg = dict(model={'himgn': 'meshgraphnets', 'transolver3': 'transolver',
-                      'himgn_v': 'meshgraphnets-v', 'chi_mgnflow': 'chi-mgnflow'}.get(method, method),
+                      'himgn_v': 'meshgraphnets-v'}.get(method, method),
                mode='train', gpu_ids=LANE_GPU[method], parallel_mode='ddp', split_seed=42,
                dataset_dir='../../dataset/' + c['train'], infer_dataset='../../dataset/' + c['infer'],
                modelpath=run + '/model.pth', log_file_dir=run + '/train.log',
@@ -215,7 +216,7 @@ def mesh_config(c, method):
                use_world_edges=False, use_multiscale=False)
     if c.get('split_group_attr'):
         cfg['split_group_attr'] = c['split_group_attr']
-    if method in ('meshgraphnets', 'himgn', 'himgn_v', 'chi_mgnflow'):
+    if method in ('meshgraphnets', 'himgn', 'himgn_v'):
         cfg.update(edge_var=8, latent_dim=128, message_passing_num=15,
                    geometry_state_mode=c['geometry'])
         if method in ('meshgraphnets', 'himgn'):
@@ -266,18 +267,11 @@ def mesh_config(c, method):
                        prior_family='fm', prior_mp_layers=3, prior_hidden_dim=128,
                        prior_nll_weight=1.0, prior_grad_to_encoder=0.0,
                        prior_fm_steps=30, prior_fm_solver='heun')
-            # One stage, so it gets cHI-MGNflow's AE + flow epochs (500 + 500) to
-            # train on the same number of updates; the prior freezes at 70%.
+            # One stage, so it gets the AE + flow epochs (500 + 500) of the
+            # retired two-stage HI-MGNflow arm, the same number of updates; the
+            # prior freezes at 70%.
             cfg['training_epochs'] = 2 * c['epochs']
             cfg['prior_freeze_epoch'] = int(0.7 * cfg['training_epochs'])
-        if method == 'chi_mgnflow':
-            cfg.pop('std_noise')  # This runtime deliberately rejects the retired noise control.
-            # val_flow_steps = flow_steps, so validation integrates the flow the
-            # way inference does.
-            cfg.update(latent_ch=4, ae_kl_weight=0.000001, ae_epochs=c['epochs'],
-                       prior_blocks=4, flow_time_freqs=16, flow_t_sampling='uniform',
-                       flow_loss_weighting='uniform', flow_steps=30, flow_solver='heun',
-                       flow_predict='sample', val_flow_steps=30, val_num_samples=8)
     elif method == 'transolver3':
         crm = c['key'].startswith('ex3_')
         cfg.update(coordinate_normalization='centered_isotropic', latent_dim=256,
@@ -465,9 +459,6 @@ def updates(c, method, cfg):
         lc = n // cfg['lc_batch_size'] * cfg['lc_training_epochs']
         return vae + lc, f'VAE {short(vae)} + LC {short(lc)}'
     per_epoch = math.ceil(n * c['steps'] / cfg['batch_size'])
-    if method == 'chi_mgnflow':
-        ae, flow = per_epoch * cfg['ae_epochs'], per_epoch * cfg['training_epochs']
-        return ae + flow, f'AE {short(ae)} + flow {short(flow)}'
     return per_epoch * cfg['training_epochs'], ''
 
 
@@ -523,14 +514,14 @@ def render(c, method, config, notes=(), trailer=(), key_notes=None):
 def build():
     files, pairs = {}, []
     for c in CASES:
-        methods = METHODS if c['category'] == DET else ['himgn_v', 'chi_mgnflow']
+        methods = METHODS if c['category'] == DET else ['himgn_v']
         if c.get('dense'):
             methods = methods + ['lsh_vae']
         for method in methods:
             train = dense_config(c) if method == 'lsh_vae' else mesh_config(c, method)
             infer = dict(train)
             infer['mode'] = 'reconstruct' if method == 'lsh_vae' else 'inference'
-            if c.get('spread') and method in ('himgn_v', 'chi_mgnflow'):
+            if c.get('spread') and method == 'himgn_v':
                 # Ground truth for the distribution comparison is the same
                 # held-out file the rollout runs on, so each generated ensemble
                 # is scored against the one simulation that scene actually
@@ -585,7 +576,7 @@ def build():
     for path, cfg, key_notes in zip(paths, (sdf, infer), (SDF_KEY_NOTES, None)):
         files[path] = render(c, 'sdfflow', cfg, key_notes=key_notes)
     pairs.append(dict(category=c['category'], example=c['key'], method='sdfflow', train=paths[0], infer=paths[1]))
-    assert len(pairs) == 75 and len(files) == 150
+    assert len(pairs) == 67 and len(files) == 134
     # Hand-maintained SDFFlow geometry configs: listed so the campaign runner
     # runs them, but not rendered here. Their gpu_ids (0/1) and output paths
     # are their own, so `generated: false` exempts them from the one-lane-per-
@@ -614,7 +605,8 @@ def main():
                      if not (ROOT / p).exists() or (ROOT / p).read_text(encoding='utf-8') != content]
         if different:
             raise SystemExit('Missing or different generated files:\n' + '\n'.join(different))
-        print(f'75 train/infer pairs: generated files match source of truth '
+        print(f'{len(json.loads(files["configs/campaigns/dataset_matrix/manifest.json"])["pairs"]) - len(HAND_GEOMETRY)} '
+              'train/infer pairs: generated files match source of truth '
               f'(manifest also lists {len(HAND_GEOMETRY)} hand-maintained SDFFlow pairs).')
 
 

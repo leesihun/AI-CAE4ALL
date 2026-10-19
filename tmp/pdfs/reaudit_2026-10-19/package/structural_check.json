@@ -1,0 +1,127 @@
+{
+  "pdf_pages": 32,
+  "pdf_sha256": "c0777c76aa4f00e5ad6b1da877a51180302d5efd0e3ae5ff28720e2022ed5e33",
+  "build_matches": true,
+  "zip_bad_member": null,
+  "zip_entries": 26,
+  "zip_live_mismatches": [],
+  "rendered_pages": [
+    10,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    27,
+    28,
+    29,
+    30,
+    31,
+    32
+  ],
+  "date": "2026-10-19 Asia/Seoul",
+  "reviewed_pages": [
+    10,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    27,
+    28,
+    29,
+    30,
+    31,
+    32
+  ],
+  "method": "Fresh PyMuPDF 1.5x render, individual view_image inspection for every assigned page",
+  "unresolved_visual_issues": [],
+  "observations": [
+    "Page 10 architecture boxes, labels and arrows fit without overlap.",
+    "Pages 17-24 equations 26-44 are legible, within text boundaries, and their numbers do not collide.",
+    "Algorithms 1 and 2 fit wholly on pages 22 and 23 respectively.",
+    "Table 1 fits on page 25; variants and hypotheses continue cleanly through page 26.",
+    "References 1-28 each remain unbroken within one page on pages 27-32."
+  ],
+  "minor_editorial_note": "Reference 26 renders machine Learning rather than Machine Learning; capitalization only, no clipping or scientific meaning problem.",
+  "page_boundaries": [
+    {
+      "page": 10,
+      "spans_outside_page": []
+    },
+    {
+      "page": 17,
+      "spans_outside_page": []
+    },
+    {
+      "page": 18,
+      "spans_outside_page": []
+    },
+    {
+      "page": 19,
+      "spans_outside_page": []
+    },
+    {
+      "page": 20,
+      "spans_outside_page": []
+    },
+    {
+      "page": 21,
+      "spans_outside_page": []
+    },
+    {
+      "page": 22,
+      "spans_outside_page": []
+    },
+    {
+      "page": 23,
+      "spans_outside_page": []
+    },
+    {
+      "page": 24,
+      "spans_outside_page": []
+    },
+    {
+      "page": 25,
+      "spans_outside_page": []
+    },
+    {
+      "page": 26,
+      "spans_outside_page": []
+    },
+    {
+      "page": 27,
+      "spans_outside_page": []
+    },
+    {
+      "page": 28,
+      "spans_outside_page": []
+    },
+    {
+      "page": 29,
+      "spans_outside_page": []
+    },
+    {
+      "page": 30,
+      "spans_outside_page": []
+    },
+    {
+      "page": 31,
+      "spans_outside_page": []
+    },
+    {
+      "page": 32,
+      "spans_outside_page": []
+    }
+  ]
+}

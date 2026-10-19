@@ -44,14 +44,16 @@ snapshot, as the current count.
 | Model ID | Native repository | Modes |
 | --- | --- | --- |
 | `meshgraphnets` | `MeshGraphNets/` | `train`, `inference` |
-| `meshgraphnets-v` | `methods/MeshGraphNets_Variational/` | `train`, `inference` |
-| `chi-mgnflow` | `methods/HI_MGNFlow/` | `train`, `inference` |
+| `meshgraphnets-v` | `methods/MeshGraphNets_Variational/` | `train`, `inference` (`latent_type` global / local / hybrid = HI-MGN-V / HI-MGNflow / HI-MGN-hybrid) |
 | `point_deeponet`, `deeponet`, `fno` | `Neural_Operator/` | `train`, `inference` |
 | `transolver` | `Transolver/` | `train`, `inference` |
 | `sdfflow` | `methods/SDFFlow/` | `train`, `train_vae`, `train_fm`, `sample`, `reconstruct`, `interpolate`, `optimize`, `evaluate` |
 | `simulgenvae` | `SimulGenVAE/` | `train`, `train_vae`, `train_lc`, `reconstruct` |
 | `mlp` | `MLP/` | `train`, `inference` |
 | `geometry_ingest` | `methods/GeometryIngest/` | `ingest`, `inspect` |
+
+HI-MGNflow (`chi-mgnflow`) was merged into `meshgraphnets-v` as `latent_type local`
+on 2026-10-19; the old repo is in `junk/legacy_HI_MGNFlow/`.
 
 ## Exact key catalogs and defaults
 
@@ -94,6 +96,6 @@ python -c "from pathlib import Path; from cae_suite.registry import MethodRegist
 ## Method-specific detail
 
 Use the method repository's own docs for architecture-specific meaning. In
-particular, see `methods/MeshGraphNets_Variational/docs/CONFIG_REFERENCE.md`,
-`methods/HI_MGNFlow/docs/CONFIG_REFERENCE.md`, `Neural_Operator/CLAUDE.md`,
+particular, see [reference/config/meshgraphnets_variational.md](reference/config/meshgraphnets_variational.md),
+`Neural_Operator/CLAUDE.md`,
 `methods/SDFFlow/CLAUDE.md`, and `MLP/CLAUDE.md`.

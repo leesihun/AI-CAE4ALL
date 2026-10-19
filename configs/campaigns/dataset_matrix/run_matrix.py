@@ -15,7 +15,7 @@ generate.py):
     lane 0  deeponet + fno        lane 4  meshgraphnets
     lane 1  point_deeponet        lane 5  himgn
     lane 2  (no arms)             lane 6  himgn_v + lsh_vae
-    lane 3  transolver3           lane 7  chi_mgnflow + sdfflow
+    lane 3  transolver3           lane 7  sdfflow
 
 The hand-maintained SDFFlow geometry ex2/ex3 configs (generated: false in
 manifest.json) carry their own gpu_ids 0/1 and run on those lanes.

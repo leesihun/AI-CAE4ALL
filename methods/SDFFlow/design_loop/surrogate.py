@@ -304,8 +304,7 @@ class HIMGNSurrogate:
 
         predictions = {}
         self.last_rollouts = {}
-        search = rollout_dir if os.path.isdir(rollout_dir) else \
-            os.path.join(_SUITE, 'output', 'chi-mgnflow', 'rollout')
+        search = rollout_dir
         import glob
         import re
         for path in glob.glob(os.path.join(search, 'rollout_sample*_steps*.h5')):

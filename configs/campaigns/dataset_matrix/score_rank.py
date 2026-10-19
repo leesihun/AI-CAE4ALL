@@ -145,14 +145,14 @@ BINS = 20
 FALLING = -0.10
 RISING = 0.05
 FLAG_ORDER = 'FRINXO?'
-# One line per epoch in every trainer's log, optionally tagged ([AE], [Prior]).
+# One line per epoch in every trainer's log, optionally tagged ([tag]); the two-stage pipelines log to separate files.
 EPOCH_LINE = re.compile(r'^(?:\[(?P<tag>[^\]]+)\] )?Elapsed:? [0-9.]+s Epoch (?P<epoch>\d+) (?P<rest>.*)$')
 # A training continued from its resume state (resume_state.py in each method)
 # appends this to the same log before redoing the epochs after that state.
 RESUME_LINE = re.compile(r'^==== Resume(?: \[(?P<tag>[^\]]+)\])? at epoch \d+')
 NUMBER = r'(nan|-?inf|[-+]?[0-9.]+(?:[eE][-+]?[0-9]+)?)'
 # The first loss of each kind on the line: TrainOpt (MeshGraphNets, operators,
-# Transolver), Train / Train recon= / Train fm= (MGN-V, HI_MGNFlow), Recon and
+# Transolver), Train / Train recon= / Train fm= (MGN-V), Recon and
 # LC train (SimulGenVAE), TrainSDF and TrainFM (SDFFlow); "Valid skipped" and
 # "Val skipped" carry no number.
 TRAIN_FIELD = re.compile(r'(?:TrainOpt |Train (?:recon=|fm=)?|Recon |TrainSDF |TrainFM |LC train )' + NUMBER)
@@ -589,10 +589,6 @@ def training_stages(root: Path, pair: dict) -> list[dict]:
         second = 'lc' if method == 'lsh_vae' else 'fm'
         names = {'train': ('vae', second), 'train_vae': ('vae',), f'train_{second}': (second,)}.get(mode, ())
         return [stage(n, None, prefix=f'{n}_') for n in names]
-    if method == 'chi_mgnflow':
-        if mode == 'train':  # one log: [AE] for ae_epochs, then [Prior] for training_epochs
-            return [stage('ae', 'AE', epochs_key='ae_epochs'), stage('prior', 'Prior')]
-        return [stage('ae', 'AE')] if mode == 'train_ae' else [stage('prior', 'Prior')]
     val_every = int(cfg.get('val_interval', 1)) if method == 'transolver3' else None
     return [stage('train', None, val_every=val_every)]
 

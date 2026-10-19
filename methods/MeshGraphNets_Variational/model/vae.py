@@ -8,7 +8,9 @@ from torch_geometric.data import Data
 from torch_geometric.nn import AttentionalAggregation
 
 from model.encoder_decoder import GnBlock
+from model.latent import Latent
 from model.mlp import build_mlp
+from torch_geometric.utils import scatter
 
 
 def gather_across_ranks(z):
@@ -56,14 +58,24 @@ class GNNVariationalEncoder(nn.Module):
     With graph awareness, z is incentivized to encode only the y-residual that
     the input graph does not already explain — keeping z mesh-type-orthogonal.
 
-    Note: mu/logvar heads are retained for reparameterization; the training
-    regularizer is MMD between the sampled z and N(0,I), NOT per-sample KL.
+    latent_type local/hybrid add a second output: the same trunk's node
+    features mean-pooled into the coarsest-level clusters, `local_mp_layers`
+    GnBlocks over the coarsest graph, and per-node heads giving z_l
+    [n_c, latent_ch]. hybrid returns both; local skips the pooled heads (and
+    builds none, so no parameter sits unused under DDP).
+
+    The regularizer is chosen by `latent_reg`: MMD between the sampled z and
+    N(0,I) (aggregate posterior, InfoVAE) or the per-sample KL(q || N(0,I)).
     """
 
     def __init__(self, node_output_size, edge_input_size, latent_dim, vae_latent_dim,
                  num_mp_layers=2, node_input_size=None, graph_aware=False,
-                 posterior_min_std=0, num_z=1):
+                 posterior_min_std=0, num_z=1, latent_type='global', latent_ch=4,
+                 local_mp_layers=2):
         super().__init__()
+        self.latent_type = str(latent_type)
+        self.has_global = self.latent_type in ('global', 'hybrid')
+        self.has_local = self.latent_type in ('local', 'hybrid')
         self.graph_aware = bool(graph_aware)
         self.min_logvar = 2.0 * math.log(max(float(posterior_min_std), 1e-6))
         self.num_z = int(num_z)
@@ -79,12 +91,25 @@ class GNNVariationalEncoder(nn.Module):
             GnBlock(latent_dim, use_world_edges=False)
             for _ in range(num_mp_layers)
         ])
-        # State-dict compatible with the deprecated GlobalAttention (same gate_nn keys).
-        self.attention_pool = AttentionalAggregation(nn.Linear(latent_dim, 1))
-        self.mu_head = nn.Linear(latent_dim, self.num_z * self.vae_latent_dim)
-        self.logvar_head = nn.Linear(latent_dim, self.num_z * self.vae_latent_dim)
+        if self.has_global:
+            # State-dict compatible with the deprecated GlobalAttention (same gate_nn keys).
+            self.attention_pool = AttentionalAggregation(nn.Linear(latent_dim, 1))
+            self.mu_head = nn.Linear(latent_dim, self.num_z * self.vae_latent_dim)
+            self.logvar_head = nn.Linear(latent_dim, self.num_z * self.vae_latent_dim)
+        if self.has_local:
+            # z_l: the trunk's node features mean-pooled into each coarsest-level
+            # cluster, a few message-passing rounds on the coarsest graph so a
+            # cluster's latent can read its neighbours, then per-node heads.
+            self.latent_ch = int(latent_ch)
+            self.local_edge_encoder = build_mlp(edge_input_size, latent_dim, latent_dim)
+            self.local_mp_layers = nn.ModuleList([
+                GnBlock(latent_dim, use_world_edges=False)
+                for _ in range(int(local_mp_layers))
+            ])
+            self.local_mu_head = nn.Linear(latent_dim, self.latent_ch)
+            self.local_logvar_head = nn.Linear(latent_dim, self.latent_ch)
 
-    def forward(self, y, edge_index, edge_attr, batch, x=None):
+    def forward(self, y, edge_index, edge_attr, batch, x=None, coarse=None):
         """
         Args:
             y:          [N, node_output_size] per-node target delta
@@ -93,10 +118,14 @@ class GNNVariationalEncoder(nn.Module):
             batch:      [N] PyG batch assignment index
             x:          [N, node_input_size] per-node input features.
                         Required when graph_aware=True; ignored otherwise.
+            coarse:     model.latent.coarsest_view(graph) -- required for
+                        latent_type local/hybrid, ignored for global.
         Returns:
             z:      [B, num_z, vae_latent_dim] reparameterized latent
             mu:     [B, num_z, vae_latent_dim]
             logvar: [B, num_z, vae_latent_dim]
+          For local/hybrid each is a Latent(g, l) with l [n_c_total, latent_ch]
+          (g None for local).
         """
         h_y = self.node_encoder(y)
         if self.graph_aware:
@@ -110,12 +139,35 @@ class GNNVariationalEncoder(nn.Module):
         g = Data(x=h, edge_attr=e, edge_index=edge_index)
         for mp in self.mp_layers:
             g = mp(g)
-        h_graph = self.attention_pool(g.x, batch)
+        if self.latent_type == 'global':
+            return self._global_heads(g.x, batch)
+        if coarse is None:
+            raise ValueError(f"latent_type '{self.latent_type}' needs the coarsest-level "
+                             f"topology (coarse=coarsest_view(graph))")
+        z_l, mu_l, lv_l = self._local_heads(g.x, coarse)
+        if self.latent_type == 'local':
+            return Latent(None, z_l), Latent(None, mu_l), Latent(None, lv_l)
+        z_g, mu_g, lv_g = self._global_heads(g.x, batch)
+        return Latent(z_g, z_l), Latent(mu_g, mu_l), Latent(lv_g, lv_l)
+
+    def _global_heads(self, h, batch):
+        h_graph = self.attention_pool(h, batch)
         B = h_graph.shape[0]
         mu = self.mu_head(h_graph).view(B, self.num_z, self.vae_latent_dim)
         logvar = self.logvar_head(h_graph).view(B, self.num_z, self.vae_latent_dim).clamp(min=self.min_logvar)
         std = torch.exp(0.5 * logvar)
         z = mu + std * torch.randn_like(std)
+        return z, mu, logvar
+
+    def _local_heads(self, h, coarse):
+        h_c = scatter(h, coarse['parent'], dim=0, dim_size=coarse['n_c'], reduce='mean')
+        g = Data(x=h_c, edge_attr=self.local_edge_encoder(coarse['c_ea']),
+                 edge_index=coarse['c_ei'])
+        for mp in self.local_mp_layers:
+            g = mp(g)
+        mu = self.local_mu_head(g.x)
+        logvar = self.local_logvar_head(g.x).clamp(min=self.min_logvar)
+        z = mu + torch.exp(0.5 * logvar) * torch.randn_like(mu)
         return z, mu, logvar
 
     @staticmethod
