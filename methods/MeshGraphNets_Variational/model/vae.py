@@ -7,6 +7,7 @@ import torch.nn as nn
 from torch_geometric.data import Data
 from torch_geometric.nn import AttentionalAggregation
 
+from model.checkpointing import checkpoint_active, run_mlp, run_plain_blocks
 from model.encoder_decoder import GnBlock
 from model.latent import Latent
 from model.mlp import build_mlp
@@ -74,6 +75,8 @@ class GNNVariationalEncoder(nn.Module):
                  local_mp_layers=2):
         super().__init__()
         self.latent_type = str(latent_type)
+        # Set by the owning model from `use_checkpointing` (training only).
+        self.use_checkpointing = False
         self.has_global = self.latent_type in ('global', 'hybrid')
         self.has_local = self.latent_type in ('local', 'hybrid')
         self.graph_aware = bool(graph_aware)
@@ -127,18 +130,18 @@ class GNNVariationalEncoder(nn.Module):
           For local/hybrid each is a Latent(g, l) with l [n_c_total, latent_ch]
           (g None for local).
         """
-        h_y = self.node_encoder(y)
+        ckpt = checkpoint_active(self)
+        h_y = run_mlp(self.node_encoder, y, ckpt)
         if self.graph_aware:
             if x is None:
                 raise ValueError("graph_aware=True but x is None")
-            h_x = self.node_input_encoder(x)
-            h = self.node_fuse(torch.cat([h_y, h_x], dim=-1))
+            h_x = run_mlp(self.node_input_encoder, x, ckpt)
+            h = run_mlp(self.node_fuse, torch.cat([h_y, h_x], dim=-1), ckpt)
         else:
             h = h_y
-        e = self.edge_encoder(edge_attr)
+        e = run_mlp(self.edge_encoder, edge_attr, ckpt)
         g = Data(x=h, edge_attr=e, edge_index=edge_index)
-        for mp in self.mp_layers:
-            g = mp(g)
+        g = run_plain_blocks(self.mp_layers, g, ckpt)
         if self.latent_type == 'global':
             return self._global_heads(g.x, batch)
         if coarse is None:

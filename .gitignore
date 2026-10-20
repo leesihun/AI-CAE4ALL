@@ -64,3 +64,10 @@ dataset/gdrive_token.json
 
 # One-off scratch scripts (downloaders, converters) -- not part of the launcher
 junk/
+
+# Papers, research notes, scratch and generated figures -- local only, never pushed.
+# (Already-tracked files need `git rm -r --cached <dir>` once; the files stay on disk.)
+paper/
+research_outputs/
+tmp/
+Claude outputs/

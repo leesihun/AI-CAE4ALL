@@ -1,11 +1,12 @@
 import torch
 import torch.nn as nn
+from torch.utils.checkpoint import checkpoint
 from torch_geometric.data import Data
 from torch_geometric.utils import scatter
 
 from general_modules.edge_features import EDGE_FEATURE_DIM
 from model.blocks import AdaLNZero, apply_adaln
-from model.checkpointing import process_with_checkpointing
+from model.checkpointing import process_with_checkpointing, run_mlp
 from model.coarsening import pool_features
 from model.conditional_prior import build_conditional_prior
 from model.encoder_decoder import Decoder, Encoder, GnBlock
@@ -49,6 +50,7 @@ class MeshGraphNets(nn.Module):
         self.has_gnn_prior = self.use_vae and prior_type == 'gnn_e2e'
         if self.has_gnn_prior:
             self.prior = build_conditional_prior(config).to(device)
+            self.prior.use_checkpointing = bool(config.get('use_checkpointing', False))
             print(f'MeshGraphNets: joint GNN conditional prior enabled '
                   f'(prior_type=gnn_e2e, family={self.prior.family})')
         else:
@@ -58,6 +60,8 @@ class MeshGraphNets(nn.Module):
 
     def set_checkpointing(self, enabled: bool):
         self.model.set_checkpointing(enabled)
+        if self.prior is not None:
+            self.prior.use_checkpointing = enabled
 
     def forward(self, graph, add_noise=None, use_posterior=None, fixed_z=None,
                 compute_prior_path=False):
@@ -164,6 +168,7 @@ class EncoderProcessorDecoder(nn.Module):
             self.edge_input_size, self.node_input_size, self.latent_dim,
             use_world_edges=self.use_world_edges
         )
+        self.encoder.use_checkpointing = self.use_checkpointing
 
         if not self.use_multiscale:
             self.processer_list = nn.ModuleList([
@@ -303,6 +308,7 @@ class EncoderProcessorDecoder(nn.Module):
             latent_ch=self.latent_ch,
             local_mp_layers=int(config.get('vae_local_mp_layers', 2)),
         )
+        self.vae_encoder.use_checkpointing = self.use_checkpointing
         print(f"  VAE latent: {self.latent_type}"
               + ("" if self.latent_type == 'local' else f" (z_g {self.num_z} slots x {self.vae_latent_dim})")
               + ("" if self.latent_type == 'global' else f" (z_l {self.latent_ch} ch per coarsest node)")
@@ -676,7 +682,8 @@ class EncoderProcessorDecoder(nn.Module):
                 h_coarse = current_graph.x[ld['seeds']]
             else:
                 h_coarse = pool_features(current_graph.x, ld['ftc'], ld['n_c'])
-            e_coarse = self.coarse_eb_encoders[i](ld['c_ea'])
+            e_coarse = run_mlp(self.coarse_eb_encoders[i], ld['c_ea'],
+                               self.use_checkpointing and self.training)
             current_graph = Data(x=h_coarse, edge_attr=e_coarse, edge_index=ld['c_ei'])
             if self.use_coarse_world_edges and ld['c_we_idx'] is not None and ld['c_we_idx'].shape[1] > 0:
                 current_graph.world_edge_attr  = ld['c_we_attr']
@@ -699,15 +706,14 @@ class EncoderProcessorDecoder(nn.Module):
             ld = level_data[i]
             src, dst = ld['up_ei']
             rel_pos = ld['fine_pos'][dst] - ld['coarse_centroid'][src]
-            h_up = self.unpool_blocks[i](
-                h_coarse=current_graph.x,
-                h_fine_skip=skip_states[i]['x'],
-                unpool_edge_index=ld['up_ei'],
-                rel_pos=rel_pos,
-            )
-
             skip = skip_states[i]
-            h_merged = self.skip_projs[i](torch.cat([skip['x'], h_up], dim=-1))
+            args = (i, current_graph.x, skip['x'], ld['up_ei'], rel_pos)
+            if self.use_checkpointing and self.training:
+                # Keeps only the inputs; the fine-level [E_up, 2D+3] messages
+                # are rebuilt in backward.
+                h_merged = checkpoint(self._unpool_merge, *args, use_reentrant=False)
+            else:
+                h_merged = self._unpool_merge(*args)
             current_graph = Data(x=h_merged, edge_attr=skip['edge_attr'], edge_index=skip['edge_index'])
             use_we_here = self.use_world_edges and (i == 0 or self.use_coarse_world_edges)
             if use_we_here and skip['w_attr'] is not None:
@@ -725,6 +731,16 @@ class EncoderProcessorDecoder(nn.Module):
             aux_loss = self._pv_loss(predicted, original_y, fine_batch,
                                      self._num_graphs(z, fine_batch))
         return predicted, vae_losses, aux_loss
+
+    def _unpool_merge(self, i, h_coarse, h_skip, up_ei, rel_pos):
+        """Level i's learned unpool, then the skip merge."""
+        h_up = self.unpool_blocks[i](
+            h_coarse=h_coarse,
+            h_fine_skip=h_skip,
+            unpool_edge_index=up_ei,
+            rel_pos=rel_pos,
+        )
+        return self.skip_projs[i](torch.cat([h_skip, h_up], dim=-1))
 
     def _extract_level_data(self, graph, L):
         """Extract per-level coarsening topology from graph before encoder drops custom attrs."""
@@ -779,3 +795,6 @@ class EncoderProcessorDecoder(nn.Module):
 
     def set_checkpointing(self, enabled: bool):
         self.use_checkpointing = enabled
+        self.encoder.use_checkpointing = enabled
+        if getattr(self, 'vae_encoder', None) is not None:
+            self.vae_encoder.use_checkpointing = enabled

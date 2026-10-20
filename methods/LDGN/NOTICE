@@ -1,0 +1,59 @@
+LDGN port for AI-CAE4ALL
+========================
+
+The package in dgn4cfd/ is derived from
+
+    DGN4CFD -- "Learning Distributions of Complex Fluid Simulations with
+    Diffusion Graph Networks", Mario Lino, Tobias Pfaff and Nils Thuerey,
+    ICLR 2025 (oral), https://openreview.net/forum?id=uKZdlihDDn
+    https://github.com/tum-pbs/dgn4cfd, commit 68311caa40030662f090c86e146d5f6ff19e1410
+
+distributed under the Apache License, Version 2.0 (see LICENSE, copied
+unchanged from upstream). Hyperparameter defaults follow upstream's
+examples/Wing scripts (train_ae.py, train_ldgn.py, inference.ipynb).
+
+Changes made for AI-CAE4ALL (Apache-2.0 section 4(b)). Every modified file
+carries an "AI-CAE4ALL port" comment at the change.
+
+Modified
+    dgn4cfd/__init__.py                     drop the datasets/plot/metrics imports
+    dgn4cfd/graph.py                        drop the plot_* helpers (dgn4cfd/plot.py not vendored)
+    dgn4cfd/loader.py                       torchvision type hint replaced by Optional[Callable]
+    dgn4cfd/nn/__init__.py                  export only what an LDGN needs; no
+                                            add_safe_globals (DiffusionProcess is
+                                            checkpointed as its constructor arguments)
+    dgn4cfd/nn/model.py                     upstream fit loop (TensorBoard, tqdm, .chk files,
+                                            mixed precision) replaced by a plain loop with the
+                                            same optimisation recipe; weights_only checkpoints
+    dgn4cfd/nn/training_settings.py         run plumbing fields removed (logs/checkpoints belong
+                                            to training_profiles/)
+    dgn4cfd/nn/losses.py                    only VaeLoss, HybridLoss and their helpers kept
+    dgn4cfd/nn/models/__init__.py           export VGAE and MultiScaleGnn only
+    dgn4cfd/nn/models/vgae.py               per-batch training step for the plain loop;
+                                            LazyBatchNorm1d -> BatchNorm1d(1) (same buffers);
+                                            sample_n sample count + fresh graph per call
+    dgn4cfd/nn/diffusion/__init__.py,
+    dgn4cfd/nn/diffusion/models/__init__.py drop the non-latent DiffusionGraphNet (dgn.py)
+    dgn4cfd/nn/diffusion/diffusion_model.py per-batch training step for the plain loop; step
+                                            sampler state in the resume state; sample_n
+                                            sample count + fresh graph per call
+    dgn4cfd/nn/diffusion/models/ldgn.py     learnable_variance=False AttributeError fixed; the
+                                            frozen VGAE may be rebuilt from its arch alone (its
+                                            weights are part of the LDGN state dict)
+    dgn4cfd/transforms/__init__.py          export MeshCoarsening only
+
+Unchanged
+    dgn4cfd/nn/blocks.py, dgn4cfd/nn/models/multi_scale_gnn.py,
+    dgn4cfd/nn/diffusion/diffusion_process.py, dgn4cfd/nn/diffusion/step_sampler.py,
+    dgn4cfd/transforms/mesh.py
+
+Not vendored (not needed to train or sample an LDGN)
+    dgn4cfd/datasets.py, dgn4cfd/metrics.py, dgn4cfd/plot.py,
+    dgn4cfd/nn/diffusion/models/dgn.py, dgn4cfd/nn/flow_matching/,
+    dgn4cfd/nn/models/{bayesian,gaussian_mixture,vanilla}.py,
+    dgn4cfd/transforms/{cond,connect,copy,dirichlet,identity,scale}.py,
+    examples/ (scripts, notebooks, checkpoints, .vtk files), pyproject.toml
+
+Everything outside dgn4cfd/ (LDGN_main.py, general_modules/, training_profiles/,
+inference_profiles/, tests/) is AI-CAE4ALL code; general_modules/resume_state.py
+is the suite's shared copy.

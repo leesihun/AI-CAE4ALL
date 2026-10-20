@@ -392,7 +392,7 @@ export function executableSteps(targetId = null) {
     }
     if (spec?.isModel) {
       const mode = String(node.config?.mode || "train").toLowerCase();
-      const trainingMode = ["train", "train_vae", "train_fm", "train_lc", "train_sar"].includes(mode);
+      const trainingMode = ["train", "train_vae", "train_fm", "train_lc", "train_sar", "train_ldgn"].includes(mode);
       if (node.id !== target?.id && runtimeProviderIds.has(node.id) && !trainingMode) return;
       steps.push({
         label: `${spec.label} · ${node.config.mode || "train"}`,
@@ -539,8 +539,8 @@ export function executableSteps(targetId = null) {
       const configuredSplit = upstream.config.infer_dataset;
       if (!(configuredSplit && wired === trainingDataset)) overrides.infer_dataset = wired;
     }
-    if (modelId === "sar" && mode === "inference") {
-      // SAR's spread histogram compares its ensembles with the truth of the
+    if ((modelId === "sar" || modelId === "ldgn") && mode === "inference") {
+      // SAR's (and LDGN's) spread histogram compares its ensembles with the truth of the
       // scenes it sampled, which are the infer_dataset ones -- so the file the
       // graph feeds the run is also the one it scores against. Left to the
       // trainer block, eval_dataset was simply absent and the run skipped the

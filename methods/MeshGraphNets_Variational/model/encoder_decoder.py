@@ -3,6 +3,7 @@ import torch.nn as nn
 from torch_geometric.data import Data
 
 from model.blocks import EdgeBlock, HybridNodeBlock, NodeBlock
+from model.checkpointing import checkpoint_active, run_mlp
 from model.mlp import build_mlp
 
 
@@ -12,17 +13,20 @@ class Encoder(nn.Module):
     def __init__(self, edge_input_size, node_input_size, latent_dim, use_world_edges=False):
         super().__init__()
         self.use_world_edges = use_world_edges
+        # Set by the owning model from `use_checkpointing` (training only).
+        self.use_checkpointing = False
         self.eb_encoder = build_mlp(edge_input_size, latent_dim, latent_dim)
         self.nb_encoder = build_mlp(node_input_size, latent_dim, latent_dim)
         if use_world_edges:
             self.world_eb_encoder = build_mlp(edge_input_size, latent_dim, latent_dim)
 
     def forward(self, graph):
-        node_ = self.nb_encoder(graph.x)
-        edge_ = self.eb_encoder(graph.edge_attr)
+        ckpt = checkpoint_active(self)
+        node_ = run_mlp(self.nb_encoder, graph.x, ckpt)
+        edge_ = run_mlp(self.eb_encoder, graph.edge_attr, ckpt)
         out = Data(x=node_, edge_attr=edge_, edge_index=graph.edge_index)
         if self.use_world_edges and hasattr(graph, 'world_edge_attr') and graph.world_edge_index.shape[1] > 0:
-            out.world_edge_attr = self.world_eb_encoder(graph.world_edge_attr)
+            out.world_edge_attr = run_mlp(self.world_eb_encoder, graph.world_edge_attr, ckpt)
             out.world_edge_index = graph.world_edge_index
         elif self.use_world_edges:
             out.world_edge_attr = torch.zeros(0, edge_.shape[1], device=edge_.device)

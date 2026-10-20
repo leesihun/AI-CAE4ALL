@@ -32,8 +32,9 @@ from sar.nn.modules.transolver import set_runtime_options
 from training_profiles.common import (as_list, check_normalization_matches, load_checkpoint,
                                       resolve_device)
 
-from .spread import (_eval_dataset_spreads, _plot_spread_histogram, _rollout_feature_names,
-                     _spread_index, _spread_scores, _spread_stat, _spread_stat_expr)
+from .spread import (_eval_dataset_groups, _eval_dataset_spreads, _plot_spread_histogram,
+                     _rollout_feature_names, _spread_by_group, _spread_index, _spread_scores,
+                     _spread_stat, _spread_stat_expr)
 
 
 DEFAULT_STEPS = [20, 11, 2]     # upstream examples/Wing sampling notebook
@@ -295,3 +296,18 @@ def run_inference(config, config_filename='config.txt'):
             scores=scores, stat=spread_stat)
     except Exception as exc:  # never let plotting break a finished run
         print(f'  Histogram generation failed: {exc}')
+    # One figure per held-out geometry, beside the pooled one: the pooled curve
+    # hides per-geometry width errors.
+    attr = md.group_attr(config)
+    try:
+        groups = _eval_dataset_groups(str(eval_dataset), attr)
+        if groups:
+            _spread_by_group(
+                gt, gt_scene, gen, generated_scene_ids, groups, attr, output_dir,
+                eval_path=str(eval_dataset), bins=int(config.get('histogram_bins', 60)),
+                clip_quantile=float(config.get('histogram_clip_quantile', 0.0)),
+                label=spread_label, stat=spread_stat)
+        else:
+            print(f'  Per-group histograms skipped: no `{attr}` metadata attribute in {eval_dataset}')
+    except Exception as exc:
+        print(f'  Per-group histogram generation failed: {exc}')

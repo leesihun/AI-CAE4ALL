@@ -177,6 +177,8 @@ function modelRows(node) {
     add("latent", "latent_dim"); add("hier. latent", "latent_dim_end");
   } else if (id === "sar") {
     add("scales", "sar_num_iters"); add("SAR width", "sar_d_model");
+  } else if (id === "ldgn") {
+    add("VAE scales", "vae_depths"); add("LDGN width", "ldgn_fnns_width");
   }
   const mode = value(node, "mode").toLowerCase() || "train";
   if (id === "sdfflow") {
@@ -198,6 +200,11 @@ function modelRows(node) {
     } else if (id === "sar" && mode === "train_sar") {
       const sarLr = value(node, "sar_learningr");
       rows.push(["epochs · lr", `${value(node, "sar_training_epochs") || "?"}${sarLr ? ` · ${sarLr}` : ""}`]);
+    } else if (id === "ldgn" && mode === "train") {
+      rows.push(["epochs", `VAE ${value(node, "vae_training_epochs") || "?"} · LDGN ${value(node, "ldgn_training_epochs") || "?"}`]);
+    } else if (id === "ldgn" && mode === "train_ldgn") {
+      const ldgnLr = value(node, "ldgn_learningr");
+      rows.push(["epochs · lr", `${value(node, "ldgn_training_epochs") || "?"}${ldgnLr ? ` · ${ldgnLr}` : ""}`]);
     } else if (epochs) rows.push(["epochs · lr", `${epochs}${lr ? ` · ${lr}` : ""}`]);
   } else if (id === "sdfflow") {
     // Every non-training mode decodes through the VAE; only these read the FM

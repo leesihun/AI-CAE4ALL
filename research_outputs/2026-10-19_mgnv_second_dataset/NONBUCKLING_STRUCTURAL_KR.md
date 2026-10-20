@@ -1,5 +1,7 @@
 # MGN-V 추가 데이터셋: 좌굴을 제외한 구조 문제
 
+> 이 문서는 유공판 제안 당시의 검토 기록이다. 이후 사용자 선호를 반영한 최신 추천은 [MNIST 및 미세조직 비교](MNIST_AND_MICROSTRUCTURE_COMPARISON_KR.md)를 따른다.
+
 검토일: 2026-10-19 (Asia/Seoul). 최신 요청은 좌굴 계열을 제외한 추가 구조 dataset이다. iFEM은 inverse FEM으로 확인됐다.
 
 ## 권고

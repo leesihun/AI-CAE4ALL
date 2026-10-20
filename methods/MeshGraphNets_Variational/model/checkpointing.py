@@ -125,3 +125,38 @@ def process_with_checkpointing(processor_list, graph, z_fusers=None, z_per_node=
         out.world_edge_attr = world_edge_attr
         out.world_edge_index = world_edge_index
     return out
+
+
+def checkpoint_active(module):
+    """True when `module` should checkpoint: flag on, training, autograd recording."""
+    return (getattr(module, 'use_checkpointing', False) and module.training
+            and torch.is_grad_enabled())
+
+
+def run_mlp(mlp, x, checkpointed):
+    """An encoder MLP, checkpointed when asked.
+
+    On the fine mesh an edge encoder keeps five [E, latent_dim] tensors for
+    backward (two Linear outputs, two SiLU outputs, the pre-LayerNorm output);
+    checkpointed it keeps only its raw [E, edge_var] input.
+    """
+    if not checkpointed:
+        return mlp(x)
+    return checkpoint(mlp, x, use_reentrant=False)
+
+
+def run_plain_blocks(blocks, graph, checkpointed):
+    """Unconditioned GnBlocks without world edges, one checkpoint per block.
+
+    The trunks of the posterior encoder and the conditional prior. Both run on
+    the fine mesh outside the processor, so `process_with_checkpointing` never
+    covered them.
+    """
+    if not checkpointed:
+        for block in blocks:
+            graph = block(graph)
+        return graph
+    x, edge_attr = graph.x, graph.edge_attr
+    for block in blocks:
+        x, edge_attr, _, _ = checkpoint_gn_block(block, x, edge_attr, graph.edge_index)
+    return Data(x=x, edge_attr=edge_attr, edge_index=graph.edge_index)

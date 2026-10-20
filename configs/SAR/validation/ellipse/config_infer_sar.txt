@@ -1,0 +1,41 @@
+% validation/ellipse - sar; samples of the Ellipse-trained port for the upstream comparison.
+% Dataset: upstream pOnEllipseInDist.h5 converted (50 simulations; simulation i keeps its first
+% TimeEllipseInDist[i] snapshots = the notebook's n_in=T[i], a whole number of shedding periods).
+% num_samples 200 per simulation, as upstream test_sar.ipynb; save_rollouts True writes every
+% sample's field, which the upstream metrics (R2 of mean/std, W2 1d/nd) are computed from.
+% Checkpoints come from the paired training config; architecture and normalization are read
+% from them, so only the sampling keys below matter here.
+% infer_dataset holds only the t=0 snapshot of each simulation: sample_scope geometry draws one
+% ensemble per simulation from its geometry and conditions, which every snapshot shares, so this
+% is the same ensemble without 200 rollout files per snapshot. eval_dataset keeps every snapshot.
+% spread_stat mag_max on p: the per-sample max |p| (histogram vs the simulation's snapshots).
+
+model                            sar
+mode                             inference
+gpu_ids                          0
+split_seed                       42
+split_group_attr                 sim_idx
+dataset_dir                      ../../dataset/validation/ellipse.h5
+infer_dataset                    ../../dataset/validation/ellipse_infer_t0.h5
+vae_modelpath                    ../../output/validation/ellipse/sar/vae.pth
+modelpath                        ../../output/validation/ellipse/sar/model.pth
+log_file_dir                     ../../output/validation/ellipse/sar/train.log
+inference_output_dir             ../../output/validation/ellipse/sar/infer
+output_var                       1
+cond_var                         3
+use_node_types                   False
+dense_attention                  True
+num_samples                      200
+sample_scope                     geometry
+sample_seed                      0
+% upstream examples/Ellipse/test_sar.ipynb: steps first=20, last=4, linear over 3 scales
+sample_steps                     20, 12, 4
+sample_batch_size                50
+eval_dataset                     ../../dataset/validation/ellipse_infer.h5
+spread_channel                   0
+spread_label                     p
+spread_stat                      mag_max
+make_histogram                   True
+show_histogram                   False
+histogram_bins                   30
+save_rollouts                    True

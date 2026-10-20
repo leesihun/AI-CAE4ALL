@@ -1,0 +1,85 @@
+% validation/ellipse - sar; port check against upstream SAR (tum-pbs/SAR 1d1609f) on its own
+% smallest benchmark, examples/Ellipse (pressure on an ellipse in a channel, vortex shedding).
+% Dataset: upstream pOnEllipseTrain.h5 converted to the mesh HDF5 contract by
+% D:/CAE_datasets_raw/lino_dgn/convert_ellipse.py (5701 simulations x their first 10 snapshots,
+% upstream T=10; checked equal to upstream pOnEllipse.data2graph to 2e-7).
+% Field storage order (0-based): input -> output -> conditioner (no node-type row).
+% input [0:3]: x, y (centred per simulation), z=0 -> SAR pos / edge_attr
+% output [3]: p -> SAR target (generated)
+% conditioner [4:7]: Re, d_bottom = y, d_top = H - y -> SAR glob (upstream glob Re + loc d_b, d_t;
+% SAR concatenates glob and loc, so one block of three is the same input)
+% SAR system = one simulation (sim_idx); its states = its 10 snapshots.
+% Hyperparameters = upstream examples/Ellipse/training_vae.py + training_sar.py, batch 64, no
+% accumulation. sar_sampler_batch_size 4 = the released checkpoint's hparams (the script says 16).
+% pos: train max |coord| is 0.5, i.e. upstream ScaleAttr('pos', -0.5, 0.5); edge_attr_r 0.04 =
+% upstream ScaleEdgeAttr(0.02) in those units.
+% Deviations from upstream: grouped 80/10/10 split (trains on ~4560 of 5701 simulations), train
+% min/max instead of the hard-coded vmin/vmax, pos in 3D with z=0, coarse-level edge_attr in
+% normalized (x2) units. Upstream stops on the plateau LR threshold; the epoch caps are only a
+% wall-clock bound (released checkpoints: VAE 457, SAR 303 epochs).
+
+model                            sar
+mode                             train
+gpu_ids                          0
+split_seed                       42
+split_group_attr                 sim_idx
+dataset_dir                      ../../dataset/validation/ellipse.h5
+infer_dataset                    ../../dataset/validation/ellipse_infer.h5
+vae_modelpath                    ../../output/validation/ellipse/sar/vae.pth
+modelpath                        ../../output/validation/ellipse/sar/model.pth
+% stage logs: train_vae.log and train_sar.log beside this name
+log_file_dir                     ../../output/validation/ellipse/sar/train.log
+inference_output_dir             ../../output/validation/ellipse/sar/infer
+output_var                       1
+cond_var                         3
+use_node_types                   False
+training_seed                    0
+num_workers                      4
+% one random snapshot of every train simulation per epoch, as upstream
+draws_per_epoch                  1
+val_draws_per_geometry           10
+val_interval                     10
+test_interval                    100
+display_trainset                 False
+display_testset                  True
+viz_num_samples                  8
+dense_attention                  True
+use_checkpointing                False
+edge_attr_r                      0.04
+
+% ---- stage 1: graph VAE (upstream examples/Ellipse/training_vae.py)
+vae_num_layers                   2
+vae_d_model                      128
+vae_dropout                      0.1
+vae_kl_weight                    1e-6
+vae_noise_std                    0.01
+vae_batch_size                   64
+vae_grad_accum                   1
+vae_learningr                    1e-4
+vae_lr_factor                    0.1
+vae_lr_patience                  50
+vae_lr_threshold                 1e-6
+vae_training_epochs              1500
+
+% ---- stage 2: SAR over the frozen VAE (upstream examples/Ellipse/training_sar.py)
+sar_num_iters                    3
+sar_num_cond_layers              2
+sar_num_ar_layers                2
+sar_num_sampler_layers           2
+sar_d_model                      128
+sar_num_slices                   8
+sar_num_heads                    8
+sar_dropout                      0.1
+sar_noise_std                    0.01
+sar_sampler_batch_size           4
+sar_batch_size                   64
+sar_grad_accum                   1
+sar_learningr                    1e-3
+sar_lr_factor                    0.1
+sar_lr_patience                  20
+sar_lr_threshold                 1e-5
+sar_training_epochs              1500
+
+% ---- periodic sample picture (test_interval); upstream Ellipse notebook first=20, last=4, linear
+sample_steps                     20, 12, 4
+sample_batch_size                16

@@ -1,0 +1,100 @@
+% ex3 B300 round 4 arm ldgn_wing_ae200: LDGN baseline (ported dgn4cfd code).
+% Change from round 3's ldgn_s42: vae_lr_patience 250 -> 200 (the released Wing AE checkpoint; the script says 250).
+% Question: Minor: the released autoencoder's schedule.
+% Base: configs/LDGN/hyperparameter_sweep/r3/config_train_ldgn_s42.txt
+% verbatim, except the run paths (output/b300_r4/ldgn_wing_ae200/) and the change above.
+% (configs/MeshGraphNets_Variational/hyperparameter_sweep/r4/run_node.sh assigns the card; one job per card.)
+% Memory and time on ex3 are not measured yet.
+%
+% probabilistic/ex3 - ldgn; LDGN (Lino, Pfaff & Thuerey, ICLR 2025) ported from tum-pbs/dgn4cfd.
+% Dataset: shell buckling, 150 geometries x 64 imperfection draws (ex3_shell_buckling.h5).
+% Field storage order (0-based): input -> output -> conditioner -> partNo.
+% input [0:3]: x_coord, y_coord, z_coord (nominal, pre-imperfection) -> LDGN pos / edge_attr
+% output [3:6]: ux, uy, uz at the final timestep -> LDGN target (generated)
+% conditioner [6:8]: thickness, delta (applied end shortening), at t=0 -> LDGN glob
+% partNo [8]: node type (0 interior, 1 clamped rim, 2 loaded rim) -> LDGN loc one-hot
+% LDGN system = one geometry (shape_idx); its states = that geometry's FEA draws. The model learns
+% p(field | geometry, conditions); the imperfection parameters (metadata attrs, `latent` group)
+% are never read, so the one-to-many spread has to come from the diffusion sampler.
+% Same split as MGN-V and SAR ex3: split_seed 42, grouped by shape_idx (no sibling leakage).
+% Hyperparameters are the upstream examples/Wing ones (train_ae.py, train_ldgn.py). Batches are
+% cut to fit ex3's 46-87k-node graphs; grad accumulation keeps upstream's effective batch of 32
+% (2 x 16 in both stages).
+% Upstream stops when the plateau scheduler drops the LR below 1e-8 (stopping), capped at 5000
+% (VGAE) and 50000 (LDGN) epochs; here the caps are 3000 (as SAR's VAE) and 5000 - wall-clock
+% caps only. Memory/throughput on ex3 is not measured yet - check the first epochs' log lines
+% before leaving it running.
+% No source HDF5 writes. Checkpoints are created by this training config.
+
+model                            ldgn
+mode                             train
+gpu_ids                          0
+split_seed                       42
+split_group_attr                 shape_idx
+dataset_dir                      ../../dataset/probabilistic/ex3_shell_buckling.h5
+infer_dataset                    ../../dataset/probabilistic/ex3_shell_buckling_infer.h5
+vae_modelpath                    ../../output/b300_r4/ldgn_wing_ae200/vae.pth
+modelpath                        ../../output/b300_r4/ldgn_wing_ae200/model.pth
+% stage logs: train_vae.log and train_ldgn.log beside this name
+log_file_dir                     ../../output/b300_r4/ldgn_wing_ae200/train.log
+inference_output_dir             ../../output/b300_r4/ldgn_wing_ae200/infer
+output_var                       3
+cond_var                         2
+use_node_types                   True
+training_seed                    42
+num_workers                      4
+% one draw of every train geometry per epoch, as upstream (one random state per system)
+draws_per_epoch                  1
+val_draws_per_geometry           4
+val_interval                     10
+test_interval                    50
+display_trainset                 True
+display_testset                  True
+viz_num_samples                  16
+% upstream ScaleEdgeAttr(0.015) on Wing; auto = half the mean train edge length. The
+% coarsening radii keep Wing's ratios to it (0.015, 0.03, 0.06, 0.12, 0.2, 0.4).
+edge_attr_r                      auto
+% upstream grad_clip epoch 0, limit 1
+grad_clip                        1.0
+
+% ---- stage 1: VGAE (upstream examples/Wing/train_ae.py)
+vae_depths                       2, 2, 1
+vae_fnns_depth                   2
+vae_fnns_width                   126
+vae_latent_features              1
+vae_aggr                         sum
+vae_dropout                      0.1
+vae_norm_latents                 True
+vae_kl_reg                       1e-6
+vae_batch_size                   2
+vae_grad_accum                   16
+vae_learningr                    1e-4
+vae_lr_factor                    0.1
+vae_lr_patience                  200
+vae_lr_threshold                 1e-8
+vae_training_epochs              3000
+
+% ---- stage 2: LDGN over the frozen VGAE (upstream examples/Wing/train_ldgn.py)
+% 6 coarsening levels in all: the VGAE's 3, then the denoiser's 4 from the VGAE's coarsest.
+ldgn_depths                      1, 2, 2, 2
+ldgn_fnns_depth                  2
+ldgn_fnns_width                  128
+ldgn_aggr                        sum
+ldgn_dropout                     0.1
+ldgn_diffusion_steps             1000
+ldgn_schedule                    linear
+ldgn_learnable_variance          True
+ldgn_lambda_vlb                  1e-3
+ldgn_step_sampler                importance
+ldgn_batch_size                  2
+ldgn_grad_accum                  16
+ldgn_learningr                   1e-4
+ldgn_lr_factor                   0.1
+ldgn_lr_patience                 250
+ldgn_lr_threshold                1e-8
+ldgn_training_epochs             5000
+
+% ---- periodic sample picture (test_interval); upstream Wing notebook: 50 of 1000 steps
+sample_steps                     50
+sample_step_schedule             linear
+sample_batch_size                8

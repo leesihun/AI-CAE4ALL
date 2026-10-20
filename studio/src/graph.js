@@ -547,7 +547,7 @@ function nodeMode(node) {
 /* What the primary button does, per mode. Anything unlisted falls back to
    "Run" rather than claiming a verb that may be wrong. */
 const MODE_VERB = {
-  train: "Train", train_vae: "Train", train_fm: "Train", train_lc: "Train", train_sar: "Train",
+  train: "Train", train_vae: "Train", train_fm: "Train", train_lc: "Train", train_sar: "Train", train_ldgn: "Train",
   inference: "Predict", reconstruct: "Reconstruct", sample: "Generate",
   interpolate: "Interpolate", optimize: "Optimize", evaluate: "Evaluate"
 };

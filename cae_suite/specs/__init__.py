@@ -1,5 +1,6 @@
 from .base import MethodSpec, PathKind, PathRule, SpecValidationContext
 from .geometry_ingest import build_geometry_ingest_spec
+from .ldgn import build_ldgn_spec
 from .meshgraphnets import build_meshgraphnets_spec
 from .meshgraphnets_variational import build_variational_spec
 from .mlp import build_mlp_spec
@@ -23,4 +24,5 @@ __all__ = [
     "build_geometry_ingest_spec",
     "build_mlp_spec",
     "build_sar_spec",
+    "build_ldgn_spec",
 ]

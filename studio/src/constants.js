@@ -37,7 +37,9 @@ export const KEY_CATALOGS = {
   sdfflow: keys(`alpha batch_size candidate_multiplier cfg_scale clamp_dist cond_dropout cond_values condition_clip condition_names condition_ood_policy dataset_dir decoder_heads decoder_hidden decoder_layers decoder_type deterministic_warmup_epochs eikonal_weight ema_decay encode_batch_size encoder_blocks encoder_dim encoder_heads encoder_self_attention fm_arch fm_batch_size fm_blocks fm_cond_hidden fm_ema_decay fm_heads fm_hidden fm_latent_draws fm_learningr fm_log_file_dir fm_mc_resolution_test fm_modelpath fm_num_test_shapes fm_num_workers fm_test_interval fm_time_logit_mean fm_time_logit_std fm_time_sampling fm_training_epochs fm_use_amp fm_use_ema fm_val_interval fm_warmup_epochs fm_weight_decay fourier_bands fsdp_min_params gpu_ids hybrid_grad_points init_vae_modelpath input_mesh kl_warmup_epochs kl_weight latent_clip latent_dim latent_tokens learningr log_file_dir max_condition_z mc_resolution mc_resolution_test min_condition_std mode model normal_weight num_encoder_points num_query_points num_samples num_test_shapes num_workers ode_steps output_dir overfit_all_shapes overfit_num_shapes parallel_mode pipeline_log_file plot_dpi plot_max_faces posterior_noise_max_scale posterior_noise_warmup_epochs sample_index_a sample_index_b seed skip_completed_stages source_num_samples split_seed surface_weight test_interval training_epochs use_amp use_conditions use_ema vae_batch_size vae_ema_decay vae_learningr vae_log_file_dir vae_mc_resolution_test vae_modelpath vae_num_test_shapes vae_num_workers vae_test_interval vae_training_epochs vae_use_amp vae_use_ema vae_val_interval vae_warmup_epochs vae_weight_decay val_interval warmup_epochs weight_decay opt_subspace_dim opt_subspace_seed opt_condition_dims opt_latent_range opt_shell_scale opt_budget opt_popsize opt_sigma0 opt_baseline_size opt_screen_batch opt_load_cases opt_length_scale opt_stress_percentile opt_mesh_size_max opt_target_faces opt_material_e opt_material_nu opt_material_rho opt_yield_stress opt_stress_margin opt_disp_margin opt_stress_weight opt_disp_weight opt_vertical_disp_max opt_verify_resolution opt_verify_target_faces opt_verify_mesh_size_max opt_analysis opt_surrogate_checkpoint opt_surrogate_config opt_surrogate_python opt_surrogate_target_nodes opt_fea_verify`),
   simulgenvae: keys(`alpha batch_size beta_target cond_var dataset_dir ema_decay field_start_row gpu_ids init_beta_divisor init_vae_modelpath kl_warmup_epochs kl_warmup_start_frac latent_dim latent_dim_end lc_batch_size lc_data_type lc_dropout lc_ema_decay lc_filter lc_learningr lc_log_file_dir lc_modelpath lc_num_workers lc_training_epochs lc_use_amp lc_use_ema lc_warmup_epochs lc_weight_decay learningr load_all log_file_dir loss_type mode model network_size node_end node_start num_filter_enc num_var num_workers output_dir parallel_mode param_data_type param_dir pipeline_log_file plot_mode recon_iter skip_completed_stages split_seed timesteps_reduced training_epochs use_amp use_ema use_spatial_attention vae_batch_size vae_ema_decay vae_learningr vae_log_file_dir vae_modelpath vae_num_workers vae_training_epochs vae_use_amp vae_use_ema vae_warmup_epochs vae_weight_decay val_interval warmup_epochs weight_decay`),
   // cae_suite/specs/sar.py SAR_KEYS + RESUME_KEYS.
-  sar: keys(`cond_var dataset_dir dense_attention display_testset display_trainset draws_per_epoch edge_attr_r eval_dataset gpu_ids grad_clip histogram_bins histogram_clip_quantile infer_dataset inference_output_dir log_file_dir make_histogram mode model modelpath num_samples num_workers output_var resume_interval_minutes resume_training sample_batch_size sample_scope sample_seed sample_steps sar_batch_size sar_d_model sar_dropout sar_grad_accum sar_learningr sar_log_file_dir sar_lr_factor sar_lr_patience sar_lr_threshold sar_noise_std sar_num_ar_layers sar_num_cond_layers sar_num_heads sar_num_iters sar_num_sampler_layers sar_num_slices sar_sampler_batch_size sar_training_epochs save_rollouts show_histogram split_group_attr split_seed spread_channel spread_label spread_stat test_interval training_seed use_checkpointing use_node_types vae_batch_size vae_d_model vae_dropout vae_grad_accum vae_kl_weight vae_latent_features vae_learningr vae_log_file_dir vae_lr_factor vae_lr_patience vae_lr_threshold vae_modelpath vae_noise_std vae_num_layers vae_training_epochs val_draws_per_geometry val_interval viz_num_samples`)
+  sar: keys(`cond_var dataset_dir dense_attention display_testset display_trainset draws_per_epoch edge_attr_r eval_dataset gpu_ids grad_clip histogram_bins histogram_clip_quantile infer_dataset inference_output_dir log_file_dir make_histogram mode model modelpath num_samples num_workers output_var resume_interval_minutes resume_training sample_batch_size sample_scope sample_seed sample_steps sar_batch_size sar_d_model sar_dropout sar_grad_accum sar_learningr sar_log_file_dir sar_lr_factor sar_lr_patience sar_lr_threshold sar_noise_std sar_num_ar_layers sar_num_cond_layers sar_num_heads sar_num_iters sar_num_sampler_layers sar_num_slices sar_sampler_batch_size sar_training_epochs save_rollouts show_histogram split_group_attr split_seed spread_channel spread_label spread_stat test_interval training_seed use_checkpointing use_node_types vae_batch_size vae_d_model vae_dropout vae_grad_accum vae_kl_weight vae_latent_features vae_learningr vae_log_file_dir vae_lr_factor vae_lr_patience vae_lr_threshold vae_modelpath vae_noise_std vae_num_layers vae_training_epochs val_draws_per_geometry val_interval viz_num_samples`),
+  // cae_suite/specs/ldgn.py LDGN_KEYS + RESUME_KEYS.
+  ldgn: keys(`cond_var dataset_dir display_testset display_trainset draws_per_epoch edge_attr_r eval_dataset gpu_ids grad_clip histogram_bins histogram_clip_quantile infer_dataset inference_output_dir ldgn_aggr ldgn_batch_size ldgn_depths ldgn_diffusion_steps ldgn_dropout ldgn_fnns_depth ldgn_fnns_width ldgn_grad_accum ldgn_lambda_vlb ldgn_learnable_variance ldgn_learningr ldgn_log_file_dir ldgn_lr_factor ldgn_lr_patience ldgn_lr_threshold ldgn_schedule ldgn_step_sampler ldgn_training_epochs log_file_dir make_histogram mode model modelpath num_samples num_workers output_var rel_pos_ratios resume_interval_minutes resume_training sample_batch_size sample_scope sample_seed sample_step_schedule sample_steps save_rollouts show_histogram split_group_attr split_seed spread_channel spread_label spread_stat test_interval training_seed use_node_types vae_aggr vae_batch_size vae_depths vae_dropout vae_fnns_depth vae_fnns_width vae_grad_accum vae_kl_reg vae_latent_features vae_learningr vae_log_file_dir vae_lr_factor vae_lr_patience vae_lr_threshold vae_modelpath vae_norm_latents vae_training_epochs val_draws_per_geometry val_interval viz_num_samples`)
 };
 
 // Periodic training visualization, added to every method that trains. The mesh
@@ -273,6 +275,44 @@ export const MODEL_CATALOG = {
       // mirrors the MGN-V ex1 inference config (density range).
       spread_channel: "0", spread_label: "density", spread_stat: "range"
     }
+  },
+  ldgn: {
+    label: "LDGN", short: "LDGN", accent: "#6b5a8e", modes: ["train", "train_vae", "train_ldgn", "inference"], keys: KEY_CATALOGS.ldgn,
+    description: "Latent diffusion graph net (Lino, Pfaff & Thuerey, ICLR 2025): a multi-scale graph VAE plus a DDPM denoiser in its latent space that samples a field distribution per geometry.",
+    dataset: "mesh HDF5",
+    // The architecture and optimiser values mirror
+    // configs/LDGN/probabilistic/ex3/config_train_ldgn.txt (the upstream
+    // dgn4cfd examples/Wing recipe, batch cut to 2 with gradient accumulation).
+    // The data keys are ex1's, for the same reason as SAR's: ex3 is not staged
+    // locally, ex1 is (one system = one tcool group, its 8 seeds the states;
+    // 3 coords + 4 state + 1 condition, no node-type row).
+    defaults: {
+      model: "ldgn", mode: "train", gpu_ids: "0",
+      dataset_dir: "../../dataset/probabilistic/ex1_turbulent_radiative_layer.h5",
+      infer_dataset: "../../dataset/probabilistic/ex1_turbulent_radiative_layer_infer.h5",
+      split_seed: "42", split_group_attr: "tcool",
+      vae_modelpath: "../../output/ldgn/studio/vae.pth",
+      modelpath: "../../output/ldgn/studio/model.pth",
+      log_file_dir: "../../output/ldgn/studio/train.log",
+      inference_output_dir: "../../output/ldgn/studio/infer",
+      output_var: "4", cond_var: "1", use_node_types: "False",
+      training_seed: "42", num_workers: "2", draws_per_epoch: "8", val_draws_per_geometry: "4",
+      val_interval: "10", test_interval: "50", display_trainset: "True", display_testset: "True",
+      viz_num_samples: "16", edge_attr_r: "auto", grad_clip: "1.0",
+      vae_depths: "2, 2, 1", vae_fnns_depth: "2", vae_fnns_width: "126", vae_latent_features: "1",
+      vae_aggr: "sum", vae_dropout: "0.1", vae_norm_latents: "True", vae_kl_reg: "1e-6",
+      vae_batch_size: "2", vae_grad_accum: "16", vae_learningr: "1e-4", vae_lr_factor: "0.1",
+      vae_lr_patience: "250", vae_lr_threshold: "1e-8", vae_training_epochs: "3000",
+      ldgn_depths: "1, 2, 2, 2", ldgn_fnns_depth: "2", ldgn_fnns_width: "128", ldgn_aggr: "sum",
+      ldgn_dropout: "0.1", ldgn_diffusion_steps: "1000", ldgn_schedule: "linear",
+      ldgn_learnable_variance: "True", ldgn_lambda_vlb: "1e-3", ldgn_step_sampler: "importance",
+      ldgn_batch_size: "2", ldgn_grad_accum: "16", ldgn_learningr: "1e-4", ldgn_lr_factor: "0.1",
+      ldgn_lr_patience: "250", ldgn_lr_threshold: "1e-8", ldgn_training_epochs: "5000",
+      // upstream Wing notebook: 50 linearly spaced of the 1000 trained steps
+      sample_steps: "50", sample_step_schedule: "linear", sample_batch_size: "8",
+      save_rollouts: "True",
+      spread_channel: "0", spread_label: "density", spread_stat: "range"
+    }
   }
 };
 
@@ -448,8 +488,14 @@ export const CHOICES = {
   // MGNV-LATENT-TYPE / MGNV-LATENT-REG.
   latent_reg: ["mmd", "kl"],
   spread_stat: ["range", "mean", "std", "mag_max"],
-  // SAR-SCOPE-001 (cae_suite/specs/sar.py SAMPLE_SCOPES).
-  sample_scope: ["geometry", "scene"]
+  // SAR-SCOPE-001 (cae_suite/specs/sar.py SAMPLE_SCOPES) and LDGN-SCOPE-001.
+  sample_scope: ["geometry", "scene"],
+  // cae_suite/specs/ldgn.py: LDGN-AGGR-001, LDGN-SCHEDULE-001, LDGN-SAMPLER-001/002.
+  vae_aggr: ["sum", "mean"],
+  ldgn_aggr: ["sum", "mean"],
+  ldgn_schedule: ["linear", "cosine"],
+  ldgn_step_sampler: ["importance", "uniform"],
+  sample_step_schedule: ["linear", "exp"]
 };
 
 // Per-route narrowing of a shared key's choices ({ "<model>": { key: [...] } }).
@@ -464,7 +510,7 @@ export const PARALLEL_MODE_CHOICES = Object.freeze({
   "meshgraphnets-v": ["ddp", "model_split"]
 });
 
-export const BOOLEAN_KEYS = new Set(keys(`augment_geometry bipartite_unpool coarse_world_edges dense_attention display_testset display_trainset encoder_self_attention fit_latent_gmm fm_use_amp fm_use_ema guidance_enabled load_all make_histogram opt_fea_verify overfit_all_shapes point_resample_each_epoch resume_prior resume_training save_rollouts show_histogram skip_completed_stages small_output_init split_by_parent train_conditional_prior use_amp use_checkpointing use_compile use_conditional_prior use_ema use_multiscale use_node_types use_parallel_stats use_vae use_world_edges vae_graph_aware vae_use_amp vae_use_ema lc_use_amp lc_use_ema write_preprocessing write_test_predictions`));
+export const BOOLEAN_KEYS = new Set(keys(`augment_geometry bipartite_unpool coarse_world_edges dense_attention display_testset display_trainset encoder_self_attention fit_latent_gmm fm_use_amp fm_use_ema guidance_enabled load_all make_histogram opt_fea_verify overfit_all_shapes point_resample_each_epoch resume_prior resume_training save_rollouts show_histogram skip_completed_stages small_output_init split_by_parent train_conditional_prior use_amp use_checkpointing use_compile use_conditional_prior use_ema use_multiscale use_node_types use_parallel_stats use_vae use_world_edges vae_graph_aware vae_norm_latents ldgn_learnable_variance vae_use_amp vae_use_ema lc_use_amp lc_use_ema write_preprocessing write_test_predictions`));
 BOOLEAN_KEYS.delete("load_all");
 export const OPERATOR_REMOVED = new Set(keys(`message_passing_num latent_dim edge_var world_radius_multiplier world_max_num_neighbors world_edge_backend coarse_world_edges multiscale_levels mp_per_level coarsening_type voronoi_clusters coarse_cache_per_worker use_vae vae_latent_dim vae_mp_layers vae_graph_aware free_bits posterior_min_std lambda_mmd lambda_kl lambda_det`));
 export const TRANSOLVER_REJECTED = new Set(keys(`edge_var message_passing_num mp_per_level coarsening_type voronoi_clusters multiscale_levels world_radius_multiplier world_max_num_neighbors world_edge_backend coarse_world_edges`));
@@ -552,7 +598,7 @@ export const BLOCK_SPECS = {
   },
   "run.inference": {
     label: "Inference Run", category: "Execution", icon: "run", accent: "#b76b2a", visual: "field", maturity: "native",
-    description: "Run a sample, batch, rollout, variational or SAR ensemble, or SimulGen-VAE reconstruction.",
+    description: "Run a sample, batch, rollout, variational, SAR or LDGN ensemble, or SimulGen-VAE reconstruction.",
     inputs: [
       { id: "data", type: "dataset", label: "dataset", required: true },
       { id: "model", type: "checkpoint", label: "saved model", required: true },
@@ -573,7 +619,7 @@ export const BLOCK_SPECS = {
       gpu_ids: "0", infer_timesteps: "", inference_output_dir: "",
       batch_size: "16", num_workers: "", infer_chunk_size: "", infer_query_chunk_size: "",
       num_vae_samples: "", vae_batch_size: "",
-      // SAR: samples drawn per held-out geometry (blank = the route default, 64).
+      // SAR / LDGN: samples drawn per held-out geometry (blank = the route default, 64).
       num_samples: "",
       viewer: "prediction · truth · error · timestep player · distributions"
     }, sampleLabel: "20 reconstructions", executable: true
@@ -1120,6 +1166,30 @@ export const TEMPLATES = {
       ["evaluation", "report", "export", "input"]
     ]
   },
+  // Derived, not mirrored, for the same reason as sar's: the checked-in LDGN
+  // configs target ex3 (configs/LDGN/probabilistic/ex3/), not staged on a fresh
+  // checkout. The trainer takes the LDGN catalog defaults (the ex3 recipe on ex1).
+  ldgn: {
+    name: "LDGN field ensembles (ex1 radiative layer)",
+    nodes: [
+      ["dataset", "source.hdf5", 35, 70, { path: "dataset/probabilistic/ex1_turbulent_radiative_layer.h5" }],
+      ["infer_dataset_src", "source.hdf5", 35, 300, { path: "dataset/probabilistic/ex1_turbulent_radiative_layer_infer.h5" }],
+      ["trainer", "model.ldgn", 330, 70, { mode: "train" }],
+      ["train_metrics", "evaluate.training_metrics", 625, 390],
+      ["inference", "run.inference", 625, 70, { num_samples: "8" }],
+      ["evaluation", "evaluate.predictions", 920, 70],
+      ["export", "output.export", 1215, 70]
+    ],
+    edges: [
+      ["dataset", "data", "trainer", "data"],
+      ["trainer", "metrics", "train_metrics", "metrics"],
+      ["infer_dataset_src", "data", "inference", "data"],
+      ["trainer", "model", "inference", "model"],
+      ["inference", "prediction", "evaluation", "prediction"],
+      ["infer_dataset_src", "data", "evaluation", "truth"],
+      ["evaluation", "report", "export", "input"]
+    ]
+  },
   blank: { name: "Untitled pipeline", nodes: [], edges: [] }
 };
 
@@ -1265,23 +1335,24 @@ export const CONFIG_SECTIONS = ["Required", "Data & output", "Architecture", "Tr
 
 export const HELP = {
   // SAR (cae_suite/specs/sar.py; methods/SAR/README.md has the upstream mapping).
-  split_group_attr: "SAR: per-sample metadata attribute that names the system (geometry). Samples sharing its value are one system's states; the train/val/test split is made over these groups, so no geometry sits on both sides. ex3 uses shape_idx.",
-  draws_per_epoch: "SAR: how many states (draws) of each training system one epoch visits. Upstream draws one random state per system per epoch (1).",
-  val_draws_per_geometry: "SAR: states per validation system used for the logged validation loss. Validation is reported only; it does not drive the LR schedule (upstream schedules on the training loss).",
-  edge_attr_r: "SAR: the length r that edge vectors are divided by (upstream ScaleEdgeAttr). auto = half the mean training edge length.",
+  split_group_attr: "SAR / LDGN: per-sample metadata attribute that names the system (geometry). Samples sharing its value are one system's states; the train/val/test split is made over these groups, so no geometry sits on both sides. ex3 uses shape_idx.",
+  draws_per_epoch: "SAR / LDGN: how many states (draws) of each training system one epoch visits. Upstream draws one random state per system per epoch (1).",
+  val_draws_per_geometry: "SAR / LDGN: states per validation system used for the logged validation loss. Validation is reported only; it does not drive the LR schedule (upstream schedules on the training loss).",
+  rel_pos_ratios: "LDGN: the coarsening radius of each scale level as a multiple of edge_attr_r (upstream MeshCoarsening rel_pos_scaling / r). Unset = upstream Wing 1, 2, 4, 8, 13.33, 26.67; upstream Ellipse uses 1, 3, 7.5, 15. Stored in the VGAE checkpoint; the LDGN stage and sampling reuse it.",
+  edge_attr_r: "SAR / LDGN: the length r that edge vectors are divided by (upstream ScaleEdgeAttr). auto = half the mean training edge length. LDGN scales its coarsening radii by the same r.",
   dense_attention: "SAR: run the vendored Transolver's slice attention as one dense matmul (faster, more memory) instead of upstream's per-graph loop. Same maths either way.",
-  grad_clip: "SAR: gradient-norm clip value for both stages; blank = no clipping (upstream).",
-  viz_num_samples: "SAR: samples drawn for the periodic test picture (test_interval) of the SAR stage.",
+  grad_clip: "SAR / LDGN: gradient-norm clip value for both stages; blank = no clipping (SAR upstream). LDGN upstream clips at 1.",
+  viz_num_samples: "SAR / LDGN: samples drawn for the periodic test picture (test_interval) of the second stage.",
   vae_num_layers: "SAR VAE: message-passing layers of the single-scale graph VAE (one integer; upstream Wing 2).",
   vae_d_model: "SAR VAE: hidden width of the graph VAE.",
-  vae_latent_features: "SAR VAE: channels of the per-node latent the SAR model generates. Blank = the upstream default.",
-  vae_dropout: "SAR VAE: dropout inside the graph VAE.",
+  vae_latent_features: "SAR / LDGN VAE: channels of the per-node latent the second stage generates. Blank = the upstream default (LDGN Wing 1).",
+  vae_dropout: "SAR / LDGN VAE: dropout inside the graph VAE.",
   vae_kl_weight: "SAR VAE: KL weight of the VAE loss (upstream 1e-6, i.e. nearly an autoencoder).",
   vae_noise_std: "SAR VAE: std of the Gaussian noise added to the latent before decoding during training.",
-  vae_grad_accum: "SAR VAE: batches accumulated per optimizer step; the effective batch is vae_batch_size x vae_grad_accum (upstream 32 x 2; ex3 2 x 32).",
-  vae_lr_factor: "SAR: ReduceLROnPlateau factor applied to the VAE learning rate when the training loss stalls.",
-  vae_lr_patience: "SAR: epochs without training-loss improvement before the VAE learning rate drops.",
-  vae_lr_threshold: "SAR: the VAE stage ends once its learning rate falls below this value (upstream stopping rule); vae_training_epochs is only a cap.",
+  vae_grad_accum: "SAR / LDGN VAE: batches accumulated per optimizer step; the effective batch is vae_batch_size x vae_grad_accum (SAR upstream 32 x 2, ex3 2 x 32; LDGN upstream 32 x 1, ex3 2 x 16).",
+  vae_lr_factor: "SAR / LDGN: ReduceLROnPlateau factor applied to the VAE learning rate when the training loss stalls.",
+  vae_lr_patience: "SAR / LDGN: epochs without training-loss improvement before the VAE learning rate drops.",
+  vae_lr_threshold: "SAR / LDGN: the VAE stage ends once its learning rate falls below this value (upstream stopping rule); vae_training_epochs is only a cap.",
   sar_num_iters: "SAR: number of scales (coarse to fine) the model generates in turn. Fixed by the checkpoint; sample_steps must list one value per scale.",
   sar_num_cond_layers: "SAR: Transolver layers of the condition encoder.",
   sar_num_ar_layers: "SAR: Transolver layers of the scale-autoregressive trunk.",
@@ -1299,12 +1370,38 @@ export const HELP = {
   sar_lr_factor: "SAR: ReduceLROnPlateau factor applied to the SAR learning rate when the training loss stalls.",
   sar_lr_patience: "SAR: epochs without training-loss improvement before the SAR learning rate drops.",
   sar_lr_threshold: "SAR: the SAR stage ends once its learning rate falls below this value (upstream stopping rule).",
-  vae_log_file_dir: "SAR: VAE-stage log. Blank = train_vae.log beside log_file_dir.",
+  vae_log_file_dir: "SAR / LDGN: VAE-stage log. Blank = train_vae.log beside log_file_dir.",
   sar_log_file_dir: "SAR: SAR-stage log. Blank = train_sar.log beside log_file_dir.",
-  sample_steps: "SAR: flow-matching steps per scale, coarse to fine (upstream Wing 20, 11, 2), or one value for every scale.",
-  sample_batch_size: "SAR: samples generated in one forward pass while sampling.",
-  sample_seed: "SAR: seed of the sampling noise in mode inference and the periodic picture.",
-  sample_scope: "SAR: geometry draws one num_samples ensemble per (geometry, condition rows) and credits it to every scene of that geometry; SAR conditions on nothing else, so they share one distribution. scene draws a fresh ensemble per scene (cost x scenes).",
+  // LDGN (cae_suite/specs/ldgn.py; methods/LDGN/README.md has the upstream mapping).
+  vae_depths: "LDGN VAE: message-passing blocks per scale of the multi-scale graph VAE, fine to coarse (upstream Wing 2, 2, 1). Its length is the number of VAE scales; the latent lives on the coarsest.",
+  vae_fnns_depth: "LDGN VAE: layers of every MLP inside the graph VAE.",
+  vae_fnns_width: "LDGN VAE: hidden width of the graph VAE (upstream Wing 126).",
+  vae_aggr: "LDGN VAE: message aggregation (sum or mean).",
+  vae_norm_latents: "LDGN VAE: batch-normalize the latent (no affine) so the diffusion stage sees unit-scale codes, as upstream.",
+  vae_kl_reg: "LDGN VAE: KL weight of the VAE loss (upstream 1e-6, i.e. nearly an autoencoder).",
+  ldgn_depths: "LDGN: message-passing blocks per scale of the denoiser, starting at the VAE's coarsest scale (upstream Wing 1, 2, 2, 2). Both stages build len(vae_depths) + len(ldgn_depths) - 1 scales.",
+  ldgn_fnns_depth: "LDGN: layers of every MLP inside the denoiser.",
+  ldgn_fnns_width: "LDGN: hidden width of the denoiser (upstream Wing 128).",
+  ldgn_aggr: "LDGN: message aggregation of the denoiser (sum or mean).",
+  ldgn_dropout: "LDGN: dropout inside the denoiser.",
+  ldgn_diffusion_steps: "LDGN: DDPM steps the denoiser is trained on (upstream 1000). Keep it at 1000: the linear schedule clips its betas, and below about 50 steps sampling returns NaN.",
+  ldgn_schedule: "LDGN: DDPM noise schedule (linear, as upstream, or cosine).",
+  ldgn_learnable_variance: "LDGN: the denoiser also predicts the reverse-step variance (upstream True, trained by the hybrid loss).",
+  ldgn_lambda_vlb: "LDGN: weight of the variational-bound term in the hybrid loss (upstream 1e-3).",
+  ldgn_step_sampler: "LDGN: how training draws the diffusion step: importance (upstream, by the loss history per step) or uniform.",
+  ldgn_training_epochs: "LDGN stage epoch cap. Upstream stops on ldgn_lr_threshold instead; this only bounds wall-clock.",
+  ldgn_batch_size: "LDGN stage: systems per batch. Memory scales with the largest graph in the batch.",
+  ldgn_grad_accum: "LDGN stage: batches accumulated per optimizer step (upstream 32 x 1; ex3 2 x 16).",
+  ldgn_learningr: "LDGN stage learning rate (upstream 1e-4).",
+  ldgn_lr_factor: "LDGN: ReduceLROnPlateau factor applied to the LDGN learning rate when the training loss stalls.",
+  ldgn_lr_patience: "LDGN: epochs without training-loss improvement before the LDGN learning rate drops.",
+  ldgn_lr_threshold: "LDGN: the LDGN stage ends once its learning rate falls below this value (upstream stopping rule).",
+  ldgn_log_file_dir: "LDGN: LDGN-stage log. Blank = train_ldgn.log beside log_file_dir.",
+  sample_step_schedule: "LDGN: how the sample_steps DDPM steps are spaced over the trained ones (linear, as the upstream Wing notebook, or exp).",
+  sample_steps: "SAR: flow-matching steps per scale, coarse to fine (upstream Wing 20, 11, 2), or one value for every scale. LDGN: one integer, the DDPM steps sampled out of ldgn_diffusion_steps (upstream Wing 50 of 1000).",
+  sample_batch_size: "SAR / LDGN: samples generated in one forward pass while sampling.",
+  sample_seed: "SAR / LDGN: seed of the sampling noise in mode inference and the periodic picture.",
+  sample_scope: "SAR / LDGN: geometry draws one num_samples ensemble per (geometry, condition rows) and credits it to every scene of that geometry; neither model conditions on anything else, so they share one distribution. scene draws a fresh ensemble per scene (cost x scenes).",
   save_rollouts: "Also write one rollout HDF5 per (scene, sample) in the MeshGraphNets-V layout. Evaluate Predictions scores these files; the spread histogram needs only eval_dataset.",
   spread_channel: "Generated channel(s), 0-based within the output rows, that the spread histogram reduces per realization (see spread_stat).",
   spread_label: "Axis label for the spread histogram.",
@@ -1333,7 +1430,7 @@ export const HELP = {
   kl_weight: "KL weight. MeshGraphNets-V (latent_reg kl): weight of the per-sample KL to N(0, I), averaged per latent coordinate, default 1e-3. SDFFlow VAE: too high collapses the posterior toward the prior (reconstructions lose detail); too low makes the latent space hard for the flow model to cover.",
   fm_arch: "Flow-matching trunk: mlp or dit. dit attends across latent tokens, so it needs latent_tokens > 1.",
   gpu_ids: "CUDA device index, or a comma-separated list to train on several GPUs where the method supports it (see parallel_mode). Indices are physical: nothing in the suite remaps CUDA_VISIBLE_DEVICES.",
-  vae_modelpath: "VAE checkpoint path. SimulGen uses it across VAE/LC stages; SDFFlow uses it to decode latent shapes; SAR writes it in train/train_vae and reads it in train_sar/inference (the SAR model samples in its latent space).",
+  vae_modelpath: "VAE checkpoint path. SimulGen uses it across VAE/LC stages; SDFFlow uses it to decode latent shapes; SAR writes it in train/train_vae and reads it in train_sar/inference (the SAR model samples in its latent space); LDGN writes it in train/train_vae and reads it in train_ldgn only (the LDGN checkpoint carries the frozen VAE).",
   fm_modelpath: "SDFFlow flow-matching checkpoint. It defines the learned latent distribution used by sample, interpolate, and optimize modes.",
   lc_modelpath: "SimulGen latent-conditioner checkpoint output for train/train_lc and input for reconstruct.",
   num_filter_enc: "Space-separated progressive VAE encoder widths; hierarchical levels equal length minus one.",
@@ -1505,7 +1602,7 @@ export const HELP = {
   fm_training_epochs: "Epochs for the flow-matching stage of the merged pipeline. The standalone train_fm mode uses training_epochs.",
   fm_batch_size: "Latents per step in the flow-matching stage.",
   fm_learningr: "Learning rate for the flow-matching stage.",
-  num_samples: "SDFFlow: shapes to generate in sample mode. SAR: field samples drawn per held-out geometry in mode inference (route default 64; ex3 uses 64 = its draws per geometry).",
+  num_samples: "SDFFlow: shapes to generate in sample mode. SAR / LDGN: field samples drawn per held-out geometry in mode inference (route default 64; ex3 uses 64 = its draws per geometry).",
   seed: "Seed for the latent noise, and for the CMA-ES trajectory in optimize mode. In the training modes it is the run seed: each rank seeds torch/numpy/python and its train DataLoader shuffle with seed + rank, while model construction is put back on the rank-independent base seed. Leave it out for the legacy unseeded run -- but then two runs of the same config differ, and a sweep has no noise floor to judge its arms against.",
   ode_steps: "Integration steps for flow-matching sampling. A sampling-time cost, not architecture: the same checkpoint runs at any step count.",
   mc_resolution: "Marching-cubes grid resolution for the output surface; cost grows with the cube of this.",

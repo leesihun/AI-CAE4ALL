@@ -1,0 +1,49 @@
+% ex3 B300 round 3 arm ldgn_s43: LDGN baseline (ported dgn4cfd code), training_seed 43.
+% Base: configs/LDGN/probabilistic/ex3/config_infer_ldgn.txt verbatim, except gpu_ids 0
+% (configs/MeshGraphNets_Variational/hyperparameter_sweep/r3/run_node.sh assigns the card) and the run-private output paths.
+% Upstream Wing batches cut with accumulation (VGAE 2 x 16, LDGN 2 x 16) are kept as checked in;
+% memory and time on ex3 are not measured yet.
+%
+% probabilistic/ex3 - ldgn; LDGN (Lino, Pfaff & Thuerey, ICLR 2025) ported from tum-pbs/dgn4cfd.
+% Dataset: shell buckling; held-out file = 8 unseen geometries x 64 imperfection draws (ex3_shell_buckling_infer.h5).
+% Field storage order (0-based): input -> output -> conditioner -> partNo.
+% input [0:3]: x_coord, y_coord, z_coord -> pos; output [3:6]: ux, uy, uz (generated);
+% conditioner [6:8]: thickness, delta -> glob; partNo [8]: node type -> loc one-hot.
+% The checkpoint comes from the paired training config and carries the frozen VGAE (arch and
+% weights) and the normalization, so only the sampling keys below matter here.
+% num_samples 64 = the imperfection draws per geometry, as MGN-V's num_vae_samples.
+% sample_scope geometry: one 64-sample ensemble per (geometry, condition rows) - LDGN conditions
+% on nothing else, so every scene of that geometry has the same conditional distribution and
+% is credited with that ensemble. `scene` draws a fresh ensemble per scene (64x the cost).
+% Writes MGN-V's spread tail (spread_values.npz, spread_metrics.json, histogram_compare.png);
+% save_rollouts True also writes rollout_sample{sid}_vaesample{k}_steps1.h5 in MGN-V's layout.
+% spread_stat mag_max on ux,uy,uz: max total displacement max|u|, as the MGN-V ex3 runs.
+
+model                            ldgn
+mode                             inference
+gpu_ids                          0
+split_seed                       42
+split_group_attr                 shape_idx
+dataset_dir                      ../../dataset/probabilistic/ex3_shell_buckling.h5
+infer_dataset                    ../../dataset/probabilistic/ex3_shell_buckling_infer.h5
+modelpath                        ../../output/b300_r3/ldgn_s43/model.pth
+log_file_dir                     ../../output/b300_r3/ldgn_s43/infer.log
+inference_output_dir             ../../output/b300_r3/ldgn_s43/infer
+output_var                       3
+cond_var                         2
+use_node_types                   True
+num_samples                      64
+sample_scope                     geometry
+sample_seed                      0
+% upstream examples/Wing sampling notebook: 50 linearly spaced of the 1000 trained steps
+sample_steps                     50
+sample_step_schedule             linear
+sample_batch_size                8
+eval_dataset                     ../../dataset/probabilistic/ex3_shell_buckling_infer.h5
+spread_channel                   0, 1, 2
+spread_label                     u
+spread_stat                      mag_max
+make_histogram                   True
+show_histogram                   False
+histogram_bins                   30
+save_rollouts                    False

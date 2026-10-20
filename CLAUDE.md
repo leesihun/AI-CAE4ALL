@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this repository is
 
-AI-CAE4ALL is a **monorepo of nine independent ML-for-CAE method repositories**
+AI-CAE4ALL is a **monorepo of ten independent ML-for-CAE method repositories**
 unified by one config-driven launcher. The launcher (`cae_suite/`, the
 `ai-cae4all` console script, `AI_CAE4ALL_main.py`) reads a native flat-text
 config, routes on its `model` field to the right method repo, runs a layered
@@ -12,7 +12,7 @@ preflight validation, and then **subprocess-launches that repo's native
 entrypoint** — it never imports the ML code.
 
 Every method repo is self-contained (own venv, own tests) and also runnable
-directly. All nine live under [methods/](methods/); the specs that route to them
+directly. All ten live under [methods/](methods/); the specs that route to them
 live in [cae_suite/specs/](cae_suite/specs/):
 
 | `model` config value(s) | Directory | Entrypoint | Own CLAUDE.md |
@@ -25,6 +25,7 @@ live in [cae_suite/specs/](cae_suite/specs/):
 | `simulgenvae` | `methods/SimulGenVAE/` | `SimulGenVAE_main.py` | [yes](methods/SimulGenVAE/CLAUDE.md) |
 | `mlp` | `methods/MLP/` | `MLP_main.py` | [yes](methods/MLP/CLAUDE.md) |
 | `sar` | `methods/SAR/` | `SAR_main.py` | — (see its [README.md](methods/SAR/README.md)) |
+| `ldgn` | `methods/LDGN/` | `LDGN_main.py` | — (see its [README.md](methods/LDGN/README.md)) |
 | `geometry_ingest` | `methods/GeometryIngest/` | `main.py` | — (see its [README.md](methods/GeometryIngest/README.md)) |
 
 **Model ID and directory name do not always match**, because model IDs are
@@ -55,6 +56,15 @@ one geometry (`split_group_attr`, `shape_idx` on ex3) and its states are that
 geometry's draws; modes `train`/`train_vae`/`train_sar`/`inference`, the last
 writing MGN-V's spread files and rollout layout. Its README lists every
 deviation from upstream.
+
+**`ldgn`** is the same kind of baseline from the other published line: LDGN
+(Lino, Pfaff & Thuerey, ICLR 2025; a multi-scale graph VAE plus a DDPM denoiser
+in its latent), ported from tum-pbs/dgn4cfd (Apache-2.0, vendored in
+`methods/LDGN/dgn4cfd/`). It shares SAR's system/state split, its output files
+and its `vae_*` stage keys; the second stage is `ldgn_*`, modes
+`train`/`train_vae`/`train_ldgn`/`inference`. Keep `ldgn_diffusion_steps` at
+1000: the linear schedule clips its betas, and below about 50 steps sampling
+returns NaN. Its README lists every deviation from upstream.
 
 **`mlp` is the odd one out among them**: a parametric surrogate (N scalar inputs →
 M scalar outputs) that is **tabular, not mesh** — it reads an `X[S,N]`/`Y[S,M]`
@@ -96,7 +106,7 @@ choice:
 ```text
 AI-CAE4ALL/
 ├── AI_CAE4ALL_main.py   cae_suite/      # launcher (no ML imports)
-├── methods/             configs/        # nine runtimes, mirrored config dirs
+├── methods/             configs/        # ten runtimes, mirrored config dirs
 ├── dataset/             output/         # inputs (git-ignored), single artifact root
 ├── studio/              inference/      # browser Studio, portable CPU bundle
 ├── docs/                               # all documentation
@@ -235,8 +245,8 @@ prediction dumps write under it, so every artifact of one run lands together.
 ### Mid-training resume (`resume_training`)
 
 Every training repo except MLP carries `general_modules/resume_state.py`,
-**copied byte-for-byte** into seven repos (they share no imports), so an edit to
-one copy goes to all seven. With `resume_training true` the trainer:
+**copied byte-for-byte** into eight repos (they share no imports), so an edit to
+one copy goes to all eight. With `resume_training true` the trainer:
 
 - keeps `<checkpoint>.resume` (everything the next epoch reads, RNG included) at
   the first epoch boundary after every `resume_interval_minutes` (15);
@@ -279,6 +289,7 @@ the method predicts:
 | MLP | parity plot of the held-out split, one panel per output column |
 | SimulGenVAE | truth / reconstruction / \|error\| field images (VAE) and a latent parity plot (LC) |
 | SAR | VAE parity scatter per output channel; SAR spread histogram (FEA draws vs samples) for one system |
+| LDGN | the same two pictures as SAR (`vae_parity_ep{k}.png`, `ldgn_samples_ep{k}.png`) |
 | SDFFlow | a strip of the reconstructed (VAE) or generated (FM) shapes, beside the STLs |
 | GeometryIngest | `preview` renders the first ingested samples; in `mode inspect` it is the only output |
 

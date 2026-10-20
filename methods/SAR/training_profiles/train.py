@@ -138,12 +138,15 @@ class _EpochReporter:
 
     def __call__(self, epoch, stats, model):
         body = f"Train {stats.get('train_loss', float('nan')):.6e}"
+        val = {}
         if self.val_dataset is not None and _due(epoch, self.val_interval, self.max_epochs):
             val = _validation_losses(model, self.val_dataset, self.batch_size, self.device)
             if 'train_loss' in val:
                 body += f" Valid {val['train_loss']:.6e}"
         body += f" LR {stats['lr']:.4e}"
+        # Every loss component, train and (on validation epochs) val, for the loss plots
         extras = [f'{short}={stats[name]:.4e}' for name, short in self.extra_names if name in stats]
+        extras += [f'val_{short}={val[name]:.4e}' for name, short in self.extra_names if name in val]
         if extras:
             body += ' | ' + ' '.join(extras)
         # stdout leads with `Epoch k/max`, the line the Studio's metrics reader

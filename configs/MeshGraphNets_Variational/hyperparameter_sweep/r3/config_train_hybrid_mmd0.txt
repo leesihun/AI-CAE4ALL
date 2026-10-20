@@ -3,8 +3,8 @@
 % Question: Is the regularizer needed at all, or does the learned prior alone suffice?
 % Base: configs/MeshGraphNets_Variational/probabilistic/ex3/latent_type/config_train_hybrid_mmd.txt
 % verbatim, except the layout below and the arm's change.
-% B300 round-3 layout, shared by every MGN-V arm and changing nothing that is learned:
-% batch_size 8 x grad_accum_steps 1 (the recipe's effective 8 in one step), gpu_ids 0
+% B300 round-3 layout, shared by every MGN-V arm; fits a 24 GB card with use_checkpointing:
+% batch_size 4 x grad_accum_steps 1 (effective batch 4, NOT the recipe's 2 x 4 = 8; global MMD sees 4 rows), gpu_ids 0
 % (configs/MeshGraphNets_Variational/hyperparameter_sweep/r3/run_node.sh assigns the card; one job per card),
 % hierarchy_cache_keep False with one run-private cache per node.
 %
@@ -44,7 +44,7 @@ use_node_types                   True
 positional_features              4
 time_integration                 ar_ot
 training_epochs                  120
-batch_size                       8
+batch_size                       4
 learningr                        0.0001
 weight_decay                     0.0001
 warmup_epochs                    5

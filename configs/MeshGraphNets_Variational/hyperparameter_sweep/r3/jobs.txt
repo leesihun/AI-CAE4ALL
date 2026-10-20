@@ -1,5 +1,5 @@
 # B300 round 3 job table: node job method train_config infer_config
-# Job k of a node runs on card k (GPU order). run_node.sh and brief.py both read this file.
+# Job k of a node starts on card k (GPU order); a ninth job takes the first card that finishes. run_node.sh and brief.py both read this file.
 135 global_mmd mgnv configs/MeshGraphNets_Variational/hyperparameter_sweep/r3/config_train_global_mmd.txt configs/MeshGraphNets_Variational/hyperparameter_sweep/r3/config_infer_global_mmd.txt
 135 global_mmd_s43 mgnv configs/MeshGraphNets_Variational/hyperparameter_sweep/r3/config_train_global_mmd_s43.txt configs/MeshGraphNets_Variational/hyperparameter_sweep/r3/config_infer_global_mmd_s43.txt
 135 global_mmd_s44 mgnv configs/MeshGraphNets_Variational/hyperparameter_sweep/r3/config_train_global_mmd_s44.txt configs/MeshGraphNets_Variational/hyperparameter_sweep/r3/config_infer_global_mmd_s44.txt
@@ -8,6 +8,7 @@
 135 global_mmd0 mgnv configs/MeshGraphNets_Variational/hyperparameter_sweep/r3/config_train_global_mmd0.txt configs/MeshGraphNets_Variational/hyperparameter_sweep/r3/config_infer_global_mmd0.txt
 135 global_long mgnv configs/MeshGraphNets_Variational/hyperparameter_sweep/r3/config_train_global_long.txt configs/MeshGraphNets_Variational/hyperparameter_sweep/r3/config_infer_global_long.txt
 135 sar_s42 sar configs/SAR/hyperparameter_sweep/r3/config_train_sar_s42.txt configs/SAR/hyperparameter_sweep/r3/config_infer_sar_s42.txt
+135 ldgn_s42 ldgn configs/LDGN/hyperparameter_sweep/r3/config_train_ldgn_s42.txt configs/LDGN/hyperparameter_sweep/r3/config_infer_ldgn_s42.txt
 136 local_mmd mgnv configs/MeshGraphNets_Variational/hyperparameter_sweep/r3/config_train_local_mmd.txt configs/MeshGraphNets_Variational/hyperparameter_sweep/r3/config_infer_local_mmd.txt
 136 local_mmd_s43 mgnv configs/MeshGraphNets_Variational/hyperparameter_sweep/r3/config_train_local_mmd_s43.txt configs/MeshGraphNets_Variational/hyperparameter_sweep/r3/config_infer_local_mmd_s43.txt
 136 local_mmd_s44 mgnv configs/MeshGraphNets_Variational/hyperparameter_sweep/r3/config_train_local_mmd_s44.txt configs/MeshGraphNets_Variational/hyperparameter_sweep/r3/config_infer_local_mmd_s44.txt
@@ -16,6 +17,7 @@
 136 local_mmd0 mgnv configs/MeshGraphNets_Variational/hyperparameter_sweep/r3/config_train_local_mmd0.txt configs/MeshGraphNets_Variational/hyperparameter_sweep/r3/config_infer_local_mmd0.txt
 136 local_long mgnv configs/MeshGraphNets_Variational/hyperparameter_sweep/r3/config_train_local_long.txt configs/MeshGraphNets_Variational/hyperparameter_sweep/r3/config_infer_local_long.txt
 136 sar_s43 sar configs/SAR/hyperparameter_sweep/r3/config_train_sar_s43.txt configs/SAR/hyperparameter_sweep/r3/config_infer_sar_s43.txt
+136 ldgn_s43 ldgn configs/LDGN/hyperparameter_sweep/r3/config_train_ldgn_s43.txt configs/LDGN/hyperparameter_sweep/r3/config_infer_ldgn_s43.txt
 137 hybrid_mmd mgnv configs/MeshGraphNets_Variational/hyperparameter_sweep/r3/config_train_hybrid_mmd.txt configs/MeshGraphNets_Variational/hyperparameter_sweep/r3/config_infer_hybrid_mmd.txt
 137 hybrid_mmd_s43 mgnv configs/MeshGraphNets_Variational/hyperparameter_sweep/r3/config_train_hybrid_mmd_s43.txt configs/MeshGraphNets_Variational/hyperparameter_sweep/r3/config_infer_hybrid_mmd_s43.txt
 137 hybrid_mmd_s44 mgnv configs/MeshGraphNets_Variational/hyperparameter_sweep/r3/config_train_hybrid_mmd_s44.txt configs/MeshGraphNets_Variational/hyperparameter_sweep/r3/config_infer_hybrid_mmd_s44.txt

@@ -1,0 +1,91 @@
+% validation/ellipse - ldgn; port check against upstream LDGN (tum-pbs/dgn4cfd 68311ca) on its
+% smallest benchmark, examples/Ellipse (pressure on an ellipse in a channel, vortex shedding).
+% Dataset: upstream pOnEllipseTrain.h5 converted to the mesh HDF5 contract by
+% D:/CAE_datasets_raw/lino_dgn/convert_ellipse.py (5701 simulations x their first 10 snapshots,
+% upstream nt=10; checked equal to upstream pOnEllipse.data2graph to 2e-7).
+% Field storage order (0-based): input -> output -> conditioner (no node-type row).
+% input [0:3]: x, y (centred per simulation), z=0 -> pos / edge_attr
+% output [3]: p -> target (generated)
+% conditioner [4:7]: Re, d_bottom = y, d_top = H - y -> glob (upstream glob Re + loc d_b, d_t,
+% concatenated by the encoder: the same three condition features)
+% System = one simulation (sim_idx); its states = its 10 snapshots.
+% Hyperparameters = upstream examples/Ellipse/train_ae.py + train_ldgn.py, batch 64.
+% pos: train max |coord| is 0.5, so edge_attr_r 0.04 = upstream ScaleEdgeAttr(0.02), and the
+% coarsening radii 0.04 x (1, 3, 7.5, 15) = upstream rel_pos_scaling [0.02, 0.06, 0.15, 0.3].
+% Deviations from upstream: grouped 80/10/10 split (trains on ~4560 of 5701 simulations), train
+% min/max instead of the hard-coded vmin/vmax, pos in 3D with z=0, and no free-stream projection
+% edge condition (edge features dx, dy, 0 instead of dx, dy, dx/|e|). Upstream stops when the
+% plateau LR falls below 1e-8; the epoch caps are only a wall-clock bound (released
+% checkpoints: AE 1144, LDGN 798 epochs).
+
+model                            ldgn
+mode                             train
+gpu_ids                          0
+split_seed                       42
+split_group_attr                 sim_idx
+dataset_dir                      ../../dataset/validation/ellipse.h5
+infer_dataset                    ../../dataset/validation/ellipse_infer.h5
+vae_modelpath                    ../../output/validation/ellipse/ldgn/vae.pth
+modelpath                        ../../output/validation/ellipse/ldgn/model.pth
+% stage logs: train_vae.log and train_ldgn.log beside this name
+log_file_dir                     ../../output/validation/ellipse/ldgn/train.log
+inference_output_dir             ../../output/validation/ellipse/ldgn/infer
+output_var                       1
+cond_var                         3
+use_node_types                   False
+training_seed                    0
+num_workers                      4
+% one random snapshot of every train simulation per epoch, as upstream
+draws_per_epoch                  1
+val_draws_per_geometry           10
+val_interval                     10
+test_interval                    200
+display_trainset                 False
+display_testset                  True
+viz_num_samples                  8
+edge_attr_r                      0.04
+rel_pos_ratios                   1, 3, 7.5, 15
+% upstream grad_clip epoch 0, limit 1
+grad_clip                        1.0
+
+% ---- stage 1: VGAE (upstream examples/Ellipse/train_ae.py)
+vae_depths                       2, 2, 1
+vae_fnns_depth                   2
+vae_fnns_width                   128
+vae_latent_features              1
+vae_aggr                         sum
+vae_dropout                      0.1
+vae_norm_latents                 True
+vae_kl_reg                       1e-6
+vae_batch_size                   64
+vae_grad_accum                   1
+vae_learningr                    1e-4
+vae_lr_factor                    0.1
+vae_lr_patience                  50
+vae_lr_threshold                 1e-8
+vae_training_epochs              2500
+
+% ---- stage 2: LDGN over the frozen VGAE (upstream examples/Ellipse/train_ldgn.py)
+% 4 coarsening levels in all: the VGAE's 3, then the denoiser's 2 from the VGAE's coarsest.
+ldgn_depths                      1, 2
+ldgn_fnns_depth                  2
+ldgn_fnns_width                  128
+ldgn_aggr                        sum
+ldgn_dropout                     0.1
+ldgn_diffusion_steps             1000
+ldgn_schedule                    linear
+ldgn_learnable_variance          True
+ldgn_lambda_vlb                  1e-3
+ldgn_step_sampler                importance
+ldgn_batch_size                  64
+ldgn_grad_accum                  1
+ldgn_learningr                   1e-4
+ldgn_lr_factor                   0.1
+ldgn_lr_patience                 50
+ldgn_lr_threshold                1e-8
+ldgn_training_epochs             2500
+
+% ---- periodic sample picture (test_interval); upstream Ellipse notebook: 50 of 1000 steps
+sample_steps                     50
+sample_step_schedule             linear
+sample_batch_size                16

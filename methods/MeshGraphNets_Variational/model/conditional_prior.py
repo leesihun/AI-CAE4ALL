@@ -8,6 +8,7 @@ from torch_geometric.nn import AttentionalAggregation
 from torch_geometric.utils import scatter
 
 from model.blocks import AdaLNZero, apply_adaln
+from model.checkpointing import checkpoint_active, run_mlp, run_plain_blocks
 from model.encoder_decoder import GnBlock
 from model.latent import Latent, coarsest_view
 from model.mlp import build_mlp, init_weights
@@ -37,6 +38,11 @@ class _ConditionalPriorBase(nn.Module):
             config.get('prior_hidden_dim', config.get('latent_dim', 128)),
         ))
         self.num_mp_layers = int(config.get('prior_mp_layers', 3))
+        # The conditioner trunk runs on the fine mesh; checkpoint it like the
+        # simulator's processor (training only, see checkpoint_active).
+        # Set by the owning model from `use_checkpointing` (training only);
+        # build_prior_config does not carry the key.
+        self.use_checkpointing = False
         # Per-level z slots (matches MeshGraphNets.num_z). Default 1 for back-compat.
         if config.get('use_multiscale', False):
             default_num_z = int(config.get('multiscale_levels', 1)) + 1
@@ -69,11 +75,11 @@ class _ConditionalPriorBase(nn.Module):
         batch = getattr(graph, 'batch', None)
         if batch is None:
             batch = torch.zeros(graph.x.shape[0], dtype=torch.long, device=graph.x.device)
-        h = self.node_encoder(graph.x)
-        e = self.edge_encoder(graph.edge_attr)
+        ckpt = checkpoint_active(self)
+        h = run_mlp(self.node_encoder, graph.x, ckpt)
+        e = run_mlp(self.edge_encoder, graph.edge_attr, ckpt)
         g = Data(x=h, edge_attr=e, edge_index=graph.edge_index)
-        for block in self.mp_layers:
-            g = block(g)
+        g = run_plain_blocks(self.mp_layers, g, ckpt)
         return self.pool(g.x, batch)
 
 
@@ -585,10 +591,11 @@ class CoarseFMPrior(_ConditionalPriorBase):
         batch = getattr(graph, 'batch', None)
         if batch is None:
             batch = torch.zeros(graph.x.shape[0], dtype=torch.long, device=graph.x.device)
-        g = Data(x=self.node_encoder(graph.x), edge_attr=self.edge_encoder(graph.edge_attr),
+        ckpt = checkpoint_active(self)
+        g = Data(x=run_mlp(self.node_encoder, graph.x, ckpt),
+                 edge_attr=run_mlp(self.edge_encoder, graph.edge_attr, ckpt),
                  edge_index=graph.edge_index)
-        for block in self.mp_layers:
-            g = block(g)
+        g = run_plain_blocks(self.mp_layers, g, ckpt)
         cv = coarsest_view(graph, self.levels)
         B = int(getattr(graph, 'num_graphs', 0) or (int(batch.max().item()) + 1))
         ctx = {

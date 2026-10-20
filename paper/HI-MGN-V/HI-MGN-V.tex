@@ -5,6 +5,7 @@
 \usepackage{booktabs}
 \usepackage{tabularx}
 \usepackage{array}
+\usepackage{pifont}
 \usepackage{graphicx}
 \usepackage{algorithm}
 \usepackage{algpseudocode}
@@ -25,12 +26,9 @@
 \newcommand{\bx}{\mathbf{x}}
 \newcommand{\by}{\mathbf{y}}
 \newcommand{\bz}{\mathbf{z}}
-% O/X table marks
-\newcommand{\yes}{O}
-\newcommand{\no}{X}
-\newcommand{\prt}{$\triangle$}
-\newcommand{\na}{--}
-\newcommand{\plan}{P}
+% Check/cross table marks
+\newcommand{\yes}{\ding{51}}
+\newcommand{\no}{\ding{55}}
 
 \setlength{\emergencystretch}{2em}
 
@@ -49,8 +47,9 @@ When some inputs of a manufactured structure are not measured, such as its geome
 imperfections, one nominal design does not give one response. The same drawing gives a scatter
 of response fields, and a surrogate model has to reproduce that scatter, not only its mean.
 Field surrogates in computational mechanics are deterministic. Generative surrogates on meshes
-exist, but they reproduce the time variation of turbulent flows, and stochastic surrogates of
-input scatter predict scalar or low-dimensional outputs. We present HI-MGN-V, a hierarchical
+exist, but most reproduce the time variation of turbulent flows, and none of the generative
+surrogates of input scatter has been checked for sample realism, distribution match and
+out-of-range inference together. We present HI-MGN-V, a hierarchical
 mesh graph network that generates complete displacement fields on unstructured finite-element
 (FE) meshes from the nominal design. A multilevel (V-cycle) graph network with 15 blocks is
 adjusted before every block by a random latent vector. During training the latent vector is
@@ -58,11 +57,14 @@ inferred from the FE result; at prediction time it is drawn from a learned distr
 conditioned on the design. The latent vector can be one vector for the whole structure
 (global), a field over coarse regions (local), or both (hybrid); the three options are three
 assumptions about how the unmeasured input acts on the response. We compare the predicted
-scatter with many FE analyses of the same nominal design on three criteria: (a) each generated
-field must look like an FE result, (b) the scatter at different locations must be correlated
-as in the FE results, and (c) the scatter must remain correct for designs outside the training
+scatter with 1000 new FE analyses of the same nominal design on three criteria: (a) sample
+realism, every generated field is close to some FE result and every FE result to some
+generated field, measured by the nearest-neighbour $R^2$ in both directions; (b) distribution
+match, the generated fields as a set are distributed as the FE results, measured by the
+Wasserstein distance $W_2$ between the two sets of fields against the value that FE results
+alone reach; and (c) out-of-range inference, (a) and (b) hold for designs outside the training
 range. The test problem is an axially compressed cylindrical shell with 64 imperfection samples
-per geometry, in which the same nominal shell either stays unbuckled or buckles. Earlier
+per training geometry, in which the same nominal shell either stays unbuckled or buckles. Earlier
 implementations of the global and local options fail in opposite ways: the local model has the
 right mean but too little scatter, and the global model underestimates the displacement and
 predicts too few buckled shells near the critical load. Results of the unified implementation
@@ -107,9 +109,10 @@ input removes the inner loop.
 
 Three properties make the target hard to learn. A surrogate trained with a squared-error loss
 predicts the mean response, which for a shell near its critical load lies between the
-unbuckled and the buckled state and is not itself a possible response. Reproducing the scatter
-of each node separately does not ensure that distant regions deform together as in the FE
-results, and a QoI such as $s$ depends on how they do. And a design study goes beyond the
+unbuckled and the buckled state and is not itself a possible response. Generating possible
+responses is not enough either: they must occur as often as in the FE results, and reproducing
+the scatter of each node separately does not ensure that the whole field is distributed as in
+the FE results, on which a QoI such as $s$ depends. And a design study goes beyond the
 training data, so a surrogate has to be checked on designs it was not trained on, including
 designs near the critical load, where $p(\by\mid c)$ changes fastest.
 
@@ -137,8 +140,11 @@ system. Latent diffusion graph networks generate states of fully developed flows
 matching \cite{song2026pifm} do the same; diffusion models generate turbulent states
 \cite{lienen2024turbdiff,molinaro2024gencfd,liu2024uncertainty}; and ensemble weather models
 generate future atmospheric states \cite{price2025gencast,oskarsson2024graphefm,alet2025fgn}.
-In these problems the scatter comes from time: the reference data are the states of a long
-simulation, and every condition has many states by construction. A shell with an unmeasured
+In most of these problems the scatter comes from time: the reference data are the states of a
+long simulation, and every condition has many states by construction. The exceptions hide a
+small random perturbation of the initial condition or a random forcing
+\cite{molinaro2024gencfd,park2026dll}, on regular grids and without a per-sample check of
+realism or a test outside the training range. A shell with an unmeasured
 imperfection is different. The solver is deterministic once $\xi$ is given, the response is one
 static end state, and the scatter appears only because $\xi$ is not known.
 
@@ -148,7 +154,7 @@ stochastic polynomial chaos for scalar QoIs \cite{zhu2021glam,zhu2023spce,zhu202
 spectral surrogates for functional outputs \cite{luthen2023spectral}. In mechanics and design,
 conditional generative models have been applied to structural strain fields under random loads
 \cite{silionis2024deep}, to fabrication variation \cite{azimi2026genfab}, to geometric
-uncertainty of metamaterials \cite{zheng2026gust}, and to imperfection-driven bifurcation
+uncertainty of metamaterials \cite{zheng2026gust}, and to multimodal and bifurcating responses
 \cite{han2026multimodal,hendriks2025equivariant,zimmel2026bifork}. These works already address
 parts of the problem studied here. Section~\ref{sec:position} compares them property by
 property; none of them combines an unmeasured input, a high-dimensional field on an
@@ -160,20 +166,24 @@ below.
 A generative surrogate of input scatter has to be compared with many FE results of the same
 design. We use three criteria.
 \begin{description}
-\item[(a) Realistic individual fields.] Each generated field should look like one FE result,
-  for example one clear buckle at one location rather than a blur of several possible buckles.
-  A model can match the mean and the standard deviation at every node with fields that no FE
-  analysis would produce.
-\item[(b) Spatial correlation of the scatter.] The scatter at different nodes must be
-  correlated as in the FE results: when the shell buckles at one location, the displacement
-  elsewhere must change accordingly. A QoI such as the peak displacement depends on this
-  correlation, and matching the scatter node by node does not ensure it.
-\item[(c) Designs outside the training range.] The scatter must remain correct for designs the
-  model was not trained on, including designs near the critical load, where the buckling
-  probability changes fastest.
+\item[(a) Sample realism.] Each generated field should be close to some FE result of the same
+  design, and each FE result should be close to some generated field. A model can match the
+  mean and the standard deviation at every node with fields that no FE analysis would produce,
+  for example fields between the unbuckled and the buckled state. The check is made sample by
+  sample, so it does not weigh how often each kind of field occurs.
+\item[(b) Distribution match.] The generated fields of a design, taken as a set, should be
+  distributed as the FE results: how often the shell buckles, where and how strongly, and how
+  all nodes vary together. A model that generates buckled fields for nine draws in ten where
+  the FE analyses buckle in four can pass (a) in both directions and fails (b); a model that
+  matches the scatter node by node can still fail (b), because a QoI such as the peak
+  displacement depends on the whole field.
+\item[(c) Out-of-range inference.] (a) and (b) must hold for designs outside the training
+  range, including designs near the critical load, where the buckling probability changes
+  fastest.
 \end{description}
 To our knowledge, no generative surrogate of structural response fields has been evaluated on
-all three (Table~\ref{tab:ox}).
+all three (Table~\ref{tab:ox}). Among the generative surrogates whose scatter comes from an
+unobserved input, none checks (a) and (b) together, and none checks (c).
 
 \subsection{Contributions}
 
@@ -188,10 +198,12 @@ all three (Table~\ref{tab:ox}).
   model is frozen. Where the latent vector acts (global, local or hybrid) is an assumption about
   how $\xi$ acts on the field, and it is one switch in one implementation
   (Section~\ref{sec:method}).
-\item \textbf{An evaluation protocol.} Many FE results per design as the reference, a
-  posterior-versus-prior check that locates failures, statistics and calibration of scalar QoIs,
-  scores for the spatial correlation, checks of individual fields, and the position and shape
-  of the buckle, on unseen, near-critical and out-of-range designs (Section~\ref{sec:metrics}).
+\item \textbf{An evaluation protocol.} 1000 new FE results per evaluation design as the
+  reference; a posterior-versus-prior check that locates failures; statistics of scalar QoIs;
+  sample realism as the nearest-neighbour $R^2$ between generated and FE fields in both
+  directions; distribution match as the Wasserstein distance $W_2$ between the generated and
+  the FE fields; each score beside the value reached by FE results alone; on unseen,
+  near-critical and out-of-range designs (Section~\ref{sec:metrics}).
 \item \textbf{A shell-buckling dataset} with 64 imperfection samples for each of 150 geometries
   and 8 out-of-range geometries, in which the imperfection decides whether the shell buckles
   (Section~\ref{sec:dataset}).
@@ -243,11 +255,16 @@ level by level \cite{lino2026sar}, and PIFM-GN trains graph flow matching in phy
 latent space \cite{song2026pifm}. Diffusion models generate turbulent states
 \cite{lienen2024turbdiff,molinaro2024gencfd} and flow uncertainty around airfoils
 \cite{liu2024uncertainty}; GenCast, Graph-EFM and FGN generate ensemble weather forecasts
-\cite{price2025gencast,oskarsson2024graphefm,alet2025fgn}. Distributional operator learning
-with a diffusion last layer \cite{park2026dll} or proper scoring rules \cite{bulte2025pno}
-compares whole fields. These methods are the technical precedents for generating fields on
-meshes. Their scatter is the time variation of a turbulent state, so they neither model an
-unmeasured static input nor test against one.
+\cite{price2025gencast,oskarsson2024graphefm,alet2025fgn}. These methods are the technical
+precedents for generating fields on meshes, and in most of them the scatter is the time
+variation of a turbulent state, not an unmeasured static input. Two exceptions hide an input.
+GenCFD trains on flows whose initial conditions carry small random perturbations and compares
+its samples with many solver runs per macroscopic condition \cite{molinaro2024gencfd}, and
+distributional operator learning with a diffusion last layer is trained on stochastic Burgers
+and Darcy problems with random forcing or source terms, several solutions per input, and is
+scored with an energy distance over the whole field \cite{park2026dll}; proper scoring rules
+serve the same purpose for neural operators \cite{bulte2025pno}. Both work on regular grids, and
+neither scores the realism of each sample nor tests the scatter outside the training range.
 
 \subsection{Generative models of input scatter in mechanics and design}
 
@@ -261,69 +278,90 @@ engression trains a generator with a proper scoring rule
 \cite{shen2025engression,pacchiardi2024scoring}. Gen-Fab predicts fabrication variation of
 nanophotonic devices and tests designs outside its training set \cite{azimi2026genfab}. GUST
 quantifies free-form geometric uncertainty of metamaterials from small data and passes
-generated shapes through a solver \cite{zheng2026gust}. Han and Bahmani map imperfections to
-bifurcation outcomes with a conditional mixture model \cite{han2026multimodal}. Equivariant flow
-matching generates alternative symmetry-breaking solutions, including buckled configurations
+generated shapes through a solver \cite{zheng2026gust}. Han and Bahmani learn pointwise
+conditional mixture densities of multimodal responses, for a bifurcation normal form with a
+bounded imperfection and a one-dimensional reaction--diffusion equation with random initial
+conditions \cite{han2026multimodal}. Equivariant flow matching generates alternative
+symmetry-breaking solutions, including buckled configurations of a beam
 \cite{hendriks2025equivariant}, and Bi-FORK generates solution paths on distinct bifurcation
-branches \cite{zimmel2026bifork}. Each of these covers some of the properties in
-Table~\ref{tab:ox}. The present paper is the combination: an unmeasured input, a static field
-on an unstructured mesh, structural mechanics, and many FE results per design, compared on
-(a)--(c).
+branches of a metamaterial and of an Allen--Cahn problem with random initial noise
+\cite{zimmel2026bifork}. Each of these covers some of the properties in Table~\ref{tab:ox}. The
+present paper is the combination: an unmeasured input, a static field on an unstructured mesh,
+structural mechanics, and many FE results per design, compared on (a)--(c).
 
 \subsection{Positioning}\label{sec:position}
 
-Table~\ref{tab:ox} rates each line of work on six properties. \emph{Source of scatter} is an
-input that the model does not receive (input), the states of a turbulent or chaotic simulation
-over time (time), or several solutions of one problem (bifurcation). Deterministic surrogates
-return one field per design and are left out. \emph{Unobserved input} asks whether the model
-is trained without the variable that causes the scatter. \emph{Several results per input} asks
-whether the data contain several solver results for the same model input, so that the
-predicted scatter can be compared with the FE scatter design by design instead of pooled over
-designs. This holds when the analysis is repeated with different values of the unobserved
-input, and when one long simulation provides many states for one condition (LDGN, SAR). Columns
-(a)--(c) are the three criteria of the research gap.
+Table~\ref{tab:ox} marks each property as met (\yes) or not (\no); a property that is met in
+part, or not reported, is \no. \emph{Cause of scatter} names what produces the spread of the
+reference data: a random initial condition, load, forcing or imperfection, a bifurcation into
+several solutions, or the evolution of a turbulent state in time (temporal). Deterministic
+surrogates return one field per design and are left out. \emph{Unobserved input} is met when the
+scatter is caused by an explicitly stated physical or numerical random input whose realization
+the model does not receive. The phase of a time series and a branch label are not such inputs.
+\emph{Several results per input} is met when the data contain several solver results
+for the same model input, so that the predicted scatter can be compared with the solver scatter
+input by input instead of pooled over inputs. The states of one long simulation count; mirrored
+copies of one solution and results at different loads do not. Columns (a)--(c) are the three
+criteria of the research gap, graded strictly: (a) sample realism is met only when every
+generated sample is scored quantitatively against the reference, by an error to the nearest
+reference result, a residual or a validity rate, not by figures or by the mean and standard
+deviation of the ensemble; (b) distribution match is met only when the distribution of whole
+fields is compared, by a distance between field distributions (Wasserstein, energy distance,
+MMD), a covariance or a variogram, not by per-node statistics, mode frequencies or spectra
+alone; and (c) out-of-range inference is met only when checks of the kinds required by (a) and
+(b) are both repeated on inputs outside the training range.
 
 \begin{table}[!htbp]
 \centering
 \scriptsize
 \setlength{\tabcolsep}{2pt}
-\begin{tabularx}{\textwidth}{@{}Y l *{5}{>{\centering\arraybackslash}p{1.15cm}}@{}}
+\begin{tabularx}{\textwidth}{@{}Y >{\raggedright\arraybackslash}p{2.5cm} >{\raggedright\arraybackslash}p{2.1cm} *{5}{>{\centering\arraybackslash}p{1.1cm}}@{}}
 \toprule
-Work & Source & Unobs. & Several & (a) & (b) & (c) \\
- & of scatter & input & results & Realistic & Spatial & Outside \\
- & & & per input & fields & correl. & range \\
+Work & Method & Cause & Unobs. & Several & (a) & (b) & (c) \\
+ & & of scatter & input & results & Sample & Distrib. & Out-of- \\
+ & & & & per input & realism & match & range inf. \\
 \midrule
-GLaM, SPCE \cite{zhu2021glam,zhu2023spce,zhu2023seismic} & input & \yes & \yes & \na & \no & \no \\
-Spectral surrogate \cite{luthen2023spectral} & input & \yes & \yes & \no & \prt & \no \\
-CVAE, structural \cite{silionis2024deep} & input & \yes & \prt & \no & \no & \no \\
-Implicit / scoring-rule \cite{yang2019conditional,shen2025engression} & input & \yes & \prt & \no & \prt & \no \\
-Gen-Fab \cite{azimi2026genfab} & input & \yes & \prt & \prt & \no & \yes \\
-GUST \cite{zheng2026gust} & input & \yes & \prt & \prt & \no & \no \\
-Han \& Bahmani \cite{han2026multimodal} & input & \prt & \yes & \no & \no & \prt \\
-Equivariant FM \cite{hendriks2025equivariant} & bifurcation & \yes & \yes & \prt & \prt & \no \\
-Bi-FORK \cite{zimmel2026bifork} & bifurcation & \yes & \yes & \prt & \prt & \prt \\
+Yang \& Perdikaris, Burgers \cite{yang2019conditional} & VAE + GAN & initial condition & \yes & \yes & \no & \no & \no \\
+CVAE, plate and hull \cite{silionis2024deep} & CVAE, CNN & load & \yes & \no & \no & \no & \no \\
+Han \& Bahmani \cite{han2026multimodal} & MDN & imperfection, initial condition & \yes & \yes & \no & \no & \no \\
+Gen-Fab, photonic device \cite{azimi2026genfab} & cGAN, U-Net & imperfection & \yes & \yes & \yes & \no & \no \\
+GUST, printed unit cell \cite{zheng2026gust} & diffusion, U-Net & imperfection & \yes & \yes & \no & \no & \no \\
+Equivariant FM, beam \cite{hendriks2025equivariant} & FM & bifurcation & \no & \no & \no & \yes & \no \\
+Bi-FORK, metamaterial \cite{zimmel2026bifork} & AE + FM & bifurcation & \no & \no & \yes & \no & \no \\
+Bi-FORK, Allen--Cahn \cite{zimmel2026bifork} & AE + FM & initial condition & \yes & \yes & \yes & \no & \no \\
 \midrule
-LDGN \cite{lino2025distributions} & time & \no & \yes & \prt & \yes & \prt \\
-SAR \cite{lino2026sar} & time & \no & \yes & \prt & \yes & \prt \\
-PIFM-GN \cite{song2026pifm} & time & \no & \yes & \prt & \prt & \prt \\
-Turbulence diffusion \cite{lienen2024turbdiff,molinaro2024gencfd,liu2024uncertainty} & time & \no & \yes & \prt & \yes & \prt \\
-Weather ensembles \cite{price2025gencast,oskarsson2024graphefm,alet2025fgn} & time & \no & \no & \no & \yes & \no \\
-Distributional operators \cite{park2026dll,bulte2025pno} & mixed & \prt & \yes & \no & \yes & \no \\
+LDGN, EllipseFlow \cite{lino2025distributions} & VAE + diffusion, GNN & temporal & \no & \yes & \yes & \yes & \yes \\
+SAR, EllipseFlow \cite{lino2026sar} & VAE + FM, GNN & temporal & \no & \yes & \yes & \yes & \yes \\
+PIFM-GN, EllipseFlow \cite{song2026pifm} & FM, GNN & temporal & \no & \yes & \yes & \no & \no \\
+Turbulence diffusion \cite{lienen2024turbdiff} & diffusion, U-Net & temporal & \no & \yes & \no & \no & \no \\
+GenCFD, shear flow \cite{molinaro2024gencfd} & diffusion, U-Net & initial condition & \yes & \yes & \no & \no & \no \\
+Airfoil diffusion \cite{liu2024uncertainty} & diffusion, U-Net & temporal & \no & \yes & \no & \no & \no \\
+Diffusion last layer \cite{park2026dll} & neural operator + diffusion & forcing & \yes & \yes & \no & \yes & \no \\
 \midrule
-This work & input & \yes & \yes & \plan & \plan & \yes \\
+This work & VAE + FM, GNN & imperfection & \yes & \yes & \no & \no & \no \\
 \bottomrule
 \end{tabularx}
-% VERIFY against the originals before submission: the rows of Yang & Perdikaris, Gen-Fab, GUST,
-% Han & Bahmani, Equivariant FM and Bi-FORK are our reading and are uncertain. Silionis et al.
-% checked 2026-10-19 against arXiv:2302.08329: loads hidden, thickness continuous (Latin
-% hypercube), one FE run per sample, mean/std fields pooled over the test set.
-\caption{Positioning. O: yes; $\triangle$: partly; X: no; --: not applicable; P: planned in
-this paper, not yet computed. Unobs.\ input: the model does not receive the variable that
-causes the scatter. Several results per input: the data hold several solver results for one
-model input. (a) each generated field looks like a solver result; (b) the scatter at different
-locations is correlated as in the solver results; (c) designs outside the training range.
-Entries are our reading of each paper. For this work, (c) is evaluated on the earlier
-implementations only (Section~\ref{sec:prelim}).}
+% Graded 2026-10-20 from the full texts (Silionis et al. from arXiv v1, 2302.08329). Dropped rows
+% remain cited in Section 2: GLaM/SPCE, spectral surrogate, engression (scalar or design-space
+% outputs), weather ensembles (scored against observations, not solver ensembles), PNO (read in
+% full: all X; energy score against one observation). The first four were NOT re-read in full.
+% Gen-Fab (2603.11505v1) and GUST (2506.12051v2) added back after a full read: Gen-Fab (a) rests
+% on random-matching IoU (Sec. 3.2, Table 1); its W-D/KL-D are pixel-intensity histograms (b X);
+% GUST W-D is per stiffness component (Sec. 4.5), density/coverage synthetic-only (b X).
+\caption{Positioning. \yes: met and reported; \no: not met, met in part, or not reported. The
+criteria are defined in Section~\ref{sec:position}. Method: the generative model, then the network
+where the paper fixes one (AE autoencoder, FM flow matching, MDN mixture density network). Gen-Fab and GUST generate the as-fabricated
+shape, not a response field, and name the fabrication process as the unobserved input without a
+random parameter; Gen-Fab has replicates for its test designs only, scores each sample by its
+overlap (IoU) with a fabricated replicate, and compares sets through pixel-intensity histograms;
+GUST compares its response scatter through scalar homogenized stiffnesses only.
+Several results per input from the
+states of one simulation (LDGN, SAR, PIFM-GN, turbulence diffusion) are not independent
+repetitions of an analysis. The equivariant-FM reference is one solution and its mirror image.
+The airfoil-diffusion scatter is the pseudo-time of an unconverged solver, not a random input.
+For this work, (a)--(c) are \no{} because no result of the unified model is reported yet; the
+earlier implementations report only statistics of the scalar response $s$
+(Section~\ref{sec:prelim}).}
 \label{tab:ox}
 \end{table}
 
@@ -360,9 +398,12 @@ rules are the basis for comparing a predicted distribution with observations
 variogram scores complement it \cite{scheuerer2015variogram,pic2024proper}. Rank histograms
 show whether the scatter is too wide or too narrow \cite{hamill2001rank}, and precision,
 recall, density and coverage separate whether individual samples are realistic from whether
-the samples cover the reference scatter \cite{kynkaanniemi2019improved,naeem2020reliable}. With
-a finite number of FE runs per design, even a perfect model does not score zero
-\cite{luthen2023spectral,kansal2023evaluating}.
+the samples cover the reference scatter \cite{kynkaanniemi2019improved,naeem2020reliable}.
+LDGN and SAR score each generated flow state by the $R^2$ to the nearest state of a long
+reference simulation and compare the two sets of fields with a Wasserstein distance over the
+whole field \cite{lino2025distributions,lino2026sar}; the present protocol follows them and adds
+the reverse direction of the nearest-neighbour check. With a finite number of FE runs per
+design, even a perfect model does not score zero \cite{luthen2023spectral,kansal2023evaluating}.
 
 %======================================================================
 \section{Method: HI-MGN-V}\label{sec:method}
@@ -491,8 +532,10 @@ field.
   written directly into it.
 \item \emph{Hybrid.} Both: a shared variable and a regional field, sampled jointly.
 \end{itemize}
-In the shell problem $\xi$ has only three random variables, but its effect is both global (the
-buckled or not) and localized (where the dimple, and hence the buckle, sits). A low-dimensional $\xi$
+In the shell problem $\xi$ has only three random variables, but its effect is both global
+(buckled or not) and spatially structured (where the buckle lobes form and how far around the
+circumference they extend). The lobes are seeded by the dimple but usually do not stay at it
+(Section~\ref{sec:dataset}). A low-dimensional $\xi$
 does not imply that a global vector suffices, and a localized effect does not imply that a
 local field suffices: a global vector can encode a location \cite{park2026dll}, and a local
 field acting on a multilevel network can produce correlation over long distances
@@ -775,7 +818,6 @@ solver's initial geometry; the model input is the nominal cylinder.}
 Item & Value \\
 \midrule
 Design variables & $R\sim U[100,200]$, $t\sim U[1,2]$, $L\sim U[150,300]$, $\Delta\sim U[1,3]$ (mm); 4-D Latin hypercube, 150 geometries \\
-Nondimensional range & $\lambda$ 0.526--3.488; $R/t$ 53.7--181.9; $L/R$ 0.810--2.694 \\
 Imperfection $\xi$ (not a model input) & 64 samples per geometry; one Gaussian dimple ($K=1$), three random variables: amplitude $a\sim\N(0,0.4^2)$\,mm, uniform angle, axial centre uniform away from a $2\sigma$ band at each rim; width $\sigma=l_c=\pi\sqrt{Rt}/[12(1-\nu^2)]^{1/4}$ \\
 Material & linear elastic steel, no yield; $E=210$\,GPa, $\nu=0.3$, $\rho=7.85\times10^{-6}$\,kg/mm$^3$ \\
 Elements, mesh & structured quadrilateral shells, 5 through-thickness integration points; $h\le l_c/10$; 27,975--87,398 nodes in training (median 45,409) \\
@@ -795,52 +837,62 @@ are not model inputs.}
 5.17\,mm. The threshold lies between the largest unbuckled and the smallest buckled peak and
 agrees with the solver's buckling flag on 97.5\% of the FEA draws.
 
+\paragraph{Where the buckle forms} The dimple seeds the buckle but does not fix where it lies.
+In the buckled FE draws of the out-of-range file, the node of largest radial displacement lies
+within one dimple width $\sigma$ of the dimple centre, in angle and in axial position, in only
+5--27\% of the draws of a geometry, against 1--5\% for a position chosen at random. The radial
+lobes above 80\% of the peak cover a median of 6--14 of 18 angular sectors, so a buckle
+usually spreads around much of the circumference. In the unbuckled geometry g156 the largest
+deviation from the geometry's mean response lies at the dimple in 94\% of the draws. A
+buckled field therefore does not reveal its imperfection, and a generated buckled field cannot
+be checked by re-running the FE analysis with an imperfection read off the field; criteria
+(a) and (b) compare it with independent FE results instead.
+
 \paragraph{Common recipes} The 64 imperfection recipes (amplitude, angle and axial quantile)
 are identical across all 158 geometries; the largest difference is $2.6\times10^{-5}$ in the
-axial quantile. The test set therefore measures unseen shapes with seen recipes. Fresh-recipe
-FEA for the held-out geometries is part of the study (Table~\ref{tab:controls}).
+axial quantile. The test set therefore measures unseen shapes with seen recipes. The
+evaluation uses new FE analyses with fresh recipes for every evaluation geometry
+(Section~\ref{sec:evalsets}, control A9 in Table~\ref{tab:controls}).
 
 \subsection{Evaluation sets}\label{sec:evalsets}
 
-Figure~\ref{fig:eval} shows the three evaluation sets: 15 unseen test geometries inside the
-box, 8 near-transition geometries inside the box, and 8 geometries that each move one design
-variable outside the box. The out-of-range set is out of range in the raw design variables but
-mostly in range in the nondimensional groups that govern buckling (Table~\ref{tab:ood}). Four of
-the eight geometries lie inside the training range of $\lambda$, $R/t$ and $L/R$; the others
-leave it by at most 14\% in one group, and only the $\Delta=0.6$\,mm geometry lies below the
-training range of $\lambda$. Criterion (c) is therefore tested mainly in the raw variables.
+There are three evaluation sets: 15 unseen test geometries inside the box, 8 near-transition
+geometries inside the box ($\lambda\approx0.80$--$0.95$), and 8 geometries that each move one
+design variable outside the box. Figure~\ref{fig:eval} shows the test and out-of-range
+geometries against the training data, and Table~\ref{tab:ood} lists the out-of-range
+geometries. For every evaluation geometry, the reference for (a) and (b) is a new set of 1000 FE analyses
+with fresh imperfection recipes, drawn from the same distribution as the training recipes
+(control A9); 31 geometries make 31,000 analyses.
 
 \begin{figure}[!htbp]
 \centering
-\includegraphics[width=\linewidth]{figures/eval_setup.png}
-\caption{Evaluation sets. Test: 15 unseen geometries inside the box, 64 FEA draws each. Dense:
-8 geometries inside the box near the transition ($\lambda\approx0.80$--$0.95$). Out-of-range
-(OOD): 8 geometries that each move one variable from the box centre $(150,1.5,225,2.0)$: $R$
-80/240, $t$ 0.8/2.4, $L$ 120/350, $\Delta$ 0.6/3.6. Right: FEA buckling probability against
-$\lambda$ with Wilson 95\% intervals. The dense and OOD sets shown here have 200 draws per
-geometry; see the provenance note in Section~\ref{sec:evalsets}.}
+\includegraphics[width=\linewidth]{figures/eval_sets.png}
+\caption{In-range (training, validation and test) and out-of-range geometries in the four
+design variables; the dashed rectangle is the design box. Each out-of-range geometry moves one
+variable from the box centre $(150,1.5,225,2.0)$: $R$ 80/240, $t$ 0.8/2.4, $L$ 120/350,
+$\Delta$ 0.6/3.6; each panel shows the four that move its variables.}
 \label{fig:eval}
 \end{figure}
 
 \begin{table}[!htbp]
 \centering
 \footnotesize
-\begin{tabular}{@{}rlrrrrl@{}}
+\begin{tabular}{@{}rlrrr@{}}
 \toprule
-shape & moved variable & $\lambda$ & $R/t$ & $L/R$ & nodes & outside training range \\
+shape & moved variable & $\lambda$ & $P_b$ & nodes \\
 \midrule
-150 & $R=80$    & 0.783 & 53.3  & 2.812 & 46,224 & $R/t$ (marginal), $L/R$ \\
-151 & $R=240$   & 2.350 & 160.0 & 0.938 & 45,982 & -- \\
-152 & $t=0.8$   & 2.754 & 187.5 & 1.500 & 85,968 & $R/t$ \\
-153 & $t=2.4$   & 0.918 & 62.5  & 1.500 & 28,718 & -- \\
-154 & $L=120$   & 2.754 & 100.0 & 0.800 & 24,852 & $L/R$ (marginal) \\
-155 & $L=350$   & 0.944 & 100.0 & 2.333 & 71,068 & -- \\
-156 & $\Delta=0.6$ & 0.441 & 100.0 & 1.500 & 45,780 & $\lambda$ \\
-157 & $\Delta=3.6$ & 2.644 & 100.0 & 1.500 & 45,780 & -- \\
+150 & $R=80$       & 0.783 & 0.41 & 46,224 \\
+151 & $R=240$      & 2.350 & 1.00 & 45,982 \\
+152 & $t=0.8$      & 2.754 & 1.00 & 85,968 \\
+153 & $t=2.4$      & 0.918 & 0.75 & 28,718 \\
+154 & $L=120$      & 2.754 & 1.00 & 24,852 \\
+155 & $L=350$      & 0.944 & 0.83 & 71,068 \\
+156 & $\Delta=0.6$ & 0.441 & 0.00 & 45,780 \\
+157 & $\Delta=3.6$ & 2.644 & 1.00 & 45,780 \\
 \bottomrule
 \end{tabular}
-\caption{Out-of-range geometries in nondimensional groups. Training ranges: $\lambda$
-0.526--3.488, $R/t$ 53.7--181.9, $L/R$ 0.810--2.694.}
+\caption{Out-of-range geometries. $\lambda$: load ratio; $P_b$: FE buckling probability from
+the 64 draws of the released file.}
 \label{tab:ood}
 \end{table}
 
@@ -848,9 +900,9 @@ shape & moved variable & $\lambda$ & $R/t$ & $L/R$ & nodes & outside training ra
 out-of-range geometries with 64 draws each, generated with the same 64 recipes as the training
 set. The analysis of the earlier implementations in Section~\ref{sec:prelim} used an earlier archive with 200
 fresh draws per out-of-range and near-transition geometry. That archive, and the
-near-transition set as a whole, is not in the released files. The study either regenerates
-both sets with fresh recipes or documents the archive; until then, the out-of-range numbers of
-Section~\ref{sec:prelim} cannot be reproduced from the released data.
+near-transition set as a whole, is not in the released files, so the out-of-range numbers of
+Section~\ref{sec:prelim} cannot be reproduced from the released data. The 1000 fresh-recipe
+analyses per evaluation geometry replace both, and will be released with the results.
 
 \subsection{Metrics}\label{sec:metrics}
 
@@ -893,36 +945,76 @@ $|P_{\text{model}}-P_{\text{FEA}}|$ and a plot of predicted against FE probabili
 geometries. Results are shown per geometry, as histograms of generated fields beside the FE
 results, not only as averaged ratios.
 
-\paragraph{(a) Realistic individual fields} The generated fields and the FE results of a
-geometry are projected on the principal components of the FE results. Precision is the
-fraction of generated fields that lie close to at least one FE result; recall is the fraction
-of FE results that have a generated field close to them \cite{kynkaanniemi2019improved}.
-Density and coverage are the same two quantities computed in a way that is less sensitive to
-isolated outliers \cite{naeem2020reliable}. A model can match the mean and the scatter at every
-node with fields that no FE analysis would produce, for example a blur of two buckle positions;
-low precision detects this.
+\paragraph{Field distance and rotation} The generated and the FE fields of a geometry live on the
+same mesh. For a generated field $\hat\by$ and an FE result $\by$,
+\begin{equation}
+  R^2(\hat\by\mid\by)=1-\frac{\sum_i\|\hat\by_i-\by_i\|^2}{\sum_i\|\by_i-\bar\by\|^2},\qquad
+  d(\hat\by,\by)=\Big(\frac1N\sum_i\|\hat\by_i-\by_i\|^2\Big)^{1/2},
+\end{equation}
+where $\bar\by$ is the node average of $\by$; the FE result is always the reference. The
+cylinder, its boundary conditions and the imperfection distribution are axisymmetric, so an FE
+result turned about the axis is an FE result of the same design. The mesh is a structured
+lattice with $n_\theta$ nodes per ring, and a turn by a multiple of $2\pi/n_\theta$ is an exact
+circular shift of the node indices, with the in-plane displacement components turned with it.
+$R^2_{\circlearrowleft}(\hat\by\mid\by)=\max_r R^2(\hat\by\mid Q_r\by)$ takes the best of these turns
+$Q_r$.
 
-\paragraph{(b) Spatial correlation of the scatter} Two scores are computed on a fixed subset of
-nodes of each geometry (the mesh is the same for all FE results of a geometry). The energy score
-measures the distance between the generated and the FE fields with all nodes taken together.
-The variogram score compares, for every pair of nodes, the scatter of the difference between the
-two node values; it detects a model whose nodes scatter by the right amount but not together
-\cite{scheuerer2015variogram,pic2024proper}.
+\paragraph{(a) Sample realism} For each evaluation geometry, $n=1000$ generated fields
+$\hat\by_j$ are compared with the $K=1000$ new FE results $\by_k$ in both directions:
+\begin{equation}
+  A_{\text{real}}=\frac1n\sum_{j}\max_{k}R^2_{\circlearrowleft}(\hat\by_j\mid\by_k),\qquad
+  A_{\text{cov}}=\frac1K\sum_{k}\max_{j}R^2_{\circlearrowleft}(\hat\by_j\mid\by_k).
+\end{equation}
+$A_{\text{real}}$ asks whether every generated field is close to some FE result; it is low for a
+model that generates fields between the unbuckled and the buckled state, or buckle lobes no FE
+analysis produces. $A_{\text{cov}}$ asks whether every FE result is close to some generated
+field; it is low for a model that never generates one kind of FE result, for example the
+unbuckled fields of a near-critical design. The first direction is the nearest-state $R^2$ of
+LDGN and SAR \cite{lino2025distributions,lino2026sar}; the pair corresponds to precision and
+recall \cite{kynkaanniemi2019improved}. The reference value is the leave-one-out score of the FE
+results, $A_{\text{FE}}=\frac1K\sum_k\max_{k'\neq k}R^2_{\circlearrowleft}(\by_{k'}\mid\by_k)$,
+which a perfect model reaches in both directions with $n=K$. Beside the means, we report the
+fraction of generated fields whose nearest-FE $R^2$ is below the 5th percentile of the FE
+leave-one-out values (5\% for a perfect model), and the per-geometry histograms of both. The
+turn is taken out because (a) asks whether a field is possible, not where around the axis it
+lies; the angular distribution is part of (b).
 
-\paragraph{(c) Designs outside the training range} Every metric above is reported separately
-on the test, near-transition and out-of-range sets of Section~\ref{sec:evalsets}.
+\paragraph{(b) Distribution match} The two sets of fields are compared by the Wasserstein
+distance
+\begin{equation}
+  W_2=\Big(\min_{\pi}\frac1n\sum_{j}d(\hat\by_j,\by_{\pi(j)})^2\Big)^{1/2},
+\end{equation}
+where $\pi$ runs over the one-to-one assignments of $n$ generated fields to $n$ FE results and
+the optimum is found exactly by the Hungarian algorithm on the $n\times n$ distance matrix. In
+(a) many generated fields may share one nearest FE result; in $W_2$ each FE result is used
+once, so a model that generates one kind of field too often or too rarely leaves fields
+matched to distant partners and is penalized, which (a) cannot detect. No turn is taken out: in
+the FE results the buckle angle is uniform, and a model that puts every buckle at the same
+angle must fail (b). $W_1$ would average the matched distances; $W_2$ is their root mean square,
+so a few generated fields far from every FE result weigh more, and it is the distance that LDGN
+and SAR report. $W_2$ of finite sets is not zero even for a perfect model, and its bias depends
+on $n$. The 1000 FE results of a geometry are therefore split at random into halves A and B of
+500: the model score is $W_2$ between 500 generated fields and half A, the reference value
+$W_2^{\text{FE}}$ is $W_2$ between half B and half A, and both are averaged over 20 random splits.
+We report $W_2$ in mm beside $W_2^{\text{FE}}$ and the ratio $W_2/W_2^{\text{FE}}$, which is 1 for a
+model whose fields are distributed as the FE results.
+
+\paragraph{(c) Out-of-range inference} (a), (b) and the scalar QoIs are reported separately on
+the test, near-transition and out-of-range sets of Section~\ref{sec:evalsets}.
 
 \paragraph{Buckle position and shape} For buckled fields: the axial and angular position of the
-peak, the direction of the peak displacement (inward or outward), and the dominant
-circumferential and axial wavelengths, each compared as a histogram with the FE results.
+peak, the direction of the peak displacement (inward or outward), the angular extent of the
+radial lobes, and the dominant circumferential and axial wavelengths, each compared as a
+histogram with the FE results.
 
-\paragraph{Reference value from the FE results alone} With a finite number $K$ of FE results,
-even a perfect model does not score zero. Splitting the FE results of a geometry in half and
-scoring one half against the other gives the value that a perfect model would reach with the
-same number of samples \cite{luthen2023spectral,kansal2023evaluating}. For $W_1/\mathrm{sd}$ its mean
-is 0.263, 0.189, 0.151 and 0.144 at $K=16,32,64,100$; for CRPS$/\mathrm{sd}$ it is about
-0.52--0.54. The reference uses half the draws and is a comparison point, not a lower bound on
-what a model can score.
+\paragraph{Reference values from the FE results alone} With a finite number $K$ of FE results,
+even a perfect model does not score zero. Every score is therefore reported beside the value
+that FE results alone reach with the same number of samples: the leave-one-out score for (a)
+and the split-half score for (b) and for the scalar QoIs
+\cite{luthen2023spectral,kansal2023evaluating}. On the existing draws, the split-half mean of
+$W_1/\mathrm{sd}$ for $s$ is 0.263, 0.189, 0.151 and 0.144 at $K=16,32,64,100$, and that of
+CRPS$/\mathrm{sd}$ about 0.52--0.54. These are comparison points, not lower bounds on what a model
+can score.
 
 \paragraph{Statistics} Comparisons are paired on the same geometries, with geometry-level
 bootstrap intervals and at least three seeds. A difference between arms is reported as real
@@ -978,7 +1070,7 @@ A5 & independent distributions & $p(\zg\mid c)\,p(\zl\mid c)$ instead of generat
 A6 & known imperfection & the three dimple variables given as inputs and sampled from their known distribution; the unmeasured input revealed \\
 A7 & deterministic global vector & a vector of the same width per geometry in the graph network, without randomness: random latent vector versus global information path \\
 A8 & $\lambda_{\mathrm{MMD}}=0$ & whether the regularization matters once the distribution is fitted after the freeze \\
-A9 & new-imperfection FEA & 64 new imperfection samples for each held-out geometry: unseen shapes with unseen imperfections \\
+A9 & new-imperfection FEA & 1000 new imperfection samples for each of the 31 evaluation geometries: unseen shapes with unseen imperfections, and the reference for (a) and (b) \\
 A10 & seeds & at least three training seeds per arm \\
 \bottomrule
 \end{tabularx}
@@ -999,9 +1091,11 @@ results will be reported; every entry is pending.
 \setlength{\tabcolsep}{2pt}
 \begin{tabular}{@{}lcccccccc@{}}
 \toprule
-& \multicolumn{4}{c}{peak displacement $s$} & \multicolumn{2}{c}{(b) correlation} & \multicolumn{2}{c}{(a) realism} \\
+& \multicolumn{4}{c}{peak displacement $s$} & \multicolumn{2}{c}{\shortstack{(a) sample\\realism}} & \multicolumn{2}{c}{\shortstack{(b) distrib.\\match}} \\
 \cmidrule(lr){2-5}\cmidrule(lr){6-7}\cmidrule(l){8-9}
-Model & mean & spread & $W_1/\mathrm{sd}$ & $|\Delta P|$ & energy & vario. & prec. & recall \\
+Model & mean & spread & $W_1/\mathrm{sd}$ & $|\Delta P|$ & $A_{\text{real}}$ & $A_{\text{cov}}$ & $W_2$ & $W_2/W_2^{\text{FE}}$ \\
+\midrule
+FE vs FE (reference) & 1 & 1 & -- & -- & -- & -- & -- & 1 \\
 \midrule
 HI-MGN (deterministic) & -- & -- & -- & -- & -- & -- & -- & -- \\
 CVAE & -- & -- & -- & -- & -- & -- & -- & -- \\
@@ -1014,9 +1108,11 @@ HI-MGN-V hybrid (MMD / KL) & -- & -- & -- & -- & -- & -- & -- & -- \\
 \bottomrule
 \end{tabular}
 \caption{Layout of the main results, one block per evaluation set (test, near-transition,
-out-of-range); the out-of-range block is criterion (c). mean, spread: ratios of model to FE
-mean and standard deviation of $s$; $|\Delta P|$: buckling-probability error; energy, vario.:
-energy and variogram scores; prec., recall: precision and recall. All entries are pending.}
+out-of-range); the out-of-range block is criterion (c). mean, spread: ratios of
+model to FE mean and standard deviation of $s$; $|\Delta P|$: buckling-probability error;
+$A_{\text{real}}$, $A_{\text{cov}}$: mean nearest-neighbour $R^2$, generated to FE and FE to
+generated; $W_2$ (mm) and its ratio to the FE-alone value. Each block also carries an ``FE vs
+FE'' row with the reference values. All entries are pending.}
 \label{tab:results}
 \end{table}
 
@@ -1140,9 +1236,12 @@ regularization leaves latent vectors that this distribution can fit.
   scatter or load scatter may favour another placement.
 \item All geometries, including the released out-of-range file, reuse the same 64 imperfection
   recipes, so the test measures unseen shapes with seen imperfections. The 200-sample archive
-  behind the earlier out-of-range and near-transition numbers is not in the released files.
-\item The out-of-range set is out of range in raw design variables but mostly in range in the
-  nondimensional groups (Table~\ref{tab:ood}).
+  behind the earlier out-of-range and near-transition numbers is not in the released files. The
+  1000 fresh-recipe analyses per evaluation geometry that the protocol needs (31,000 in all,
+  about three times the training campaign) have not been run.
+\item A buckled field does not reveal its imperfection (Section~\ref{sec:dataset}), so a
+  generated field is scored against independent FE results, not against a re-analysis of
+  its own imperfection.
 \item The clusters are random. Regional latent vectors do not correspond to physical regions,
   and a model may depend on the node numbering through the first seed node.
 \item The default arms are not capacity-matched (Table~\ref{tab:params}).
@@ -1166,7 +1265,7 @@ Not claimed & Reason / correct statement \\
 ``first to address one-to-many responses in mechanics'' & stochastic emulators, CVAEs, Gen-Fab, GUST, Han \& Bahmani, equivariant flow matching and Bi-FORK address parts of it (Table~\ref{tab:ox}) \\
 ``first generative surrogate on meshes'' & LDGN, SAR, PIFM-GN and Graph-EFM exist \\
 ``first hybrid latent'' & LION, DualDiff, HPU-Net and others combine global and local latent variables \\
-``first to evaluate (a)+(b)+(c)'' & only after (a) and (b) are computed, and limited to structural fields with scatter from an unmeasured input \\
+``first to evaluate sample realism, distribution match and out-of-range inference'' & only after (a)--(c) are computed, and limited to structural fields with scatter from an unmeasured input \\
 ``the diffusion-transformer conditioning (AdaLN-Zero)'' & there is no normalization and the gate starts at one: a gated FiLM \\
 ``ELBO'' or ``likelihood'' & the loss is a weighted sum; MMD acts on the set of latent vectors, not on each one \\
 ``regional latent vectors are physical regions'' & the clusters are random \\
@@ -1190,9 +1289,10 @@ multilevel graph network whose blocks are adjusted by a latent vector drawn from
 distribution conditioned on the design. Whether the latent vector acts globally, regionally or
 both is a stated assumption about how the unmeasured input acts, and it is one setting of one
 implementation. The evaluation compares generated fields with many FE analyses of the same
-design on three criteria: (a) each generated field looks like an FE result, (b) the scatter is
-correlated over the structure as in the FE results, and (c) both hold outside the training
-range. The test problem is a shell-buckling dataset in which the unmeasured imperfection
+design on three criteria: (a) sample realism, every generated field is close to some FE
+result and every FE result to some generated field; (b) distribution match, the generated fields
+are distributed as the FE results, by a Wasserstein distance read against the value that FE
+results alone reach; and (c) out-of-range inference, both hold outside the training range. The test problem is a shell-buckling dataset in which the unmeasured imperfection
 decides whether the shell buckles. Earlier implementations of the global and local options fail
 in opposite ways on this dataset, which motivates the hybrid and the controlled study that will
 test it.
@@ -1213,7 +1313,7 @@ Graph network & \code{latent_dim 128}; \code{message_passing_num 15}; \code{use_
 Latent & \code{latent_type global|local|hybrid}; \code{vae_latent_dim 32} (3 levels); \code{latent_ch 4}; \code{vae_mp_layers 3}; \code{vae_local_mp_layers 2}; \code{vae_graph_aware}; \code{posterior_min_std 0.05}; \code{z_conditioning adaln} \\
 Loss & \code{alpha_recon 1000} (MSE); \code{latent_reg mmd} ($\lambda=1$) or \code{kl} (\code{kl_weight 1e-3}); \code{beta_aux 10} (peak-to-valley, axial channel); \code{prior_nll_weight 1}; \code{prior_grad_to_encoder 0} \\
 Learned distribution & \code{use_conditional_prior}; \code{prior_type gnn_e2e}; \code{prior_family fm}; \code{prior_mp_layers 3}; \code{prior_hidden_dim 128}; coarse prior 4 blocks; \code{prior_fm_steps 30}; \code{prior_fm_solver heun}; \code{prior_freeze_epoch 80} \\
-Inference & 64 samples per geometry; spread statistic \code{mag_max} on channels 0--2 \\
+Inference & 64 samples per geometry in the configuration files, 1000 for the evaluation protocol; spread statistic \code{mag_max} on channels 0--2 \\
 \bottomrule
 \end{tabularx}
 \caption{Settings shared by the six arms (\nolinkurl{configs/MeshGraphNets_Variational/probabilistic/ex3/latent_type/}). Only \code{latent_type} and \code{latent_reg} (with its weight) differ.}

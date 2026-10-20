@@ -189,6 +189,8 @@ export function sectionFor(modelId, key, required, config = null) {
   if (/^(point_|pointnet_|deeponet_|fno_|encoder_|decoder_|fm_arch|fm_blocks|fm_hidden|fm_cond_hidden|latent_|latent_dim|vae_local_mp_layers|message_passing|slice_num|num_layers|num_heads|attention_kernel|mlp_ratio|coarsening|multiscale|mp_per_level|positional|fourier|operator_dim|global_condition|num_filter|lc_filter|network_size)/.test(key)) return "Architecture";
   // SAR's stage-prefixed network shapes (vae_* graph VAE, sar_* Transolvers).
   if (/^(vae_num_layers|vae_d_model|vae_latent_features|sar_num_iters|sar_num_cond_layers|sar_num_ar_layers|sar_num_sampler_layers|sar_d_model|sar_num_slices|sar_num_heads)$/.test(key)) return "Architecture";
+  // LDGN's graph VAE (vae_depths, vae_fnns_*) and latent denoiser (ldgn_*).
+  if (/^(vae_depths|vae_fnns_depth|vae_fnns_width|vae_aggr|vae_norm_latents|ldgn_depths|ldgn_fnns_depth|ldgn_fnns_width|ldgn_aggr|ldgn_diffusion_steps|ldgn_schedule|ldgn_learnable_variance)$/.test(key)) return "Architecture";
   // Network-shape keys the prefix-anchored test above misses. Without these,
   // MLP showed an "Architecture / 0" tab while hidden_layers, activation,
   // output_activation, and norm sat in "Advanced", and every mesh route filed
@@ -382,6 +384,8 @@ export function presetOptions(modelId) {
   if (modelId === "simulgenvae") options.push(["simulgen_vae", "VAE only"], ["simulgen_lc", "LC only"], ["simulgen_reconstruct", "Reconstruct fields"]);
   // SAR's two stages; train_sar reads the VAE at vae_modelpath.
   if (modelId === "sar") options.push(["sar_vae", "VAE only"], ["sar_stage", "SAR stage only (needs trained VAE)"]);
+  // LDGN's two stages; train_ldgn reads the VAE at vae_modelpath.
+  if (modelId === "ldgn") options.push(["ldgn_vae", "VAE only"], ["ldgn_stage", "LDGN stage only (needs trained VAE)"]);
   return options;
 }
 
@@ -603,7 +607,7 @@ export async function applyPreset() {
   if (preset === "smoke") values = {
     training_epochs: "2", batch_size: "1", vae_training_epochs: "2", lc_training_epochs: "2", fm_training_epochs: "2",
     vae_batch_size: "1", lc_batch_size: "2", fm_batch_size: "2", test_max_batches: "1", num_test_shapes: "2",
-    sar_training_epochs: "2", sar_batch_size: "1"
+    sar_training_epochs: "2", sar_batch_size: "1", ldgn_training_epochs: "2", ldgn_batch_size: "1"
   };
   if (preset === "high_performance" || preset === "low_vram") {
     source = PRESET_SOURCES[spec.modelId]?.[preset === "high_performance" ? "high" : "low"];
@@ -654,6 +658,8 @@ export async function applyPreset() {
   if (preset === "sdfflow_fm") values = { mode: "train_fm" };
   if (preset === "sar_vae") values = { mode: "train_vae" };
   if (preset === "sar_stage") values = { mode: "train_sar" };
+  if (preset === "ldgn_vae") values = { mode: "train_vae" };
+  if (preset === "ldgn_stage") values = { mode: "train_ldgn" };
   if (preset === "simulgen_vae") values = { mode: "train_vae", training_epochs: model.defaults.vae_training_epochs, batch_size: model.defaults.vae_batch_size, learningr: model.defaults.vae_learningr };
   if (preset === "simulgen_lc") values = { mode: "train_lc", training_epochs: model.defaults.lc_training_epochs, batch_size: model.defaults.lc_batch_size, learningr: model.defaults.lc_learningr };
   if (preset === "simulgen_reconstruct") values = { mode: "reconstruct", batch_size: "16", output_dir: "../../output/simulgenvae/ex1/reconstruct" };

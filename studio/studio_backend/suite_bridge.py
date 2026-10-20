@@ -221,6 +221,7 @@ _REPOSITORY_MODEL_HINTS = {
     "deeponet": "deeponet",
     "point_deeponet": "point_deeponet",
     "sar": "sar",
+    "ldgn": "ldgn",
 }
 
 

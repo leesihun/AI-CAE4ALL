@@ -303,6 +303,11 @@ def _train_worker_inner(rank, world_size, config, gpu_ids, config_filename):
             reg_tensor = torch.tensor([train_metrics['reg_mean']], device=device, dtype=torch.float64)
             dist.all_reduce(reg_tensor, op=dist.ReduceOp.SUM)
             train_metrics['reg_mean'] = (reg_tensor[0] / world_size).item()
+        for key in ('aux_mean', 'prior_loss_mean', 'kl_anchor_mean'):
+            if use_vae and key in train_metrics:
+                term = torch.tensor([train_metrics[key]], device=device, dtype=torch.float64)
+                dist.all_reduce(term, op=dist.ReduceOp.SUM)
+                train_metrics[key] = (term[0] / world_size).item()
         if use_vae and 'total_mean' in train_metrics:
             total_tensor = torch.tensor(
                 [train_metrics['total_mean'] * train_metrics['count']],
@@ -413,10 +418,16 @@ def _train_worker_inner(rank, world_size, config, gpu_ids, config_filename):
         if log_file and rank == 0: 
             with open(log_file, 'a') as f:
                 if use_vae:
+                    # The other train terms, for the loss plots (val has no aux/prior)
+                    train_extra = ''.join(
+                        f" {short}={train_metrics[key]:.4e}"
+                        for key, short in (('aux_mean', 'aux'), ('prior_loss_mean', 'prior'),
+                                           ('kl_anchor_mean', 'kl_anchor'))
+                        if key in train_metrics)
                     f.write(
                         f"Elapsed: {time.time() - start_time:.2f}s "
                         f"Epoch {epoch} LR: {current_lr:.4e} | "
-                        f"Train recon={train_loss:.4e} {reg_name}={train_metrics.get('reg_mean', 0.0):.4e} total={train_metrics.get('total_mean', train_loss):.4e} | "
+                        f"Train recon={train_loss:.4e} {reg_name}={train_metrics.get('reg_mean', 0.0):.4e} total={train_metrics.get('total_mean', train_loss):.4e}{train_extra} | "
                         f"Valid recon={valid_loss:.4e} {reg_name}={valid_metrics.get('reg_mean', 0.0):.4e} total={valid_metrics.get('total_mean', valid_loss):.4e}"
                         f"{crps_str}{vram_str}\n"
                     )

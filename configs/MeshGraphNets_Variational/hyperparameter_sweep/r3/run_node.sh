@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
-# B300 round 3: 24 jobs on three 8-GPU nodes, one job per GPU. Do not call this
+# B300 round 3: 26 jobs on three 8-GPU nodes. Do not call this
 # file directly; on each node run its own wrapper, from this directory:
 #
-#   node 135:  bash run_135.sh     HI-MGN-V      (latent_type global) x 7 + SAR seed 42
-#   node 136:  bash run_136.sh     HI-MGNflow    (latent_type local)  x 7 + SAR seed 43
+#   node 135:  bash run_135.sh     HI-MGN-V      (latent_type global) x 7 + SAR seed 42 + LDGN seed 42
+#   node 136:  bash run_136.sh     HI-MGNflow    (latent_type local)  x 7 + SAR seed 43 + LDGN seed 43
 #   node 137:  bash run_137.sh     HI-MGN-hybrid (latent_type hybrid) x 7 + deterministic HI-MGN
 #
 # jobs.txt is the job table (node, job, method, train config, infer config);
-# README.md says what each job changes and why. Job k of a node runs on card k.
+# README.md says what each job changes and why. Job k of a node starts on card
+# k; the ninth job (LDGN on 135/136) waits for the first card that finishes.
 #
 # No argument and no nohup: the checks (stages 1-3) run in the terminal, and
 # when they pass the jobs go to the background on their own, so the terminal
@@ -19,11 +20,11 @@
 #
 # ORDER OF WORK
 #   1. environment  launcher python imports cae_suite; each method's
-#                   interpreter (MGN-V; SAR on 135/136) imports torch /
+#                   interpreter (MGN-V; SAR and LDGN on 135/136) imports torch /
 #                   torch_geometric / h5py and runs a bf16 matmul and a
 #                   scatter on GPU 0; this checkout has split_group_attr.
 #   2. data         every dataset a config names exists, exact case.
-#   3. --check      the launcher's full preflight on all 16 configs, 8 at a
+#   3. --check      the launcher's full preflight on all 16-18 configs, 8 at a
 #                   time (inference configs without the path layer while
 #                   their checkpoint does not exist yet).
 #   Any failure in 1-3 aborts before a GPU-hour is spent, says why, and
@@ -37,7 +38,7 @@
 # Stdout per stage: run_logs/<node>/<job>.<train|infer>.out.
 #
 # Overrides, in front of the command (GPUS="0 1 2 3" bash run_135.sh):
-#   PYTHON (launcher), MGNV_PYTHON, SAR_PYTHON (method interpreters; default
+#   PYTHON (launcher), MGNV_PYTHON, SAR_PYTHON, LDGN_PYTHON (method interpreters; default
 #   from ai_cae4all.local.toml), GPUS (default: every GPU visible),
 #   THREADS_PER_JOB=4, PROBE_TIMEOUT=900, PREFLIGHT=1, TRAIN=1, INFER=1,
 #   DETACH=1 (0 keeps the jobs in this terminal; the default when stdout is
@@ -115,11 +116,12 @@ method_info() {   # m -> "model_id spec_id method_dir label"
     case "$1" in
         mgnv) echo "meshgraphnets-v meshgraphnets_variational methods/MeshGraphNets_Variational MGN-V" ;;
         sar)  echo "sar sar methods/SAR SAR" ;;
+        ldgn) echo "ldgn ldgn methods/LDGN LDGN" ;;
         *)    echo "" ;;
     esac
 }
 method_python() {   # m -> the interpreter chosen in stage 1
-    case "$1" in mgnv) echo "$MGNV_PYTHON" ;; sar) echo "$SAR_PYTHON" ;; esac
+    case "$1" in mgnv) echo "$MGNV_PYTHON" ;; sar) echo "$SAR_PYTHON" ;; ldgn) echo "$LDGN_PYTHON" ;; esac
 }
 
 cfg_value() {   # cfg key -> value (first token, comment stripped)
@@ -350,7 +352,7 @@ print(info)
     grep -q "split_group_attr" "$method_dir/general_modules/mesh_dataset.py" \
         || die "this checkout's $method_dir has no split_group_attr: the train/test split would leak geometries. Pull first."
 done
-MGNV_PYTHON="${MGNV_PYTHON:-}"; SAR_PYTHON="${SAR_PYTHON:-}"
+MGNV_PYTHON="${MGNV_PYTHON:-}"; SAR_PYTHON="${SAR_PYTHON:-}"; LDGN_PYTHON="${LDGN_PYTHON:-}"
 
 [ -n "$GPUS" ] || GPUS="$(seq -s ' ' 0 $(( NGPU_SEEN - 1 )))"
 for g in $GPUS; do
@@ -379,7 +381,7 @@ import sys
 from pathlib import Path
 from cae_suite.config_parser import parse_config
 
-DIRS = {"mgnv": "methods/MeshGraphNets_Variational", "sar": "methods/SAR"}
+DIRS = {"mgnv": "methods/MeshGraphNets_Variational", "sar": "methods/SAR", "ldgn": "methods/LDGN"}
 missing_cfg, needed = [], {}
 for line in Path(sys.argv[1]).read_text().splitlines():
     m, cfg = line.split(None, 1)
@@ -414,7 +416,7 @@ if [ "$PREFLIGHT" = "1" ] && { [ "$TRAIN" = "1" ] || [ "$INFER" = "1" ]; }; then
     mkdir -p "$CHECK_DIR"
     check_one() {   # "method cfg" -> "OK cfg" | "FAILED cfg"
         local m="${1%% *}" cfg="${1#* }" extra="" log py
-        case "$m" in mgnv) py="$MGNV_PYTHON" ;; sar) py="$SAR_PYTHON" ;; esac
+        case "$m" in mgnv) py="$MGNV_PYTHON" ;; sar) py="$SAR_PYTHON" ;; ldgn) py="$LDGN_PYTHON" ;; esac
         case "$(basename "$cfg")" in
             # The checkpoint does not exist until training ends; the real
             # launch re-runs the full preflight, path layer included.

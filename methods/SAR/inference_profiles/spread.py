@@ -5,6 +5,7 @@ Copied verbatim from MeshGraphNets_Variational/inference_profiles/rollout.py
 spread_values.npz / spread_metrics.json / histogram_compare.png, scored by
 the same code, as an MGN-V one. Keep the two copies identical.
 """
+import json
 import os
 
 import h5py
@@ -257,11 +258,13 @@ def _open_in_viewer(path):
 def _plot_spread_histogram(gt, gen, out_path, eval_path=None, rollout_dir=None,
                            bins=60, clip_quantile=0.0, show=False, dpi=150,
                            label='z_disp', scores=None,
-                           stat=SPREAD_STAT_DEFAULT):
+                           stat=SPREAD_STAT_DEFAULT, title=None):
     """Overlay GT vs generated spread histograms; save PNG, optionally display.
 
     Renders headlessly (Agg) so it works on a display-less box; when show=True
-    the saved PNG is additionally opened in the OS default viewer.
+    the saved PNG is additionally opened in the OS default viewer. `title`, when
+    given, becomes the first line of the axes title (the group a per-geometry
+    figure shows).
     """
     import matplotlib
     matplotlib.use('Agg')
@@ -301,10 +304,13 @@ def _plot_spread_histogram(gt, gen, out_path, eval_path=None, rollout_dir=None,
             if value is not None and np.isfinite(value):
                 bits.append(f"{key}={value:.3f} (->{target})")
         if bits:
-            score_line = "\n" + "   ".join(bits)
+            # Two per line: four on one line overflow the 8-inch figure.
+            score_line = "".join(
+                "\n" + "   ".join(bits[i:i + 2]) for i in range(0, len(bits), 2))
     expr = _spread_stat_expr(label, stat)
+    head = f"{title}\n" if title else ""
     ax.set_title(
-        f"{expr} per realization, final timestep\n"
+        f"{head}{expr} per realization, final timestep\n"
         f"GT  mu={g_mu:.3e}  sigma={g_sd:.3e}  [{g_lo:.3e}, {g_hi:.3e}]\n"
         f"Gen mu={p_mu:.3e}  sigma={p_sd:.3e}  [{p_lo:.3e}, {p_hi:.3e}]"
         f"{score_line}"
@@ -326,6 +332,84 @@ def _plot_spread_histogram(gt, gen, out_path, eval_path=None, rollout_dir=None,
     if show:
         _open_in_viewer(os.path.abspath(out_path))
     return out_path
+
+
+def _eval_dataset_groups(h5_path, attr):
+    """{scene id: group value} from `data/{id}/metadata.attrs[attr]`.
+
+    Empty when any scene lacks the attribute, so a file without groups falls
+    back to the pooled figure alone instead of a partial grouping.
+    """
+    groups = {}
+    with h5py.File(h5_path, 'r') as f:
+        for sample_id in f['data'].keys():
+            meta = f[f'data/{sample_id}'].get('metadata')
+            if meta is None or attr not in meta.attrs:
+                return {}
+            value = meta.attrs[attr]
+            if isinstance(value, bytes):
+                value = value.decode()
+            elif isinstance(value, np.ndarray) and value.size == 1:
+                value = value.item()
+            groups[str(sample_id)] = str(value)
+    return groups
+
+
+def _group_order(values):
+    """Group values sorted numerically when they all parse, else as text."""
+    values = sorted({str(v) for v in values})
+    try:
+        return sorted(values, key=float)
+    except ValueError:
+        return values
+
+
+def _spread_by_group(gt, gt_scene, gen, gen_scene, groups, attr, out_dir,
+                     eval_path=None, bins=60, clip_quantile=0.0, dpi=150,
+                     label='z_disp', stat=SPREAD_STAT_DEFAULT):
+    """Score and draw each group (held-out geometry) on its own.
+
+    The pooled histogram adds the between-geometry variance to the
+    within-geometry one, so an ensemble that is too narrow for every geometry
+    can still draw a pooled curve of the right width. Here each group gets its
+    own truths, only the draws generated for its scenes, and scores normalized
+    by that group's own sd(gt). Writes histogram_compare_<attr>_<value>.png per
+    group and spread_metrics_by_group.json; returns {value: scores}.
+    """
+    gt = np.asarray(gt, dtype=np.float64)
+    gen = np.asarray(gen, dtype=np.float64)
+    gt_scene = np.asarray([str(s) for s in gt_scene])
+    gen_scene = np.asarray([str(s) for s in gen_scene])
+    gt_group = np.asarray([groups.get(s, '') for s in gt_scene])
+    gen_group = np.asarray([groups.get(s, '') for s in gen_scene])
+
+    by_group = {}
+    for value in _group_order(v for v in gt_group if v):
+        g_mask = gt_group == value
+        p_mask = gen_group == value
+        if not p_mask.any():
+            continue
+        scores = _spread_scores(gt[g_mask], gt_scene[g_mask],
+                                gen[p_mask], gen_scene[p_mask])
+        scores.pop('pit_ranks', None)
+        by_group[value] = scores
+        safe = ''.join(c if c.isalnum() or c in '-.' else '_' for c in value)
+        _plot_spread_histogram(
+            gt[g_mask], gen[p_mask],
+            os.path.join(out_dir, f'histogram_compare_{attr}_{safe}.png'),
+            eval_path=eval_path, rollout_dir=out_dir, bins=bins,
+            clip_quantile=clip_quantile, dpi=dpi, label=label, scores=scores,
+            stat=stat,
+            title=f"{attr} {value}: {int(g_mask.sum())} scenes (scores vs this group's sd)")
+        print(f"  [GROUP] {attr}={value} n_gt={int(g_mask.sum())} "
+              f"n_gen={int(p_mask.sum())} crps_norm={scores.get('crps_norm', float('nan')):.4f} "
+              f"spread_skill={scores.get('spread_skill', float('nan')):.4f} "
+              f"dmean_norm={scores['dmean_norm']:.4f} sd_ratio={scores['sd_ratio']:.4f}")
+    path = os.path.join(out_dir, 'spread_metrics_by_group.json')
+    with open(path, 'w', encoding='utf-8') as fh:
+        json.dump({'attr': attr, 'groups': by_group}, fh, indent=2)
+    print(f"  [GROUP] metrics -> {path}")
+    return by_group
 
 
 def _rollout_feature_names(dataset_dir, output_dim):

@@ -20,9 +20,9 @@ Line     job  w1 sd bias crps skill h
     skill = spread_skill
     h     = training hours
 A failure appends F:<stage> and the first error line. A job still training
-prints "run NN%" (epochs done over the configured total; SAR prints its stage
-and epoch, "vae e120" / "sar e40", since its epoch caps are only ceilings and
-the learning-rate stop ends it earlier). "wait" = no epoch logged yet, "inf" =
+prints "run NN%" (epochs done over the configured total; SAR and LDGN print
+their stage and epoch, "vae e120" / "sar e40" / "ldgn e300", since their epoch
+caps are only ceilings and the learning-rate stop ends them earlier). "wait" = no epoch logged yet, "inf" =
 inference running. A node whose checks aborted prints only "ABORT <reason>".
 """
 import argparse
@@ -37,6 +37,9 @@ REPO = os.path.normpath(os.path.join(HERE, "..", "..", "..", ".."))
 NODES = ("135", "136", "137")
 OUT_ROOT = os.path.join(REPO, "output", "b300_r3")
 EPOCH_RE = re.compile(r"^Elapsed: ([\d.]+)s Epoch (\d+)")
+# Two-stage baselines: method -> second stage. Each stage logs beside
+# log_file_dir as <root>_vae<ext>, then <root>_<stage><ext>.
+STAGED = {"sar": "sar", "ldgn": "ldgn"}
 
 
 def cfg(path):
@@ -118,10 +121,9 @@ class Job:
         self.model = method_path(c["modelpath"])
         self.log = method_path(c["log_file_dir"])
         self.infer_dir = method_path(ci["inference_output_dir"])
-        if method == "sar":
+        if method in STAGED:
             root, ext = os.path.splitext(self.log)
-            self.stages = [("vae", f"{root}_vae{ext or '.log'}"),
-                           ("sar", f"{root}_sar{ext or '.log'}")]
+            self.stages = [(st, f"{root}_{st}{ext or '.log'}") for st in ("vae", STAGED[method])]
         self.epochs = int(c.get("training_epochs", 0))
         self.status = {}
         for key in ("state", "err", "train_start", "train_end", "inferfail"):
@@ -129,7 +131,7 @@ class Job:
 
     def progress(self):
         """(flag text, hours) for a job still training: ' run NN%' / ' vae e120' / ' wait'."""
-        if self.method == "sar":
+        if self.method in STAGED:
             for stage, log in reversed(self.stages):
                 done, secs = last_epoch(log)
                 if done is not None:

@@ -408,10 +408,16 @@ def single_worker(config, config_filename='config.txt'):
                             val_str += (
                                 f" | CRPS {valid_learned_prior_metrics['crps']:.4e}"
                             )
+                        # The other train terms, for the loss plots (val has no aux/prior)
+                        train_extra = ''.join(
+                            f" {short}={train_metrics[key]:.4e}"
+                            for key, short in (('aux_mean', 'aux'), ('prior_loss_mean', 'prior'),
+                                               ('kl_anchor_mean', 'kl_anchor'))
+                            if key in train_metrics)
                         f.write(
                             f"Elapsed: {elapsed:.2f}s Epoch {epoch} LR: {current_lr:.4e} | "
                             f"Train recon={train_loss:.4e} {reg_name}={train_metrics.get('reg_mean',0):.4e} "
-                            f"total={train_metrics.get('total_mean',train_loss):.4e} | "
+                            f"total={train_metrics.get('total_mean',train_loss):.4e}{train_extra} | "
                             f"{val_str}{vram_str}\n"
                         )
                     else:

@@ -1,0 +1,53 @@
+% ex3 B300 round 4 arm sar_3x4: SAR baseline (ported upstream code).
+% Change from round 3's sar_s42: sar_wing + cond/AR/sampler layers 8 -> 4 (Wing SAR-3x4, paper Table 3).
+% Question: Is 5.25M parameters too many for about 120 training geometries?
+% Scores sar_3x4 on the 8 held-out geometries x 64 draws (spread_metrics.json, one histogram per geometry).
+% Base: configs/SAR/hyperparameter_sweep/r3/config_infer_sar_s42.txt
+% verbatim, except the run paths (output/b300_r4/sar_3x4/) and the sampling keys of the change above, if any (sar_num_iters only for the launcher's sample_steps check); the architecture comes from the checkpoint.
+% (configs/MeshGraphNets_Variational/hyperparameter_sweep/r4/run_node.sh assigns the card; one job per card.)
+% Memory and time on ex3 are not measured yet.
+%
+% probabilistic/ex3 - sar; SAR (Lino & Thuerey 2026, arXiv:2604.11403) ported from the upstream code.
+% Dataset: shell buckling; held-out file = 8 unseen geometries x 64 imperfection draws (ex3_shell_buckling_infer.h5).
+% Field storage order (0-based): input -> output -> conditioner -> partNo.
+% input [0:3]: x_coord, y_coord, z_coord -> pos; output [3:6]: ux, uy, uz (generated);
+% conditioner [6:8]: thickness, delta -> glob; partNo [8]: node type -> loc one-hot.
+% Checkpoints come from the paired training config; architecture and normalization are read
+% from them, so only the sampling keys below matter here.
+% num_samples 64 = the imperfection draws per geometry, as MGN-V's num_vae_samples.
+% sample_scope geometry: one 64-sample ensemble per (geometry, condition rows) - SAR conditions
+% on nothing else, so every scene of that geometry has the same conditional distribution and
+% is credited with that ensemble. `scene` draws a fresh ensemble per scene (64x the cost).
+% Writes MGN-V's spread tail (spread_values.npz, spread_metrics.json, histogram_compare.png);
+% save_rollouts True also writes rollout_sample{sid}_vaesample{k}_steps1.h5 in MGN-V's layout.
+% spread_stat mag_max on ux,uy,uz: max total displacement max|u|, as the MGN-V ex3 runs.
+
+model                            sar
+mode                             inference
+gpu_ids                          0
+split_seed                       42
+split_group_attr                 shape_idx
+dataset_dir                      ../../dataset/probabilistic/ex3_shell_buckling.h5
+infer_dataset                    ../../dataset/probabilistic/ex3_shell_buckling_infer.h5
+vae_modelpath                    ../../output/b300_r4/sar_3x4/vae.pth
+modelpath                        ../../output/b300_r4/sar_3x4/model.pth
+log_file_dir                     ../../output/b300_r4/sar_3x4/infer.log
+inference_output_dir             ../../output/b300_r4/sar_3x4/infer
+output_var                       3
+cond_var                         2
+use_node_types                   True
+dense_attention                  True
+num_samples                      64
+sample_scope                     geometry
+sample_seed                      0
+% upstream examples/Wing sampling notebook: flow-matching steps per scale, coarse -> fine
+sample_steps                     20, 11, 2
+sample_batch_size                8
+eval_dataset                     ../../dataset/probabilistic/ex3_shell_buckling_infer.h5
+spread_channel                   0, 1, 2
+spread_label                     u
+spread_stat                      mag_max
+make_histogram                   True
+show_histogram                   False
+histogram_bins                   30
+save_rollouts                    False

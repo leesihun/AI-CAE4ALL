@@ -8,6 +8,7 @@ from .diagnostics import DiagnosticReport, Severity
 from .specs import (
     MethodSpec,
     build_geometry_ingest_spec,
+    build_ldgn_spec,
     build_meshgraphnets_spec,
     build_mlp_spec,
     build_neural_operator_spec,
@@ -40,6 +41,7 @@ class MethodRegistry:
             build_geometry_ingest_spec(),
             build_mlp_spec(),
             build_sar_spec(),
+            build_ldgn_spec(),
         )
         self._by_model: dict[str, MethodSpec] = {}
         for spec in self.specs:

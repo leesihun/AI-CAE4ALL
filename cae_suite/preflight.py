@@ -204,10 +204,10 @@ def _probe_dataset(
     # `evaluate` (SDFFlow) reads its held-out split from `dataset_dir` like the
     # training modes; without it here the sdf_hdf5 schema probe never runs and a
     # wrong-contract dataset only fails deep inside the native run. `train_sar`
-    # (SAR's second stage) trains on dataset_dir too.
+    # and `train_ldgn` (SAR's and LDGN's second stages) train on dataset_dir too.
     field_name = (
         "dataset_dir"
-        if result.mode in {"train", "train_vae", "train_fm", "train_sar", "evaluate"}
+        if result.mode in {"train", "train_vae", "train_fm", "train_sar", "train_ldgn", "evaluate"}
         else "infer_dataset"
     )
     path = result.resolved_paths.get(field_name)
