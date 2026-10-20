@@ -3,7 +3,7 @@
 % Question: The published Wing LDGN on ex3; the reference for the other LDGN arms.
 % Base: configs/LDGN/hyperparameter_sweep/r3/config_train_ldgn_s42.txt
 % verbatim, except the run paths (output/b300_r4/ldgn_wing/) and the change above.
-% (configs/MeshGraphNets_Variational/hyperparameter_sweep/r4/run_node.sh assigns the card; one job per card.)
+% (configs/MeshGraphNets_Variational/hyperparameter_sweep/r4/run_node.sh assigns the card.)
 % Memory and time on ex3 are not measured yet.
 %
 % probabilistic/ex3 - ldgn; LDGN (Lino, Pfaff & Thuerey, ICLR 2025) ported from tum-pbs/dgn4cfd.

@@ -4,7 +4,7 @@
 % Scores ldgn_wing on the 8 held-out geometries x 64 draws (spread_metrics.json, one histogram per geometry).
 % Base: configs/LDGN/hyperparameter_sweep/r3/config_infer_ldgn_s42.txt
 % verbatim, except the run paths (output/b300_r4/ldgn_wing/) and the sampling keys of the change above, if any (sar_num_iters only for the launcher's sample_steps check); the architecture comes from the checkpoint.
-% (configs/MeshGraphNets_Variational/hyperparameter_sweep/r4/run_node.sh assigns the card; one job per card.)
+% (configs/MeshGraphNets_Variational/hyperparameter_sweep/r4/run_node.sh assigns the card.)
 % Memory and time on ex3 are not measured yet.
 %
 % probabilistic/ex3 - ldgn; LDGN (Lino, Pfaff & Thuerey, ICLR 2025) ported from tum-pbs/dgn4cfd.

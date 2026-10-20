@@ -3,7 +3,7 @@
 % Question: Is 5.25M parameters too many for about 120 training geometries?
 % Base: configs/SAR/hyperparameter_sweep/r3/config_train_sar_s42.txt
 % verbatim, except the run paths (output/b300_r4/sar_3x4/) and the change above.
-% (configs/MeshGraphNets_Variational/hyperparameter_sweep/r4/run_node.sh assigns the card; one job per card.)
+% (configs/MeshGraphNets_Variational/hyperparameter_sweep/r4/run_node.sh assigns the card.)
 % Memory and time on ex3 are not measured yet.
 %
 % probabilistic/ex3 - sar; SAR (Lino & Thuerey 2026, arXiv:2604.11403) ported from the upstream code.

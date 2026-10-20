@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
-"""A results block short enough to retype by hand, for the B300 round-3 sweep.
+"""A results block short enough to retype by hand, for the B300 round-4 sweep.
 
     python configs/MeshGraphNets_Variational/hyperparameter_sweep/r4/brief.py         # every node that ran here
-    python configs/MeshGraphNets_Variational/hyperparameter_sweep/r4/brief.py 136     # one node
     python configs/MeshGraphNets_Variational/hyperparameter_sweep/r4/brief.py --long  # every number, not for typing
 
 Standard library only; run it with any Python 3.8+, while the jobs run or
@@ -34,7 +33,7 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.normpath(os.path.join(HERE, "..", "..", "..", ".."))
-NODES = ("135", "136", "137")
+NODES = ("135",)
 OUT_ROOT = os.path.join(REPO, "output", "b300_r4")
 EPOCH_RE = re.compile(r"^Elapsed: ([\d.]+)s Epoch (\d+)")
 # Two-stage baselines: method -> second stage. Each stage logs beside

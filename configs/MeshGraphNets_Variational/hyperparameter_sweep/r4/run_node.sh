@@ -1,14 +1,13 @@
 #!/usr/bin/env bash
-# B300 round 4: 23 jobs on three nodes, one job per card (node 135 skips its
-# GPU1, see run_135.sh). Do not call this file directly; on each node run its
-# own wrapper, from this directory:
+# B300 round 4: 18 jobs on node 135's 7 cards (GPU1 is left out, see
+# run_135.sh). Do not call this file directly; run, from this directory:
 #
-#   node 135:  bash run_135.sh   SAR x 4 (published configs) + hybrid_ch1, hybrid_prior2x, himgn_det
-#   node 136:  bash run_136.sh   LDGN x 4 (published recipes) + global_mmd, _s43, _long, _zl
-#   node 137:  bash run_137.sh   local_mmd, _s43, _long, _ch1 + hybrid_mmd, _s43, _s44, _long
+#   bash run_135.sh
 #
 # jobs.txt is the job table (node, job, method, train config, infer config);
-# README.md says what each job changes and why. Job k of a node starts on card k.
+# README.md says what each job changes and why. jobs.txt is a priority queue:
+# jobs 1-7 start at once (job k on the k-th card); each card that finishes
+# takes the next job.
 #
 # No argument and no nohup: the checks (stages 1-3) run in the terminal, and
 # when they pass the jobs go to the background on their own, so the terminal
@@ -20,7 +19,7 @@
 #
 # ORDER OF WORK
 #   1. environment  launcher python imports cae_suite; each method's
-#                   interpreter (MGN-V; SAR on 135, LDGN on 136) imports torch /
+#                   interpreter (MGN-V, SAR, LDGN) imports torch /
 #                   torch_geometric / h5py and runs a bf16 matmul and a
 #                   scatter on GPU 0; this checkout has split_group_attr.
 #   2. data         every dataset a config names exists, exact case.
@@ -39,23 +38,24 @@
 # <job>.{state,err,train_start,train_end,inferfail}, _start, _end, _abort.
 # Stdout per stage: run_logs/<node>/<job>.<train|infer|plots>.out.
 #
-# Overrides, in front of the command (GPUS="0 1 2 3" bash run_135.sh):
+# Overrides, in front of the command (GPUS="0 2 3" bash run_135.sh):
 #   PYTHON (launcher), MGNV_PYTHON, SAR_PYTHON, LDGN_PYTHON (method interpreters; default
-#   from ai_cae4all.local.toml), GPUS (default: every GPU visible),
+#   from ai_cae4all.local.toml), GPUS (run_135.sh: 0 2 3 4 5 6 7),
 #   THREADS_PER_JOB=4, PROBE_TIMEOUT=900, PREFLIGHT=1, TRAIN=1, INFER=1,
 #   DETACH=1 (0 keeps the jobs in this terminal; the default when stdout is
-#   not a terminal), JOBS="global_zl sar_wing" (a subset, in this order).
-#   Fewer GPUs than jobs also works: a card that finishes takes the next job.
+#   not a terminal), JOBS="global_zl sar_3x4" (a subset, in this order).
 # Inference-only rerun:  TRAIN=0 bash run_135.sh
 # One job again:         JOBS=hybrid_ch1 bash run_135.sh
+# End the queue early:   touch output/b300_r4/stop_135   (running jobs finish, no new
+#                        job starts; the next run deletes it)
 #
 # The script calls itself: R4_PHASE=run is the background driver (stages 4-5).
 set -uo pipefail
 
 NODE="${1:-}"
 case "$NODE" in
-    135|136|137) ;;
-    *) echo "usage: bash run_135.sh | run_136.sh | run_137.sh   (run_node.sh takes the node: 135, 136 or 137)"; exit 2 ;;
+    135) ;;
+    *) echo "usage: bash run_135.sh   (run_node.sh takes the node: 135)"; exit 2 ;;
 esac
 PHASE="${R4_PHASE:-}"
 
@@ -230,7 +230,8 @@ if [ "$PHASE" = "run" ]; then
     if [ "$TRAIN" = "1" ]; then date +%s > "$STATUS_DIR/_start"; rm -f "$STATUS_DIR/_end"; fi
     # The first round is dealt before any card starts (card s takes job s), so
     # a job that fails in seconds cannot let its card steal the next card's job.
-    # After that a card takes the next job nobody has claimed.
+    # After that a card takes the next job nobody has claimed, unless
+    # output/b300_r4/stop_<node> exists (touch it to end the queue early).
     for ((s = 0; s < NG && s < NJ; s++)); do mkdir "$QUEUE_DIR/claim_$s"; done
     pids=""
     for ((s = 0; s < NG; s++)); do
@@ -238,6 +239,7 @@ if [ "$PHASE" = "run" ]; then
         (
             [ "$s" -lt "$NJ" ] && run_job "$gpu" "$s"
             for i in "${!JOB_IDS[@]}"; do
+                [ -e "$OUT_ROOT/stop_$NODE" ] && break   # no new jobs; running ones finish
                 mkdir "$QUEUE_DIR/claim_$i" 2>/dev/null || continue
                 run_job "$gpu" "$i"
             done
@@ -274,6 +276,10 @@ if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
 fi
 rm -f "$STATUS_DIR/_abort"
 exec > >(tee -a "$MASTER_LOG") 2>&1
+if [ -e "$OUT_ROOT/stop_$NODE" ]; then
+    echo "removing $OUT_ROOT/stop_$NODE left by an earlier run (it would end this queue after the first 7 jobs)"
+    rm -f "$OUT_ROOT/stop_$NODE"
+fi
 
 die() {
     echo
