@@ -1,6 +1,6 @@
 % ex3 B300 round 4 arm global_zl: HI-MGN-V (latent_type global: one latent vector per shell)
-% Change from round 3's global_mmd: a 4x larger latent (vae_latent_dim 32 -> 128).
-% Question: The other side of zs: does a richer z widen the per-geometry spread?
+% Change from round 3's global_mmd: vae_latent_dim 32 -> 128 (3 slots x 128 = 384 latent numbers per shell, more than local_ch1's ~256).
+% Question: Capacity control with local_ch1: if local_ch1 still beats this arm, placement, not latent size, decides the score.
 % Base: configs/MeshGraphNets_Variational/hyperparameter_sweep/r3/config_train_global_mmd.txt
 % verbatim, except the run paths (output/b300_r4/global_zl/) and the change above (also in the infer config, which rebuilds the model).
 % B300 round-4 layout, shared by every MGN-V arm; fits a 24 GB card with use_checkpointing:

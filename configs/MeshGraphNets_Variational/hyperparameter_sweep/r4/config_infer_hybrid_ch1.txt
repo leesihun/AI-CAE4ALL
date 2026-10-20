@@ -1,16 +1,16 @@
-% ex3 B300 round 4 arm global_pmin: HI-MGN-V (latent_type global: one latent vector per shell)
-% Change from round 3's global_mmd: posterior_min_std 0.05 -> 0.2 (a noisier posterior: each latent coordinate can carry less).
-% Question: A rate limit on z by a different mechanism than its size: does it change calibration?
-% Scores global_pmin on the 8 held-out geometries x 64 draws (spread_metrics.json, one histogram per geometry).
-% Base: configs/MeshGraphNets_Variational/hyperparameter_sweep/r3/config_infer_global_mmd.txt
-% verbatim, except the run paths (output/b300_r4/global_pmin/) and the change above (also in the infer config, which rebuilds the model).
+% ex3 B300 round 4 arm hybrid_ch1: HI-MGN-hybrid (latent_type hybrid: global vector + per-coarse-node channels)
+% Change from round 3's hybrid_mmd: latent_ch 4 -> 1 (the local part shrinks to ~256 numbers; the global part stays 3 x 32).
+% Question: With less room in the local part, does the decoder use the global part, and does the spread widen?
+% Scores hybrid_ch1 on the 8 held-out geometries x 64 draws (spread_metrics.json, one histogram per geometry).
+% Base: configs/MeshGraphNets_Variational/hyperparameter_sweep/r3/config_infer_hybrid_mmd.txt
+% verbatim, except the run paths (output/b300_r4/hybrid_ch1/) and the change above (also in the infer config, which rebuilds the model).
 % B300 round-4 layout, shared by every MGN-V arm and changing nothing that is learned:
 % batch_size 8 x grad_accum_steps 1 (the recipe's effective 8 in one step), gpu_ids 0
 % (configs/MeshGraphNets_Variational/hyperparameter_sweep/r4/run_node.sh assigns the card; one job per card),
 % hierarchy_cache_keep False with one run-private cache per node.
 %
-% probabilistic/ex3 - latent_type ablation, arm global_mmd; paper-informed native adaptation, not an exact reproduction.
-% Arm global_mmd: latent_type global -- HI-MGN-V placement: num_z per-graph latent slots (identical to baseline/himgn_v).
+% probabilistic/ex3 - latent_type ablation, arm hybrid_mmd; paper-informed native adaptation, not an exact reproduction.
+% Arm hybrid_mmd: latent_type hybrid -- HI-MGN-hybrid placement: global slots + per-coarse-node channels, one joint coarse FM prior.
 % latent_reg mmd: MMD(q-aggregate, N(0,I)) weighted by lambda_mmd 1 (baseline regularizer).
 % Everything else is the baseline/himgn_v recipe, so the six arms differ only in these keys.
 % Dataset: shell buckling; held-out file = 8 unseen geometries x 64 imperfection draws (ex3_shell_buckling_infer.h5).
@@ -35,9 +35,9 @@ split_seed                       42
 split_group_attr                 shape_idx
 dataset_dir                      ../../dataset/probabilistic/ex3_shell_buckling.h5
 infer_dataset                    ../../dataset/probabilistic/ex3_shell_buckling_infer.h5
-modelpath                        ../../output/b300_r4/global_pmin/model.pth
-log_file_dir                     ../../output/b300_r4/global_pmin/infer.log
-inference_output_dir             ../../output/b300_r4/global_pmin/infer
+modelpath                        ../../output/b300_r4/hybrid_ch1/model.pth
+log_file_dir                     ../../output/b300_r4/hybrid_ch1/infer.log
+inference_output_dir             ../../output/b300_r4/hybrid_ch1/infer
 infer_timesteps                  1
 input_var                        3
 output_var                       3
@@ -90,13 +90,15 @@ use_vae                          True
 vae_latent_dim                   32
 vae_mp_layers                    3
 vae_graph_aware                  True
-latent_type                      global
+latent_type                      hybrid
+latent_ch                        1
+vae_local_mp_layers              2
 latent_reg                       mmd
 recon_loss                       mse
 alpha_recon                      1000
 lambda_mmd                       1
 mmd_bandwidth                    median
-posterior_min_std                0.2
+posterior_min_std                0.05
 beta_aux                         10
 z_conditioning                   adaln
 use_conditional_prior            True

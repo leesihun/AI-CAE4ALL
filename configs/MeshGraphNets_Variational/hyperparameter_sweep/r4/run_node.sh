@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# B300 round 4: 24 jobs on three 8-GPU nodes, one job per card. Do not call
-# this file directly; on each node run its own wrapper, from this directory:
+# B300 round 4: 23 jobs on three nodes, one job per card (node 135 skips its
+# GPU1, see run_135.sh). Do not call this file directly; on each node run its
+# own wrapper, from this directory:
 #
-#   node 135:  bash run_135.sh     SAR x 6 (published configs)  + HI-MGN-V global_zs, global_zl
-#   node 136:  bash run_136.sh     LDGN x 6 (published configs) + HI-MGN-V global_prior2x, global_pmin
-#   node 137:  bash run_137.sh     HI-MGNflow (local) x 4 + HI-MGN-hybrid x 4: zs, zl, prior2x, pmin
+#   node 135:  bash run_135.sh   SAR x 4 (published configs) + hybrid_ch1, hybrid_prior2x, himgn_det
+#   node 136:  bash run_136.sh   LDGN x 4 (published recipes) + global_mmd, _s43, _long, _zl
+#   node 137:  bash run_137.sh   local_mmd, _s43, _long, _ch1 + hybrid_mmd, _s43, _s44, _long
 #
 # jobs.txt is the job table (node, job, method, train config, infer config);
 # README.md says what each job changes and why. Job k of a node starts on card k.
@@ -23,8 +24,8 @@
 #                   torch_geometric / h5py and runs a bf16 matmul and a
 #                   scatter on GPU 0; this checkout has split_group_attr.
 #   2. data         every dataset a config names exists, exact case.
-#   3. --check      the launcher's full preflight on all 16 configs, 8 at a
-#                   time (inference configs without the path layer while
+#   3. --check      the launcher's full preflight on all of the node's configs,
+#                   8 at a time (inference configs without the path layer while
 #                   their checkpoint does not exist yet).
 #   Any failure in 1-3 aborts before a GPU-hour is spent, says why, and
 #   prints a one-line block to type back.
@@ -43,10 +44,10 @@
 #   from ai_cae4all.local.toml), GPUS (default: every GPU visible),
 #   THREADS_PER_JOB=4, PROBE_TIMEOUT=900, PREFLIGHT=1, TRAIN=1, INFER=1,
 #   DETACH=1 (0 keeps the jobs in this terminal; the default when stdout is
-#   not a terminal), JOBS="global_zs sar_wing" (a subset, in this order).
+#   not a terminal), JOBS="global_zl sar_wing" (a subset, in this order).
 #   Fewer GPUs than jobs also works: a card that finishes takes the next job.
 # Inference-only rerun:  TRAIN=0 bash run_135.sh
-# One job again:         JOBS=global_zs bash run_135.sh
+# One job again:         JOBS=hybrid_ch1 bash run_135.sh
 #
 # The script calls itself: R4_PHASE=run is the background driver (stages 4-5).
 set -uo pipefail

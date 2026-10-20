@@ -1,8 +1,8 @@
-% ex3 B300 round 4 arm local_pmin: HI-MGNflow (latent_type local: latent_ch channels per coarsest V-cycle node)
-% Change from round 3's local_mmd: posterior_min_std 0.05 -> 0.2 (a noisier posterior: each latent coordinate can carry less).
-% Question: A rate limit on z by a different mechanism than its size: does it change calibration?
+% ex3 B300 round 4 arm local_ch1: HI-MGNflow (latent_type local: latent_ch channels per coarsest V-cycle node)
+% Change from round 3's local_mmd: latent_ch 4 -> 1 (~256 latent numbers per shell instead of ~1024).
+% Question: Capacity control with global_zl; also, does a smaller coarse latent let the prior keep the nodes coherent (the per-geometry spread was too narrow)?
 % Base: configs/MeshGraphNets_Variational/hyperparameter_sweep/r3/config_train_local_mmd.txt
-% verbatim, except the run paths (output/b300_r4/local_pmin/) and the change above (also in the infer config, which rebuilds the model).
+% verbatim, except the run paths (output/b300_r4/local_ch1/) and the change above (also in the infer config, which rebuilds the model).
 % B300 round-4 layout, shared by every MGN-V arm; fits a 24 GB card with use_checkpointing:
 % batch_size 4 x grad_accum_steps 1 (effective batch 4, NOT the recipe's 2 x 4 = 8; global MMD sees 4 rows), gpu_ids 0
 % (configs/MeshGraphNets_Variational/hyperparameter_sweep/r4/run_node.sh assigns the card; one job per card),
@@ -32,9 +32,9 @@ split_seed                       42
 split_group_attr                 shape_idx
 dataset_dir                      ../../dataset/probabilistic/ex3_shell_buckling.h5
 infer_dataset                    ../../dataset/probabilistic/ex3_shell_buckling_infer.h5
-modelpath                        ../../output/b300_r4/local_pmin/model.pth
-log_file_dir                     ../../output/b300_r4/local_pmin/train.log
-inference_output_dir             ../../output/b300_r4/local_pmin/infer
+modelpath                        ../../output/b300_r4/local_ch1/model.pth
+log_file_dir                     ../../output/b300_r4/local_ch1/train.log
+inference_output_dir             ../../output/b300_r4/local_ch1/infer
 infer_timesteps                  1
 input_var                        3
 output_var                       3
@@ -90,14 +90,14 @@ vae_latent_dim                   32
 vae_mp_layers                    3
 vae_graph_aware                  True
 latent_type                      local
-latent_ch                        4
+latent_ch                        1
 vae_local_mp_layers              2
 latent_reg                       mmd
 recon_loss                       mse
 alpha_recon                      1000
 lambda_mmd                       1
 mmd_bandwidth                    median
-posterior_min_std                0.2
+posterior_min_std                0.05
 beta_aux                         10
 z_conditioning                   adaln
 use_conditional_prior            True

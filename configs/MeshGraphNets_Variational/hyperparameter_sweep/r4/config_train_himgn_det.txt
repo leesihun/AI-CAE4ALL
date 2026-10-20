@@ -1,15 +1,15 @@
-% ex3 B300 round 4 arm local_zl: HI-MGNflow (latent_type local: latent_ch channels per coarsest V-cycle node)
-% Change from round 3's local_mmd: a 4x larger latent (latent_ch 4 -> 16).
-% Question: The other side of zs: does a richer z widen the per-geometry spread?
-% Base: configs/MeshGraphNets_Variational/hyperparameter_sweep/r3/config_train_local_mmd.txt
-% verbatim, except the run paths (output/b300_r4/local_zl/) and the change above (also in the infer config, which rebuilds the model).
+% ex3 B300 round 4 arm himgn_det: deterministic HI-MGN (global_mmd with the latent removed, use_vae False)
+% Change from round 3's himgn_det: none, rerun as is (round 4 adds the loss plots and the per-geometry histograms).
+% Question: How far is a deterministic prediction (the conditional mean) from the 64 FE results?
+% Base: configs/MeshGraphNets_Variational/hyperparameter_sweep/r3/config_train_himgn_det.txt
+% verbatim, except the run paths (output/b300_r4/himgn_det/) and the change above (also in the infer config, which rebuilds the model).
 % B300 round-4 layout, shared by every MGN-V arm; fits a 24 GB card with use_checkpointing:
 % batch_size 4 x grad_accum_steps 1 (effective batch 4, NOT the recipe's 2 x 4 = 8; global MMD sees 4 rows), gpu_ids 0
 % (configs/MeshGraphNets_Variational/hyperparameter_sweep/r4/run_node.sh assigns the card; one job per card),
 % hierarchy_cache_keep False with one run-private cache per node.
 %
-% probabilistic/ex3 - latent_type ablation, arm local_mmd; paper-informed native adaptation, not an exact reproduction.
-% Arm local_mmd: latent_type local -- HI-MGNflow placement: latent_ch channels per coarsest V-cycle node, coarse GNN FM prior.
+% probabilistic/ex3 - latent_type ablation, arm global_mmd; paper-informed native adaptation, not an exact reproduction.
+% Arm global_mmd: latent_type global -- HI-MGN-V placement: num_z per-graph latent slots (identical to baseline/himgn_v).
 % latent_reg mmd: MMD(q-aggregate, N(0,I)) weighted by lambda_mmd 1 (baseline regularizer).
 % Everything else is the baseline/himgn_v recipe, so the six arms differ only in these keys.
 % Dataset: shell buckling, 150 geometries x 64 imperfection draws (ex3_shell_buckling.h5).
@@ -32,9 +32,9 @@ split_seed                       42
 split_group_attr                 shape_idx
 dataset_dir                      ../../dataset/probabilistic/ex3_shell_buckling.h5
 infer_dataset                    ../../dataset/probabilistic/ex3_shell_buckling_infer.h5
-modelpath                        ../../output/b300_r4/local_zl/model.pth
-log_file_dir                     ../../output/b300_r4/local_zl/train.log
-inference_output_dir             ../../output/b300_r4/local_zl/infer
+modelpath                        ../../output/b300_r4/himgn_det/model.pth
+log_file_dir                     ../../output/b300_r4/himgn_det/train.log
+inference_output_dir             ../../output/b300_r4/himgn_det/infer
 infer_timesteps                  1
 input_var                        3
 output_var                       3
@@ -82,31 +82,7 @@ hierarchy_cache_keep             False
 hierarchy_cache_dir              ../../output/b300_r4/mscache/mgnv_v4096_256
 hierarchy_cache_build_workers    8
 training_seed                    42
-best_by                          crps
-num_vae_samples                  16
-vae_batch_size                   16
-use_vae                          True
-vae_latent_dim                   32
-vae_mp_layers                    3
-vae_graph_aware                  True
-latent_type                      local
-latent_ch                        16
-vae_local_mp_layers              2
-latent_reg                       mmd
+best_by                          recon
+use_vae                          False
 recon_loss                       mse
-alpha_recon                      1000
-lambda_mmd                       1
-mmd_bandwidth                    median
-posterior_min_std                0.05
-beta_aux                         10
-z_conditioning                   adaln
-use_conditional_prior            True
-prior_type                       gnn_e2e
-prior_family                     fm
-prior_mp_layers                  3
-prior_hidden_dim                 128
-prior_nll_weight                 1
-prior_grad_to_encoder            0.0
-prior_fm_steps                   30
-prior_fm_solver                  heun
-prior_freeze_epoch               80
+use_conditional_prior            False

@@ -1,9 +1,9 @@
-% ex3 B300 round 4 arm ldgn_wing_ae200: LDGN baseline (ported dgn4cfd code).
-% Change from round 3's ldgn_s42: vae_lr_patience 250 -> 200 (the released Wing AE checkpoint; the script says 250).
-% Question: Minor: the released autoencoder's schedule.
-% Scores ldgn_wing_ae200 on the 8 held-out geometries x 64 draws (spread_metrics.json, one histogram per geometry).
+% ex3 B300 round 4 arm ldgn_wing: LDGN baseline (ported dgn4cfd code).
+% Change from round 3's ldgn_s42: none, rerun as is (Wing as checked in, seed 42).
+% Question: The published Wing LDGN on ex3; the reference for the other LDGN arms.
+% Scores ldgn_wing on the 8 held-out geometries x 64 draws (spread_metrics.json, one histogram per geometry).
 % Base: configs/LDGN/hyperparameter_sweep/r3/config_infer_ldgn_s42.txt
-% verbatim, except the run paths (output/b300_r4/ldgn_wing_ae200/) and the sampling keys of the change above, if any (sar_num_iters only for the launcher's sample_steps check); the architecture comes from the checkpoint.
+% verbatim, except the run paths (output/b300_r4/ldgn_wing/) and the sampling keys of the change above, if any (sar_num_iters only for the launcher's sample_steps check); the architecture comes from the checkpoint.
 % (configs/MeshGraphNets_Variational/hyperparameter_sweep/r4/run_node.sh assigns the card; one job per card.)
 % Memory and time on ex3 are not measured yet.
 %
@@ -29,9 +29,9 @@ split_seed                       42
 split_group_attr                 shape_idx
 dataset_dir                      ../../dataset/probabilistic/ex3_shell_buckling.h5
 infer_dataset                    ../../dataset/probabilistic/ex3_shell_buckling_infer.h5
-modelpath                        ../../output/b300_r4/ldgn_wing_ae200/model.pth
-log_file_dir                     ../../output/b300_r4/ldgn_wing_ae200/infer.log
-inference_output_dir             ../../output/b300_r4/ldgn_wing_ae200/infer
+modelpath                        ../../output/b300_r4/ldgn_wing/model.pth
+log_file_dir                     ../../output/b300_r4/ldgn_wing/infer.log
+inference_output_dir             ../../output/b300_r4/ldgn_wing/infer
 output_var                       3
 cond_var                         2
 use_node_types                   True

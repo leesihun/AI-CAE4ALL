@@ -1,11 +1,10 @@
-% ex3 B300 round 4 arm hybrid_pmin: HI-MGN-hybrid (latent_type hybrid: global vector + per-coarse-node channels)
-% Change from round 3's hybrid_mmd: posterior_min_std 0.05 -> 0.2 (a noisier posterior: each latent coordinate can carry less).
-% Question: A rate limit on z by a different mechanism than its size: does it change calibration?
-% Scores hybrid_pmin on the 8 held-out geometries x 64 draws (spread_metrics.json, one histogram per geometry).
-% Base: configs/MeshGraphNets_Variational/hyperparameter_sweep/r3/config_infer_hybrid_mmd.txt
-% verbatim, except the run paths (output/b300_r4/hybrid_pmin/) and the change above (also in the infer config, which rebuilds the model).
-% B300 round-4 layout, shared by every MGN-V arm and changing nothing that is learned:
-% batch_size 8 x grad_accum_steps 1 (the recipe's effective 8 in one step), gpu_ids 0
+% ex3 B300 round 4 arm hybrid_long: HI-MGN-hybrid (latent_type hybrid: global vector + per-coarse-node channels)
+% Change from round 3's hybrid_long: none, rerun as is (round 4 adds the loss plots and the per-geometry histograms); training_epochs 240, prior_freeze_epoch 160.
+% Question: Is 120 epochs too short?
+% Base: configs/MeshGraphNets_Variational/hyperparameter_sweep/r3/config_train_hybrid_long.txt
+% verbatim, except the run paths (output/b300_r4/hybrid_long/) and the change above (also in the infer config, which rebuilds the model).
+% B300 round-4 layout, shared by every MGN-V arm; fits a 24 GB card with use_checkpointing:
+% batch_size 4 x grad_accum_steps 1 (effective batch 4, NOT the recipe's 2 x 4 = 8; global MMD sees 4 rows), gpu_ids 0
 % (configs/MeshGraphNets_Variational/hyperparameter_sweep/r4/run_node.sh assigns the card; one job per card),
 % hierarchy_cache_keep False with one run-private cache per node.
 %
@@ -13,31 +12,29 @@
 % Arm hybrid_mmd: latent_type hybrid -- HI-MGN-hybrid placement: global slots + per-coarse-node channels, one joint coarse FM prior.
 % latent_reg mmd: MMD(q-aggregate, N(0,I)) weighted by lambda_mmd 1 (baseline regularizer).
 % Everything else is the baseline/himgn_v recipe, so the six arms differ only in these keys.
-% Dataset: shell buckling; held-out file = 8 unseen geometries x 64 imperfection draws (ex3_shell_buckling_infer.h5).
+% Dataset: shell buckling, 150 geometries x 64 imperfection draws (ex3_shell_buckling.h5).
 % Field storage order (0-based): input -> output -> conditioner -> partNo.
 % input [0:3]: x_coord, y_coord, z_coord (nominal, pre-imperfection)
 % output/state [3:6]: ux, uy, uz
 % conditioner [6:8]: thickness, delta (applied end shortening)
 % partNo [8]: node type (0 interior, 1 clamped rim, 2 loaded rim) -> use_node_types
 % Static (T=1) problem: the state input is zero and the model predicts the field in one step.
+% The one-to-many spread comes from the imperfection draw, which the model never sees.
 % Reference: https://arxiv.org/abs/1706.02262
-% No source HDF5 writes. Checkpoints are created by the paired training config.
-% num_vae_samples is draws PER held-out scene. Set to 64 = the imperfection draws per geometry,
-% so each scene's ensemble is as large as the ground-truth set of its geometry.
-% spread_stat mag_max on ux,uy,uz: the max total displacement max|u| (= attr max_deform) separates
-% buckled from unbuckled draws; one component alone moves with the buckle's orientation.
+% split_group_attr keeps all 64 draws of a geometry in one split (no sibling leakage).
+% No source HDF5 writes. Checkpoints are created by this training config.
 
 model                            meshgraphnets-v
-mode                             inference
+mode                             train
 gpu_ids                          0
 parallel_mode                    ddp
 split_seed                       42
 split_group_attr                 shape_idx
 dataset_dir                      ../../dataset/probabilistic/ex3_shell_buckling.h5
 infer_dataset                    ../../dataset/probabilistic/ex3_shell_buckling_infer.h5
-modelpath                        ../../output/b300_r4/hybrid_pmin/model.pth
-log_file_dir                     ../../output/b300_r4/hybrid_pmin/infer.log
-inference_output_dir             ../../output/b300_r4/hybrid_pmin/infer
+modelpath                        ../../output/b300_r4/hybrid_long/model.pth
+log_file_dir                     ../../output/b300_r4/hybrid_long/train.log
+inference_output_dir             ../../output/b300_r4/hybrid_long/infer
 infer_timesteps                  1
 input_var                        3
 output_var                       3
@@ -46,8 +43,8 @@ feature_loss_weights             1, 1, 1
 use_node_types                   True
 positional_features              4
 time_integration                 ar_ot
-training_epochs                  120
-batch_size                       8
+training_epochs                  240
+batch_size                       4
 learningr                        0.0001
 weight_decay                     0.0001
 warmup_epochs                    5
@@ -82,10 +79,12 @@ mp_per_level                     2, 3, 5, 3, 2
 hierarchy_variants               2
 hierarchy_seed                   42
 hierarchy_cache_keep             False
+hierarchy_cache_dir              ../../output/b300_r4/mscache/mgnv_v4096_256
+hierarchy_cache_build_workers    8
 training_seed                    42
 best_by                          crps
-num_vae_samples                  64
-vae_batch_size                   auto
+num_vae_samples                  16
+vae_batch_size                   16
 use_vae                          True
 vae_latent_dim                   32
 vae_mp_layers                    3
@@ -98,7 +97,7 @@ recon_loss                       mse
 alpha_recon                      1000
 lambda_mmd                       1
 mmd_bandwidth                    median
-posterior_min_std                0.2
+posterior_min_std                0.05
 beta_aux                         10
 z_conditioning                   adaln
 use_conditional_prior            True
@@ -110,12 +109,4 @@ prior_nll_weight                 1
 prior_grad_to_encoder            0.0
 prior_fm_steps                   30
 prior_fm_solver                  heun
-prior_freeze_epoch               80
-eval_dataset                     ../../dataset/probabilistic/ex3_shell_buckling_infer.h5
-spread_channel                   0, 1, 2
-spread_label                     u
-spread_stat                      mag_max
-make_histogram                   True
-show_histogram                   False
-histogram_bins                   30
-save_rollouts                    False
+prior_freeze_epoch               160

@@ -1,15 +1,15 @@
-% ex3 B300 round 4 arm hybrid_pmin: HI-MGN-hybrid (latent_type hybrid: global vector + per-coarse-node channels)
-% Change from round 3's hybrid_mmd: posterior_min_std 0.05 -> 0.2 (a noisier posterior: each latent coordinate can carry less).
-% Question: A rate limit on z by a different mechanism than its size: does it change calibration?
-% Base: configs/MeshGraphNets_Variational/hyperparameter_sweep/r3/config_train_hybrid_mmd.txt
-% verbatim, except the run paths (output/b300_r4/hybrid_pmin/) and the change above (also in the infer config, which rebuilds the model).
+% ex3 B300 round 4 arm local_long: HI-MGNflow (latent_type local: latent_ch channels per coarsest V-cycle node)
+% Change from round 3's local_long: none, rerun as is (round 4 adds the loss plots and the per-geometry histograms); training_epochs 240, prior_freeze_epoch 160.
+% Question: Is 120 epochs too short? (round 2: longer training brought this placement's spread_skill .56 -> .99)
+% Base: configs/MeshGraphNets_Variational/hyperparameter_sweep/r3/config_train_local_long.txt
+% verbatim, except the run paths (output/b300_r4/local_long/) and the change above (also in the infer config, which rebuilds the model).
 % B300 round-4 layout, shared by every MGN-V arm; fits a 24 GB card with use_checkpointing:
 % batch_size 4 x grad_accum_steps 1 (effective batch 4, NOT the recipe's 2 x 4 = 8; global MMD sees 4 rows), gpu_ids 0
 % (configs/MeshGraphNets_Variational/hyperparameter_sweep/r4/run_node.sh assigns the card; one job per card),
 % hierarchy_cache_keep False with one run-private cache per node.
 %
-% probabilistic/ex3 - latent_type ablation, arm hybrid_mmd; paper-informed native adaptation, not an exact reproduction.
-% Arm hybrid_mmd: latent_type hybrid -- HI-MGN-hybrid placement: global slots + per-coarse-node channels, one joint coarse FM prior.
+% probabilistic/ex3 - latent_type ablation, arm local_mmd; paper-informed native adaptation, not an exact reproduction.
+% Arm local_mmd: latent_type local -- HI-MGNflow placement: latent_ch channels per coarsest V-cycle node, coarse GNN FM prior.
 % latent_reg mmd: MMD(q-aggregate, N(0,I)) weighted by lambda_mmd 1 (baseline regularizer).
 % Everything else is the baseline/himgn_v recipe, so the six arms differ only in these keys.
 % Dataset: shell buckling, 150 geometries x 64 imperfection draws (ex3_shell_buckling.h5).
@@ -32,9 +32,9 @@ split_seed                       42
 split_group_attr                 shape_idx
 dataset_dir                      ../../dataset/probabilistic/ex3_shell_buckling.h5
 infer_dataset                    ../../dataset/probabilistic/ex3_shell_buckling_infer.h5
-modelpath                        ../../output/b300_r4/hybrid_pmin/model.pth
-log_file_dir                     ../../output/b300_r4/hybrid_pmin/train.log
-inference_output_dir             ../../output/b300_r4/hybrid_pmin/infer
+modelpath                        ../../output/b300_r4/local_long/model.pth
+log_file_dir                     ../../output/b300_r4/local_long/train.log
+inference_output_dir             ../../output/b300_r4/local_long/infer
 infer_timesteps                  1
 input_var                        3
 output_var                       3
@@ -43,7 +43,7 @@ feature_loss_weights             1, 1, 1
 use_node_types                   True
 positional_features              4
 time_integration                 ar_ot
-training_epochs                  120
+training_epochs                  240
 batch_size                       4
 learningr                        0.0001
 weight_decay                     0.0001
@@ -89,7 +89,7 @@ use_vae                          True
 vae_latent_dim                   32
 vae_mp_layers                    3
 vae_graph_aware                  True
-latent_type                      hybrid
+latent_type                      local
 latent_ch                        4
 vae_local_mp_layers              2
 latent_reg                       mmd
@@ -97,7 +97,7 @@ recon_loss                       mse
 alpha_recon                      1000
 lambda_mmd                       1
 mmd_bandwidth                    median
-posterior_min_std                0.2
+posterior_min_std                0.05
 beta_aux                         10
 z_conditioning                   adaln
 use_conditional_prior            True
@@ -109,4 +109,4 @@ prior_nll_weight                 1
 prior_grad_to_encoder            0.0
 prior_fm_steps                   30
 prior_fm_solver                  heun
-prior_freeze_epoch               80
+prior_freeze_epoch               160

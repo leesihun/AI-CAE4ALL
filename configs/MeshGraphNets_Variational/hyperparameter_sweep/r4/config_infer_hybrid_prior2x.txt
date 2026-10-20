@@ -1,6 +1,6 @@
 % ex3 B300 round 4 arm hybrid_prior2x: HI-MGN-hybrid (latent_type hybrid: global vector + per-coarse-node channels)
-% Change from round 3's hybrid_mmd: a 2x wider and 2x deeper conditional prior (prior_hidden_dim 128 -> 256, prior_mp_layers 3 -> 6, prior_fm_blocks 4 -> 8).
-% Question: Per-geometry spread is drawn from the learned prior: is the prior network the limit (round 3: every placement too narrow per geometry, skill ~0.4)?
+% Change from round 3's hybrid_mmd: a 2x wider and 2x deeper joint prior (prior_hidden_dim 128 -> 256, prior_mp_layers 3 -> 6, prior_fm_blocks 4 -> 8).
+% Question: The joint prior's global token is what couples the coarse nodes: is its capacity the limit on the per-geometry spread?
 % Scores hybrid_prior2x on the 8 held-out geometries x 64 draws (spread_metrics.json, one histogram per geometry).
 % Base: configs/MeshGraphNets_Variational/hyperparameter_sweep/r3/config_infer_hybrid_mmd.txt
 % verbatim, except the run paths (output/b300_r4/hybrid_prior2x/) and the change above (also in the infer config, which rebuilds the model).

@@ -1,8 +1,8 @@
-% ex3 B300 round 4 arm ldgn_eflow_s43: LDGN baseline (ported dgn4cfd code).
-% Change from round 3's ldgn_s42: ldgn_eflow + training_seed 43.
-% Question: Seed spread of the EllipseFlow recipe.
+% ex3 B300 round 4 arm ldgn_wing: LDGN baseline (ported dgn4cfd code).
+% Change from round 3's ldgn_s42: none, rerun as is (Wing as checked in, seed 42).
+% Question: The published Wing LDGN on ex3; the reference for the other LDGN arms.
 % Base: configs/LDGN/hyperparameter_sweep/r3/config_train_ldgn_s42.txt
-% verbatim, except the run paths (output/b300_r4/ldgn_eflow_s43/) and the change above.
+% verbatim, except the run paths (output/b300_r4/ldgn_wing/) and the change above.
 % (configs/MeshGraphNets_Variational/hyperparameter_sweep/r4/run_node.sh assigns the card; one job per card.)
 % Memory and time on ex3 are not measured yet.
 %
@@ -33,15 +33,15 @@ split_seed                       42
 split_group_attr                 shape_idx
 dataset_dir                      ../../dataset/probabilistic/ex3_shell_buckling.h5
 infer_dataset                    ../../dataset/probabilistic/ex3_shell_buckling_infer.h5
-vae_modelpath                    ../../output/b300_r4/ldgn_eflow_s43/vae.pth
-modelpath                        ../../output/b300_r4/ldgn_eflow_s43/model.pth
+vae_modelpath                    ../../output/b300_r4/ldgn_wing/vae.pth
+modelpath                        ../../output/b300_r4/ldgn_wing/model.pth
 % stage logs: train_vae.log and train_ldgn.log beside this name
-log_file_dir                     ../../output/b300_r4/ldgn_eflow_s43/train.log
-inference_output_dir             ../../output/b300_r4/ldgn_eflow_s43/infer
+log_file_dir                     ../../output/b300_r4/ldgn_wing/train.log
+inference_output_dir             ../../output/b300_r4/ldgn_wing/infer
 output_var                       3
 cond_var                         2
 use_node_types                   True
-training_seed                    43
+training_seed                    42
 num_workers                      4
 % one draw of every train geometry per epoch, as upstream (one random state per system)
 draws_per_epoch                  1
@@ -64,19 +64,19 @@ vae_fnns_width                   126
 vae_latent_features              1
 vae_aggr                         sum
 vae_dropout                      0.1
-vae_norm_latents                 False
+vae_norm_latents                 True
 vae_kl_reg                       1e-6
 vae_batch_size                   2
 vae_grad_accum                   16
 vae_learningr                    1e-4
 vae_lr_factor                    0.1
-vae_lr_patience                  50
+vae_lr_patience                  250
 vae_lr_threshold                 1e-8
 vae_training_epochs              3000
 
 % ---- stage 2: LDGN over the frozen VGAE (upstream examples/Wing/train_ldgn.py)
 % 6 coarsening levels in all: the VGAE's 3, then the denoiser's 4 from the VGAE's coarsest.
-ldgn_depths                      1, 2, 2
+ldgn_depths                      1, 2, 2, 2
 ldgn_fnns_depth                  2
 ldgn_fnns_width                  128
 ldgn_aggr                        sum
@@ -90,12 +90,11 @@ ldgn_batch_size                  2
 ldgn_grad_accum                  16
 ldgn_learningr                   1e-4
 ldgn_lr_factor                   0.1
-ldgn_lr_patience                 50
+ldgn_lr_patience                 250
 ldgn_lr_threshold                1e-8
 ldgn_training_epochs             5000
 
 % ---- periodic sample picture (test_interval); upstream Wing notebook: 50 of 1000 steps
 sample_steps                     50
-rel_pos_ratios                   1, 2, 4, 8, 16
 sample_step_schedule             linear
 sample_batch_size                8
