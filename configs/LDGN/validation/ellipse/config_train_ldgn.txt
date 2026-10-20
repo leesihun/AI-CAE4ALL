@@ -43,6 +43,10 @@ test_interval                    200
 display_trainset                 False
 display_testset                  True
 viz_num_samples                  8
+% the periodic sample picture's statistic; the default (channels 0,1,2) needs a 3D output
+spread_channel                   0
+spread_label                     p
+spread_stat                      mag_max
 edge_attr_r                      0.04
 rel_pos_ratios                   1, 3, 7.5, 15
 % upstream grad_clip epoch 0, limit 1
