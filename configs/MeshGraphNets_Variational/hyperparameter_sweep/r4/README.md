@@ -1,8 +1,8 @@
-# B300 round 4: ex3 shell buckling, 18 jobs on node 135's 7 cards
+# B300 round 4: ex3 shell buckling, 7 jobs on node 135's 7 cards
 
 Round 4 replaces round 3; stop round 3 before starting it. Only node 135 is
-available, without its GPU1, so the run has 7 cards (0, 2–7) for SAR, LDGN
-and the three latent placements (global, local, hybrid).
+available, without its GPU1, so the run has 7 cards (0, 2–7): one job per card,
+for SAR, LDGN and the three latent placements (global, local, hybrid).
 
 Every job trains on `dataset/probabilistic/ex3_shell_buckling.h5` with round 3's
 split (`split_seed 42`, grouped by `shape_idx`). It is then scored on the 8
@@ -20,40 +20,49 @@ terminal can close. To see results, run
 `python configs/MeshGraphNets_Variational/hyperparameter_sweep/r4/brief.py`.
 [run_node.sh](run_node.sh) lists the overrides (`GPUS`, `JOBS`, `TRAIN=0`, …).
 
-## The queue
+## The 7 jobs
 
-[jobs.txt](jobs.txt) is a priority queue. Jobs 1–7 start at once, job k on
-the k-th card. After that, each card that finishes takes the next job. The
-order puts the paper's table first, and starts the long arms early because
-they set the wall clock.
+[jobs.txt](jobs.txt) lists them; job k starts on the k-th card.
 
-| # | job | starts | question |
+| # | job | card | question |
 | --- | --- | --- | --- |
-| 1 | `sar_wing` | at once, GPU 0 | the published SAR row |
-| 2 | `ldgn_wing` | at once, GPU 2 | the published LDGN row |
-| 3 | `global_mmd` | at once, GPU 3 | HI-MGN-V reference |
-| 4 | `local_mmd` | at once, GPU 4 | HI-MGNflow reference |
-| 5 | `hybrid_mmd` | at once, GPU 5 | HI-MGN-hybrid reference |
-| 6 | `local_long` | at once, GPU 6 | is 120 epochs too short? (round 2: longer training calibrated this placement) |
-| 7 | `hybrid_long` | at once, GPU 7 | is 120 epochs too short? |
-| 8 | `himgn_det` | first free card | how far is one deterministic field from the 64 FE results? |
-| 9 | `global_long` | next | is 120 epochs too short? (later than local: global's limit is the encoder) |
-| 10–12 | `hybrid_mmd_s43`, `global_mmd_s43`, `local_mmd_s43` | next | second seed: how large a difference is noise? |
-| 13–14 | `global_zl`, `local_ch1` | next | capacity control (see below) |
-| 15–16 | `hybrid_ch1`, `hybrid_prior2x` | next | does hybrid use its global part; is the joint prior's capacity the limit? |
-| 17 | `sar_3x4` | next | is SAR's 5.25M parameters too many for about 120 geometries? |
-| 18 | `ldgn_eflow` | next | does LDGN need a 6-level denoiser (EllipseFlow: 5)? |
+| 1 | `sar_wing` | GPU 0 | the published SAR row |
+| 2 | `ldgn_wing` | GPU 2 | the published LDGN row |
+| 3 | `global_mmd` | GPU 3 | HI-MGN-V reference |
+| 4 | `local_mmd` | GPU 4 | HI-MGNflow reference |
+| 5 | `hybrid_mmd` | GPU 5 | HI-MGN-hybrid reference |
+| 6 | `local_long` | GPU 6 | is 120 epochs too short? (round 2: longer training calibrated this placement) |
+| 7 | `hybrid_long` | GPU 7 | is 120 epochs too short? |
 
 **Rough wall clock**, from round 3's hours with 8 jobs per node (120 epochs:
 global about 15 h, local about 12 h; `long` about twice that). Hybrid, SAR and
-LDGN have not been timed. On that basis:
+LDGN have not been timed. On that basis the 120-epoch jobs end in about
+half a day and the two `long` jobs in about a day and a half.
 
-- jobs 1–8 (the paper table, plus the local and hybrid `long` arms) end at about
-  30 h, apart from SAR and LDGN;
-- jobs 9–16 (the MGN-V arms) end at about 2.5 days;
-- jobs 17–18 start when a card is free, after SAR's or LDGN's first run.
+## Later jobs (commented out in jobs.txt)
 
-**To end the queue early**, run `touch output/b300_r4/stop_135` from the repo
+Their configs exist and pass `--check`. Each line sits at the end of
+[jobs.txt](jobs.txt) behind a `# `. To run some of them, delete the `# ` of
+their lines and name them, or the 7 jobs above train again:
+
+```
+JOBS="himgn_det global_long" bash run_135.sh
+```
+
+With more active jobs than cards, the runner deals the first 7 and then gives
+each card that finishes the next job, in file order.
+
+| job | question |
+| --- | --- |
+| `himgn_det` | how far is one deterministic field from the 64 FE results? |
+| `global_long` | is 120 epochs too short? (global's limit is the encoder) |
+| `hybrid_mmd_s43`, `global_mmd_s43`, `local_mmd_s43` | second seed: how large a difference is noise? |
+| `global_zl`, `local_ch1` | capacity control (see below) |
+| `hybrid_ch1`, `hybrid_prior2x` | does hybrid use its global part; is the joint prior's capacity the limit? |
+| `sar_3x4` | is SAR's 5.25M parameters too many for about 120 geometries? |
+| `ldgn_eflow` | does LDGN need a 6-level denoiser (EllipseFlow: 5)? |
+
+**To end a queue early**, run `touch output/b300_r4/stop_135` from the repo
 root. Running jobs finish, and no new job starts. The next `bash run_135.sh`
 deletes the file. To kill everything now, use the PID procedure that stopped
 round 3.
@@ -84,8 +93,8 @@ Each arm tests a cause we have already measured, or measures the noise.
 - **Longer training calibrated the local placement in round 2**
   (spread_skill .56 → .99). Round 3's `long` arms did not finish, so each
   placement runs `long` again.
-- **Two seeds per placement** give the paper's placement table its own noise
-  estimate.
+- **Two seeds per placement** (the later `*_s43` jobs) give the paper's
+  placement table its own noise estimate.
 
 ## MGN-V arms
 
@@ -146,10 +155,10 @@ copy its infer config and change the key (and `inference_output_dir`):
 - MGN-V: `prior_temperature`. The per-geometry width was too narrow in round 3,
   so a temperature above 1 is the cheapest test.
 
-## What 7 cards leave out
+## Not in round 4 at all
 
-These were in the 23-job plan. With 7 cards, each would take a card for a day
-or more:
+These were in the 23-job plan and have no configs now. Each would take a card
+for a day or more:
 
 - **A third seed for hybrid** (`hybrid_mmd_s44`).
 - **`sar_wing_d8`** (8 draws per epoch, the upstream epoch length). It can take
@@ -159,8 +168,7 @@ or more:
 - **`ldgn_ellipse`** (4 levels).
 - **The regularizer arms.** They had no measurable effect in round 3.
 
-To add one, generate its configs and append it to `jobs.txt`. A job at the end
-of the queue runs when a card is free.
+To add one, generate its configs and append its line to `jobs.txt`.
 
 ## Layout
 

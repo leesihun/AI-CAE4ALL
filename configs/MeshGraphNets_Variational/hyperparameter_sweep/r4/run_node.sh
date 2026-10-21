@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# B300 round 4: 18 jobs on node 135's 7 cards (GPU1 is left out, see
-# run_135.sh). Do not call this file directly; run, from this directory:
+# B300 round 4: 7 jobs on node 135's 7 cards, one per card (GPU1 is left
+# out, see run_135.sh). Do not call this file directly; run, from this directory:
 #
 #   bash run_135.sh
 #
 # jobs.txt is the job table (node, job, method, train config, infer config);
-# README.md says what each job changes and why. jobs.txt is a priority queue:
-# jobs 1-7 start at once (job k on the k-th card); each card that finishes
-# takes the next job.
+# README.md says what each job changes and why. Job k starts on the k-th
+# card. The 11 later jobs are commented out at the end of jobs.txt; with more
+# active jobs than cards, each card that finishes takes the next one.
 #
 # No argument and no nohup: the checks (stages 1-3) run in the terminal, and
 # when they pass the jobs go to the background on their own, so the terminal
@@ -43,9 +43,10 @@
 #   from ai_cae4all.local.toml), GPUS (run_135.sh: 0 2 3 4 5 6 7),
 #   THREADS_PER_JOB=4, PROBE_TIMEOUT=900, PREFLIGHT=1, TRAIN=1, INFER=1,
 #   DETACH=1 (0 keeps the jobs in this terminal; the default when stdout is
-#   not a terminal), JOBS="global_zl sar_3x4" (a subset, in this order).
+#   not a terminal), JOBS="sar_wing ldgn_wing" (a subset, in this order).
 # Inference-only rerun:  TRAIN=0 bash run_135.sh
-# One job again:         JOBS=hybrid_ch1 bash run_135.sh
+# One job again:         JOBS=hybrid_mmd bash run_135.sh
+# A later job:           uncomment its line in jobs.txt, then JOBS=himgn_det bash run_135.sh
 # End the queue early:   touch output/b300_r4/stop_135   (running jobs finish, no new
 #                        job starts; the next run deletes it)
 #
@@ -105,7 +106,7 @@ if [ -n "${JOBS:-}" ]; then   # a subset, in the order given
     ids=(); ms=(); trs=(); ifs=()
     for j in $JOBS; do
         found=""; for i in "${!JOB_IDS[@]}"; do [ "${JOB_IDS[$i]}" = "$j" ] && found="$i"; done
-        [ -n "$found" ] || { echo "JOBS entry '$j' is not a job of node $NODE (jobs: ${JOB_IDS[*]})."; exit 2; }
+        [ -n "$found" ] || { echo "JOBS entry '$j' is not a job of node $NODE (jobs: ${JOB_IDS[*]}; a later job is a commented line in jobs.txt: uncomment it first)."; exit 2; }
         ids+=("${JOB_IDS[$found]}"); ms+=("${JOB_METHOD[$found]}")
         trs+=("${JOB_TRAIN[$found]}"); ifs+=("${JOB_INFER[$found]}")
     done
@@ -277,7 +278,7 @@ fi
 rm -f "$STATUS_DIR/_abort"
 exec > >(tee -a "$MASTER_LOG") 2>&1
 if [ -e "$OUT_ROOT/stop_$NODE" ]; then
-    echo "removing $OUT_ROOT/stop_$NODE left by an earlier run (it would end this queue after the first 7 jobs)"
+    echo "removing $OUT_ROOT/stop_$NODE left by an earlier run (it would stop the queue from taking a further job)"
     rm -f "$OUT_ROOT/stop_$NODE"
 fi
 
