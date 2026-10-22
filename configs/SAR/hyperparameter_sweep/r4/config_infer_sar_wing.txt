@@ -3,7 +3,7 @@
 % Question: The published Wing SAR on ex3; this should be the paper's SAR row.
 % Scores sar_wing on the 8 held-out geometries x 64 draws (spread_metrics.json, one histogram per geometry).
 % Base: configs/SAR/hyperparameter_sweep/r3/config_infer_sar_s42.txt
-% verbatim, except the run paths (output/b300_r4/sar_wing/) and the sampling keys of the change above, if any (sar_num_iters only for the launcher's sample_steps check); the architecture comes from the checkpoint.
+% verbatim, except the run paths (output/b300_r4/sar_wing/) and the sampling keys of the change above, if any (sar_num_iters only for the launcher's sample_steps check; target_scaling only to check the checkpoint's); the architecture comes from the checkpoint.
 % (configs/MeshGraphNets_Variational/hyperparameter_sweep/r4/run_node.sh assigns the card.)
 % Memory and time on ex3 are not measured yet.
 %
@@ -14,7 +14,7 @@
 % conditioner [6:8]: thickness, delta -> glob; partNo [8]: node type -> loc one-hot.
 % Checkpoints come from the paired training config; architecture and normalization are read
 % from them, so only the sampling keys below matter here.
-% num_samples 64 = the imperfection draws per geometry, as MGN-V's num_vae_samples.
+% num_samples 64 = the imperfection draws per geometry, as MGN-V's inference_samples.
 % sample_scope geometry: one 64-sample ensemble per (geometry, condition rows) - SAR conditions
 % on nothing else, so every scene of that geometry has the same conditional distribution and
 % is credited with that ensemble. `scene` draws a fresh ensemble per scene (64x the cost).

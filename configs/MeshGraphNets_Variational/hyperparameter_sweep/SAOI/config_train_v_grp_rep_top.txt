@@ -40,7 +40,7 @@ infer_timesteps	1   # Inference timesteps
 split_seed	42  # Seed for the deterministic 80/10/10 random split
 split_group_attr	geometry_id  # every realization of one geometry lands in one split: validation (best_by crps) sees only unseen geometries
 training_seed	20261012  # SWEPT: v_grp with another seed -- the noise floor
-num_vae_samples	10000   # Number of probabilistic generation; unused in train mode
+inference_samples	10000   # Number of probabilistic generation; unused in train mode
 
 %   Common params
 %   Dataset columns: x y z dx dy dz stress thickness Part-No -- stress,
@@ -103,7 +103,7 @@ hierarchy_cache_build_workers	8
 %   VAE (MMD-InfoVAE)
 use_vae	True  # Enable posterior encoder + stochastic latent path (variational losses)
 vae_latent_dim	16  # Posterior/global latent width (must match checkpoint)
-vae_mp_layers	5  # Posterior graph-encoder message-passing depth
+vae_encoder_mp_layers	5  # Posterior graph-encoder message-passing depth
 recon_loss	mse  # huber or mse reconstruction objective
 alpha_recon	1000  # Reconstruction-loss multiplier
 lambda_mmd	1  # Aggregate-posterior MMD loss multiplier

@@ -154,7 +154,7 @@ is linked to and flags a required input that is not, and the settings in
 between are labelled in words with the raw config key beside them. Prose rows
 that describe a block rather than configure it (`split`, `viewer`, `metrics`…)
 are not shown, and an Inference block hides the knobs its linked family cannot
-read (`infer_chunk_size` is Transolver-only, `num_vae_samples` MeshGraphNets-V-only;
+read (`infer_chunk_size` is Transolver-only, `inference_samples` MeshGraphNets-V-only;
 the `flow_*` keys of the retired HI-MGNflow route apply to no live family)
 unless you filled one in.
 
@@ -207,13 +207,13 @@ checked-in train config for the route (`PRESET_SOURCES` in
 memory switches. Paths, `opt_*`, seeds, epoch budgets and their schedules,
 `*_interval` cadence, the data contract (`input_var`/`output_var`/`cond_var`,
 node types, positional features, rollout) and dataset-tuned values
-(`kl_weight`, `num_vae_samples`) stay the block's own, and mesh-sized values
+(`kl_weight`, `inference_samples`) stay the block's own, and mesh-sized values
 (`voronoi_clusters`, FNO grid/modes, DeepONet sensor grid) are filled only when
 the block has none — a flat block switched to a hierarchy gets `voronoi_clusters
 512, 64`, the HI-MGN preset's ex9 value, not the source mesh's count. A value
 equal to the block's own (`1e-6` and `0.000001`) is not listed as a change. Low
 VRAM also sets `batch_size 1` where the recipe or the block runs more, and on
-MGN-V `vae_batch_size 1` (trajectories rolled out together —
+MGN-V `inference_batch_size 1` (trajectories rolled out together —
 memory and speed only); SDFFlow and SimulGen-VAE keep their stage batch sizes
 as the source has them. For MeshGraphNets both presets are the HI-MGN recipe: activations are
 checkpointed per GnBlock, so memory follows the full-resolution block count

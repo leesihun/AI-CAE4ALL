@@ -147,7 +147,7 @@ def _train_worker_inner(rank, world_size, config, gpu_ids, config_filename):
         num_workers=num_workers,
         pin_memory=pin_memory,
         persistent_workers=num_workers > 0,
-        prefetch_factor=4 if num_workers > 0 else None,
+        prefetch_factor=int(config.get('prefetch_factor', 4)) if num_workers > 0 else None,
         multiprocessing_context=mp_context,
     )
 

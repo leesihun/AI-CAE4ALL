@@ -147,6 +147,11 @@ def check_normalization_matches(stats, config, source):
     if bool(stats['use_node_types']) != want_types:
         raise ValueError(f'{source} was trained with use_node_types {stats["use_node_types"]}, '
                          f'config says {want_types}')
+    if config.get('target_scaling') is not None:
+        trained = stats.get('target_scaling', 'minmax')
+        want = md.target_scaling(config)
+        if trained != want:
+            raise ValueError(f'{source} was trained with target_scaling {trained}, config says {want}')
     if config.get('rel_pos_ratios') is not None:
         trained = list(stats.get('rel_pos_ratios') or md.REL_POS_RATIOS)
         want = md.config_rel_pos_ratios(config)

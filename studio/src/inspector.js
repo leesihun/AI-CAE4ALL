@@ -476,7 +476,7 @@ const KEY_LABELS = {
   lc_modelpath: "LC checkpoint", output_dir: "Output folder",
   training_epochs: "Epochs", vae_training_epochs: "VAE epochs", fm_training_epochs: "Flow epochs",
   lc_training_epochs: "LC epochs", sar_training_epochs: "SAR epochs", ldgn_training_epochs: "LDGN epochs", batch_size: "Batch size",
-  vae_batch_size: "VAE batch size", fm_batch_size: "Flow batch size", sar_batch_size: "SAR batch size", ldgn_batch_size: "LDGN batch size",
+  vae_batch_size: "VAE batch size", inference_batch_size: "Inference batch size", fm_batch_size: "Flow batch size", sar_batch_size: "SAR batch size", ldgn_batch_size: "LDGN batch size",
   lc_batch_size: "LC batch size", learningr: "Learning rate", vae_learningr: "VAE learning rate",
   fm_learningr: "Flow learning rate", lc_learningr: "LC learning rate", sar_learningr: "SAR learning rate", ldgn_learningr: "LDGN learning rate",
   num_samples: "Samples to generate", ode_steps: "ODE steps", mc_resolution: "Mesh resolution",
@@ -485,7 +485,7 @@ const KEY_LABELS = {
   opt_stress_margin: "Stress margin (× baseline)", opt_fea_verify: "FEA re-check",
   infer_timesteps: "Rollout steps", inference_output_dir: "Results folder", num_workers: "Loader workers",
   infer_chunk_size: "Node chunk", infer_query_chunk_size: "Query chunk",
-  num_vae_samples: "Ensemble draws", reader: "Reader", mesh_type: "Mesh type", emit: "Writes",
+  inference_samples: "Ensemble draws", reader: "Reader", mesh_type: "Mesh type", emit: "Writes",
   num_fields: "Field rows", num_points: "Points per sample", resample_method: "Resampling",
   mesh_size_min: "Min element size", mesh_size_max: "Max element size",
   output_dataset: "Output dataset", limit: "File limit", export_label: "Export name",
@@ -538,8 +538,8 @@ function isStatementRow(node, key) {
 const INFERENCE_KEY_FAMILIES = {
   infer_chunk_size: ["transolver"],
   infer_query_chunk_size: ["fno", "deeponet", "point_deeponet"],
-  num_vae_samples: ["meshgraphnets-v"],
-  vae_batch_size: ["meshgraphnets-v"],
+  inference_samples: ["meshgraphnets-v"],
+  inference_batch_size: ["meshgraphnets-v"],
   num_samples: ["sar", "ldgn"],
   flow_steps: [], flow_solver: [], flow_predict: []
 };

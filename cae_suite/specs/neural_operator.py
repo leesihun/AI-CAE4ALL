@@ -74,7 +74,7 @@ NO_REMOVED_KEYS = frozenset(
         "message_passing_num", "latent_dim", "edge_var", "world_radius_multiplier",
         "world_max_num_neighbors", "world_edge_backend", "coarse_world_edges",
         "multiscale_levels", "mp_per_level", "coarsening_type", "voronoi_clusters",
-        "coarse_cache_per_worker", "use_vae", "vae_latent_dim", "vae_mp_layers",
+        "coarse_cache_per_worker", "use_vae", "vae_latent_dim", "vae_mp_layers", "vae_encoder_mp_layers",
         "vae_graph_aware", "free_bits", "posterior_min_std", "lambda_mmd",
         "lambda_kl", "lambda_det",
     }

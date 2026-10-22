@@ -1,8 +1,8 @@
 # B300 round 4 job table: node job method train_config infer_config
 # Job k starts on the k-th card. run_node.sh, brief.py and ../plots.py read this file.
 # Round 4 runs the first 7 jobs, one per card.
-135 sar_wing sar configs/SAR/hyperparameter_sweep/r4/config_train_sar_wing.txt configs/SAR/hyperparameter_sweep/r4/config_infer_sar_wing.txt
-135 ldgn_wing ldgn configs/LDGN/hyperparameter_sweep/r4/config_train_ldgn_wing.txt configs/LDGN/hyperparameter_sweep/r4/config_infer_ldgn_wing.txt
+135 sar_wing_std sar configs/SAR/hyperparameter_sweep/r4/config_train_sar_wing_std.txt configs/SAR/hyperparameter_sweep/r4/config_infer_sar_wing_std.txt
+135 ldgn_wing_std ldgn configs/LDGN/hyperparameter_sweep/r4/config_train_ldgn_wing_std.txt configs/LDGN/hyperparameter_sweep/r4/config_infer_ldgn_wing_std.txt
 135 global_mmd mgnv configs/MeshGraphNets_Variational/hyperparameter_sweep/r4/config_train_global_mmd.txt configs/MeshGraphNets_Variational/hyperparameter_sweep/r4/config_infer_global_mmd.txt
 135 local_mmd mgnv configs/MeshGraphNets_Variational/hyperparameter_sweep/r4/config_train_local_mmd.txt configs/MeshGraphNets_Variational/hyperparameter_sweep/r4/config_infer_local_mmd.txt
 135 hybrid_mmd mgnv configs/MeshGraphNets_Variational/hyperparameter_sweep/r4/config_train_hybrid_mmd.txt configs/MeshGraphNets_Variational/hyperparameter_sweep/r4/config_infer_hybrid_mmd.txt
@@ -12,6 +12,7 @@
 # Later, not run now (their configs exist and pass --check). To run some of them,
 # delete the leading '# ' of their lines and name them, or every job above trains again:
 #   JOBS="himgn_det global_long" bash run_135.sh
+# sar_wing / ldgn_wing (last) are the upstream min/max scaling, for reference.
 # 135 himgn_det mgnv configs/MeshGraphNets_Variational/hyperparameter_sweep/r4/config_train_himgn_det.txt configs/MeshGraphNets_Variational/hyperparameter_sweep/r4/config_infer_himgn_det.txt
 # 135 global_long mgnv configs/MeshGraphNets_Variational/hyperparameter_sweep/r4/config_train_global_long.txt configs/MeshGraphNets_Variational/hyperparameter_sweep/r4/config_infer_global_long.txt
 # 135 hybrid_mmd_s43 mgnv configs/MeshGraphNets_Variational/hyperparameter_sweep/r4/config_train_hybrid_mmd_s43.txt configs/MeshGraphNets_Variational/hyperparameter_sweep/r4/config_infer_hybrid_mmd_s43.txt
@@ -21,5 +22,7 @@
 # 135 local_ch1 mgnv configs/MeshGraphNets_Variational/hyperparameter_sweep/r4/config_train_local_ch1.txt configs/MeshGraphNets_Variational/hyperparameter_sweep/r4/config_infer_local_ch1.txt
 # 135 hybrid_ch1 mgnv configs/MeshGraphNets_Variational/hyperparameter_sweep/r4/config_train_hybrid_ch1.txt configs/MeshGraphNets_Variational/hyperparameter_sweep/r4/config_infer_hybrid_ch1.txt
 # 135 hybrid_prior2x mgnv configs/MeshGraphNets_Variational/hyperparameter_sweep/r4/config_train_hybrid_prior2x.txt configs/MeshGraphNets_Variational/hyperparameter_sweep/r4/config_infer_hybrid_prior2x.txt
-# 135 sar_3x4 sar configs/SAR/hyperparameter_sweep/r4/config_train_sar_3x4.txt configs/SAR/hyperparameter_sweep/r4/config_infer_sar_3x4.txt
-# 135 ldgn_eflow ldgn configs/LDGN/hyperparameter_sweep/r4/config_train_ldgn_eflow.txt configs/LDGN/hyperparameter_sweep/r4/config_infer_ldgn_eflow.txt
+# 135 sar_3x4_std sar configs/SAR/hyperparameter_sweep/r4/config_train_sar_3x4_std.txt configs/SAR/hyperparameter_sweep/r4/config_infer_sar_3x4_std.txt
+# 135 ldgn_eflow_std ldgn configs/LDGN/hyperparameter_sweep/r4/config_train_ldgn_eflow_std.txt configs/LDGN/hyperparameter_sweep/r4/config_infer_ldgn_eflow_std.txt
+# 135 sar_wing sar configs/SAR/hyperparameter_sweep/r4/config_train_sar_wing.txt configs/SAR/hyperparameter_sweep/r4/config_infer_sar_wing.txt
+# 135 ldgn_wing ldgn configs/LDGN/hyperparameter_sweep/r4/config_train_ldgn_wing.txt configs/LDGN/hyperparameter_sweep/r4/config_infer_ldgn_wing.txt

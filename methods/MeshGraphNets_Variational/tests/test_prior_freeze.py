@@ -58,7 +58,7 @@ def _config(dataset_path):
         "edge_var": 8, "positional_features": 0, "use_node_types": False,
         "use_world_edges": False, "use_multiscale": False, "augment_geometry": False,
         "std_noise": 0.0, "latent_dim": 16, "message_passing_num": 1,
-        "use_vae": True, "vae_latent_dim": 4, "vae_mp_layers": 1,
+        "use_vae": True, "vae_latent_dim": 4, "vae_encoder_mp_layers": 1,
         "recon_loss": "mse", "alpha_recon": 1.0, "lambda_mmd": 0.2, "beta_aux": 0.0,
         "prior_type": "gnn_e2e", "use_conditional_prior": True, "prior_family": "fm",
         "prior_hidden_dim": 16, "prior_mp_layers": 1, "prior_fm_steps": 4,

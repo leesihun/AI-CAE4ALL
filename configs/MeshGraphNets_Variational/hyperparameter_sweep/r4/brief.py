@@ -6,18 +6,23 @@
 
 Standard library only; run it with any Python 3.8+, while the jobs run or
 after. It reads jobs.txt for the jobs of each node, each training config for
-where the job writes, then the spread_metrics.json that inference leaves in
-the job's infer/ directory (the 8 held-out ex3 geometries x 64 draws).
+where the job writes, then what inference and ../plots.py leave in the job's
+infer/ directory (the 8 held-out ex3 geometries x 64 FE results each):
+spread_w2.json for the ranking, spread_metrics.json for crps.
 Every number is x100 and rounded, so "23" is 0.23.
 
 Header   R4 <node> <h>h D<done>/<jobs> F<failed>
-Line     job  w1 sd bias crps skill h
-    w1    = w1_norm       (distribution distance / truth sd; 0 is perfect)
-    sd    = sd_ratio      (generated width / true width; 100 is right)
-    bias  = dmean_norm    (signed mean offset / truth sd; negative = generated mean below truth)
-    crps  = crps_norm
-    skill = spread_skill
+Line     job  w2 b s shape sdg crps h
+    Per geometry, each over that geometry's own FE sd, then the root mean
+    square over the 8 geometries, so w2^2 = b^2 + s^2 + shape^2:
+    w2    = W2 between the draws and the FE results (the ranking; 0 is perfect)
+    b     = mean offset
+    s     = width error, |sd_ratio - 1|
+    shape = what is left once mean and width match
+    sdg   = geometric mean of the sd ratios (100 is right; below = too narrow)
+    crps  = crps_norm (pooled, from spread_metrics.json)
     h     = training hours
+    "-" in the W2 columns: plots.py has not run on that job yet.
 A failure appends F:<stage> and the first error line. A job still training
 prints "run NN%" (epochs done over the configured total; SAR and LDGN print
 their stage and epoch, "vae e120" / "sar e40" / "ldgn e300", since their epoch
@@ -204,9 +209,17 @@ def node_block(node, rows, long):
         m = metrics(os.path.join(job.infer_dir, "spread_metrics.json")) or {}
         if long and m:
             print(f"  {job.jid:<16} " + " ".join(f"{k}={v:.4f}" for k, v in sorted(m.items())))
+        w2 = {}
+        try:
+            with open(os.path.join(job.infer_dir, "spread_w2.json"), encoding="utf-8") as fh:
+                w2 = json.load(fh).get("summary", {})
+        except (OSError, ValueError):
+            pass
+        if long and w2:
+            print(f"  {job.jid:<16} " + " ".join(f"{k}={v:.4f}" for k, v in sorted(w2.items())))
         h = job.hours()
-        cols = [x100(m.get("w1_norm")), x100(m.get("sd_ratio")), x100(m.get("dmean_norm")),
-                x100(m.get("crps_norm")), x100(m.get("spread_skill")),
+        cols = [x100(w2.get("w2")), x100(w2.get("bias")), x100(w2.get("sd_gap")),
+                x100(w2.get("shape")), x100(w2.get("sd_ratio_geomean")), x100(m.get("crps_norm")),
                 f"{h:.0f}" if h is not None else "-"]
         lines.append(f"{job.jid} " + " ".join(cols) + job.flags())
     h = run_hours(status_dir)

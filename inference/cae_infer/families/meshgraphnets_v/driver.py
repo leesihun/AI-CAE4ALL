@@ -2,7 +2,7 @@
 `methods/MeshGraphNets_Variational/inference_profiles/rollout.py`'s `run_rollout`.
 CPU-only: no gpu_ids branch, and the CUDA-only auto-VRAM VAE-batch-sizing /
 OOM-retry logic is dropped (the native code itself falls back to
-`vae_batch_size=1` whenever `device.type != 'cuda'`, so this bundle simply
+`inference_batch_size=1` whenever `device.type != 'cuda'`, so this bundle simply
 always takes that path). The eval-dataset z_disp spread-histogram feature
 (matplotlib, `eval_dataset` ground-truth compare, `os.startfile` viewer) is
 diagnostic/plotting tooling, not part of the rollout contract -- dropped
@@ -259,6 +259,9 @@ def run(checkpoint: str, input: str, output: str, device: torch.device,
         print("  prior_family: gmm (implied by pre-FM checkpoint)")
     for k, v in model_config.items():
         config[k] = v
+    # Checkpoints saved before 2026-10-22 spell this key vae_mp_layers.
+    if "vae_mp_layers" in config:
+        config["vae_encoder_mp_layers"] = config.pop("vae_mp_layers")
     print(f"  Model config loaded from checkpoint: {sorted(model_config)}")
 
     if config.get("use_node_types") and norm.get("num_node_types"):
@@ -287,8 +290,8 @@ def run(checkpoint: str, input: str, output: str, device: torch.device,
     # those are advanced together in one batched forward pass. The native
     # rollout only auto-sizes/grows this batch on CUDA; on CPU it always
     # falls back to 1, so this bundle (CPU-only) does the same by default.
-    num_vae_samples = int(_ignored.get("num_vae_samples", 1)) if use_vae else 1
-    vae_batch_size = max(1, int(_ignored.get("vae_batch_size", 1))) if use_vae else 1
+    inference_samples = int(_ignored.get("inference_samples", _ignored.get("num_vae_samples", 1))) if use_vae else 1
+    inference_batch_size = max(1, int(_ignored.get("inference_batch_size", _ignored.get("vae_batch_size", 1)))) if use_vae else 1
 
     conditional_prior = None
     if use_vae and use_conditional_prior:
@@ -305,8 +308,8 @@ def run(checkpoint: str, input: str, output: str, device: torch.device,
                                  f"({conditional_prior.num_components} components, temp={prior_temperature:g})")
         else:
             sampler_desc = "N(0, I)"
-        print(f"  VAE sampling: {num_vae_samples} sample(s) per scene "
-              f"(z_dim={vae_latent_dim}, batch_size={vae_batch_size}, prior={sampler_desc})")
+        print(f"  VAE sampling: {inference_samples} sample(s) per scene "
+              f"(z_dim={vae_latent_dim}, batch_size={inference_batch_size}, prior={sampler_desc})")
 
     input_dim = config.get("input_var")
     output_dim = config.get("output_var")
@@ -364,7 +367,7 @@ def run(checkpoint: str, input: str, output: str, device: torch.device,
         )
 
         def _run_batch(batch_start, requested_batch_size):
-            B = min(requested_batch_size, num_vae_samples - batch_start)
+            B = min(requested_batch_size, inference_samples - batch_start)
             states = [initial_state.copy() for _ in range(B)]
             all_states = np.zeros((B, steps + 1, num_nodes, output_dim), dtype=np.float32)
             for b in range(B):
@@ -407,8 +410,8 @@ def run(checkpoint: str, input: str, output: str, device: torch.device,
 
         batch_start = 0
         batch_counter = 0
-        while batch_start < num_vae_samples:
-            requested_batch_size = min(vae_batch_size, num_vae_samples - batch_start)
+        while batch_start < inference_samples:
+            requested_batch_size = min(inference_batch_size, inference_samples - batch_start)
             if use_vae:
                 batch_counter += 1
                 print(f"  batch {batch_counter}: z-samples "
@@ -418,7 +421,7 @@ def run(checkpoint: str, input: str, output: str, device: torch.device,
 
             for b in range(B):
                 vae_idx = batch_start + b
-                if num_vae_samples > 1:
+                if inference_samples > 1:
                     filename = f"rollout_sample{sample_id}_vaesample{vae_idx}_steps{steps}.h5"
                 else:
                     filename = f"rollout_sample{sample_id}_steps{steps}.h5"
@@ -433,7 +436,7 @@ def run(checkpoint: str, input: str, output: str, device: torch.device,
 
             batch_start += B
 
-    total_outputs = len(sample_ids) * num_vae_samples
+    total_outputs = len(sample_ids) * inference_samples
     print(f"\nInference complete. Processed {len(sample_ids)} scene(s) x "
-          f"{num_vae_samples} VAE sample(s) = {total_outputs} output file(s).")
+          f"{inference_samples} VAE sample(s) = {total_outputs} output file(s).")
     return last_path

@@ -1,9 +1,9 @@
-% ex3 B300 round 4 arm ldgn_eflow: LDGN baseline (ported dgn4cfd code).
-% Change from round 3's ldgn_s42: EllipseFlow recipe: ldgn_depths 1, 2, 2 (5 levels), vae_norm_latents False, rel_pos_ratios 1, 2, 4, 8, 16, patience 50 / 50.
-% Question: How deep does the denoiser need to be (Wing 6 levels, EllipseFlow 5)?
-% Scores ldgn_eflow on the 8 held-out geometries x 64 draws (spread_metrics.json, one histogram per geometry).
+% ex3 B300 round 4 arm ldgn_wing_std: LDGN baseline (ported dgn4cfd code).
+% Change from round 3's ldgn_s42: ldgn_wing + target_scaling minmax -> standard (per-channel train mean/std; minmax, upstream ScaleAttr, is the default).
+% Question: The Wing LDGN with our target scaling; the LDGN row we compare. Under min/max the lateral channels' draw-to-draw variation carried a small share of the VAE loss and the VAE flattened them (ldgn_wing, 2026-10-21): does z-scoring recover it?
+% Scores ldgn_wing_std on the 8 held-out geometries x 64 draws (spread_metrics.json, one histogram per geometry).
 % Base: configs/LDGN/hyperparameter_sweep/r3/config_infer_ldgn_s42.txt
-% verbatim, except the run paths (output/b300_r4/ldgn_eflow/) and the sampling keys of the change above, if any (sar_num_iters only for the launcher's sample_steps check); the architecture comes from the checkpoint.
+% verbatim, except the run paths (output/b300_r4/ldgn_wing_std/) and the sampling keys of the change above, if any (sar_num_iters only for the launcher's sample_steps check; target_scaling only to check the checkpoint's); the architecture comes from the checkpoint.
 % (configs/MeshGraphNets_Variational/hyperparameter_sweep/r4/run_node.sh assigns the card.)
 % Memory and time on ex3 are not measured yet.
 %
@@ -14,7 +14,7 @@
 % conditioner [6:8]: thickness, delta -> glob; partNo [8]: node type -> loc one-hot.
 % The checkpoint comes from the paired training config and carries the frozen VGAE (arch and
 % weights) and the normalization, so only the sampling keys below matter here.
-% num_samples 64 = the imperfection draws per geometry, as MGN-V's num_vae_samples.
+% num_samples 64 = the imperfection draws per geometry, as MGN-V's inference_samples.
 % sample_scope geometry: one 64-sample ensemble per (geometry, condition rows) - LDGN conditions
 % on nothing else, so every scene of that geometry has the same conditional distribution and
 % is credited with that ensemble. `scene` draws a fresh ensemble per scene (64x the cost).
@@ -29,12 +29,15 @@ split_seed                       42
 split_group_attr                 shape_idx
 dataset_dir                      ../../dataset/probabilistic/ex3_shell_buckling.h5
 infer_dataset                    ../../dataset/probabilistic/ex3_shell_buckling_infer.h5
-modelpath                        ../../output/b300_r4/ldgn_eflow/model.pth
-log_file_dir                     ../../output/b300_r4/ldgn_eflow/infer.log
-inference_output_dir             ../../output/b300_r4/ldgn_eflow/infer
+modelpath                        ../../output/b300_r4/ldgn_wing_std/model.pth
+log_file_dir                     ../../output/b300_r4/ldgn_wing_std/infer.log
+inference_output_dir             ../../output/b300_r4/ldgn_wing_std/infer
 output_var                       3
 cond_var                         2
 use_node_types                   True
+% target_scaling: minmax (upstream ScaleAttr, [-1, 1]) is the default; standard
+% (train-split mean/std per channel) is our deviation, see the method README.
+target_scaling                   standard
 num_samples                      64
 sample_scope                     geometry
 sample_seed                      0

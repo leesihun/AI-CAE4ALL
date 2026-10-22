@@ -16,8 +16,12 @@ are that geometry's FEA draws. What the model is given, per node:
 
 and what it generates:
 
-    target  rows 3:3+output_var at the final timestep, each channel
-            min/max-scaled to [-1, 1] over the train split (upstream ScaleAttr)
+    target  rows 3:3+output_var at the final timestep, each channel scaled
+            over the train split as `target_scaling` says: `minmax` (the
+            default, upstream ScaleAttr) maps it to [-1, 1]; `standard` (a
+            deviation, see README) subtracts the mean and divides by the
+            standard deviation. The decoder ends in a linear layer, so z-scores
+            outside [-1, 1] are reachable.
 
 Nothing else in the file is read. In particular the top-level `latent` group
 and every metadata attribute except the grouping one (ex3 stores the hidden
@@ -140,6 +144,7 @@ def _bidirectional_edges(mesh_edge, num_nodes):
 
 def compute_normalization(config, train_groups, log=print):
     """Train-split statistics; stored in every checkpoint and reused verbatim."""
+    scaling = target_scaling(config)
     h5_path = config['dataset_dir']
     t0 = time.time()
     with h5py.File(h5_path, 'r') as f:
@@ -178,11 +183,18 @@ def compute_normalization(config, train_groups, log=print):
         # Field rows: every train draw (a min/max must see the extremes).
         f_lo = np.full(len(field_rows), np.inf)
         f_hi = np.full(len(field_rows), -np.inf)
+        t_sum = np.zeros(len(target_rows))
+        t_sq = np.zeros(len(target_rows))
+        t_count = 0
         n_read = 0
         for sids in train_groups.values():
             for sid in sids:
                 nodal = _nodal(f, sid)
                 block = nodal[target_rows[0]:target_rows[-1] + 1, -1, :]
+                t = block.astype(np.float64)
+                t_sum += t.sum(axis=1)
+                t_sq += np.square(t).sum(axis=1)
+                t_count += t.shape[1]
                 if cond_rows:
                     # Conditions at t=0, as MGN-V reads them (input-only rows).
                     block = np.concatenate([block, nodal[cond_rows[0]:cond_rows[-1] + 1, 0, :]], axis=0)
@@ -191,6 +203,8 @@ def compute_normalization(config, train_groups, log=print):
                 n_read += 1
 
     out = len(target_rows)
+    t_mean = t_sum / t_count
+    t_std = np.sqrt(np.maximum(t_sq / t_count - np.square(t_mean), 0.0))
     r = config.get('edge_attr_r', 'auto')
     edge_r = 0.5 * mean_edge if str(r).lower() == 'auto' else float(r)
     stats = {
@@ -198,6 +212,9 @@ def compute_normalization(config, train_groups, log=print):
         'pos_scale': scale,
         'target_min': [float(v) for v in f_lo[:out]],
         'target_max': [float(v) for v in f_hi[:out]],
+        'target_scaling': scaling,
+        'target_mean': [float(v) for v in t_mean],
+        'target_std': [float(v) for v in t_std],
         'cond_min': [float(v) for v in f_lo[out:]],
         'cond_max': [float(v) for v in f_hi[out:]],
         'node_types': sorted(types),
@@ -211,7 +228,8 @@ def compute_normalization(config, train_groups, log=print):
     log(f'Normalization from {len(train_groups)} train systems / {n_read} draws '
         f'({time.time() - t0:.1f}s): pos centre {np.round(center, 4).tolist()} scale {scale:.4g}; '
         f'mean edge {mean_edge:.4g} -> r {edge_r:.4g}; target min {np.round(f_lo[:out], 6).tolist()} '
-        f'max {np.round(f_hi[:out], 6).tolist()}; node types {stats["node_types"]}')
+        f'max {np.round(f_hi[:out], 6).tolist()} mean {np.round(t_mean, 6).tolist()} '
+        f'std {np.round(t_std, 6).tolist()} (target_scaling {scaling}); node types {stats["node_types"]}')
     return stats
 
 
@@ -229,13 +247,38 @@ def _minmax(values, vmin, vmax):
     return np.where(span > 0, out, 0.0)
 
 
+TARGET_SCALINGS = ('minmax', 'standard')   # minmax (upstream ScaleAttr) is the default
+
+
+def target_scaling(config):
+    """`target_scaling` from the config: `minmax` (default) or `standard`."""
+    value = str(config.get('target_scaling', 'minmax')).lower()
+    if value not in TARGET_SCALINGS:
+        raise ValueError(f"target_scaling must be one of {', '.join(TARGET_SCALINGS)}; got {value!r}")
+    return value
+
+
+def _target_mean_std(stats):
+    """Per-channel train mean and std; a constant channel divides by 1 (maps to 0)."""
+    mean = np.asarray(stats['target_mean'], dtype=np.float64)
+    std = np.asarray(stats['target_std'], dtype=np.float64)
+    return mean, np.where(std > 0, std, 1.0)
+
+
 def normalize_target(values, stats):
-    """[N, out] physical -> [-1, 1]."""
+    """[N, out] physical -> model units ([-1, 1] for minmax, z-scores for standard)."""
+    # Checkpoints written before `target_scaling` existed are min/max.
+    if stats.get('target_scaling', 'minmax') == 'standard':
+        mean, std = _target_mean_std(stats)
+        return (np.asarray(values, dtype=np.float64) - mean) / std
     return _minmax(values, stats['target_min'], stats['target_max'])
 
 
 def denormalize_target(values, stats):
-    """[..., out] in [-1, 1] -> physical."""
+    """[..., out] model units -> physical (the inverse of normalize_target)."""
+    if stats.get('target_scaling', 'minmax') == 'standard':
+        mean, std = _target_mean_std(stats)
+        return np.asarray(values, dtype=np.float64) * std + mean
     vmin = np.asarray(stats['target_min'], dtype=np.float64)
     vmax = np.asarray(stats['target_max'], dtype=np.float64)
     return (np.asarray(values, dtype=np.float64) + 1.0) * 0.5 * (vmax - vmin) + vmin

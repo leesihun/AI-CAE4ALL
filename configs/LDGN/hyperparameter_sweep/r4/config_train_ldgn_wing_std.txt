@@ -1,8 +1,8 @@
-% ex3 B300 round 4 arm ldgn_eflow: LDGN baseline (ported dgn4cfd code).
-% Change from round 3's ldgn_s42: EllipseFlow recipe: ldgn_depths 1, 2, 2 (5 levels), vae_norm_latents False, rel_pos_ratios 1, 2, 4, 8, 16, patience 50 / 50.
-% Question: How deep does the denoiser need to be (Wing 6 levels, EllipseFlow 5)?
+% ex3 B300 round 4 arm ldgn_wing_std: LDGN baseline (ported dgn4cfd code).
+% Change from round 3's ldgn_s42: ldgn_wing + target_scaling minmax -> standard (per-channel train mean/std; minmax, upstream ScaleAttr, is the default).
+% Question: The Wing LDGN with our target scaling; the LDGN row we compare. Under min/max the lateral channels' draw-to-draw variation carried a small share of the VAE loss and the VAE flattened them (ldgn_wing, 2026-10-21): does z-scoring recover it?
 % Base: configs/LDGN/hyperparameter_sweep/r3/config_train_ldgn_s42.txt
-% verbatim, except the run paths (output/b300_r4/ldgn_eflow/) and the change above.
+% verbatim, except the run paths (output/b300_r4/ldgn_wing_std/) and the change above.
 % (configs/MeshGraphNets_Variational/hyperparameter_sweep/r4/run_node.sh assigns the card.)
 % Memory and time on ex3 are not measured yet.
 %
@@ -33,14 +33,17 @@ split_seed                       42
 split_group_attr                 shape_idx
 dataset_dir                      ../../dataset/probabilistic/ex3_shell_buckling.h5
 infer_dataset                    ../../dataset/probabilistic/ex3_shell_buckling_infer.h5
-vae_modelpath                    ../../output/b300_r4/ldgn_eflow/vae.pth
-modelpath                        ../../output/b300_r4/ldgn_eflow/model.pth
+vae_modelpath                    ../../output/b300_r4/ldgn_wing_std/vae.pth
+modelpath                        ../../output/b300_r4/ldgn_wing_std/model.pth
 % stage logs: train_vae.log and train_ldgn.log beside this name
-log_file_dir                     ../../output/b300_r4/ldgn_eflow/train.log
-inference_output_dir             ../../output/b300_r4/ldgn_eflow/infer
+log_file_dir                     ../../output/b300_r4/ldgn_wing_std/train.log
+inference_output_dir             ../../output/b300_r4/ldgn_wing_std/infer
 output_var                       3
 cond_var                         2
 use_node_types                   True
+% target_scaling: minmax (upstream ScaleAttr, [-1, 1]) is the default; standard
+% (train-split mean/std per channel) is our deviation, see the method README.
+target_scaling                   standard
 training_seed                    42
 num_workers                      4
 % one draw of every train geometry per epoch, as upstream (one random state per system)
@@ -64,19 +67,19 @@ vae_fnns_width                   126
 vae_latent_features              1
 vae_aggr                         sum
 vae_dropout                      0.1
-vae_norm_latents                 False
+vae_norm_latents                 True
 vae_kl_reg                       1e-6
 vae_batch_size                   2
 vae_grad_accum                   16
 vae_learningr                    1e-4
 vae_lr_factor                    0.1
-vae_lr_patience                  50
+vae_lr_patience                  250
 vae_lr_threshold                 1e-8
 vae_training_epochs              3000
 
 % ---- stage 2: LDGN over the frozen VGAE (upstream examples/Wing/train_ldgn.py)
 % 6 coarsening levels in all: the VGAE's 3, then the denoiser's 4 from the VGAE's coarsest.
-ldgn_depths                      1, 2, 2
+ldgn_depths                      1, 2, 2, 2
 ldgn_fnns_depth                  2
 ldgn_fnns_width                  128
 ldgn_aggr                        sum
@@ -90,12 +93,11 @@ ldgn_batch_size                  2
 ldgn_grad_accum                  16
 ldgn_learningr                   1e-4
 ldgn_lr_factor                   0.1
-ldgn_lr_patience                 50
+ldgn_lr_patience                 250
 ldgn_lr_threshold                1e-8
 ldgn_training_epochs             5000
 
 % ---- periodic sample picture (test_interval); upstream Wing notebook: 50 of 1000 steps
 sample_steps                     50
-rel_pos_ratios                   1, 2, 4, 8, 16
 sample_step_schedule             linear
 sample_batch_size                8

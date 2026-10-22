@@ -6,6 +6,8 @@ import time
 import numpy as np
 import torch
 
+from general_modules import mesh_dataset as md
+
 
 def as_list(value, cast=int):
     """The config parser gives a bare scalar for one value and a list for
@@ -145,3 +147,8 @@ def check_normalization_matches(stats, config, source):
     if bool(stats['use_node_types']) != want_types:
         raise ValueError(f'{source} was trained with use_node_types {stats["use_node_types"]}, '
                          f'config says {want_types}')
+    if config.get('target_scaling') is not None:
+        trained = stats.get('target_scaling', 'minmax')
+        want = md.target_scaling(config)
+        if trained != want:
+            raise ValueError(f'{source} was trained with target_scaling {trained}, config says {want}')

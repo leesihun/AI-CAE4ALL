@@ -57,8 +57,8 @@ use_multiscale                   True
 edge_var                         8
 latent_dim                       128
 message_passing_num              28
-geometry_state_mode              displacement
-displacement_state_indices       0, 1, 2
+use_deformed_edge                True
+displacement_indices             0, 1, 2
 coarsening_type                  voronoi_seedmean
 multiscale_levels                2
 voronoi_clusters                 256, 32

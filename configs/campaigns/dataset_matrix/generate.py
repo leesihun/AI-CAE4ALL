@@ -218,13 +218,13 @@ def mesh_config(c, method):
         cfg['split_group_attr'] = c['split_group_attr']
     if method in ('meshgraphnets', 'himgn', 'himgn_v'):
         cfg.update(edge_var=8, latent_dim=128, message_passing_num=15,
-                   geometry_state_mode=c['geometry'])
+                   use_deformed_edge=(c['geometry'] == 'displacement'))
         if method in ('meshgraphnets', 'himgn'):
             cfg['weight_decay'] = 0.0  # arXiv:2010.03409 trains with plain Adam
             if c['category'] == DET and c['key'] in HIMGN_PAPER_BUDGET:
                 cfg['training_epochs'], cfg['batch_size'] = HIMGN_PAPER_BUDGET[c['key']]
         if c['indices'] is not None:
-            cfg['displacement_state_indices'] = c['indices']
+            cfg['displacement_indices'] = c['indices']
         if c['category'] == DET and c['key'] in ('ex2', 'ex5'):
             # Radius = multiplier x the MEDIAN mesh-edge length of the first ten
             # train samples (see _compute_world_edge_radius). ex2 takes 2x, a
@@ -247,8 +247,8 @@ def mesh_config(c, method):
                        mp_per_level=[4, 6, 8, 6, 4], message_passing_num=28)
         if c['category'] == PROB:
             cfg.update(positional_features=0, hierarchy_variants=2, hierarchy_seed=42,
-                       training_seed=42, best_by='crps', val_interval=10, num_vae_samples=16,
-                       vae_batch_size=16, batch_size=16, std_noise=0.0)
+                       training_seed=42, best_by='crps', val_interval=10, inference_samples=16,
+                       inference_batch_size=16, batch_size=16, std_noise=0.0)
             if c.get('periodic_box'):
                 cfg['periodic_box'] = c['periodic_box']
         if method == 'himgn_v':
@@ -260,7 +260,7 @@ def mesh_config(c, method):
             # is a biased V-statistic over the batch dimension: at batch 2 / D=32 it
             # reads 2.42 even for a perfect posterior and separates a 3x-too-wide one
             # by only 1.6 sd, so it stops regularising the aggregate posterior at all.
-            cfg.update(use_vae=True, vae_latent_dim=32, vae_mp_layers=3, vae_graph_aware=True,
+            cfg.update(use_vae=True, vae_latent_dim=32, vae_encoder_mp_layers=3, vae_graph_aware=True,
                        recon_loss='mse', alpha_recon=1000.0, lambda_mmd=1.0,
                        mmd_bandwidth='median', posterior_min_std=0.05, beta_aux=10.0,
                        z_conditioning='adaln', use_conditional_prior=True, prior_type='gnn_e2e',
@@ -545,8 +545,8 @@ def build():
             trailers = ((), ())
             if c['category'] == PROB:
                 scenes = TEST_SCENES[c['key']]
-                infer['num_vae_samples'] = scenes
-                trailers = ((), (f"num_vae_samples is draws PER held-out scene. Set to {scenes} = the "
+                infer['inference_samples'] = scenes
+                trailers = ((), (f"inference_samples is draws PER held-out scene. Set to {scenes} = the "
                                  "number of test cases in infer_dataset/eval_dataset "
                                  f"({Path(c['infer']).name}), so each scene's ensemble is as large "
                                  "as the held-out set it is scored against.",))

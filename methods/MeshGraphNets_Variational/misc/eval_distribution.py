@@ -49,6 +49,7 @@ sys.path.insert(0, REPO_ROOT)
 os.chdir(REPO_ROOT)
 
 from general_modules.load_config import load_config
+from general_modules.renamed_keys import migrate_checkpoint_config
 from general_modules.data_loader import load_data
 from inference_profiles.rollout import _load_model_from_checkpoint, _load_conditional_prior
 
@@ -140,7 +141,7 @@ def main():
 
     ck = torch.load(cfg['modelpath'], map_location=dev, weights_only=False)
     c2 = dict(cfg)
-    for k, v in ck['model_config'].items():
+    for k, v in migrate_checkpoint_config(ck['model_config']).items():
         c2[k] = v
     model = _load_model_from_checkpoint(c2, ck, dev)
 

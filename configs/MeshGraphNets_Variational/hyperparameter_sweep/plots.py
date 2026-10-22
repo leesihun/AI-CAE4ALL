@@ -21,8 +21,14 @@ Reads <round>/jobs.txt and, for each job (or the jobs named), writes:
       with the inference code's own helper. New inference runs write these
       themselves; this covers runs scored before they did. --force redraws.
 
-Then prints, per job, the per-geometry CRPS and generated/true width (x100)
-from spread_metrics_by_group.json.
+  infer/spread_w2.json, the per-geometry 1-D W2 between the FE results and
+      the draws, over that geometry's own FE sd, split exactly as
+      w2^2 = bias^2 + (sd_ratio - 1)^2 + shape^2, plus the root mean square
+      over geometries. brief.py ranks by it. Rewritten when spread_values.npz
+      is newer.
+
+Then prints, per job, the per-geometry W2 parts, CRPS and generated/true
+width (x100).
 
 Needs numpy, h5py, matplotlib and torch: run it with a method interpreter
 (the MGN-V, SAR or LDGN venv), from anywhere.
@@ -69,8 +75,9 @@ def read_jobs(sweep_dir):
         if not line.strip() or line.lstrip().startswith("#"):
             continue
         node, jid, method, tcfg, icfg = line.split()[:5]
+        # train config "-": an inference-only job on another job's checkpoint
         jobs.append(dict(node=node, job=jid, method=method,
-                         train=REPO_ROOT / tcfg, infer=REPO_ROOT / icfg))
+                         train=None if tcfg == "-" else REPO_ROOT / tcfg, infer=REPO_ROOT / icfg))
     return jobs
 
 
@@ -266,6 +273,111 @@ def job_groups(job, spread, force):
     return json.loads(by_group.read_text(encoding="utf-8"))
 
 
+def w2_parts(gt, gen):
+    """Exact 1-D W2 between two empirical samples, and its three parts.
+
+    W2^2 = (mean gap)^2 + (sd gap)^2 + shape, shape = 2 sd_gt sd_gen (1 - rho),
+    where rho correlates the two quantile functions. Moments are population
+    moments, so the identity is exact. Returns (w2^2, mean gap, sd_gen, sd_gt, shape).
+    """
+    import numpy as np
+    x = np.sort(np.asarray(gen, dtype=np.float64))
+    y = np.sort(np.asarray(gt, dtype=np.float64))
+    n, m = x.size, y.size
+    # Both quantile functions are steps; between the union of their breakpoints
+    # each is constant, so a weighted sum over those pieces is the exact integral.
+    cuts = np.union1d(np.arange(n + 1) / n, np.arange(m + 1) / m)
+    w = np.diff(cuts)
+    mid = 0.5 * (cuts[:-1] + cuts[1:])
+    qx = x[np.minimum((mid * n).astype(int), n - 1)]
+    qy = y[np.minimum((mid * m).astype(int), m - 1)]
+    mx, my = float((w * qx).sum()), float((w * qy).sum())
+    sx = math.sqrt(float((w * (qx - mx) ** 2).sum()))
+    sy = math.sqrt(float((w * (qy - my) ** 2).sum()))
+    cov = float((w * (qx - mx) * (qy - my)).sum())
+    return float((w * (qx - qy) ** 2).sum()), mx - my, sx, sy, max(2.0 * (sx * sy - cov), 0.0)
+
+
+def job_w2(job, spread, force):
+    """Per-geometry W2 / FE sd, split into bias, sd and shape; writes spread_w2.json.
+
+    Each geometry is normalized by its own FE sd, so per geometry
+    w2^2 = bias^2 + (sd - 1)^2 + shape^2. The summary takes the root mean square
+    over geometries (the same identity holds for it), plus the geometric mean of
+    the sd ratios, which keeps the direction (below 1 = too narrow).
+    """
+    cfg = cfg_values(job["infer"])
+    out_dir, attr = cfg.get("inference_output_dir"), cfg.get("split_group_attr")
+    eval_h5 = cfg.get("eval_dataset") or cfg.get("infer_dataset")
+    if not (out_dir and attr and eval_h5):
+        return None
+    out_dir = method_path(job["method"], out_dir)
+    npz, path = out_dir / "spread_values.npz", out_dir / "spread_w2.json"
+    if not npz.is_file():
+        return None
+    if path.is_file() and not force and path.stat().st_mtime >= npz.stat().st_mtime:
+        return json.loads(path.read_text(encoding="utf-8"))
+    import numpy as np
+    data = np.load(npz)
+    groups = spread._eval_dataset_groups(str(method_path(job["method"], eval_h5)), attr)
+    if not groups:
+        return None
+    gt, gen = np.asarray(data["gt"], dtype=np.float64), np.asarray(data["gen"], dtype=np.float64)
+    gt_group = np.asarray([groups.get(str(s), "") for s in data["gt_scene"]])
+    gen_group = np.asarray([groups.get(str(s), "") for s in data["gen_scene"]])
+    pooled_sd = float(gt.std()) or 1.0
+
+    def score(keep):
+        rows, skipped = {}, []
+        for value in spread._group_order(v for v in gt_group if v):
+            g, p = gt[gt_group == value], gen[keep & (gen_group == value)]
+            if not p.size:
+                continue
+            w2sq, gap, sx, sy, shape = w2_parts(g, p)
+            if g.size < 2 or sy <= 1e-9 * pooled_sd:
+                skipped.append(value)   # one FE result, or all identical: nothing to normalize by
+                continue
+            rows[value] = {"w2": math.sqrt(w2sq) / sy, "bias": gap / sy, "sd_ratio": sx / sy,
+                           "shape": math.sqrt(shape) / sy, "gt_sd_over_pooled": sy / pooled_sd,
+                           "n_gt": int(g.size), "n_gen": int(p.size)}
+        if not rows:
+            return None, rows, skipped
+
+        def rms(key, shift=0.0):
+            return math.sqrt(sum((r[key] - shift) ** 2 for r in rows.values()) / len(rows))
+
+        summary = {"w2": rms("w2"), "bias": rms("bias"), "sd_gap": rms("sd_ratio", 1.0),
+                   "shape": rms("shape"), "n_groups": len(rows),
+                   "sd_ratio_geomean": math.exp(sum(math.log(max(r["sd_ratio"], 1e-12))
+                                                    for r in rows.values()) / len(rows))}
+        return summary, rows, skipped
+
+    # A `latent_inflation` list tags every draw with its factor (gen_lam). Each
+    # factor is scored on its own; the headline is factor 1 when it was drawn.
+    lams = np.asarray(data["gen_lam"], dtype=np.float64) if "gen_lam" in data.files else None
+    every = np.ones(gen.shape, dtype=bool)
+    by_inflation = {}
+    if lams is not None and np.unique(lams).size > 1:
+        for lam in np.unique(lams):
+            s, _, _ = score(lams == lam)
+            if s:
+                by_inflation[f"{lam:g}"] = s
+        keep = (lams == 1.0) if np.any(lams == 1.0) else every
+    else:
+        keep = every
+    summary, rows, skipped = score(keep)
+    if summary is None:
+        return None
+    out = {"attr": attr, "norm": "each geometry's own FE sd",
+           "identity": "w2^2 = bias^2 + (sd_ratio - 1)^2 + shape^2 (per geometry and for the rms summary)",
+           "summary": summary, "groups": rows, "skipped_zero_sd": skipped}
+    if by_inflation:
+        out["summary_draws"] = "latent_inflation 1" if keep is not every else "every latent_inflation pooled"
+        out["by_inflation"] = by_inflation
+    path.write_text(json.dumps(out, indent=2), encoding="utf-8")
+    return out
+
+
 def shown(path):
     try:
         return path.relative_to(REPO_ROOT)
@@ -292,11 +404,11 @@ def main():
     jobs = [j for j in read_jobs(sweep_dir) if not args.jobs or j["job"] in args.jobs]
     spread = None if args.no_hist else load_spread_module()
 
-    table = []
+    table, w2_table = [], []
     for job in jobs:
-        cfg = cfg_values(job["train"])
+        cfg = cfg_values(job["train"] or job["infer"])
         out_root = method_path(job["method"], cfg.get("log_file_dir", ".")).parent.parent
-        if not args.no_loss:
+        if not args.no_loss and job["train"] is not None:
             for png in job_losses(job, out_root):
                 print(f"  {job['job']:<18} {shown(png)}")
         if spread is not None:
@@ -307,6 +419,31 @@ def main():
                 by = None
             if by:
                 table.append((job["job"], by["attr"], by["groups"]))
+            try:
+                w2 = job_w2(job, spread, args.force)
+            except Exception as exc:
+                print(f"  {job['job']}: per-geometry W2 failed: {exc}")
+                w2 = None
+            if w2:
+                w2_table.append((job["job"], w2))
+
+    if w2_table:
+        print("\nPer geometry W2 (x100, each geometry over its own FE sd; lower is better)")
+        print("  w2^2 = bias^2 + (sd - 100)^2 + shape^2;  'fe sd' = that geometry's FE sd / pooled FE sd")
+        for jid, w2 in w2_table:
+            s = w2["summary"]
+            print(f"  {jid:<18} rms w2 {fmt(s['w2'])}  bias {fmt(s['bias'])}  sd gap {fmt(s['sd_gap'])}  "
+                  f"shape {fmt(s['shape'])}  sd (geometric mean) {fmt(s['sd_ratio_geomean'])}")
+            print(f"  {'':<18} {w2['attr']:>8} {'w2':>6} {'bias':>6} {'sd':>6} {'shape':>6} {'fe sd':>6}")
+            for k, r in w2["groups"].items():
+                print(f"  {'':<18} {k:>8} {fmt(r['w2']):>6} {fmt(r['bias']):>6} {fmt(r['sd_ratio']):>6} "
+                      f"{fmt(r['shape']):>6} {fmt(r['gt_sd_over_pooled']):>6}")
+            for lam, b in w2.get("by_inflation", {}).items():
+                print(f"  {'':<18} latent_inflation {lam:>5}: w2 {fmt(b['w2'])}  bias {fmt(b['bias'])}  "
+                      f"sd gap {fmt(b['sd_gap'])}  shape {fmt(b['shape'])}  sd (geometric mean) "
+                      f"{fmt(b['sd_ratio_geomean'])}")
+            if w2.get("skipped_zero_sd"):
+                print(f"  {'':<18} skipped (one FE result, or FE sd 0): {', '.join(w2['skipped_zero_sd'])}")
 
     if table:
         print("\nPer geometry (x100): crps (lower is better) / sd (100 = right width)")

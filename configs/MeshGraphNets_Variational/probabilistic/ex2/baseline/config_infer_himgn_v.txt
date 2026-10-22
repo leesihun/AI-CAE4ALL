@@ -8,7 +8,7 @@
 % Reference: https://arxiv.org/abs/1706.02262
 % See configs/campaigns/dataset_matrix/README.md for deviations and verification boundaries.
 % No source HDF5 writes. Checkpoints are created by the paired training config.
-% num_vae_samples is draws PER held-out scene. Set to 250 = the number of test cases in infer_dataset/eval_dataset (ex2_crack_path_infer.h5), so each scene's ensemble is as large as the held-out set it is scored against.
+% inference_samples is draws PER held-out scene. Set to 250 = the number of test cases in infer_dataset/eval_dataset (ex2_crack_path_infer.h5), so each scene's ensemble is as large as the held-out set it is scored against.
 
 model                            meshgraphnets-v
 mode                             inference
@@ -55,8 +55,8 @@ use_multiscale                   True
 edge_var                         8
 latent_dim                       128
 message_passing_num              15
-geometry_state_mode              displacement
-displacement_state_indices       1, 2, -1
+use_deformed_edge                True
+displacement_indices             1, 2, -1
 coarsening_type                  voronoi_seedmean
 multiscale_levels                2
 voronoi_clusters                 4096, 256
@@ -65,11 +65,11 @@ hierarchy_variants               2
 hierarchy_seed                   42
 training_seed                    42
 best_by                          crps
-num_vae_samples                  250
-vae_batch_size                   16
+inference_samples                250
+inference_batch_size             16
 use_vae                          True
 vae_latent_dim                   32
-vae_mp_layers                    3
+vae_encoder_mp_layers            3
 vae_graph_aware                  True
 recon_loss                       mse
 alpha_recon                      1000

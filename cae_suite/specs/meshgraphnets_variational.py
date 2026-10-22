@@ -2,14 +2,14 @@ from __future__ import annotations
 
 from ..diagnostics import Severity
 from .base import MethodSpec, PathKind, PathRule, RESUME_KEYS, SpecValidationContext, integer, numeric, validate_positive_fields, validate_resume
-from .meshgraphnets import validate_meshgraphnets
+from .meshgraphnets import check_renamed_keys, validate_meshgraphnets
 
 
 # Keys consumed by the live variational runtime (traced from config[...] /
 # config.get(...) reachable from methods/MeshGraphNets_Variational/MeshGraphNets_main.py).
 VAR_KEYS = frozenset(
     {
-        "geometry_state_mode", "displacement_state_indices", "periodic_box", "write_preprocessing",
+        "use_deformed_edge", "displacement_indices", "periodic_box", "write_preprocessing",
         # Group samples by data/{sid}/metadata.attrs[<attr>] so every draw of
         # one geometry lands in the same split (general_modules/grouped_split.py).
         "split_group_attr",
@@ -75,7 +75,7 @@ VAR_KEYS = frozenset(
         # LIST of channels (`spread_channel 0, 1, 2` = total displacement).
         "spread_channel", "spread_label", "spread_stat",
         # VAE / conditional-prior branch
-        "use_vae", "vae_latent_dim", "vae_mp_layers", "vae_graph_aware",
+        "use_vae", "vae_latent_dim", "vae_encoder_mp_layers", "vae_graph_aware",
         # How z reaches the processor: 'concat' (legacy Linear([x, z]) fuser) or
         # 'adaln' (AdaLN-Zero modulation, identity at init). It changes the
         # parameter names, so a checkpoint is tied to the value it trained with.
@@ -90,10 +90,10 @@ VAR_KEYS = frozenset(
         # All-gather z across DDP ranks before MMD so the two-sample estimator
         # sees the GLOBAL batch instead of the per-rank one (default True).
         "mmd_gather_ranks",
-        "vae_batch_size", "vae_batch_size_max", "vae_batch_size_min",
-        "vae_batch_vram_fraction", "vae_valid_prior_samples", "recon_loss",
+        "inference_batch_size", "inference_batch_size_max", "inference_batch_size_min",
+        "inference_batch_vram_fraction", "vae_valid_prior_samples", "recon_loss",
         "alpha_recon", "beta_aux", "pv_channel", "lambda_mmd", "mmd_bandwidth",
-        "posterior_min_std", "num_z", "num_vae_samples", "prior_type",
+        "posterior_min_std", "num_z", "inference_samples", "prior_type",
         "use_conditional_prior", "prior_family", "prior_nll_weight",
         "prior_fm_steps", "prior_fm_solver", "prior_mp_layers", "prior_hidden_dim",
         "prior_temperature", "prior_kl_reg_weight", "prior_cov_rank",
@@ -134,8 +134,21 @@ VAR_REMOVED_KEYS = frozenset(
 )
 
 
+# Renamed on 2026-10-22 (the geometry pair is checked by validate_meshgraphnets).
+# Mirror of methods/MeshGraphNets_Variational/general_modules/renamed_keys.py.
+VAR_RENAMED_KEYS = {
+    "vae_mp_layers": "vae_encoder_mp_layers",
+    "num_vae_samples": "inference_samples",
+    "vae_batch_size": "inference_batch_size",
+    "vae_batch_size_min": "inference_batch_size_min",
+    "vae_batch_size_max": "inference_batch_size_max",
+    "vae_batch_vram_fraction": "inference_batch_vram_fraction",
+}
+
+
 def validate_variational(ctx: SpecValidationContext) -> None:
     validate_meshgraphnets(ctx)
+    check_renamed_keys(ctx, VAR_RENAMED_KEYS)
     values = ctx.values
 
     for name in sorted(VAR_REMOVED_KEYS.intersection(values)):
@@ -149,7 +162,7 @@ def validate_variational(ctx: SpecValidationContext) -> None:
         )
 
     if values.get("use_vae", False) is True:
-        for name in ("vae_latent_dim", "vae_mp_layers", "recon_loss", "vae_graph_aware"):
+        for name in ("vae_latent_dim", "vae_encoder_mp_layers", "recon_loss", "vae_graph_aware"):
             if name not in values:
                 ctx.add(
                     "MGNV-VAE-DEFAULT",
@@ -157,7 +170,7 @@ def validate_variational(ctx: SpecValidationContext) -> None:
                     f"{name} is absent while use_vae=True; the native VAE default will be used.",
                     field_name=name,
                 )
-        validate_positive_fields(ctx, ("vae_latent_dim", "vae_mp_layers"), "MGNV-VAE-POSITIVE")
+        validate_positive_fields(ctx, ("vae_latent_dim", "vae_encoder_mp_layers"), "MGNV-VAE-POSITIVE")
 
         # Same default as the runtime's resolve_prior_type (training_profiles/setup.py).
         prior_type = str(values.get("prior_type") or "gnn_e2e").lower()
@@ -300,11 +313,11 @@ def validate_variational(ctx: SpecValidationContext) -> None:
         )
 
     if ctx.mode == "inference" and values.get("use_vae", False) is True:
-        if "num_vae_samples" not in values:
-            ctx.add("MGNV-SAMPLES-DEFAULT", Severity.NOTICE, "num_vae_samples is absent; the native default of 1 will be used.", field_name="num_vae_samples")
-        elif integer(values["num_vae_samples"]) is None or integer(values["num_vae_samples"]) <= 0:
-            ctx.add("MGNV-SAMPLES-VALUE", Severity.ERROR, "num_vae_samples must be a positive integer.", field_name="num_vae_samples")
-        elif (integer(values["num_vae_samples"]) and integer(values["num_vae_samples"]) > 1000
+        if "inference_samples" not in values:
+            ctx.add("MGNV-SAMPLES-DEFAULT", Severity.NOTICE, "inference_samples is absent; the native default of 1 will be used.", field_name="inference_samples")
+        elif integer(values["inference_samples"]) is None or integer(values["inference_samples"]) <= 0:
+            ctx.add("MGNV-SAMPLES-VALUE", Severity.ERROR, "inference_samples must be a positive integer.", field_name="inference_samples")
+        elif (integer(values["inference_samples"]) and integer(values["inference_samples"]) > 1000
                 and values.get("save_rollouts", True) is not False):
             # The warning is about FILES, one per (scene, draw). With
             # save_rollouts False none are written, so a large draw count is
@@ -313,10 +326,10 @@ def validate_variational(ctx: SpecValidationContext) -> None:
             ctx.add(
                 "MGNV-SAMPLES-WORKLOAD",
                 Severity.WARNING,
-                f"num_vae_samples={values['num_vae_samples']} writes that many rollout "
+                f"inference_samples={values['inference_samples']} writes that many rollout "
                 f"HDF5s per scene. Set save_rollouts False if only the spread "
                 f"histogram is wanted.",
-                field_name="num_vae_samples",
+                field_name="inference_samples",
             )
         if "prior_temperature" in values and (numeric(values["prior_temperature"]) is None or numeric(values["prior_temperature"]) <= 0):
             ctx.add("MGNV-TEMP-001", Severity.ERROR, "prior_temperature must be > 0.", field_name="prior_temperature")

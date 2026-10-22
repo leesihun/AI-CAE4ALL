@@ -30,6 +30,7 @@ LDGN_KEYS = frozenset(
         # then cond_var input-only rows, node type in the last row)
         "dataset_dir", "infer_dataset", "eval_dataset", "split_seed", "split_group_attr",
         "output_var", "cond_var", "use_node_types", "edge_attr_r", "rel_pos_ratios",
+        "target_scaling",
         "draws_per_epoch", "val_draws_per_geometry",
         # checkpoints / artifacts
         "vae_modelpath", "modelpath", "log_file_dir", "vae_log_file_dir", "ldgn_log_file_dir",
@@ -61,6 +62,9 @@ DIFFUSION_SCHEDULES = ("linear", "cosine")      # DiffusionProcess
 STEP_SAMPLERS = ("importance", "uniform")       # TrainingSettings
 SAMPLE_STEP_SCHEDULES = ("linear", "exp")       # DiffusionStepsGenerator
 SAMPLE_SCOPES = ("geometry", "scene")
+# Mirror of methods/LDGN/general_modules/mesh_dataset.py TARGET_SCALINGS;
+# minmax (upstream ScaleAttr) is the default.
+TARGET_SCALINGS = ("minmax", "standard")
 _TRAIN_MODES = frozenset({"train", "train_vae", "train_ldgn"})
 _VAE_STAGE = ("vae_training_epochs", "vae_batch_size", "vae_learningr", "vae_lr_patience")
 _LDGN_STAGE = ("ldgn_training_epochs", "ldgn_batch_size", "ldgn_learningr", "ldgn_lr_patience")
@@ -117,6 +121,7 @@ def validate_ldgn(ctx: SpecValidationContext) -> None:
     _choice(ctx, "ldgn_step_sampler", STEP_SAMPLERS, "LDGN-SAMPLER-001")
     _choice(ctx, "sample_step_schedule", SAMPLE_STEP_SCHEDULES, "LDGN-SAMPLER-002")
     _choice(ctx, "sample_scope", SAMPLE_SCOPES, "LDGN-SCOPE-001")
+    _choice(ctx, "target_scaling", TARGET_SCALINGS, "LDGN-SCALING-001")
 
     # The linear schedule scales its betas by 1000/N and clips them at 0.999;
     # short schedules reach alpha_bar = 0 and sample NaN (methods/LDGN/README.md).
@@ -194,6 +199,7 @@ def validate_ldgn(ctx: SpecValidationContext) -> None:
 
 _TRAIN_DEFAULTS = {
     "split_seed": 42, "edge_attr_r": "auto", "draws_per_epoch": 1, "val_draws_per_geometry": 1,
+    "target_scaling": "minmax",
     "num_workers": 0, "val_interval": 10, "test_interval": 0, "grad_clip": 1.0,
     "display_testset": True,
     "display_trainset": False,

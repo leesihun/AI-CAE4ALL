@@ -27,7 +27,7 @@ FEA draws. The model learns `p(field | geometry, conditions)`.
 | `nodal_data` rows (ex3) | SAR input | handling |
 | --- | --- | --- |
 | `0:3` x, y, z at t=0 | `pos`, and `edge_attr = pos[dst] - pos[src]` on the bidirectional mesh edges | train-set centre removed; one isotropic factor (train max \|coord\|). `edge_attr` is divided by `2r` (upstream `ScaleEdgeAttr`), with `r = edge_attr_r`, `auto` = half the mean train edge length |
-| `3:3+output_var` = ux, uy, uz at the **final** timestep | `target` (generated) | per channel min/max to [-1, 1] over the train split (upstream `ScaleAttr`) |
+| `3:3+output_var` = ux, uy, uz at the **final** timestep | `target` (generated) | per channel over the train split, by `target_scaling`: `minmax` (**the default**, upstream `ScaleAttr`) maps to [-1, 1]; `standard` (a deviation, see below) subtracts the mean and divides by the standard deviation |
 | next `cond_var` rows = thickness, delta at **t=0** | `glob` | per channel min/max to [-1, 1] over the train split; 0 if constant |
 | last row = node type (0 interior, 1 clamped rim, 2 loaded rim) | `loc` one-hot | `use_node_types True` |
 
@@ -172,6 +172,16 @@ Everything below is a change in plumbing, scale or I/O.
    `general_modules/mesh_dataset.py`:
    - the mapping and normalization described above;
    - train-split min/max instead of Wing's hard-coded `vmin/vmax`;
+   - `target_scaling`, which picks how the generated field is scaled. The
+     default, `minmax`, is upstream's `ScaleAttr`. `standard` (per-channel
+     train-split mean and standard deviation, pooled over every draw and node;
+     a constant channel maps to 0) is our deviation. On ex3 the lateral
+     channels' draw-to-draw variation is small against their min/max range, so
+     under `minmax` it is a small share of the reconstruction loss and the VAE
+     can flatten it (LDGN's did in round 4). The decoder ends in a linear
+     layer, so z-scores outside [-1, 1] are reachable. The choice is stored in
+     the VAE checkpoint's `normalization` and reused by the second stage and
+     the sampler; a checkpoint without it is read as `minmax`;
    - `edge_attr_r auto` instead of Wing's fixed 0.015.
 
    A system's static graph and scale hierarchy are built once per run and

@@ -11,7 +11,7 @@
 % conditioner [6:8]: thickness, delta -> glob; partNo [8]: node type -> loc one-hot.
 % The checkpoint comes from the paired training config and carries the frozen VGAE (arch and
 % weights) and the normalization, so only the sampling keys below matter here.
-% num_samples 64 = the imperfection draws per geometry, as MGN-V's num_vae_samples.
+% num_samples 64 = the imperfection draws per geometry, as MGN-V's inference_samples.
 % sample_scope geometry: one 64-sample ensemble per (geometry, condition rows) - LDGN conditions
 % on nothing else, so every scene of that geometry has the same conditional distribution and
 % is credited with that ensemble. `scene` draws a fresh ensemble per scene (64x the cost).

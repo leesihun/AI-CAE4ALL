@@ -524,7 +524,7 @@ the bipartite `UnpoolBlock`.
   the only latent regularizer (the `gmm` prior family adds its own KL anchor,
   `prior_kl_reg_weight`); `latent_reg kl` swaps in a per-sample KL
   (`kl_weight`, default `1e-3`). Latent width/depth via
-  `vae_latent_dim`/`vae_mp_layers`.
+  `vae_latent_dim`/`vae_encoder_mp_layers`.
 - **Latent placement** (`latent_type`, persisted in `model_config`): `global`
   (default, `num_z` per-graph slots; HI-MGN-V with `use_multiscale`), `local`
   (`latent_ch` channels per coarsest-level node, a `vae_local_mp_layers`-deep
@@ -538,8 +538,8 @@ the bipartite `UnpoolBlock`.
   trained (`prior_type gnn_e2e`) in two families — a **flow-matching** prior
   (`prior_family fm`) or a **GMM** prior (`prior_family gmm`) — each with its own
   set of `prior_*` controls.
-- **Stochastic inference**: `num_vae_samples` trajectories per scene, with an
-  auto-batching path (`vae_batch_size auto` + `vae_batch_vram_fraction`) and an
+- **Stochastic inference**: `inference_samples` trajectories per scene, with an
+  auto-batching path (`inference_batch_size auto` + `inference_batch_vram_fraction`) and an
   optional inline generated-vs-ground-truth displacement-spread histogram
   (`eval_dataset`, `make_histogram`).
 - **Time integration under the VAE** (§9.1): in `ar_rt` *training* the

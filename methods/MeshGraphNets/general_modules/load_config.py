@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 from general_modules.removed_feature_guard import validate_config
+from general_modules.renamed_keys import check_config_file
 
 # Values for these keys are filesystem paths and keep their original case;
 # every other string value is still lowercased (see parse_value). Mirrored in
@@ -52,6 +53,7 @@ def load_config(config_path):
                 config[key] = parse_value(value, preserve_case=key in PATH_KEYS)
 
     validate_config(config, config_path)
+    check_config_file(config, config_path)
     print(f"Configuration loaded with {len(config)} parameters")
 
     return config

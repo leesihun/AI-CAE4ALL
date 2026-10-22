@@ -8,6 +8,7 @@ import torch
 from torch_geometric.data import Batch, Data
 
 from general_modules.state_geometry import deformed_positions
+from general_modules.renamed_keys import migrate_checkpoint_config
 from general_modules.edge_features import EDGE_FEATURE_DIM, compute_edge_attr
 from general_modules.positional_features import compute_positional_features
 from general_modules.world_edges import HAS_TORCH_CLUSTER, compute_world_edges
@@ -522,7 +523,7 @@ class _SampleContext:
             # `hierarchy_seed` pins the draw. Give it a LIST and the rollout
             # builds one hierarchy per seed and rotates them across z-sample
             # batches: the partition stops being a per-scene lottery whose bad
-            # outcome poisons all num_vae_samples at once, and becomes a nuisance
+            # outcome poisons all inference_samples at once, and becomes a nuisance
             # variable the sample set marginalises over. Each trajectory records
             # the seed it used, so an outlier can be traced back to a partition.
             raw_seed = config.get('hierarchy_seed')
@@ -825,9 +826,9 @@ def run_rollout(config, config_filename='config.txt'):
             c. Denormalize delta;  state_{t+1} = state_t + delta
         3. Save all predicted timesteps to HDF5
 
-    With use_vae=True, `num_vae_samples` independent trajectories are generated
+    With use_vae=True, `inference_samples` independent trajectories are generated
     per scene, each with its own z drawn from the conditional prior (fallback:
-    N(0, I)). `vae_batch_size` trajectories are advanced together in one
+    N(0, I)). `inference_batch_size` trajectories are advanced together in one
     batched forward pass.
     """
     print("\n" + "=" * 60)
@@ -864,7 +865,7 @@ def run_rollout(config, config_filename='config.txt'):
 
     # Override config with model_config from checkpoint if available
     if 'model_config' in checkpoint:
-        model_config = checkpoint['model_config']
+        model_config = migrate_checkpoint_config(checkpoint['model_config'])
         # Back-compat: checkpoints saved before prior_family existed are all
         # Gaussian-mixture priors. Without this shim the new 'fm' default
         # would rebuild them as FM priors and state_dict loading would fail.
@@ -895,21 +896,21 @@ def run_rollout(config, config_filename='config.txt'):
     vae_latent_dim = int(config.get('vae_latent_dim', 8))
     use_conditional_prior = bool(config.get('use_conditional_prior', True))
     prior_temperature = float(config.get('prior_temperature', 1.0))
-    num_vae_samples = int(config.get('num_vae_samples', 1)) if use_vae else 1
-    raw_vae_batch_size = config.get('vae_batch_size', 1)
-    auto_vae_batch_size = (
+    inference_samples = int(config.get('inference_samples', 1)) if use_vae else 1
+    raw_inference_batch_size = config.get('inference_batch_size', 1)
+    auto_inference_batch_size = (
         use_vae
-        and isinstance(raw_vae_batch_size, str)
-        and raw_vae_batch_size.strip().lower() == 'auto'
+        and isinstance(raw_inference_batch_size, str)
+        and raw_inference_batch_size.strip().lower() == 'auto'
     )
-    if use_vae and not auto_vae_batch_size:
-        vae_batch_size = max(1, int(raw_vae_batch_size))
+    if use_vae and not auto_inference_batch_size:
+        inference_batch_size = max(1, int(raw_inference_batch_size))
     else:
-        vae_batch_size = 1
-    vae_batch_vram_fraction = float(config.get('vae_batch_vram_fraction', 0.70))
-    vae_batch_vram_fraction = min(max(vae_batch_vram_fraction, 0.01), 1.0)
-    vae_batch_size_min = max(1, int(config.get('vae_batch_size_min', 1)))
-    vae_batch_size_max = max(0, int(config.get('vae_batch_size_max', 0)))
+        inference_batch_size = 1
+    inference_batch_vram_fraction = float(config.get('inference_batch_vram_fraction', 0.70))
+    inference_batch_vram_fraction = min(max(inference_batch_vram_fraction, 0.01), 1.0)
+    inference_batch_size_min = max(1, int(config.get('inference_batch_size_min', 1)))
+    inference_batch_size_max = max(0, int(config.get('inference_batch_size_max', 0)))
 
     conditional_prior = None
     if use_vae and use_conditional_prior:
@@ -927,12 +928,12 @@ def run_rollout(config, config_filename='config.txt'):
         else:
             sampler_desc = "N(0, I)"
         batch_desc = (
-            f"auto, target={vae_batch_vram_fraction:.0%} free VRAM"
-            if auto_vae_batch_size else str(vae_batch_size)
+            f"auto, target={inference_batch_vram_fraction:.0%} free VRAM"
+            if auto_inference_batch_size else str(inference_batch_size)
         )
-        if auto_vae_batch_size and device.type != 'cuda':
+        if auto_inference_batch_size and device.type != 'cuda':
             batch_desc = "auto requested, using 1 on CPU"
-        print(f"  VAE sampling: {num_vae_samples} sample(s) per scene "
+        print(f"  VAE sampling: {inference_samples} sample(s) per scene "
               f"(z_dim={vae_latent_dim}, batch_size={batch_desc}, prior={sampler_desc})")
 
     # ---- Rollout inputs --------------------------------------------------
@@ -1055,7 +1056,7 @@ def run_rollout(config, config_filename='config.txt'):
             # Cycle the inflation list across batches; every draw in this
             # batch is tagged with it in _save_batch.
             batch_index['lam'] = latent_inflation[(batch_index['n'] - 1) % len(latent_inflation)]
-            B = min(requested_batch_size, num_vae_samples - batch_start)
+            B = min(requested_batch_size, inference_samples - batch_start)
             states = [initial_state.copy() for _ in range(B)]
             all_states = np.zeros((B, steps + 1, num_nodes, output_dim), dtype=np.float32)
             for b in range(B):
@@ -1119,7 +1120,7 @@ def run_rollout(config, config_filename='config.txt'):
                 if not save_rollouts:
                     continue
 
-                if num_vae_samples > 1:
+                if inference_samples > 1:
                     filename = f"rollout_sample{sample_id}_vaesample{vae_idx}_steps{steps}.h5"
                 else:
                     filename = f"rollout_sample{sample_id}_steps{steps}.h5"
@@ -1137,12 +1138,12 @@ def run_rollout(config, config_filename='config.txt'):
                     size_mb = os.path.getsize(output_path) / (1024 * 1024)
                     print(f"  Saved {filename}  ({size_mb:.1f} MB)")
 
-        active_vae_batch_size = vae_batch_size
+        active_inference_batch_size = inference_batch_size
         batch_start = 0
 
-        if use_vae and auto_vae_batch_size and device.type == 'cuda' and num_vae_samples > 0:
-            print(f"\nRollout: {num_vae_samples} z-sample(s) x {steps} step(s), "
-                  f"batch_size=auto (target {vae_batch_vram_fraction:.0%} of free VRAM)")
+        if use_vae and auto_inference_batch_size and device.type == 'cuda' and inference_samples > 0:
+            print(f"\nRollout: {inference_samples} z-sample(s) x {steps} step(s), "
+                  f"batch_size=auto (target {inference_batch_vram_fraction:.0%} of free VRAM)")
             print("  Auto batch probe: running z-sample 0 with batch_size=1")
             torch.cuda.empty_cache()
             torch.cuda.synchronize(device)
@@ -1165,18 +1166,18 @@ def run_rollout(config, config_filename='config.txt'):
             _save_batch(0, B, all_states, rollout_time)
             batch_start = B
 
-            remaining = num_vae_samples - batch_start
-            target_extra = int(free_after * vae_batch_vram_fraction)
+            remaining = inference_samples - batch_start
+            target_extra = int(free_after * inference_batch_vram_fraction)
             raw_choice = max(1, int(target_extra // probe_extra))
-            if vae_batch_size_max:
-                raw_choice = min(raw_choice, vae_batch_size_max)
+            if inference_batch_size_max:
+                raw_choice = min(raw_choice, inference_batch_size_max)
             if remaining > 0:
-                active_vae_batch_size = min(
+                active_inference_batch_size = min(
                     remaining,
-                    max(vae_batch_size_min, raw_choice),
+                    max(inference_batch_size_min, raw_choice),
                 )
             else:
-                active_vae_batch_size = 1
+                active_inference_batch_size = 1
 
             print("  Auto batch memory:")
             print(f"    free before probe: {_format_bytes(free_before)} / {_format_bytes(total_bytes)}")
@@ -1185,20 +1186,20 @@ def run_rollout(config, config_filename='config.txt'):
                   f"(allocated {_format_bytes(probe_extra_allocated)}, "
                   f"reserved {_format_bytes(probe_extra_reserved)})")
             print(f"    target extra:      {_format_bytes(target_extra)} "
-                  f"({vae_batch_vram_fraction:.0%} of free)")
-            print(f"    selected batch:    {active_vae_batch_size}")
+                  f"({inference_batch_vram_fraction:.0%} of free)")
+            print(f"    selected batch:    {active_inference_batch_size}")
         else:
             if use_vae:
-                if auto_vae_batch_size:
+                if auto_inference_batch_size:
                     print("\nRollout: auto VAE batch sizing requested, but CUDA is unavailable; "
                           "using batch_size=1")
-                num_batches = (num_vae_samples + active_vae_batch_size - 1) // active_vae_batch_size
-                print(f"\nRollout: {num_vae_samples} z-sample(s) x {steps} step(s), "
-                      f"batch_size={active_vae_batch_size} -> {num_batches} forward batch(es)")
+                num_batches = (inference_samples + active_inference_batch_size - 1) // active_inference_batch_size
+                print(f"\nRollout: {inference_samples} z-sample(s) x {steps} step(s), "
+                      f"batch_size={active_inference_batch_size} -> {num_batches} forward batch(es)")
 
         batch_counter = 0
-        while batch_start < num_vae_samples:
-            requested_batch_size = min(active_vae_batch_size, num_vae_samples - batch_start)
+        while batch_start < inference_samples:
+            requested_batch_size = min(active_inference_batch_size, inference_samples - batch_start)
             if use_vae:
                 batch_counter += 1
                 print(f"  batch {batch_counter}: z-samples "
@@ -1207,12 +1208,12 @@ def run_rollout(config, config_filename='config.txt'):
             try:
                 B, all_states, rollout_time = _run_batch(batch_start, requested_batch_size)
             except RuntimeError as exc:
-                if (auto_vae_batch_size and device.type == 'cuda'
+                if (auto_inference_batch_size and device.type == 'cuda'
                         and requested_batch_size > 1 and _is_cuda_oom(exc)):
                     new_batch_size = max(1, requested_batch_size // 2)
                     print(f"  CUDA OOM at batch_size={requested_batch_size}; "
                           f"retrying z-sample {batch_start} with batch_size={new_batch_size}")
-                    active_vae_batch_size = new_batch_size
+                    active_inference_batch_size = new_batch_size
                     if use_vae:
                         batch_counter -= 1
                     torch.cuda.empty_cache()
@@ -1221,9 +1222,9 @@ def run_rollout(config, config_filename='config.txt'):
             _save_batch(batch_start, B, all_states, rollout_time)
             batch_start += B
 
-    total_outputs = len(sample_ids) * num_vae_samples
+    total_outputs = len(sample_ids) * inference_samples
     print(f"\nRollout inference complete. Processed {len(sample_ids)} scene(s) x "
-          f"{num_vae_samples} VAE sample(s) = {total_outputs} output file(s).")
+          f"{inference_samples} VAE sample(s) = {total_outputs} output file(s).")
 
     # ---- z_disp spread histogram: generated vs ground-truth eval set ------
     if make_histogram:

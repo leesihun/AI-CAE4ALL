@@ -29,7 +29,7 @@ SAR_KEYS = frozenset(
         # data mapping (shared mesh HDF5: rows 3:3+output_var generated,
         # then cond_var input-only rows, node type in the last row)
         "dataset_dir", "infer_dataset", "eval_dataset", "split_seed", "split_group_attr",
-        "output_var", "cond_var", "use_node_types", "edge_attr_r",
+        "output_var", "cond_var", "use_node_types", "edge_attr_r", "target_scaling",
         "draws_per_epoch", "val_draws_per_geometry",
         # checkpoints / artifacts
         "vae_modelpath", "modelpath", "log_file_dir", "vae_log_file_dir", "sar_log_file_dir",
@@ -58,6 +58,9 @@ SAR_KEYS = frozenset(
 
 # Mirror of methods/SAR/inference_profiles/sampler.py (sample_scope).
 SAMPLE_SCOPES = ("geometry", "scene")
+# Mirror of methods/SAR/general_modules/mesh_dataset.py TARGET_SCALINGS;
+# minmax (upstream ScaleAttr) is the default.
+TARGET_SCALINGS = ("minmax", "standard")
 _TRAIN_MODES = frozenset({"train", "train_vae", "train_sar"})
 _VAE_STAGE = ("vae_training_epochs", "vae_batch_size", "vae_learningr", "vae_lr_patience")
 _SAR_STAGE = ("sar_training_epochs", "sar_batch_size", "sar_learningr", "sar_lr_patience")
@@ -107,6 +110,13 @@ def validate_sar(ctx: SpecValidationContext) -> None:
                 f"sample_scope must be one of {', '.join(SAMPLE_SCOPES)}; got {scope!r}.",
                 field_name="sample_scope")
 
+    scaling = values.get("target_scaling")
+    if scaling is not None and str(scaling).lower() not in TARGET_SCALINGS:
+        ctx.add("SAR-SCALING-001", Severity.ERROR,
+                f"target_scaling must be one of {', '.join(TARGET_SCALINGS)} (default minmax, "
+                f"upstream ScaleAttr); got {scaling!r}.",
+                field_name="target_scaling")
+
     cond_var = integer(values.get("cond_var", 0))
     if cond_var is None or cond_var < 0:
         ctx.add("SAR-COND-001", Severity.ERROR, "cond_var must be a nonnegative integer.",
@@ -150,6 +160,7 @@ def validate_sar(ctx: SpecValidationContext) -> None:
 
 _TRAIN_DEFAULTS = {
     "split_seed": 42, "edge_attr_r": "auto", "draws_per_epoch": 1, "val_draws_per_geometry": 1,
+    "target_scaling": "minmax",
     "num_workers": 0, "use_checkpointing": False, "val_interval": 10, "test_interval": 0,
     "display_testset": True,
     "display_trainset": False,

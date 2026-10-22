@@ -7,7 +7,7 @@
 %
 %   WHAT IS BEING MEASURED. The `_infer_` file is ONE part geometry. The
 %   matching `_compare_` file holds the physical realizations of that SAME
-%   part under that SAME condition. The model draws num_vae_samples from
+%   part under that SAME condition. The model draws inference_samples from
 %   p(z|graph) and rollout.py histograms the generated peak-to-valley spread
 %   against the real one, so the target width ratio is exactly 1 -- this is a
 %   calibration measurement, not an accuracy measurement.
@@ -35,7 +35,7 @@ eval_dataset	../../dataset/SAOI/test_S26FE-SEC_compare_top.h5  # its real realiz
 infer_timesteps	1  # Inference timesteps
 split_seed	42  # MUST match training: the split decides which 80% the
 %   normalizers were fit on, and those normalizers denormalize every spread.
-num_vae_samples	2000  # Stochastic prior draws per condition
+inference_samples	2000  # Stochastic prior draws per condition
 
 %   Histogram. This IS the deliverable -- rollout.py writes the GT-vs-generated
 %   PNG, spread_values.npz and the machine-readable [SPREAD] log lines itself,
@@ -55,7 +55,7 @@ positional_features	4  # Rotation-invariant node features: [centroid_dist, mean_
 
 %   Network parameters - MUST match config_train_top.txt
 message_passing_num	15  # Only used for non-multiscale modes (vanilla MeshGraphNets only)
-Batch_size	2  # per-rank training batch; unused in inference (vae_batch_size governs)
+Batch_size	2  # per-rank training batch; unused in inference (inference_batch_size governs)
 LearningR	0.0001
 Latent_dim	128  # Encoder/processor/decoder hidden width
 num_workers	4  # number of workers for dataloader
@@ -87,14 +87,14 @@ mp_per_level	4, 6, 8, 6, 4  # Message-passing blocks per level: down arm, coarse
 %   rollout builds a different Voronoi partition every run (~50% of node
 %   pairs regrouped) -- one the trained model never saw. A LIST builds one
 %   hierarchy per seed and rotates them across z-sample batches, so a bad
-%   partition can no longer poison all num_vae_samples of a scene at once.
+%   partition can no longer poison all inference_samples of a scene at once.
 %   Each output records its hierarchy_seed in /metadata for attribution.
 hierarchy_seed	0, 1, 2, 3  # Coarsening partitions to build and rotate across z-sample batches
 
 %   VAE (MMD-InfoVAE) - MUST match training
 use_vae	True  # Enable posterior encoder + stochastic latent path (variational losses)
 vae_latent_dim	16  # Posterior/global latent width (must match checkpoint)
-vae_mp_layers	5  # Posterior graph-encoder message-passing depth
+vae_encoder_mp_layers	5  # Posterior graph-encoder message-passing depth
 recon_loss	mse  # huber or mse reconstruction objective
 vae_graph_aware	True  # Include graph/input context when encoding the posterior
 

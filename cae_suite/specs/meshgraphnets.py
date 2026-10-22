@@ -19,7 +19,7 @@ from .base import (
 # config.get(...) reachable from MeshGraphNets_main.py).
 MGN_KEYS = frozenset(
     {
-        "geometry_state_mode", "displacement_state_indices", "write_preprocessing",
+        "use_deformed_edge", "displacement_indices", "write_preprocessing",
         "split_group_attr",
         "model", "mode", "gpu_ids", "parallel_mode", "log_file_dir", "modelpath",
         # Warm start: weights to initialize training from. The pretrain-one-step
@@ -57,9 +57,9 @@ MGN_KEYS = frozenset(
 # REMOVED_CONFIG_KEYS: the native loader raises on these before any HDF5 access.
 MGN_NATIVE_REMOVED_KEYS = frozenset(
     {
-        "use_vae", "vae_latent_dim", "vae_mp_layers", "vae_graph_aware", "free_bits",
+        "use_vae", "vae_latent_dim", "vae_mp_layers", "vae_encoder_mp_layers", "vae_graph_aware", "free_bits",
         "posterior_min_std", "lambda_mmd", "lambda_kl", "lambda_det", "alpha_recon",
-        "beta_aux", "num_vae_samples", "vae_valid_prior_samples", "fit_latent_gmm",
+        "beta_aux", "num_vae_samples", "inference_samples", "vae_valid_prior_samples", "fit_latent_gmm",
         "gmm_components", "gmm_covariance_type", "gmm_reg_covar",
         "train_conditional_prior", "use_conditional_prior", "prior_temperature",
         "prior_mixture_components", "prior_hidden_dim", "prior_mp_layers",
@@ -76,8 +76,8 @@ MGN_VARIATIONAL_IGNORED_KEYS = frozenset(
     {
         "recon_loss", "mmd_bandwidth", "prior_type", "prior_family",
         "prior_nll_weight", "prior_fm_steps", "prior_kl_reg_weight",
-        "prior_cov_rank", "vae_batch_size", "vae_batch_size_max",
-        "vae_batch_size_min", "vae_batch_vram_fraction", "eval_dataset",
+        "prior_cov_rank", "inference_batch_size", "inference_batch_size_max",
+        "inference_batch_size_min", "inference_batch_vram_fraction", "eval_dataset",
         "hierarchy_cache_dir", "hierarchy_cache_build_workers",
         "hierarchy_cache_wait_timeout", "hierarchy_cache_keep",
         "static_cache_per_worker",
@@ -87,8 +87,28 @@ MGN_VARIATIONAL_IGNORED_KEYS = frozenset(
 )
 
 
+# Keys renamed on 2026-10-22. Mirror of general_modules/renamed_keys.py in each
+# native repo, which refuses them in a config file; the launcher says so first.
+MGN_RENAMED_KEYS = {
+    "geometry_state_mode": "use_deformed_edge (True = displacement, False = fixed)",
+    "displacement_state_indices": "displacement_indices",
+}
+
+
+def check_renamed_keys(ctx: SpecValidationContext, renamed: dict) -> None:
+    for old in sorted(set(renamed).intersection(ctx.values)):
+        ctx.add(
+            "CFG-RENAMED-001",
+            Severity.ERROR,
+            f"{old} was renamed to {renamed[old]}; the native loader refuses the old name.",
+            field_name=old,
+            hint=f"Replace the key with {renamed[old].split(' ')[0]}.",
+        )
+
+
 def validate_meshgraphnets(ctx: SpecValidationContext) -> None:
     validate_common_values(ctx)
+    check_renamed_keys(ctx, MGN_RENAMED_KEYS)
     values = ctx.values
     if "edge_var" in values and integer(values["edge_var"]) != 8:
         ctx.add(

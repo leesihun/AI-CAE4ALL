@@ -15,7 +15,7 @@ manufactured objects that **share mesh topology** but differ in physical outputs
 to **production variability** (warpage, residual stress spread), it learns the
 **distribution** of outputs, not a single answer. At inference it can **generate many
 distinct, physically plausible variants** for the same input mesh — potentially more
-samples than existed in training (`num_vae_samples`).
+samples than existed in training (`inference_samples`).
 
 It does this by wrapping the [MGN / HI-MGN](02_HI-MGN.md) simulator in a
 **conditional VAE (cVAE)**: a graph latent `z` captures the sample-to-sample spread,
@@ -113,7 +113,7 @@ the static (`T = 1`) case:
    input `x` and fuse (`node_fuse`), so `z` encodes only the residual the graph
    cannot already explain.
 2. `edge_encoder` MLP on the 8-D edge attrs.
-3. `vae_mp_layers` **`GnBlock`s** (message passing on the mesh).
+3. `vae_encoder_mp_layers` **`GnBlock`s** (message passing on the mesh).
 4. **Attentional pooling** (`AttentionalAggregation`) → one vector per graph.
 5. `mu_head`, `logvar_head` → `[B, num_z, vae_latent_dim]`; **reparameterize** to `z`.
    `logvar` is floored via `posterior_min_std`.
@@ -240,7 +240,7 @@ is the authoritative key catalog.
 | --- | --- |
 | `use_vae` | Enable the posterior encoder + stochastic latent path |
 | `vae_latent_dim` | Global latent `z` width (≈32 recommended for spread) |
-| `vae_mp_layers` | Posterior graph-encoder message-passing depth (default 5) |
+| `vae_encoder_mp_layers` | Posterior graph-encoder message-passing depth (default 5) |
 | `vae_graph_aware` | Fuse input `x` with target `y` in the posterior (recommended for multi-type data) |
 | `recon_loss` | `huber` (default) or `mse` (MSE preserves extreme amplitudes) |
 | `alpha_recon` | Reconstruction-loss weight |
@@ -284,8 +284,8 @@ is the authoritative key catalog.
 
 | Key | Meaning |
 | --- | --- |
-| `num_vae_samples` | Stochastic samples per scene (can exceed training set size) |
-| `vae_batch_size` | Trajectories advanced together per batched forward |
+| `inference_samples` | Stochastic samples per scene (can exceed training set size) |
+| `inference_batch_size` | Trajectories advanced together per batched forward |
 | `vae_valid_prior_samples` | Prior samples per graph for the CRPS validation metric (default 8) |
 | `eval_dataset` | Ground-truth HDF5 for the inline z-disp spread histogram |
 | `make_histogram` / `show_histogram` / `histogram_bins` / `histogram_clip_quantile` | Spread-histogram controls |
@@ -301,7 +301,7 @@ multiscale_levels 2
 mp_per_level     4, 8, 12, 8, 4
 use_vae          True
 vae_latent_dim   128
-vae_mp_layers    5
+vae_encoder_mp_layers    5
 z_conditioning   adaln
 mmd_gather_ranks True
 recon_loss       mse
@@ -314,11 +314,11 @@ prior_family     fm
 prior_fm_steps   30
 prior_fm_solver  heun
 prior_grad_to_encoder 1.0
-num_vae_samples  10000
+inference_samples  10000
 ```
 
 For an inference run that only needs the spread distribution, add
 `save_rollouts False`: sampling, the `histogram_compare.png` and the
 `spread_values.npz` dump all still happen, but no per-(scene, draw) trajectory
-HDF5s are written — otherwise `num_vae_samples` draws across many scenes is
+HDF5s are written — otherwise `inference_samples` draws across many scenes is
 thousands of files per run.

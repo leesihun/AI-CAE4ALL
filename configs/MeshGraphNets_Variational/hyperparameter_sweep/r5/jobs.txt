@@ -1,0 +1,17 @@
+# B300 round 5 job table: node job method train_config infer_config
+# Job k starts on the k-th card; a card that finishes takes the next line.
+# train_config '-' = inference only, on the checkpoint its infer config names.
+# run_node.sh, brief.py and ../plots.py read this file.
+135 hybrid_long mgnv configs/MeshGraphNets_Variational/hyperparameter_sweep/r5/config_train_hybrid_long.txt configs/MeshGraphNets_Variational/hyperparameter_sweep/r5/config_infer_hybrid_long.txt
+135 local_long mgnv configs/MeshGraphNets_Variational/hyperparameter_sweep/r5/config_train_local_long.txt configs/MeshGraphNets_Variational/hyperparameter_sweep/r5/config_infer_local_long.txt
+135 hybrid_mp28 mgnv configs/MeshGraphNets_Variational/hyperparameter_sweep/r5/config_train_hybrid_mp28.txt configs/MeshGraphNets_Variational/hyperparameter_sweep/r5/config_infer_hybrid_mp28.txt
+135 sar_wing_std_short sar configs/SAR/hyperparameter_sweep/r5/config_train_sar_wing_std_short.txt configs/SAR/hyperparameter_sweep/r5/config_infer_sar_wing_std_short.txt
+135 hybrid_v128c8 mgnv configs/MeshGraphNets_Variational/hyperparameter_sweep/r5/config_train_hybrid_v128c8.txt configs/MeshGraphNets_Variational/hyperparameter_sweep/r5/config_infer_hybrid_v128c8.txt
+135 hybrid_v8192 mgnv configs/MeshGraphNets_Variational/hyperparameter_sweep/r5/config_train_hybrid_v8192.txt configs/MeshGraphNets_Variational/hyperparameter_sweep/r5/config_infer_hybrid_v8192.txt
+135 hybrid_prior_deep mgnv configs/MeshGraphNets_Variational/hyperparameter_sweep/r5/config_train_hybrid_prior_deep.txt configs/MeshGraphNets_Variational/hyperparameter_sweep/r5/config_infer_hybrid_prior_deep.txt
+135 infl_hybrid mgnv - configs/MeshGraphNets_Variational/hyperparameter_sweep/r5/config_infer_infl_hybrid.txt
+135 infl_local mgnv - configs/MeshGraphNets_Variational/hyperparameter_sweep/r5/config_infer_infl_local.txt
+135 infl_global mgnv - configs/MeshGraphNets_Variational/hyperparameter_sweep/r5/config_infer_infl_global.txt
+135 ldgn_wing_std ldgn configs/LDGN/hyperparameter_sweep/r5/config_train_ldgn_wing_std.txt configs/LDGN/hyperparameter_sweep/r5/config_infer_ldgn_wing_std.txt
+135 hybrid_v512c2 mgnv configs/MeshGraphNets_Variational/hyperparameter_sweep/r5/config_train_hybrid_v512c2.txt configs/MeshGraphNets_Variational/hyperparameter_sweep/r5/config_infer_hybrid_v512c2.txt
+135 hybrid_prior_wide mgnv configs/MeshGraphNets_Variational/hyperparameter_sweep/r5/config_train_hybrid_prior_wide.txt configs/MeshGraphNets_Variational/hyperparameter_sweep/r5/config_infer_hybrid_prior_wide.txt

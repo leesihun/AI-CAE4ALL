@@ -56,4 +56,4 @@ use_multiscale                   False
 edge_var                         8
 latent_dim                       128
 message_passing_num              15
-geometry_state_mode              fixed
+use_deformed_edge                False

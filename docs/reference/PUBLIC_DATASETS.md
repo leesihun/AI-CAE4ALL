@@ -259,7 +259,7 @@ mechanism, so those rows are excluded rather than re-tagged).
 **`configs/MeshGraphNets_Variational/` intentionally has no `ex4`-`ex9` entries.** The variational tree
 exists for **one-to-many** problems (stochastic process variation -> a distribution of plausible
 outcomes for the *same* nominal input, hence the VAE + conditional-prior machinery and
-`num_vae_samples`) -- that's what `SAOI_all_input`/`b8_all_warpage_input` actually are. `ex4`-`ex9`
+`inference_samples`) -- that's what `SAOI_all_input`/`b8_all_warpage_input` actually are. `ex4`-`ex9`
 are all **deterministic one-to-one** simulations (same input always gives the same output); MGN-V
 configs were built and confirmed to *technically train* on several of them during investigation,
 but were removed afterward as a wrong fit for the tool, not because they failed to run.

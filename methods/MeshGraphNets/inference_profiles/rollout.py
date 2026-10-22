@@ -7,6 +7,7 @@ import torch
 from torch_geometric.data import Data
 
 from general_modules.state_geometry import deformed_positions
+from general_modules.renamed_keys import migrate_checkpoint_config
 from general_modules.edge_features import EDGE_FEATURE_DIM, compute_edge_attr
 from general_modules.positional_features import compute_positional_features
 from general_modules.removed_feature_guard import validate_checkpoint
@@ -106,7 +107,7 @@ def run_rollout(config, config_filename='config.txt'):
     print(f"    delta_std:  {delta_std}")
 
     if 'model_config' in checkpoint:
-        model_config = checkpoint['model_config']
+        model_config = migrate_checkpoint_config(checkpoint['model_config'])
         print("\n  Model config loaded from checkpoint:")
         for k, v in model_config.items():
             old_val = config.get(k)

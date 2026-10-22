@@ -62,6 +62,8 @@ HDF5 file for training.
 | `edge_var` | model, data | Must be `8`. The code validates this against `EDGE_FEATURE_DIM`. |
 | `positional_features` | data, model | Number of extra node features appended to physical channels (centroid distance, mean edge length, then RWPE). |
 | `use_node_types` | data, model | Adds one-hot node type features from feature index 7 when available. |
+| `use_deformed_edge` | data, model | Default `True`. Edge features follow the displaced geometry (reference coordinates plus the displacement columns); `False` keeps them on the reference geometry. Replaces `geometry_state_mode displacement/fixed`. |
+| `displacement_indices` | data, model | Three state-column indices holding the displacement; `-1` pads a missing axis with zero. Replaces `displacement_state_indices`. Used when `use_deformed_edge` is `True`. |
 | `num_node_types` | model | Filled from the dataset when node types are enabled. |
 | `latent_dim` | model | Processor hidden width. Config files may write `Latent_dim`; the loader lowercases it. |
 | `message_passing_num` | flat model | Number of flat processor blocks when `use_multiscale False`. |
@@ -133,7 +135,7 @@ same mesh topology. For this objective, keep `lambda_mmd` low (≈ 0.1) and
 | --- | --- | --- |
 | `use_vae` | model, training, inference | Enables the graph VAE latent path. |
 | `vae_latent_dim` | model | Global latent `z` dimension. 32 recommended for spread modeling. |
-| `vae_mp_layers` | VAE encoder | Message-passing layers inside the posterior encoder. Default `5` in model construction. |
+| `vae_encoder_mp_layers` | VAE encoder | Message-passing layers inside the posterior encoder. Default `5` in model construction. |
 | `vae_graph_aware` | VAE encoder | Fuses graph input `x` with target `y` in the posterior encoder. Recommended `True` for multi-type datasets: enables type-conditional spread encoding. |
 | `z_conditioning` | model | How `z` reaches the processor. `concat` (default, legacy) applies a bare `Linear([x, z])` before every block: since `z` is broadcast, that adds ONE constant vector per graph, and the non-residual Linear compounds a ~1.33x gain per block under the repo's kaiming init. `adaln` emits `(shift, scale, gate)` from `z` and modulates the block instead — zero-initialized so it is EXACTLY the unconditioned block at init. **Renames the per-block conditioning parameters**, so it is persisted in the checkpoint's `model_config` and a checkpoint only loads under the value it trained with. See [MESHGRAPHNET_ARCHITECTURE.md](../../research/meshgraphnets_variational/MESHGRAPHNET_ARCHITECTURE.md). |
 | `latent_type` | model, training, inference | Where `z` lives on the V-cycle: `global` (default; `num_z` per-graph slots, HI-MGN-V), `local` (`latent_ch` channels per coarsest-level node with a coarse-node flow-matching prior, HI-MGNflow), or `hybrid` (both, HI-MGN-hybrid). Architecture-defining and persisted in `model_config`. `local`/`hybrid` train single-stage and jointly, and preflight requires `use_multiscale True`, `prior_family fm`, no `prior_fm_moments`, `prior_fm_velocity_arch mlp`, `prior_moment_calibration_epochs 0`, and not `parallel_mode model_split`. HI-MGNflow (`chi-mgnflow`) was merged into `meshgraphnets-v` as `latent_type local` on 2026-10-19; the old repo is in `junk/legacy_HI_MGNFlow/`. |
@@ -150,8 +152,8 @@ same mesh topology. For this objective, keep `lambda_mmd` low (≈ 0.1) and
 | `mmd_bandwidth` | training | RBF bandwidth mode for the MMD. `fixed` uses constant sigmas tuned for ~64-D `z` and **saturates at high `vae_latent_dim`** — pairwise squared distances grow ~2D, every kernel goes to 0, and the penalty silently disappears along with its gradient. `median` sets the base scale from the median pairwise distance each step and stays sensitive at any latent width. |
 | `best_by` | training | Checkpoint-selection metric: `recon` (posterior validation loss, default) or `crps` (the learned-prior CRPS that mirrors inference). Reconstruction measures the POSTERIOR path, which a model can keep improving while its generative path rots — select on `crps` whenever the run exists to generate. |
 | `recon_loss` | training | `huber` (default) or `mse`. MSE preserves extreme-node amplitude better. |
-| `num_vae_samples` | inference | Number of rollout samples per scene. Can exceed training set size to extrapolate spread. |
-| `vae_batch_size` | inference | Trajectories advanced together per batched forward pass. |
+| `inference_samples` | inference | Number of rollout samples per scene. Can exceed training set size to extrapolate spread. |
+| `inference_batch_size` | inference | Trajectories advanced together per batched forward pass. |
 | `vae_valid_prior_samples` | training | Prior samples per graph for the CRPS validation metric. Default `8`. |
 | `num_z` | model, prior | Per-level z slots. Defaults to `multiscale_levels + 1` for multiscale, else `1`. |
 | `use_conditional_prior` | training, inference | Sample z from the joint-trained conditional prior at inference (`False` forces N(0,I)). Training default `False`, and the value is saved in `model_config`, which overrides the inference config -- so set it when TRAINING. The inference default `True` applies only to a checkpoint with no `model_config`. |
@@ -251,7 +253,7 @@ spread modeling the historical starting point is `lambda_mmd 0.1`,
 | --- | --- | --- |
 | `inference_output_dir` | inference | Output directory. Defaults to `outputs/rollout`. |
 | `infer_timesteps` | inference | Rollout steps per selected scene. |
-| `num_vae_samples` | inference | Number of stochastic samples per scene when VAE is enabled. |
+| `inference_samples` | inference | Number of stochastic samples per scene when VAE is enabled. |
 | `prior_temperature` | inference | Conditional-prior sampling spread control. |
 | `latent_inflation` | inference | Post-ODE widening of the FM prior's `z` around its center; scalar or cycled list. |
 | `eval_dataset` | inference | Ground-truth eval HDF5 used for the inline z_disp spread-histogram comparison. When set (and VAE enabled), rollout writes `histogram_compare.png` next to the `.h5` outputs. No GT path → comparison skipped. |
@@ -259,10 +261,10 @@ spread modeling the historical starting point is `lambda_mmd 0.1`,
 | `show_histogram` | inference | Open the saved `histogram_compare.png` in the OS default viewer after rollout. Default `True`; best-effort (silently degrades on a headless box). |
 | `histogram_bins` | inference | Histogram bin count (default `60`). |
 | `histogram_clip_quantile` | inference | Symmetric quantile clip for the binning range, e.g. `0.001` trims the 0.1% tails (default `0` = no clip). |
-| `vae_batch_size_min` | inference | Floor for the automatic VAE batch sizer. Default `1`. |
-| `vae_batch_size_max` | inference | Ceiling for the automatic sizer. Default `0` = no ceiling. |
-| `vae_batch_vram_fraction` | inference | Fraction of free VRAM the sizer aims to use when `vae_batch_size` is not set explicitly. Default `0.70`, clamped to (0, 1]. |
-| `save_rollouts` | inference | Write one trajectory HDF5 per (scene, VAE sample). Default `True`. Set `False` for a distribution study: `num_vae_samples` draws across many scenes is thousands of files per run, and the histogram only needs the spread scalars. Sampling, `histogram_compare.png`, the `[SPREAD]` log lines and `spread_values.npz` all still happen. |
+| `inference_batch_size_min` | inference | Floor for the automatic VAE batch sizer. Default `1`. |
+| `inference_batch_size_max` | inference | Ceiling for the automatic sizer. Default `0` = no ceiling. |
+| `inference_batch_vram_fraction` | inference | Fraction of free VRAM the sizer aims to use when `inference_batch_size` is not set explicitly. Default `0.70`, clamped to (0, 1]. |
+| `save_rollouts` | inference | Write one trajectory HDF5 per (scene, VAE sample). Default `True`. Set `False` for a distribution study: `inference_samples` draws across many scenes is thousands of files per run, and the histogram only needs the spread scalars. Sampling, `histogram_compare.png`, the `[SPREAD]` log lines and `spread_values.npz` all still happen. |
 
 Inference output files are named like:
 

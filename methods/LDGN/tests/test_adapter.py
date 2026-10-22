@@ -79,6 +79,37 @@ def test_normalization_roundtrip_and_train_only(case):
     np.testing.assert_allclose(stats['target_min'], lo, rtol=1e-6)
 
 
+def test_target_scaling_standard(case):
+    """`target_scaling standard`: train mean/std z-scores; minmax stays the default."""
+    from training_profiles.common import check_normalization_matches
+    _, _, _, default = _setup(case)
+    assert default['target_scaling'] == 'minmax'
+    config, train, _, stats = _setup(case, target_scaling='standard')
+    assert stats['target_scaling'] == 'standard'
+    rows = []
+    with h5py.File(config['dataset_dir'], 'r') as f:
+        for sids in train.values():
+            for s in sids:
+                rows.append(f[f'data/{s}/nodal_data'][3:6, -1, :].astype(np.float64))
+        sid = next(iter(train.values()))[0]
+        raw = f[f'data/{sid}/nodal_data'][3:6, -1, :].T
+    pooled = np.concatenate(rows, axis=1)
+    np.testing.assert_allclose(stats['target_mean'], pooled.mean(axis=1), rtol=1e-6, atol=1e-9)
+    np.testing.assert_allclose(stats['target_std'], pooled.std(axis=1), rtol=1e-5, atol=1e-9)
+    z = md.normalize_target(raw, stats)
+    np.testing.assert_allclose(z, (raw - pooled.mean(axis=1)) / pooled.std(axis=1), rtol=1e-5, atol=1e-6)
+    np.testing.assert_allclose(md.denormalize_target(z, stats), raw, rtol=1e-6, atol=1e-6)
+    # A checkpoint without the key is min/max.
+    legacy = {k: v for k, v in default.items() if k not in ('target_scaling', 'target_mean', 'target_std')}
+    np.testing.assert_allclose(md.normalize_target(raw, legacy), md.normalize_target(raw, default))
+    # The second stage and the sampler refuse a different scaling.
+    check_normalization_matches(stats, config, 'vae.pth')
+    with pytest.raises(ValueError, match='target_scaling'):
+        check_normalization_matches(stats, dict(config, target_scaling='minmax'), 'vae.pth')
+    with pytest.raises(ValueError, match='target_scaling'):
+        md.target_scaling({'target_scaling': 'tanh'})
+
+
 def test_dataset_items(case):
     config, train, val, stats = _setup(case)
     statics = md.build_statics(config, train, stats, 3, log=lambda *_: None)

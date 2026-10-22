@@ -196,7 +196,7 @@ export function sectionFor(modelId, key, required, config = null) {
   // output_activation, and norm sat in "Advanced", and every mesh route filed
   // its auxiliary encoder/prior sizes there too. Each name is matched exactly
   // so the later Training / Resources / Inference tests keep the keys they own.
-  if (/^(hidden_layers|activation|output_activation|norm|pool_type|unpool_type|pool_heads|bipartite_unpool|residual_scale|use_spatial_attention|fm_heads|vae_latent_dim|vae_mp_layers|prior_hidden_dim|prior_mp_layers)$/.test(key)) return "Architecture";
+  if (/^(hidden_layers|activation|output_activation|norm|pool_type|unpool_type|pool_heads|bipartite_unpool|residual_scale|use_spatial_attention|fm_heads|vae_latent_dim|vae_encoder_mp_layers|prior_hidden_dim|prior_mp_layers)$/.test(key)) return "Architecture";
   if (/training_epochs|learningr|_lr_|weight_decay|warmup|batch_size|loss|dropout|grad_|noise|ema|kl_|beta|eikonal|surface_weight|normal_weight|alpha|lambda_|free_bits|mmd|recon_loss|recon_iter|draws_per_epoch/.test(key)) return "Training";
   if (/gpu|parallel|worker|prefetch|amp|compile|checkpointing|cache|profile|fsdp|pipeline_microbatches|chunk_size|load_all|dense_attention/.test(key)) return "Resources & runtime";
   if (/^infer|^test|^val_|^sample_|^spread_|save_rollouts|display|plot|histogram|num_samples|candidate_multiplier|cfg_scale|condition_|cond_|ode_steps|best_by|mc_resolution|sample_index|source_num_samples|posterior_noise|timesteps_reduced/.test(key)) return "Inference & evaluation";
@@ -322,14 +322,14 @@ const PRESET_SKIP = /(^|_)(dataset|modelpath|dir|path|file|mesh|geometry|sidecar
 const PRESET_SKIP_KEYS = new Set([
   "model", "mode", "gpu_ids", "parallel_mode",
   "input_var", "output_var", "cond_var", "num_var", "edge_var", "feature_loss_weights",
-  "use_node_types", "positional_features", "time_integration", "geometry_state_mode",
-  "displacement_state_indices", "periodic_box", "augment_geometry", "std_noise",
+  "use_node_types", "positional_features", "time_integration", "use_deformed_edge",
+  "displacement_indices", "periodic_box", "augment_geometry", "std_noise",
   "infer_timesteps", "test_batch_idx", "plot_feature_idx", "write_preprocessing",
   "use_world_edges", "operator_dim", "dimension_tolerance", "out_of_bounds_policy",
   "sdf_source", "global_condition_features", "integration_weight_source", "split_group_attr",
   "field_start_row", "node_start", "node_end", "timesteps_reduced", "lc_data_type",
   "split_by_parent", "use_conditions", "condition_names",
-  "kl_weight", "kl_warmup_start_frac", "num_vae_samples"
+  "kl_weight", "kl_warmup_start_frac", "inference_samples"
 ]);
 // Sized to one mesh or grid: filled in only when the block has no value yet.
 // FNO's grid and modes need one entry per spatial axis (ex9 is 2-D, ex10 3-D).
@@ -621,12 +621,12 @@ export async function applyPreset() {
       return;
     }
     // The smallest checked-in MGN-V configs still train at
-    // batch 16 and roll out 16 trajectories at once (vae_batch_size, read only
+    // batch 16 and roll out 16 trajectories at once (inference_batch_size, read only
     // by their rollout, so it changes memory and speed, never the result).
     // SDFFlow and SimulGen-VAE train their stages with vae_/fm_/lc_batch_size,
     // taken as the source file has them.
     if (preset === "low_vram" && !["sdfflow", "simulgenvae"].includes(spec.modelId)) {
-      const floors = spec.modelId === "meshgraphnets-v" ? ["batch_size", "vae_batch_size"] : ["batch_size"];
+      const floors = spec.modelId === "meshgraphnets-v" ? ["batch_size", "inference_batch_size"] : ["batch_size"];
       floors.forEach(key => {
         const current = values[key] ?? node.config[key];
         if (Number(current) > 1) {
@@ -664,7 +664,7 @@ export async function applyPreset() {
   if (preset === "simulgen_lc") values = { mode: "train_lc", training_epochs: model.defaults.lc_training_epochs, batch_size: model.defaults.lc_batch_size, learningr: model.defaults.lc_learningr };
   if (preset === "simulgen_reconstruct") values = { mode: "reconstruct", batch_size: "16", output_dir: "../../output/simulgenvae/ex1/reconstruct" };
   // A preset is shared across routes, so it names keys some routes do not own
-  // (vae_batch_size on deterministic MGN) or have retired. Writing those put an
+  // (inference_batch_size on deterministic MGN) or have retired. Writing those put an
   // inactive or removed key into the config -- the removed ones are preflight
   // ERRORS -- so only keys this route actively reads are applied.
   values = Object.fromEntries(Object.entries(values).filter(([key]) => model.keys.includes(key) && keyDisposition(spec.modelId, key, { ...node.config, ...values }) === "active"));

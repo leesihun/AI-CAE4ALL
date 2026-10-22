@@ -6,7 +6,7 @@
 #
 # jobs.txt is the job table (node, job, method, train config, infer config);
 # README.md says what each job changes and why. Job k starts on the k-th
-# card. The 11 later jobs are commented out at the end of jobs.txt; with more
+# card. The 13 later jobs are commented out at the end of jobs.txt; with more
 # active jobs than cards, each card that finishes takes the next one.
 #
 # No argument and no nohup: the checks (stages 1-3) run in the terminal, and
@@ -43,7 +43,10 @@
 #   from ai_cae4all.local.toml), GPUS (run_135.sh: 0 2 3 4 5 6 7),
 #   THREADS_PER_JOB=4, PROBE_TIMEOUT=900, PREFLIGHT=1, TRAIN=1, INFER=1,
 #   DETACH=1 (0 keeps the jobs in this terminal; the default when stdout is
-#   not a terminal), JOBS="sar_wing ldgn_wing" (a subset, in this order).
+#   not a terminal), JOBS="sar_wing_std ldgn_wing_std" (a subset, in this order),
+#   LANE=b (a second run beside one still going: its own run_<node>_b.out/.pid,
+#   and it leaves the hierarchy cache and the run hours of the first alone).
+# Two jobs beside a running node:  LANE=b GPUS="0 2" JOBS="sar_wing_std ldgn_wing_std" bash run_135.sh
 # Inference-only rerun:  TRAIN=0 bash run_135.sh
 # One job again:         JOBS=hybrid_mmd bash run_135.sh
 # A later job:           uncomment its line in jobs.txt, then JOBS=himgn_det bash run_135.sh
@@ -87,8 +90,10 @@ INFER="${INFER:-1}"
 OUT_ROOT="output/b300_r4"
 LOG_ROOT="$OUT_ROOT/run_logs/$NODE"
 STATUS_DIR="$LOG_ROOT/status"
-RUN_LOG="$OUT_ROOT/run_$NODE.out"
-PID_FILE="$OUT_ROOT/run_$NODE.pid"
+LANE="${LANE:-}"
+export LANE
+RUN_LOG="$OUT_ROOT/run_$NODE${LANE:+_$LANE}.out"
+PID_FILE="$OUT_ROOT/run_$NODE${LANE:+_$LANE}.pid"
 mkdir -p "$LOG_ROOT" "$STATUS_DIR"
 
 TS="${R4_TS:-$(date +%Y%m%d_%H%M%S)}"
@@ -145,7 +150,8 @@ if [ "$PHASE" = "run" ]; then
 
     # The hierarchy cache is run-private (one per node and coarsening). A cache
     # left by an aborted run may hold a half-written variant; start clean.
-    if [ "$TRAIN" = "1" ]; then
+    # A LANE run starts beside a running one, whose jobs may have it open.
+    if [ "$TRAIN" = "1" ] && [ -z "$LANE" ]; then
         for d in "$OUT_ROOT"/mscache/mgnv_*; do
             [ -e "$d" ] || continue
             echo "  removing the leftover hierarchy cache $d"
@@ -228,7 +234,7 @@ if [ "$PHASE" = "run" ]; then
     echo "  stdout: $LOG_ROOT/<job>.<train|infer>.out   status: $STATUS_DIR/"
     for i in "${!JOB_IDS[@]}"; do echo "queued" > "$STATUS_DIR/${JOB_IDS[$i]}.state"; done
     # Run hours (brief.py) count the training run; an inference-only rerun keeps them.
-    if [ "$TRAIN" = "1" ]; then date +%s > "$STATUS_DIR/_start"; rm -f "$STATUS_DIR/_end"; fi
+    if [ "$TRAIN" = "1" ] && [ -z "$LANE" ]; then date +%s > "$STATUS_DIR/_start"; rm -f "$STATUS_DIR/_end"; fi
     # The first round is dealt before any card starts (card s takes job s), so
     # a job that fails in seconds cannot let its card steal the next card's job.
     # After that a card takes the next job nobody has claimed, unless
@@ -249,7 +255,7 @@ if [ "$PHASE" = "run" ]; then
         sleep 2   # stagger the starts: 8 interpreters importing torch at once
     done
     for pid in $pids; do wait "$pid"; done
-    [ "$TRAIN" = "1" ] && date +%s > "$STATUS_DIR/_end"
+    [ "$TRAIN" = "1" ] && [ -z "$LANE" ] && date +%s > "$STATUS_DIR/_end"
 
     # ------------------------------------------------------------- 5. summary
     rc=0
@@ -277,7 +283,7 @@ if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
 fi
 rm -f "$STATUS_DIR/_abort"
 exec > >(tee -a "$MASTER_LOG") 2>&1
-if [ -e "$OUT_ROOT/stop_$NODE" ]; then
+if [ -e "$OUT_ROOT/stop_$NODE" ] && [ -z "$LANE" ]; then
     echo "removing $OUT_ROOT/stop_$NODE left by an earlier run (it would stop the queue from taking a further job)"
     rm -f "$OUT_ROOT/stop_$NODE"
 fi

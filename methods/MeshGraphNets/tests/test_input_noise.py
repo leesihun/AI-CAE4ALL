@@ -36,7 +36,7 @@ def _config(mode='displacement', std_noise=0.05):
     stats = _stats(state)
     cfg = {
         'input_var': 4, 'output_var': 4, 'std_noise': std_noise,
-        'geometry_state_mode': mode, 'displacement_state_indices': [0, 1, 2],
+        'use_deformed_edge': mode == 'displacement', 'displacement_indices': [0, 1, 2],
         '_norm_stats': stats,
         'noise_std_ratio': (NODE_STD / DELTA_STD).tolist(),
     }

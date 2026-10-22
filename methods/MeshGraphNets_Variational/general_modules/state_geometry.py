@@ -3,24 +3,26 @@
 State columns are physical fields, NOT necessarily displacement. The legacy
 default is the first min(3, input_var) columns; new configs must choose explicitly.
 A -1 index means zero displacement for that spatial axis.
+
+Config keys: `use_deformed_edge` (bool, default True) builds edge features from
+the displaced geometry; False keeps the reference geometry. `displacement_indices`
+names the three state columns that move the nodes. Both were renamed on
+2026-10-22 from `geometry_state_mode` (fixed/displacement) and
+`displacement_state_indices`; see general_modules/renamed_keys.py.
 """
 import numpy as np
 import torch
 
-
 def displacement_indices(config, input_dim):
-    mode = str(config.get('geometry_state_mode', 'displacement')).lower()
-    if mode not in ('fixed', 'displacement'):
-        raise ValueError("geometry_state_mode must be 'fixed' or 'displacement'")
-    if mode == 'fixed':
+    if not config.get('use_deformed_edge', True):
         return (-1, -1, -1)
-    indices = config.get('displacement_state_indices')
+    indices = config.get('displacement_indices')
     if indices is None:
         return tuple(i if i < input_dim else -1 for i in range(3))
     if not isinstance(indices, (list, tuple)):
         indices = [indices]
     if len(indices) != 3 or any(int(i) != i or int(i) < -1 or int(i) >= input_dim for i in indices):
-        raise ValueError("displacement_state_indices needs three state-column indices (-1 pads zero)")
+        raise ValueError("displacement_indices needs three state-column indices (-1 pads zero)")
     return tuple(int(i) for i in indices)
 
 

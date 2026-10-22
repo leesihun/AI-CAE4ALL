@@ -80,6 +80,7 @@ sys.path.insert(0, REPO_ROOT)
 os.chdir(REPO_ROOT)
 
 from general_modules.load_config import load_config                  # noqa: E402
+from general_modules.renamed_keys import migrate_checkpoint_config  # noqa: E402
 from general_modules.data_loader import load_data                    # noqa: E402
 from model.conditional_prior import build_conditional_prior          # noqa: E402
 from inference_profiles.rollout import _load_model_from_checkpoint   # noqa: E402
@@ -227,7 +228,7 @@ def main():
     src = cfg['modelpath']
     ck = torch.load(src, map_location=dev, weights_only=False)
     c2 = dict(cfg)
-    for k, v in ck['model_config'].items():
+    for k, v in migrate_checkpoint_config(ck['model_config']).items():
         c2[k] = v
     c2['num_timesteps'] = 1
     model = _load_model_from_checkpoint(c2, ck, dev)

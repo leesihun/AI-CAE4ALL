@@ -421,13 +421,13 @@ def log_training_config(config):
 
     if config.get('use_vae', False):
         z_dim   = config.get('vae_latent_dim', 32)
-        mp_enc  = config.get('vae_mp_layers', 5)
+        mp_enc  = config.get('vae_encoder_mp_layers', 5)
         reg, w  = latent_reg_weight(config)
         b_aux   = config.get('beta_aux', 1.0)
         alpha   = config.get('alpha_recon', 1.0)
         w_name  = 'kl_weight' if reg == 'kl' else 'lambda_mmd'
         print(f"VAE ({reg.upper()}): ENABLED (latent_type={config.get('latent_type', 'global')}, "
-              f"z_dim={z_dim}, vae_mp_layers={mp_enc}, "
+              f"z_dim={z_dim}, vae_encoder_mp_layers={mp_enc}, "
               f"{w_name}={w}, beta_aux={b_aux}, alpha_recon={alpha})")
         if str(config.get('prior_type', '')).lower().strip() == 'gnn_e2e':
             p_family = str(config.get('prior_family', 'fm')).lower().strip()

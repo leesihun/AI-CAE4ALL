@@ -256,7 +256,7 @@ def _model_from_architecture(model_config: dict[str, Any]) -> str:
         return "mlp"
     if {"edge_var", "message_passing_num"} & keys:
         # The variational tree adds its own keys on top of the vanilla set.
-        return "meshgraphnets-v" if {"vae_latent_dim", "num_vae_samples", "prior_type", "latent_type"} & keys else "meshgraphnets"
+        return "meshgraphnets-v" if {"vae_latent_dim", "inference_samples", "prior_type", "latent_type"} & keys else "meshgraphnets"
     return ""
 
 

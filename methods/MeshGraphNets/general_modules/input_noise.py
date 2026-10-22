@@ -14,7 +14,7 @@ What this module does, in that order:
 2.  correct the target, `y -= noise_gamma * noise * noise_std_ratio`, where
     `noise_std_ratio = node_std / delta_std` converts the perturbation from
     node-normalized units into delta-normalized units;
-3.  map the same draw through `displacement_state_indices` to a *physical*
+3.  map the same draw through `displacement_indices` to a *physical*
     node displacement and rebuild the deformed half of every edge feature
     (mesh edges and world edges) from the perturbed positions.
 
@@ -72,7 +72,7 @@ class InputNoise:
         # paper's gamma 0.1 is specific to second-order cloth, where the
         # correction is split between position and velocity.
         self.gamma = float(config.get('noise_gamma', 1.0))
-        # A state that cannot move geometry (geometry_state_mode fixed, e.g. a
+        # A state that cannot move geometry (use_deformed_edge False, e.g. a
         # fluid on a rigid mesh) perturbs no edge feature at all -- which is
         # exactly what the paper does for CylinderFlow, where the noise is on
         # momentum and the mesh never moves.

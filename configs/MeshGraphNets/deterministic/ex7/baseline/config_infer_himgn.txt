@@ -54,7 +54,7 @@ use_multiscale                   True
 edge_var                         8
 latent_dim                       128
 message_passing_num              28
-geometry_state_mode              fixed
+use_deformed_edge                False
 coarsening_type                  voronoi_seedmean
 multiscale_levels                2
 voronoi_clusters                 4096, 256

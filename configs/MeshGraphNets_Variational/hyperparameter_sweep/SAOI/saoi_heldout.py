@@ -236,7 +236,7 @@ def derive_config(method, arm, half, es, draws):
         "inference_output_dir": f"../../output/b300_r2/saoi/{arm}/{half}/infer/{tag}",
         "infer_dataset": f"{CUT_REL}/{es['infer']}  # one realization of the held-out part",
         "eval_dataset": f"{CUT_REL}/{es['compare']}  # every realization of the part: the histogram ground truth",
-        "num_vae_samples": f"{draws}  # draws per scene",
+        "inference_samples": f"{draws}  # draws per scene",
     }
     seen_keys, body = set(), []
     for line in lines[start:]:

@@ -241,7 +241,7 @@ class EncoderProcessorDecoder(nn.Module):
         # MMD kernel bandwidth mode: 'fixed' (legacy constant sigmas, saturates at
         # high vae_latent_dim) or 'median' (dimension-adaptive median heuristic).
         self.mmd_bandwidth = str(config.get('mmd_bandwidth', 'fixed')).lower().strip()
-        vae_mp_layers = int(config.get('vae_mp_layers', 5))
+        vae_encoder_mp_layers = int(config.get('vae_encoder_mp_layers', 5))
         self.vae_graph_aware = bool(config.get('vae_graph_aware', False))
         self.vae_posterior_min_std = float(config.get('posterior_min_std', 0))
         # How z reaches the processor. 'concat' is the legacy fuser
@@ -262,7 +262,7 @@ class EncoderProcessorDecoder(nn.Module):
             self.num_z = int(config.get('num_z', 1))
         self.vae_encoder = GNNVariationalEncoder(
             self.node_output_size, self.edge_input_size,
-            self.latent_dim, self.vae_latent_dim, num_mp_layers=vae_mp_layers,
+            self.latent_dim, self.vae_latent_dim, num_mp_layers=vae_encoder_mp_layers,
             node_input_size=self.node_input_size,
             graph_aware=self.vae_graph_aware,
             posterior_min_std=self.vae_posterior_min_std,
@@ -294,7 +294,7 @@ class EncoderProcessorDecoder(nn.Module):
             raise ValueError(
                 f'pv_channel {self.pv_channel} is outside the '
                 f'{self.node_output_size} output rows.')
-        print(f"  VAE: ENABLED (z_dim={self.vae_latent_dim}, vae_mp_layers={vae_mp_layers})")
+        print(f"  VAE: ENABLED (z_dim={self.vae_latent_dim}, vae_encoder_mp_layers={vae_encoder_mp_layers})")
 
     # ── VAE helpers ──────────────────────────────────────────────────────────
 

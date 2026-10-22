@@ -126,7 +126,7 @@ def _save_rollout_h5(output_path, sample_id, field, ref_pos, mesh_edge, part_ids
 
     nodal_data [3 + out + 1, 2, N]: t=0 is the zero state a static MGN-V rollout
     starts from, t=1 the sample. normalization_params holds LDGN's own
-    statistics (min/max scaling), not MGN-V's mean/std set.
+    statistics (its target_scaling: min/max or mean/std), not MGN-V's set.
     """
     num_nodes = ref_pos.shape[0]
     steps = 1
@@ -167,8 +167,10 @@ def _save_rollout_h5(output_path, sample_id, field, ref_pos, mesh_edge, part_ids
         global_meta = f.create_group('metadata')
         global_meta.create_dataset('feature_names', data=feature_names)
         norm_grp = global_meta.create_group('normalization_params')
-        norm_grp.attrs['scheme'] = 'ldgn_minmax'
-        for key in ('target_min', 'target_max', 'cond_min', 'cond_max', 'pos_center'):
+        norm_grp.attrs['scheme'] = f"ldgn_{stats.get('target_scaling', 'minmax')}"
+        keys = ('target_min', 'target_max', 'target_mean', 'target_std', 'cond_min', 'cond_max',
+                'pos_center')
+        for key in (k for k in keys if k in stats):
             norm_grp.create_dataset(key, data=np.asarray(stats[key], dtype=np.float64))
         norm_grp.create_dataset('pos_scale', data=np.float64(stats['pos_scale']))
         norm_grp.create_dataset('edge_r', data=np.float64(stats['edge_r']))

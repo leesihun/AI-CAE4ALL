@@ -720,11 +720,11 @@ class _StageInner(nn.Module):
         posterior_min_std = float(config.get('posterior_min_std', 0))
 
         if is_first:
-            vae_mp_layers = int(config.get('vae_mp_layers', 5))
+            vae_encoder_mp_layers = int(config.get('vae_encoder_mp_layers', 5))
             vae_graph_aware = bool(config.get('vae_graph_aware', False))
             self.vae_encoder = GNNVariationalEncoder(
                 node_output_size, edge_input_size, latent_dim, vae_latent_dim,
-                num_mp_layers=vae_mp_layers,
+                num_mp_layers=vae_encoder_mp_layers,
                 node_input_size=node_input_size if vae_graph_aware else None,
                 graph_aware=vae_graph_aware,
                 posterior_min_std=posterior_min_std,

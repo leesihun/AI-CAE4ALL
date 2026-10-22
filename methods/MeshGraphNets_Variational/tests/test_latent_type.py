@@ -73,7 +73,7 @@ def _config(dataset_path, latent_type, latent_reg):
         "use_multiscale": True, "multiscale_levels": 2, "mp_per_level": [1, 1, 1, 1, 1],
         "coarsening_type": "bfs", "augment_geometry": False, "std_noise": 0.0,
         "latent_dim": 16, "message_passing_num": 1,
-        "use_vae": True, "vae_latent_dim": VAE_DIM, "vae_mp_layers": 1,
+        "use_vae": True, "vae_latent_dim": VAE_DIM, "vae_encoder_mp_layers": 1,
         "z_conditioning": "adaln",
         "latent_type": latent_type, "latent_reg": latent_reg, "latent_ch": LATENT_CH,
         "vae_local_mp_layers": 1, "kl_weight": 1e-3,
@@ -83,7 +83,7 @@ def _config(dataset_path, latent_type, latent_reg):
         "prior_nll_weight": 1.0, "prior_grad_to_encoder": 0.0,
         "use_ema": True, "ema_decay": 0.5, "use_amp": False, "use_compile": False,
         "learningr": 1e-3, "training_epochs": 3, "warmup_epochs": 1, "batch_size": 3,
-        "num_timesteps": 1, "num_vae_samples": 2,
+        "num_timesteps": 1, "inference_samples": 2,
     }
 
 

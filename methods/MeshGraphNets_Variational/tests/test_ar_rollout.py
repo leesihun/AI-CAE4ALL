@@ -71,7 +71,7 @@ def _base_config(dataset_path, **overrides):
         # VAE path on, conditional prior off (the prior has its own tests).
         "use_vae": True,
         "vae_latent_dim": 8,
-        "vae_mp_layers": 1,
+        "vae_encoder_mp_layers": 1,
         "recon_loss": "mse",
         "alpha_recon": 1.0,
         "lambda_mmd": 0.2,

@@ -54,8 +54,8 @@ use_multiscale                   True
 edge_var                         8
 latent_dim                       128
 message_passing_num              15
-geometry_state_mode              displacement
-displacement_state_indices       1, 2, -1
+use_deformed_edge                True
+displacement_indices             1, 2, -1
 coarsening_type                  voronoi_seedmean
 multiscale_levels                2
 voronoi_clusters                 4096, 256
@@ -64,11 +64,11 @@ hierarchy_variants               2
 hierarchy_seed                   42
 training_seed                    42
 best_by                          crps
-num_vae_samples                  16
-vae_batch_size                   16
+inference_samples                16
+inference_batch_size             16
 use_vae                          True
 vae_latent_dim                   32
-vae_mp_layers                    3
+vae_encoder_mp_layers            3
 vae_graph_aware                  True
 recon_loss                       mse
 alpha_recon                      1000

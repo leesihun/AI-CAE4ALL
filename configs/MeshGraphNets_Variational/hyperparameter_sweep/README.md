@@ -75,8 +75,8 @@ subset it was what let `z` rise above the z-free floor.
 | --- | --- | --- |
 | `v_base` | none, at batch 8 x 1 instead of 2 x 4 (MMD sees 8 graphs) | the reference |
 | `v_rep` | `training_seed 43` | the seed noise floor |
-| `v_mp8` | `vae_mp_layers 8` | does the subset result hold on all 150 geometries? |
-| `v_mp12` | `vae_mp_layers 12` | does depth keep paying past 8? |
+| `v_mp8` | `vae_encoder_mp_layers 8` | does the subset result hold on all 150 geometries? |
+| `v_mp12` | `vae_encoder_mp_layers 12` | does depth keep paying past 8? |
 | `v_mp8_pmin01` | `v_mp8` + `posterior_min_std 0.01` | does a lower posterior floor let `z` carry more of the draw? |
 | `v_mp8_aux100` | `v_mp8` + `beta_aux 100` | does a stronger pull on the decoded peak-to-valley undo the shrunken amplitude (0.6-0.8x of FEA)? |
 | `v_mp8_mmd10` | `v_mp8` + `lambda_mmd 10` | does a stronger aggregate-posterior MMD reduce posterior drift? |
