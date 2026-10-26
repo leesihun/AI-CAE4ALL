@@ -10,14 +10,14 @@ on ex3 shell buckling, before the placements are compared for the paper:
 | hybrid | HI-MGN-hybrid | `hybrid`: global vector + per-coarse-node channels |
 
 Everything here is generated: `make_sweep.py` writes
-`r6/{config_train_*,config_infer_*,jobs.txt,README.md}` (`--plan` prints the
+`r6/{config_train_*,config_infer_*,jobs.txt,run_135.sh,README.md}` (`--plan` prints the
 queue and its estimated hours and writes nothing). Edit `make_sweep.py`, never
 a generated config. The round-based generator it replaced is in
 `junk/legacy_placement_rounds_2026-10-26/`.
 
 ## Running it (node 135, cards 0 and 2-7, two jobs per card)
 
-    bash configs/MeshGraphNets_Variational/hyperparameter_sweep/placement/run_135.sh r6
+    bash configs/MeshGraphNets_Variational/hyperparameter_sweep/placement/r6/run_135.sh
 
 Checks (environment, data, launcher `--check`) run in the terminal; when they
 pass, the jobs detach. 14 slots (the 7 cards, each listed twice) take the
@@ -35,7 +35,7 @@ and type back the block between `==== TYPE THIS BACK ====` and `==== END ====`.
 - **Two jobs per card is unmeasured**: memory (B300) is not the concern; the
   slowdown of each job and the CPU contention (`THREADS_PER_JOB 4`,
   `num_workers 4`, 14 jobs) are. Read the epoch times in the first brief.
-  Fewer slots: `GPUS="0 2 3 4 5 6 7" bash run_135.sh r6`.
+  Fewer slots: `GPUS="0 2 3 4 5 6 7" bash r6/run_135.sh`.
 - **Sampling-only jobs** (`*_ref_infl`, `*_ref_t*`) sample `<placement>_ref`'s
   checkpoint; a slot that takes one before that training ends waits for it
   (state `wait`, brief's `wait` line).

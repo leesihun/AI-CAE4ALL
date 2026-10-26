@@ -2,7 +2,7 @@
 
 See ../README.md for the design. 98 jobs (89 trainings, 9 sampling only) on 14 slots; estimated makespan 16 days (guess: 34 h per 120 epochs on one card, x1.5 for two per card, width^1.5, batch factors {2: 1.3, 4: 1.0, 8: 0.85, 16: 0.75}).
 
-Run: `bash configs/MeshGraphNets_Variational/hyperparameter_sweep/placement/run_135.sh r6`
+Run: `bash configs/MeshGraphNets_Variational/hyperparameter_sweep/placement/r6/run_135.sh`
 
 | # | job | change from the reference | est. h | est. start-end (days) |
 | --- | --- | --- | --- | --- |
