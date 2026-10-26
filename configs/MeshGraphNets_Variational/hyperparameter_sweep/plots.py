@@ -25,7 +25,21 @@ Reads <round>/jobs.txt and, for each job (or the jobs named), writes:
       the draws, over that geometry's own FE sd, split exactly as
       w2^2 = bias^2 + (sd_ratio - 1)^2 + shape^2, plus the root mean square
       over geometries. brief.py ranks by it. Rewritten when spread_values.npz
-      is newer.
+      is newer, or when the file predates its current `noise` block.
+
+      `noise` is the noise level of the held-out FE set. Each geometry's n FE
+      results are shuffled --splits times (default 200, fixed seed, so every
+      job gets the same permutations) and cut at k = min(draws, n // 2): 128
+      vs 128 on the 256-draw ex3 file. `floor` scores the first k FE results
+      as if they were draws against the other n - k, about what a perfect
+      sampler with k draws gets. `model` scores k of the job's draws against
+      the same n - k, so it compares with `floor` directly. Each gives the
+      median and the 5-95% range over splits. A latent_inflation job gets one
+      such block per factor.
+
+  <round output>/noise_floor.png (a full pass only), one split of every
+      held-out geometry, k FE results against the other n - k, and the floor
+      W2 over all splits with each job's `model` median marked.
 
 Then prints, per job, the per-geometry W2 parts, CRPS and generated/true
 width (x100).
@@ -298,69 +312,185 @@ def w2_parts(gt, gen):
     return float((w * (qx - qy) ** 2).sum()), mx - my, sx, sy, max(2.0 * (sx * sy - cov), 0.0)
 
 
-def job_w2(job, spread, force):
-    """Per-geometry W2 / FE sd, split into bias, sd and shape; writes spread_w2.json.
+SPLITS = 200        # random splits of each geometry's FE results (--splits)
+SPLIT_SEED = 0      # fixed, so every job is scored against the same splits
+MIN_K = 8           # fewer draws per geometry than this: the job gets no noise comparison
+NOISE_VERSION = 2   # a spread_w2.json with an older noise block is recomputed
 
-    Each geometry is normalized by its own FE sd, so per geometry
-    w2^2 = bias^2 + (sd - 1)^2 + shape^2. The summary takes the root mean square
-    over geometries (the same identity holds for it), plus the geometric mean of
-    the sd ratios, which keeps the direction (below 1 = too narrow).
-    """
+
+def geometry_row(g, p, pooled_sd):
+    """One geometry: W2 of draws p against FE results g, over g's own sd (None: nothing to normalize by)."""
+    w2sq, gap, sx, sy, shape = w2_parts(g, p)
+    if g.size < 2 or sy <= 1e-9 * pooled_sd:
+        return None
+    return {"w2": math.sqrt(w2sq) / sy, "bias": gap / sy, "sd_ratio": sx / sy,
+            "shape": math.sqrt(shape) / sy, "gt_sd_over_pooled": sy / pooled_sd,
+            "n_gt": int(g.size), "n_gen": int(p.size)}
+
+
+def summarize(rows):
+    """Root mean square over geometries (w2^2 = bias^2 + sd_gap^2 + shape^2 holds for it too)."""
+    def rms(key, shift=0.0):
+        return math.sqrt(sum((r[key] - shift) ** 2 for r in rows.values()) / len(rows))
+
+    return {"w2": rms("w2"), "bias": rms("bias"), "sd_gap": rms("sd_ratio", 1.0),
+            "shape": rms("shape"), "n_groups": len(rows),
+            "sd_ratio_geomean": math.exp(sum(math.log(max(r["sd_ratio"], 1e-12))
+                                             for r in rows.values()) / len(rows))}
+
+
+def spread_arrays(job, spread):
+    """spread_values.npz of a job, with each FE result and draw tagged by its geometry."""
     cfg = cfg_values(job["infer"])
     out_dir, attr = cfg.get("inference_output_dir"), cfg.get("split_group_attr")
     eval_h5 = cfg.get("eval_dataset") or cfg.get("infer_dataset")
     if not (out_dir and attr and eval_h5):
         return None
     out_dir = method_path(job["method"], out_dir)
-    npz, path = out_dir / "spread_values.npz", out_dir / "spread_w2.json"
+    npz = out_dir / "spread_values.npz"
     if not npz.is_file():
         return None
-    if path.is_file() and not force and path.stat().st_mtime >= npz.stat().st_mtime:
-        return json.loads(path.read_text(encoding="utf-8"))
     import numpy as np
     data = np.load(npz)
-    groups = spread._eval_dataset_groups(str(method_path(job["method"], eval_h5)), attr)
+    eval_h5 = method_path(job["method"], eval_h5)
+    groups = spread._eval_dataset_groups(str(eval_h5), attr)
     if not groups:
         return None
-    gt, gen = np.asarray(data["gt"], dtype=np.float64), np.asarray(data["gen"], dtype=np.float64)
     gt_group = np.asarray([groups.get(str(s), "") for s in data["gt_scene"]])
-    gen_group = np.asarray([groups.get(str(s), "") for s in data["gen_scene"]])
-    pooled_sd = float(gt.std()) or 1.0
+    label = "spread"
+    metrics = out_dir / "spread_metrics.json"
+    if metrics.is_file():
+        label = json.loads(metrics.read_text(encoding="utf-8")).get("label", label)
+    return dict(out_dir=out_dir, attr=attr, eval_h5=eval_h5, label=label,
+                gt=np.asarray(data["gt"], dtype=np.float64), gt_group=gt_group,
+                gen=np.asarray(data["gen"], dtype=np.float64),
+                gen_group=np.asarray([groups.get(str(s), "") for s in data["gen_scene"]]),
+                lams=np.asarray(data["gen_lam"], dtype=np.float64) if "gen_lam" in data.files else None,
+                order=list(spread._group_order(v for v in gt_group if v)))
+
+
+def split_perms(a, splits):
+    """{geometry: [a permutation of its FE results] * splits}.
+
+    The generator depends only on SPLIT_SEED and the FE set, so every job of a
+    round, at every k, cuts the same permutations. With n even and k = n // 2
+    they are round 5's halves exactly.
+    """
+    import numpy as np
+    rng = np.random.default_rng(SPLIT_SEED)
+    return {value: [rng.permutation(int((a["gt_group"] == value).sum())) for _ in range(splits)]
+            for value in a["order"]}
+
+
+def split_noise(a, keep, splits, perms):
+    """The noise level of the held-out FE set itself, and the job at the same sample size.
+
+    k = min(draws, n // 2), the smallest over geometries (n = a geometry's FE
+    results). Each split cuts the geometry's fixed permutation at k:
+    floor: the first k FE results scored as if they were the draws, against
+           the other n - k. A perfect sampler with k draws scores about this.
+    model: k of the job's draws (a random subset) against the same n - k, so
+           it compares with floor directly. None when a geometry has fewer
+           than MIN_K draws.
+    Each is the root mean square over geometries, once per split; the spread
+    over splits is the sampling noise of the score alone (not seed noise).
+    """
+    import numpy as np
+    pooled_sd = float(a["gt"].std()) or 1.0
+    gts = {v: a["gt"][a["gt_group"] == v] for v in a["order"]}
+    gens = {v: a["gen"][keep & (a["gen_group"] == v)] for v in a["order"]}
+    order = [v for v in a["order"] if gts[v].size >= 2]
+    if not order:
+        return None
+    k = min(gts[v].size // 2 for v in order)
+    model_ok = min(gens[v].size for v in order) >= MIN_K
+    if model_ok:
+        k = min(k, min(gens[v].size for v in order))
+    rng = np.random.default_rng(SPLIT_SEED + 1)
+    floor, model = [], []
+    for i in range(splits):
+        f_rows, m_rows = {}, {}
+        for value in order:
+            g, perm = gts[value], perms[value][i]
+            ia, ib = perm[:k], perm[k:]
+            row = geometry_row(g[ib], g[ia], pooled_sd)
+            if row is None:
+                continue
+            f_rows[value] = row
+            if model_ok:
+                p = gens[value]
+                m_rows[value] = geometry_row(g[ib], p[rng.choice(p.size, k, replace=False)], pooled_sd)
+        if f_rows:
+            floor.append(summarize(f_rows))
+        if m_rows:
+            model.append(summarize(m_rows))
+
+    def stats(runs):
+        if not runs:
+            return None
+        out = {}
+        for key in ("w2", "bias", "sd_gap", "shape", "sd_ratio_geomean"):
+            v = np.asarray([r[key] for r in runs])
+            out[key] = {"p50": float(np.median(v)), "p5": float(np.percentile(v, 5)),
+                        "p95": float(np.percentile(v, 95))}
+        out["w2_runs"] = [r["w2"] for r in runs]
+        return out
+
+    n_ref = sorted({gts[v].size - k for v in order})
+    return {"version": NOISE_VERSION, "splits": splits, "seed": SPLIT_SEED, "k": k,
+            "n_ref": n_ref[0] if len(n_ref) == 1 else n_ref,
+            "floor": stats(floor), "model": stats(model) if model_ok else None}
+
+
+def job_w2(job, spread, force, splits=SPLITS):
+    """Per-geometry W2 / FE sd, split into bias, sd and shape; writes spread_w2.json.
+
+    Each geometry is normalized by its own FE sd, so per geometry
+    w2^2 = bias^2 + (sd - 1)^2 + shape^2. The summary takes the root mean square
+    over geometries (the same identity holds for it), plus the geometric mean of
+    the sd ratios, which keeps the direction (below 1 = too narrow). The
+    noise block (see split_noise) is the noise level of the FE set.
+    """
+    out_dir = cfg_values(job["infer"]).get("inference_output_dir")
+    if not out_dir:
+        return None
+    path = method_path(job["method"], out_dir) / "spread_w2.json"
+    npz = path.parent / "spread_values.npz"
+    if path.is_file() and npz.is_file() and not force and path.stat().st_mtime >= npz.stat().st_mtime:
+        cached = json.loads(path.read_text(encoding="utf-8"))
+        noise = cached.get("noise") or {}
+        if noise.get("version") == NOISE_VERSION and noise.get("splits") == splits:
+            return cached   # else written before this noise block: recompute
+    a = spread_arrays(job, spread)
+    if a is None:
+        return None
+    import numpy as np
+    pooled_sd = float(a["gt"].std()) or 1.0
 
     def score(keep):
         rows, skipped = {}, []
-        for value in spread._group_order(v for v in gt_group if v):
-            g, p = gt[gt_group == value], gen[keep & (gen_group == value)]
+        for value in a["order"]:
+            g, p = a["gt"][a["gt_group"] == value], a["gen"][keep & (a["gen_group"] == value)]
             if not p.size:
                 continue
-            w2sq, gap, sx, sy, shape = w2_parts(g, p)
-            if g.size < 2 or sy <= 1e-9 * pooled_sd:
+            row = geometry_row(g, p, pooled_sd)
+            if row is None:
                 skipped.append(value)   # one FE result, or all identical: nothing to normalize by
                 continue
-            rows[value] = {"w2": math.sqrt(w2sq) / sy, "bias": gap / sy, "sd_ratio": sx / sy,
-                           "shape": math.sqrt(shape) / sy, "gt_sd_over_pooled": sy / pooled_sd,
-                           "n_gt": int(g.size), "n_gen": int(p.size)}
-        if not rows:
-            return None, rows, skipped
-
-        def rms(key, shift=0.0):
-            return math.sqrt(sum((r[key] - shift) ** 2 for r in rows.values()) / len(rows))
-
-        summary = {"w2": rms("w2"), "bias": rms("bias"), "sd_gap": rms("sd_ratio", 1.0),
-                   "shape": rms("shape"), "n_groups": len(rows),
-                   "sd_ratio_geomean": math.exp(sum(math.log(max(r["sd_ratio"], 1e-12))
-                                                    for r in rows.values()) / len(rows))}
-        return summary, rows, skipped
+            rows[value] = row
+        return (summarize(rows) if rows else None), rows, skipped
 
     # A `latent_inflation` list tags every draw with its factor (gen_lam). Each
     # factor is scored on its own; the headline is factor 1 when it was drawn.
-    lams = np.asarray(data["gen_lam"], dtype=np.float64) if "gen_lam" in data.files else None
-    every = np.ones(gen.shape, dtype=bool)
+    lams = a["lams"]
+    every = np.ones(a["gen"].shape, dtype=bool)
+    perms = split_perms(a, splits)
     by_inflation = {}
     if lams is not None and np.unique(lams).size > 1:
         for lam in np.unique(lams):
             s, _, _ = score(lams == lam)
             if s:
+                s["noise"] = split_noise(a, lams == lam, splits, perms)
                 by_inflation[f"{lam:g}"] = s
         keep = (lams == 1.0) if np.any(lams == 1.0) else every
     else:
@@ -368,14 +498,84 @@ def job_w2(job, spread, force):
     summary, rows, skipped = score(keep)
     if summary is None:
         return None
-    out = {"attr": attr, "norm": "each geometry's own FE sd",
+    out = {"attr": a["attr"], "norm": "each geometry's own FE sd",
            "identity": "w2^2 = bias^2 + (sd_ratio - 1)^2 + shape^2 (per geometry and for the rms summary)",
-           "summary": summary, "groups": rows, "skipped_zero_sd": skipped}
+           "summary": summary, "groups": rows, "skipped_zero_sd": skipped,
+           "noise": split_noise(a, keep, splits, perms)}
     if by_inflation:
         out["summary_draws"] = "latent_inflation 1" if keep is not every else "every latent_inflation pooled"
         out["by_inflation"] = by_inflation
     path.write_text(json.dumps(out, indent=2), encoding="utf-8")
     return out
+
+
+def floor_figure(job, spread, w2_table, out_png, splits=SPLITS):
+    """noise_floor.png: what a perfect sampler's mismatch looks like, and where each job sits.
+
+    Drawn at the k most jobs share. Top: one split (the one with the median
+    floor W2) of every held-out geometry, k FE results against the other n - k,
+    drawn like histogram_compare. Bottom: the floor W2 over all splits, with
+    each job's median at the same k.
+    """
+    import numpy as np
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    a = spread_arrays(job, spread)
+    if a is None:
+        return False
+    blocks = [(jid, w2["noise"]) for jid, w2 in w2_table if (w2.get("noise") or {}).get("floor")]
+    if not blocks:
+        return False
+    ks = [b["k"] for _, b in blocks]
+    k = max(set(ks), key=ks.count)
+    runs = np.asarray(next(b["floor"]["w2_runs"] for _, b in blocks if b["k"] == k))
+    pick = int(np.argsort(runs)[runs.size // 2])
+    perms = split_perms(a, splits)
+    pooled_sd = float(a["gt"].std()) or 1.0
+    order = [v for v in a["order"] if (a["gt_group"] == v).sum() >= 2]
+
+    ncol = min(4, len(order))
+    nrow = math.ceil(len(order) / ncol)
+    fig = plt.figure(figsize=(4.0 * ncol, 2.9 * nrow + 3.6))
+    grid = fig.add_gridspec(nrow + 1, ncol, height_ratios=[1] * nrow + [1.3])
+    for i, value in enumerate(order):
+        ax = fig.add_subplot(grid[i // ncol, i % ncol])
+        g = a["gt"][a["gt_group"] == value]
+        perm = perms[value][pick]
+        ia, ib = perm[:k], perm[k:]
+        bins = np.histogram_bin_edges(g, bins=16)
+        # Densities: the two sides differ in size when k < n / 2.
+        ax.hist(g[ib], bins=bins, density=True, alpha=0.55, color="steelblue", label=f"FE, the other {ib.size}")
+        ax.hist(g[ia], bins=bins, density=True, alpha=0.55, color="darkorange", label=f"FE, {ia.size} as draws")
+        row = geometry_row(g[ib], g[ia], pooled_sd)
+        ax.set_title(f"{a['attr']} {value}   w2 {fmt(row['w2']) if row else '-'}", fontsize=9)
+        ax.tick_params(labelsize=7)
+        if i == 0:
+            ax.legend(fontsize=7)
+    ax = fig.add_subplot(grid[nrow, :])
+    lo, hi = np.percentile(100 * runs, [5, 95])
+    ax.axvspan(lo, hi, color="0.88", zorder=0, label="floor, 5-95%")
+    ax.hist(100 * runs, bins=30, color="0.55", label=f"FE against FE ({splits} splits)")
+    marks = sorted(((jid, b["model"]["w2"]["p50"]) for jid, b in blocks if b["k"] == k and b.get("model")),
+                   key=lambda m: m[1])
+    top = ax.get_ylim()[1]
+    for j, (jid, v) in enumerate(marks):
+        ax.axvline(100 * v, color="C3", lw=0.9)
+        ax.text(100 * v, top * (0.97 - 0.08 * (j % 8)), f" {jid}", fontsize=7, color="C3", va="top")
+    n_ref = next(b["n_ref"] for _, b in blocks if b["k"] == k)
+    ax.set_xlabel(f"rms over geometries of W2 / FE sd (x100), {k} vs {n_ref} per geometry. "
+                  "Red: each job's median over the same splits, with its draws subsampled to the same size",
+                  fontsize=8)
+    ax.set_ylabel("splits")
+    ax.legend(fontsize=7, loc="center right")
+    fig.suptitle(f"Noise level of the held-out FE set ({a['label']}, {shown(a['eval_h5'])}). "
+                 f"Top: the median split, {k} FE results against the other {n_ref}", fontsize=10)
+    fig.tight_layout(rect=(0, 0, 1, 0.97))
+    fig.savefig(out_png, dpi=120)
+    plt.close(fig)
+    return True
 
 
 def shown(path):
@@ -396,6 +596,8 @@ def main():
     ap.add_argument("--force", action="store_true", help="redraw the per-geometry histograms")
     ap.add_argument("--no-loss", action="store_true")
     ap.add_argument("--no-hist", action="store_true")
+    ap.add_argument("--splits", type=int, default=SPLITS,
+                    help=f"random splits of the FE results for the noise level (default {SPLITS})")
     args = ap.parse_args()
 
     sweep_dir = Path(args.round)
@@ -404,7 +606,7 @@ def main():
     jobs = [j for j in read_jobs(sweep_dir) if not args.jobs or j["job"] in args.jobs]
     spread = None if args.no_hist else load_spread_module()
 
-    table, w2_table = [], []
+    table, w2_table, w2_jobs = [], [], []
     for job in jobs:
         cfg = cfg_values(job["train"] or job["infer"])
         out_root = method_path(job["method"], cfg.get("log_file_dir", ".")).parent.parent
@@ -420,12 +622,13 @@ def main():
             if by:
                 table.append((job["job"], by["attr"], by["groups"]))
             try:
-                w2 = job_w2(job, spread, args.force)
+                w2 = job_w2(job, spread, args.force, args.splits)
             except Exception as exc:
                 print(f"  {job['job']}: per-geometry W2 failed: {exc}")
                 w2 = None
             if w2:
                 w2_table.append((job["job"], w2))
+                w2_jobs.append((job, out_root))
 
     if w2_table:
         print("\nPer geometry W2 (x100, each geometry over its own FE sd; lower is better)")
@@ -439,11 +642,35 @@ def main():
                 print(f"  {'':<18} {k:>8} {fmt(r['w2']):>6} {fmt(r['bias']):>6} {fmt(r['sd_ratio']):>6} "
                       f"{fmt(r['shape']):>6} {fmt(r['gt_sd_over_pooled']):>6}")
             for lam, b in w2.get("by_inflation", {}).items():
+                m = (b.get("noise") or {}).get("model")
                 print(f"  {'':<18} latent_inflation {lam:>5}: w2 {fmt(b['w2'])}  bias {fmt(b['bias'])}  "
                       f"sd gap {fmt(b['sd_gap'])}  shape {fmt(b['shape'])}  sd (geometric mean) "
-                      f"{fmt(b['sd_ratio_geomean'])}")
+                      f"{fmt(b['sd_ratio_geomean'])}"
+                      + (f"  at k={b['noise']['k']}: {fmt(m['w2']['p50'])}" if m else ""))
             if w2.get("skipped_zero_sd"):
                 print(f"  {'':<18} skipped (one FE result, or FE sd 0): {', '.join(w2['skipped_zero_sd'])}")
+
+    blocks = [(jid, w2["noise"]) for jid, w2 in w2_table if (w2.get("noise") or {}).get("floor")]
+    if blocks:
+        print(f"\nNoise level (x100): per geometry, k FE results scored as if they were draws against "
+              f"the other n - k, {blocks[0][1]['splits']} splits: w2 median, 5-95%")
+        for k in sorted({b["k"] for _, b in blocks}, reverse=True):
+            b = next(b for _, b in blocks if b["k"] == k)
+            f = b["floor"]["w2"]
+            print(f"  {'floor':<18} k={k} vs {b['n_ref']}: {fmt(f['p50'])}, {fmt(f['p5'])}-{fmt(f['p95'])}")
+        for jid, b in blocks:
+            m = b.get("model")
+            if m:
+                print(f"  {jid:<18} k={b['k']}, its draws: {fmt(m['w2']['p50'])}, "
+                      f"{fmt(m['w2']['p5'])}-{fmt(m['w2']['p95'])}")
+        if not args.jobs:   # the figure marks every job, so only on a full pass
+            job, out_root = w2_jobs[0]
+            png = out_root / "noise_floor.png"
+            try:
+                if floor_figure(job, spread, w2_table, png, args.splits):
+                    print(f"  {shown(png)}")
+            except Exception as exc:
+                print(f"  noise_floor.png failed: {exc}")
 
     if table:
         print("\nPer geometry (x100): crps (lower is better) / sd (100 = right width)")

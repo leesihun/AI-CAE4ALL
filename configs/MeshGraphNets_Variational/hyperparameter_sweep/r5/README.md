@@ -146,7 +146,8 @@ epoch). SAR and LDGN have no wall-clock cap key.
 
 ```
 R5 <node> <h>h D<done>/<jobs> F<failed>
-<job> w2 b s shape sdg crps h [flags]
+floor p50 p5 p95
+<job> w2 b s shape sdg crps h w2h [flags]
 infl_hybrid@1.5 w2 b s shape sdg - -
 ```
 
@@ -156,3 +157,23 @@ sd, then the root mean square over the 8 geometries. It splits exactly as
 w2² = b² + s² + shape² (mean offset, width error, the rest). `sdg` is 100 when
 the width is right and below 100 when too narrow. An inference-only job prints
 one extra line per λ. [brief.py](brief.py) explains the flags.
+
+**The noise level (`floor`, `w2h`).** The 64 FE results of each geometry are
+themselves a sample. [../plots.py](../plots.py) cuts them at random into two
+halves of 32, 200 times with a fixed seed, and scores one half against the
+other: `floor` is the median of that W2 and its 5–95% range. It is the score a
+perfect sampler would get at this sample size. `w2h` scores 32 of the job's
+draws against the same halves, so compare `w2h` with `floor`, not `w2`. A
+`w2h` inside the floor range means the job cannot be told from FE scatter.
+The infl jobs have 16 draws per λ, too few for this, so their `w2h` is `-`.
+The figure is `output/b300_r5/noise_floor.png`: one median split per geometry
+(half A against half B) and the floor histogram with each job's `w2h`.
+
+To add both to jobs that already finished (their `spread_w2.json` predates
+them and is recomputed), run from the repo root:
+
+```
+PY=$(python -c "from pathlib import Path; from cae_suite.settings import LocalSettings; print(LocalSettings.load(Path('.')).resolve_python('meshgraphnets-v', 'meshgraphnets_variational'))")
+"$PY" -B configs/MeshGraphNets_Variational/hyperparameter_sweep/plots.py configs/MeshGraphNets_Variational/hyperparameter_sweep/r5 --no-loss
+python -B configs/MeshGraphNets_Variational/hyperparameter_sweep/r5/brief.py 135
+```

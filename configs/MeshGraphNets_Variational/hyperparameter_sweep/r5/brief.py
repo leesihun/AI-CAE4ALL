@@ -12,7 +12,8 @@ spread_w2.json for the ranking, spread_metrics.json for crps.
 Every number is x100 and rounded, so "23" is 0.23.
 
 Header   R5 <node> <h>h D<done>/<jobs> F<failed>
-Line     job  w2 b s shape sdg crps h
+Floor    floor w2 p5 p95
+Line     job  w2 b s shape sdg crps h w2h
     Per geometry, each over that geometry's own FE sd, then the root mean
     square over the 8 geometries, so w2^2 = b^2 + s^2 + shape^2:
     w2    = W2 between the draws and the FE results (the ranking; 0 is perfect)
@@ -22,10 +23,19 @@ Line     job  w2 b s shape sdg crps h
     sdg   = geometric mean of the sd ratios (100 is right; below = too narrow)
     crps  = crps_norm (pooled, from spread_metrics.json)
     h     = training hours ("-" for an inference-only job)
+    w2h   = w2 at half the sample size: 32 of the job's draws against one
+            random half (32) of each geometry's FE results, the median over
+            ../plots.py's 200 splits. Compare it with the floor line, not w2.
+The floor line is the noise level of the held-out FE set: one random half of
+each geometry's FE results scored against the other half, as if it were the
+draws (32 vs 32), median and 5-95% over the same 200 splits. A perfect sampler
+scores about that; a job whose w2h sits inside p5-p95 cannot be told apart
+from one. It measures the sampling noise of the score, not seed noise.
     "-" in the W2 columns: plots.py has not run on that job yet.
 An inference-only job (infl_*) samples at several latent_inflation factors;
-its line scores factor 1, and one line per factor follows, with crps "-"
-(spread_metrics.json pools every factor):
+its line scores factor 1 (w2h "-": 16 draws per factor is below 32), and
+one line per factor follows, with crps "-" (spread_metrics.json pools every
+factor):
     infl_hybrid@1.5 w2 b s shape sdg - -
 A failure appends F:<stage> and the first error line. A job still training
 prints "run NN%" (epochs done over the configured total; SAR and LDGN print
@@ -211,7 +221,7 @@ def node_block(node, rows, long):
     if abort:
         # Nothing ran this time; the job lines would be an older run's.
         return [f"R5 {node} ABORT {abort.splitlines()[0]}"]
-    lines, n_done, n_fail = [], 0, 0
+    lines, n_done, n_fail, floor = [], 0, 0, None
     jobs = [Job(j, m, t, i, status_dir) for n, j, m, t, i in rows if n == node]
     for job in jobs:
         n_done += job.state() == "done" and job.failure() is None
@@ -219,11 +229,15 @@ def node_block(node, rows, long):
         m = metrics(os.path.join(job.infer_dir, "spread_metrics.json")) or {}
         if long and m:
             print(f"  {job.jid:<16} " + " ".join(f"{k}={v:.4f}" for k, v in sorted(m.items())))
-        w2, by_lam = {}, {}
+        w2, by_lam, half = {}, {}, None
         try:
             with open(os.path.join(job.infer_dir, "spread_w2.json"), encoding="utf-8") as fh:
                 full = json.load(fh)
             w2, by_lam = full.get("summary", {}), full.get("by_inflation", {})
+            sh = full.get("noise") or full.get("split_half") or {}
+            if sh.get("k", 0) == sh.get("n_ref", 0):   # halves only (32 vs 32 on the 64-draw file)
+                floor = floor or (sh.get("floor") or {}).get("w2")
+                half = ((sh.get("model") or {}).get("w2") or {}).get("p50")
         except (OSError, ValueError):
             pass
         if long and w2:
@@ -231,7 +245,7 @@ def node_block(node, rows, long):
         h = job.hours()
         cols = [x100(w2.get("w2")), x100(w2.get("bias")), x100(w2.get("sd_gap")),
                 x100(w2.get("shape")), x100(w2.get("sd_ratio_geomean")), x100(m.get("crps_norm")),
-                f"{h:.0f}" if h is not None else "-"]
+                f"{h:.0f}" if h is not None else "-", x100(half)]
         lines.append(f"{job.jid} " + " ".join(cols) + job.flags())
         for lam, b in sorted(by_lam.items(), key=lambda kv: float(kv[0])):
             lines.append(f"{job.jid}@{lam} " + " ".join(
@@ -239,6 +253,8 @@ def node_block(node, rows, long):
                  x100(b.get("shape")), x100(b.get("sd_ratio_geomean")), "-", "-"]))
     h = run_hours(status_dir)
     head = f"R5 {node} {'-' if h is None else f'{h:.0f}'}h D{n_done}/{len(jobs)} F{n_fail}"
+    if floor:
+        head += f"\nfloor {x100(floor['p50'])} {x100(floor['p5'])} {x100(floor['p95'])}"
     return [head] + lines
 
 
