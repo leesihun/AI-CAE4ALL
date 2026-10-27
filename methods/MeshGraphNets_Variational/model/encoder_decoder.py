@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 from torch_geometric.data import Data
 
+from model import compiled_block
 from model.blocks import EdgeBlock, HybridNodeBlock, NodeBlock
 from model.checkpointing import checkpoint_active, run_mlp
 from model.mlp import build_mlp
@@ -44,6 +45,8 @@ class GnBlock(nn.Module):
     def __init__(self, latent_dim, use_world_edges=False):
         super().__init__()
         self.use_world_edges = use_world_edges
+        # Set by compiled_block.enable() (`use_compile`) once its self-test passed.
+        self.compiled = False
 
         eb_input_dim = 3 * latent_dim
         self.eb_module = EdgeBlock(custom_func=build_mlp(eb_input_dim, latent_dim, latent_dim))
@@ -55,6 +58,10 @@ class GnBlock(nn.Module):
             self.nb_module = NodeBlock(custom_func=build_mlp(2 * latent_dim, latent_dim, latent_dim))
 
     def forward(self, graph):
+        if self.compiled:
+            out = compiled_block.forward(self, graph)
+            if out is not None:
+                return out
         x_input = graph.x
         world_edge_index = graph.world_edge_index if self.use_world_edges and hasattr(graph, 'world_edge_index') else None
         world_edge_attr = (

@@ -29,16 +29,45 @@ import numpy as np
 import torch
 
 # Keys that legitimately differ between two launches of the same run.
-_VOLATILE_KEYS = frozenset({'gpu_ids', 'log_dir', 'resume_training', 'resume_interval_minutes'})
+# use_checkpointing (memory for recompute) and use_compile (eager or compiled
+# kernels) change how a step runs, not what it computes, so a run may switch
+# them between launches.
+_VOLATILE_KEYS = frozenset({'gpu_ids', 'log_dir', 'resume_training', 'resume_interval_minutes',
+                            'use_checkpointing', 'use_compile'})
+# Earlier volatile sets, oldest first: states written under them still load.
+_LEGACY_VOLATILE_KEYS = (
+    _VOLATILE_KEYS - {'use_checkpointing', 'use_compile'},   # before 2026-10-27
+    _VOLATILE_KEYS - {'use_compile'},                        # 2026-10-27, first change
+)
 DEFAULT_INTERVAL_MINUTES = 15.0
 
 
 def config_fingerprint(config) -> str:
     """sha256 over the config's keys and values, minus launch-specific ones
-    (`gpu_ids`, the resume keys, and runtime keys starting with `_`)."""
+    (`gpu_ids`, the resume keys, `use_checkpointing`, `use_compile`, and
+    runtime keys starting with `_`)."""
+    return _digest(config, _VOLATILE_KEYS)
+
+
+def _digest(config, volatile) -> str:
     items = sorted((str(k), repr(v)) for k, v in config.items()
-                   if k not in _VOLATILE_KEYS and not str(k).startswith('_'))
+                   if k not in volatile and not str(k).startswith('_'))
     return hashlib.sha256(repr(items).encode('utf-8')).hexdigest()
+
+
+def _legacy_fingerprints(config) -> set:
+    """Fingerprints a state written under an earlier volatile set carries, for
+    each value the since-volatile keys could have had then (absent, True, False)."""
+    out = set()
+    for volatile in _LEGACY_VOLATILE_KEYS:
+        newer = sorted(_VOLATILE_KEYS - volatile)
+        base = {k: v for k, v in config.items() if k not in newer}
+        combos = [{}]
+        for key in newer:
+            combos = [dict(c, **extra) for c in combos
+                      for extra in ({}, {key: True}, {key: False})]
+        out |= {_digest(dict(base, **c), volatile) for c in combos}
+    return out
 
 
 def reject_multi_process(config, where: str) -> None:
@@ -90,6 +119,7 @@ class TrainingResume:
         minutes = config.get('resume_interval_minutes', DEFAULT_INTERVAL_MINUTES)
         self.interval = max(0.0, float(minutes)) * 60.0
         self.fingerprint = config_fingerprint(config)
+        self._legacy = _legacy_fingerprints(config)
         self.upstream = [_file_identity(p) for p in upstream]
         self._last = time.monotonic()
         self._rng = None
@@ -98,7 +128,8 @@ class TrainingResume:
         if not self.enabled or not os.path.exists(self.path):
             return None
         state = torch.load(self.path, map_location='cpu', weights_only=False)
-        if state.get('fingerprint') != self.fingerprint:
+        if (state.get('fingerprint') != self.fingerprint
+                and state.get('fingerprint') not in self._legacy):
             raise RuntimeError(
                 f'{self.path} was written under a different config; move it away to train '
                 'from epoch 0, or restore the config it was written with')

@@ -75,6 +75,28 @@ SHARE = 2.0            # three jobs on one card: guessed slowdown of each
 BS_FACTOR = {2: 1.3, 4: 1.0, 8: 0.85, 16: 0.75}   # guessed
 INFER_H, INFL_H = 2.0, 4.0
 
+# Gradient checkpointing costs 1.52x per step (aarl 3090, bs 1, 2026-10-27), so it is off
+# wherever the job fits without it. Peak memory without it, measured there at bs 1: 21 GB per
+# 100k nodes at the reference (13 at latent_dim 64, +4.7 at prior_hidden_dim 256; the same
+# for every placement), +1 GB fixed. The prior_mp_layers term is a guess (same as width).
+# Worst batch in nodes = max of 200k random ex3 batches (mean sample 48k, largest 87k).
+CKPT_SPEEDUP = 1.52
+WORST_NODES = {2: 175e3, 4: 329e3, 8: 563e3, 16: 1045e3}
+MEM_BUDGET_GB = 80     # of ~96 GB per job (288 GB B300, three per card)
+# amp_layernorm (LayerNorm on the bf16 activations): 17.1 instead of 21 GB per 100k nodes
+# at the reference, same harness. Applied to every term (measured at the reference only).
+AMP_LN_MEM = 17.1 / 21
+
+
+def peak_gb_without_checkpointing(spec):
+    per_100k = (5.0 + 16.0 * spec.w / 128 + 4.7 * (spec.ph / 128 - 1)
+                + 4.7 * (spec.pm / 3 - 1))
+    return per_100k * AMP_LN_MEM * WORST_NODES[spec.bs] / 1e5 + 1.0
+
+
+def use_checkpointing(spec):
+    return peak_gb_without_checkpointing(spec) > MEM_BUDGET_GB
+
 
 @dataclasses.dataclass(frozen=True)
 class Spec:
@@ -127,6 +149,8 @@ augment_geometry                 True
 std_noise                        0.0
 use_amp                          True
 use_checkpointing                True
+use_compile                      True
+amp_layernorm                    True
 use_ema                          True
 ema_decay                        0.99
 use_parallel_stats               False
@@ -254,6 +278,7 @@ def train_body(spec, job):
     b.set("prior_mp_layers", spec.pm).set("prior_hidden_dim", spec.ph)
     if spec.fb != REF["fb"]:
         b.set("prior_fm_blocks", spec.fb, after="prior_hidden_dim")
+    b.set("use_checkpointing", use_checkpointing(spec))
     b.set("resume_training", "True")
     return b
 
@@ -281,7 +306,8 @@ def det_train_body():
     b.set("inference_output_dir", f"{run}/infer")
     b.set("hierarchy_cache_dir", f"../../output/b300_{ROUND}/mscache/mgnv_v{VORONOI[0]}_{VORONOI[1]}")
     for k, v in (("best_by", "recon"), ("use_vae", "False"), ("recon_loss", "mse"),
-                 ("use_conditional_prior", "False"), ("resume_training", "True")):
+                 ("use_conditional_prior", "False"), ("use_checkpointing", "False"),
+                 ("resume_training", "True")):
         b.set(k, v)
     return b
 
@@ -315,8 +341,9 @@ def fmt(v):
 
 def est_hours(spec):
     if spec is None:
-        return H120 * 0.6 * SHARE + INFER_H   # no encoder, no prior (guess)
-    return H120 * spec.ep / 120 * (spec.w / 128) ** 1.5 * BS_FACTOR[spec.bs] * SHARE + INFER_H
+        return H120 * 0.6 * SHARE / CKPT_SPEEDUP + INFER_H   # no encoder, no prior (guess)
+    ckpt = 1.0 if use_checkpointing(spec) else 1.0 / CKPT_SPEEDUP
+    return H120 * spec.ep / 120 * (spec.w / 128) ** 1.5 * BS_FACTOR[spec.bs] * SHARE * ckpt + INFER_H
 
 
 def build_jobs():
@@ -401,7 +428,10 @@ def self_check(jobs):
     ok = True
     # hierarchy_cache_build_workers only sets how many CPU processes build the
     # (identical) hierarchy cache; r6 raised it from 8 to 48 for the 128-core node.
-    build_only = {"hierarchy_cache_build_workers"}
+    # use_checkpointing only trades memory for recompute; the gradients are the same.
+    # use_compile (fused GnBlocks, eager fallback) and amp_layernorm are r6 speedups, set
+    # on every job alike; amp_layernorm rounds LayerNorm in bf16, so r6 is not bit-equal to r4.
+    build_only = {"hierarchy_cache_build_workers", "use_checkpointing", "use_compile", "amp_layernorm"}
     skip = PATH_KEYS | build_only | {"message_passing_num", "mp_per_level"}
     for p in PLACEMENTS:
         mine = train_body(Spec(p), f"{p}_ref").as_dict()

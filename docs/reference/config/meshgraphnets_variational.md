@@ -212,7 +212,8 @@ flags them as `MGNV-REMOVED`).
 | `grad_accum_steps` | training | `1` steps per batch, `N` accumulates N batches, `0` accumulates the whole epoch. |
 | `use_checkpointing` | model | Activation checkpointing in training. |
 | `use_amp` | training | bfloat16 autocast. |
-| `use_compile` | training | `torch.compile(dynamic=True)`. |
+| `use_compile` | training | Compiles each plain GnBlock (no world edges) as one `torch.compile(dynamic=True)` tensor function (`model/compiled_block.py`). A startup self-test runs it forward and backward against eager; any failure, then or later, switches back to eager and training continues. Execution-only: resume-volatile. |
+| `amp_layernorm` | model | Under `use_amp`, LayerNorm runs on the bf16 activations instead of upcasting to fp32 (1.06-1.20x step, -19% activation memory on a 3090). Changes numerics, so it is stored in the checkpoint's model config and a resume state refuses a switch. Default `False`. |
 | `use_ema` | training | EMA shadow model for validation and inference. |
 | `ema_decay` | training | EMA decay. |
 | `test_interval` | training | Visualization/test output cadence. |

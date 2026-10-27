@@ -32,7 +32,10 @@ VAR_KEYS = frozenset(
         "time_integration",
         "noise_std_ratio", "weight_decay", "warmup_epochs", "augment_geometry",
         "grad_accum_steps", "use_checkpointing", "use_amp", "use_ema", "ema_decay",
-        "use_compile", "test_interval", "val_interval", "test_max_batches",
+        # use_compile: single-process/DDP training compiles each plain GnBlock
+        # (model/compiled_block.py) and falls back to eager on any failure.
+        # amp_layernorm: the MLP LayerNorms run in the autocast dtype.
+        "use_compile", "amp_layernorm", "test_interval", "val_interval", "test_max_batches",
         # Batch for the rank-0 (unsharded) validation loader. Defaults to
         # batch_size; set it when a DDP run lowers batch_size per rank.
         "val_batch_size",

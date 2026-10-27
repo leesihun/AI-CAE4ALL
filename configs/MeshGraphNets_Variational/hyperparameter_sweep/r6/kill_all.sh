@@ -13,7 +13,8 @@
 # case a runner started a job between the scan and the SIGSTOP. Afterwards it
 # removes the pid files and the hierarchy-cache .lock / .tmp.<pid> files a
 # killed builder leaves (a .lock only counts as stale after 6 h, so every later
-# job would wait on it).
+# job would wait on it), and quits the MPS control daemon run_node.sh started
+# (/tmp/b300_mps_<uid>; it is not in a runner's process tree).
 #
 # A killed training continues from its last <checkpoint>.resume when it is run
 # again with resume_training true (run_node.sh appends it); others start over.
@@ -92,6 +93,12 @@ fi
 LOCKS="$(leftovers)"
 [ -n "$LOCKS" ] && echo "cache build leftovers:" && echo "$LOCKS" | sed "s#^$REPO/#  #"
 
+MPS_PIPE="/tmp/b300_mps_$ME"
+mps_ctl() { CUDA_MPS_PIPE_DIRECTORY="$MPS_PIPE" timeout 20 nvidia-cuda-mps-control; }
+MPS_UP=0
+[ -S "$MPS_PIPE/control" ] && command -v nvidia-cuda-mps-control >/dev/null 2>&1     && echo get_server_list | mps_ctl >/dev/null 2>&1 && MPS_UP=1
+[ "$MPS_UP" = "1" ] && echo "MPS control daemon running ($MPS_PIPE)"
+
 if [ "$DRY" = "1" ]; then
     echo "(-n: nothing was signalled or removed)"
     exit 0
@@ -132,6 +139,11 @@ while IFS= read -r f; do
     [ -n "$f" ] || continue
     rm -f -- "${f:?}" && n_locks=$((n_locks + 1))
 done < <(leftovers)
+
+# The daemon last: its clients are gone now.
+if [ "$MPS_UP" = "1" ]; then
+    if echo quit | mps_ctl >/dev/null 2>&1; then echo "MPS control daemon quit"; else echo "MPS control daemon did not answer quit"; fi
+fi
 
 echo "done: $total processes signalled, $n_locks cache build leftovers removed"
 command -v nvidia-smi >/dev/null 2>&1 \

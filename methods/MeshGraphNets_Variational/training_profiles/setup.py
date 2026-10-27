@@ -57,8 +57,8 @@ def build_dataset_splits(config, split_seed: int):
 
 def build_model_and_ema(config, device):
     """
-    Instantiate MeshGraphNets, wrap with EMA if configured, and optionally
-    compile with torch.compile.  Returns (model, ema_model); ema_model is None
+    Instantiate MeshGraphNets, wrap with EMA if configured, and with
+    `use_compile` compile its GnBlocks (eager if that fails).  Returns (model, ema_model); ema_model is None
     when `use_ema` is not set.
     """
     model = MeshGraphNets(config, str(device)).to(device)
@@ -67,8 +67,12 @@ def build_model_and_ema(config, device):
     if ema_model is not None:
         ema_model = ema_model.to(device)
 
+    # Per-block compile with eager fallback (model/compiled_block.py), not a
+    # whole-model torch.compile.
     if config.get('use_compile', False):
-        model = torch.compile(model, dynamic=True)
+        from model import compiled_block
+        compiled_block.enable([model, ema_model], device, resolve_amp_dtype(device),
+                              bool(config.get('use_amp', True)))
 
     return model, ema_model
 
@@ -82,7 +86,11 @@ def log_model_summary(model, config, ema_model=None):
     if config.get('use_amp', True):
         print(f"Mixed precision (AMP): ENABLED ({describe_amp(resolve_amp_dtype())})")
     if config.get('use_compile', False):
-        print("torch.compile: ENABLED (dynamic=True)")
+        from model import compiled_block
+        print("torch.compile: GnBlocks" if not compiled_block._disabled_reason
+              else f"torch.compile: OFF ({compiled_block._disabled_reason})")
+    if config.get('amp_layernorm', False):
+        print("LayerNorm in the AMP dtype: ENABLED")
     if ema_model is not None:
         print(f"EMA: ENABLED (decay={config.get('ema_decay', 0.999)})")
     if config.get('use_vae', False):
@@ -204,6 +212,9 @@ def build_model_config(config) -> dict:
         'num_timesteps':     config.get('num_timesteps'),
         'use_world_edges':   config.get('use_world_edges', False),
         'use_checkpointing': config.get('use_checkpointing', False),
+        # Precision, not architecture: recorded so inference normalizes the
+        # way training did. Absent in older checkpoints, which used fp32.
+        'amp_layernorm':     bool(config.get('amp_layernorm', False)),
         'use_multiscale':    config.get('use_multiscale', False),
         'multiscale_levels': config.get('multiscale_levels', 1),
         'mp_per_level':      config.get('mp_per_level', None),

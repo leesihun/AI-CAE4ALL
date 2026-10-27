@@ -58,7 +58,8 @@
 #   not a terminal), JOBS="a b" (only these, in this order, run again even if done),
 #   REDO=1 (every job again, from scratch), LANE=b (a second run of the SAME round
 #   beside one still going: its own run_<node>_b.out/.pid, and it leaves the
-#   hierarchy cache and the run hours of the first alone).
+#   hierarchy cache and the run hours of the first alone; it joins the first's MPS daemon),
+#   MPS=1 (0: the jobs of one card time-slice instead of sharing it through MPS).
 # Inference-only rerun:  TRAIN=0 JOBS="..." bash run_135.sh
 # End the queue early:   touch output/b300_r6/stop_135   (running jobs finish,
 #                        no new job starts; the next run deletes it)
@@ -91,6 +92,9 @@ THREADS_PER_JOB="${THREADS_PER_JOB:-4}"
 export OMP_NUM_THREADS="${OMP_NUM_THREADS:-$THREADS_PER_JOB}"
 export MKL_NUM_THREADS="${MKL_NUM_THREADS:-1}"
 export OPENBLAS_NUM_THREADS="${OPENBLAS_NUM_THREADS:-1}"
+# use_compile: Inductor starts min(32, cores) compile workers per process by default,
+# 21 trainers x 32 at startup.
+export TORCHINDUCTOR_COMPILE_THREADS="${TORCHINDUCTOR_COMPILE_THREADS:-$THREADS_PER_JOB}"
 
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
 cd "$REPO_ROOT" || exit 1
@@ -108,6 +112,9 @@ LOG_ROOT="$OUT_ROOT/run_logs/$NODE"
 STATUS_DIR="$LOG_ROOT/status"
 LANE="${LANE:-}"
 export LANE
+MPS="${MPS:-1}"
+# MPS pipe: node-local and short (a UNIX socket path has ~100 characters); kill_all.sh uses it too.
+MPS_PIPE="/tmp/b300_mps_$(id -u)"
 RUN_LOG="$OUT_ROOT/run_$NODE${LANE:+_$LANE}.out"
 PID_FILE="$OUT_ROOT/run_$NODE${LANE:+_$LANE}.pid"
 mkdir -p "$LOG_ROOT" "$STATUS_DIR"
@@ -181,9 +188,80 @@ need_infer() {
 if [ "$PHASE" = "run" ]; then
     exec > >(tee -a "$MASTER_LOG") 2>&1
     echo "$$" > "$PID_FILE"
-    trap 'rm -f "$PID_FILE"' EXIT
+    trap 'rm -f "$PID_FILE"; mps_stop' EXIT
     GPU_ARR=($GPUS)
     NG=${#GPU_ARR[@]}
+
+    # MPS: the three jobs of a card share it as one CUDA context instead of
+    # time-slicing (1.54x throughput for 3 jobs on one card, aarl 3090, 2026-10-27).
+    # One control daemon of ours for every card, started here and quit at the
+    # end (kill_all.sh quits it too); a LANE run only joins a running one. Every
+    # card is probed through it first: a client that does not start, hangs
+    # (another user's MPS server owns the card) or lands on another card than
+    # its index means no MPS for this run, said once, and the jobs time-slice.
+    MPS_MINE=0
+    mps_ctl() { CUDA_MPS_PIPE_DIRECTORY="$MPS_PIPE" timeout 20 nvidia-cuda-mps-control; }
+    mps_alive() { [ -S "$MPS_PIPE/control" ] && echo get_server_list | mps_ctl >/dev/null 2>&1; }
+    mps_stop() {
+        [ "$MPS_MINE" = "1" ] || return 0
+        local f pid
+        for f in "$OUT_ROOT"/run_"$NODE"_*.pid; do   # a LANE run still uses it
+            [ -f "$f" ] && [ "$f" != "$PID_FILE" ] || continue
+            pid="$(tr -dc '0-9' < "$f")"
+            [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && { echo "  MPS daemon left running for $f"; return 0; }
+        done
+        echo quit | mps_ctl >/dev/null 2>&1 && echo "  MPS daemon stopped"
+        MPS_MINE=0
+    }
+    mps_probe() {   # card index -> 0 when a client works through the daemon on that card
+        local g="$1" want got
+        want="$(nvidia-smi -i "$g" --query-gpu=uuid --format=csv,noheader 2>/dev/null | tr -d ' ')"
+        got="$(CUDA_VISIBLE_DEVICES="$g" MPS_WANT="$want" timeout 180 "$MGNV_PYTHON" -c "
+import os, torch
+torch.zeros(1, device='cuda'); torch.cuda.synchronize()
+have = 'GPU-' + str(torch.cuda.get_device_properties(0).uuid)
+print('ok' if have.lower() == os.environ['MPS_WANT'].lower() else 'the client landed on ' + have)
+" 2>&1 | tail -1)"
+        [ "$got" = "ok" ] && return 0
+        echo "card $g: ${got:-the client failed or hung (180 s) with no output}"; return 1
+    }
+    if [ "$MPS" = "1" ] && ! command -v nvidia-cuda-mps-control >/dev/null 2>&1; then
+        echo "  MPS: nvidia-cuda-mps-control not found, the jobs of a card time-slice"
+    elif [ "$MPS" = "1" ]; then
+        export CUDA_MPS_PIPE_DIRECTORY="$MPS_PIPE" CUDA_MPS_LOG_DIRECTORY="$MPS_PIPE/log"
+        mps_why=""
+        if mps_alive; then
+            echo "  MPS: joining the running daemon ($MPS_PIPE)"
+            [ -z "$LANE" ] && MPS_MINE=1
+        elif [ -n "$LANE" ]; then
+            mps_why="no running daemon to join (a LANE run does not start one)"
+        else
+            mkdir -p "$CUDA_MPS_LOG_DIRECTORY" && chmod 700 "$MPS_PIPE"
+            if env -u CUDA_VISIBLE_DEVICES nvidia-cuda-mps-control -d && sleep 2 && mps_alive; then
+                MPS_MINE=1
+                echo "  MPS: daemon started ($MPS_PIPE, log $CUDA_MPS_LOG_DIRECTORY)"
+            else
+                mps_why="the control daemon did not start"
+            fi
+        fi
+        if [ -z "$mps_why" ]; then
+            for g in $(printf '%s
+' "${GPU_ARR[@]}" | sort -un); do
+                mps_why="$(mps_probe "$g")" || break
+                mps_why=""
+            done
+        fi
+        if [ -z "$mps_why" ] && [ -z "$(echo get_server_list | mps_ctl 2>/dev/null)" ]; then
+            mps_why="the probes ran but no MPS server started"
+        fi
+        if [ -n "$mps_why" ]; then
+            echo "  MPS OFF, the jobs of a card time-slice: $mps_why"
+            mps_stop
+            unset CUDA_MPS_PIPE_DIRECTORY CUDA_MPS_LOG_DIRECTORY
+        else
+            echo "  MPS ON: every card answered through the daemon"
+        fi
+    fi
 
     RUN_IDX=()
     for i in "${!JOB_IDS[@]}"; do

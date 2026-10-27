@@ -14,7 +14,7 @@ from model.latent import (
     LATENT_REGS, LATENT_TYPES, Latent, coarsest_parent_maps, coarsest_view,
     kl_to_standard_normal,
 )
-from model.mlp import build_mlp, init_weights
+from model.mlp import AmpLayerNorm, build_mlp, init_weights
 from model.vae import GNNVariationalEncoder, gather_across_ranks
 
 # z_l rows entering one MMD estimate. MMD is O(rows^2); a 16-graph batch of
@@ -55,6 +55,12 @@ class MeshGraphNets(nn.Module):
                   f'(prior_type=gnn_e2e, family={self.prior.family})')
         else:
             self.prior = None
+
+        # `amp_layernorm`: the MLP LayerNorms keep autocast's dtype (model/mlp.py).
+        if bool(config.get('amp_layernorm', False)):
+            for m in self.modules():
+                if isinstance(m, AmpLayerNorm):
+                    m.in_amp_dtype = True
 
         print('MeshGraphNets model created successfully')
 
