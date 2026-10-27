@@ -6,7 +6,7 @@
 #
 # jobs.txt is the job table (node, job, method, train config, infer
 # config), written by make_sweep.py; README.md says what each job is
-# for. Job k starts on the k-th slot (GPUS lists a card twice for two slots);
+# for. Job k starts on the k-th slot (GPUS lists a card three times for three slots);
 # each slot that frees up takes the next line. A train config of '-' is an
 # inference-only job: it samples the checkpoint its infer config names. When a
 # training job of the same table writes that checkpoint, it waits for it.
@@ -50,8 +50,9 @@
 #
 # Overrides, in front of the command (GPUS="0 2 3" bash run_135.sh):
 #   PYTHON (launcher), MGNV_PYTHON (default from ai_cae4all.local.toml),
-#   GPUS (run_135.sh: 0 2 3 4 5 6 7 0 2 3 4 5 6 7, a card listed twice runs two jobs at once;
+#   GPUS (run_135.sh: 0 2 3 4 5 6 7 x3, a card listed three times runs three jobs at once;
 #   slot s takes job s first, so list every card once before any twice),
+#   (run_135.sh sets THREADS_PER_JOB 2 for its 21 slots)
 #   THREADS_PER_JOB=4, PROBE_TIMEOUT=900, PREFLIGHT=1, TRAIN=1, INFER=1,
 #   DETACH=1 (0 keeps the jobs in this terminal; the default when stdout is
 #   not a terminal), JOBS="a b" (only these, in this order, run again even if done),
