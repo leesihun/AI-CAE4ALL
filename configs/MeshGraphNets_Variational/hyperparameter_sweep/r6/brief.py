@@ -7,7 +7,8 @@
 Standard library only; run it with any Python 3.8+, while the jobs run or
 after. It prints a column legend and a numbered job index (read them, do not
 type them), then the block to type back. Jobs are numbers (#, the jobs.txt
-order), so a line is only numbers. The ranking comes last, best w2 first:
+order), so a line is only numbers. The ranking comes last, best w2 first,
+as job number and w2 only (--long adds the other columns):
 
     ==== TYPE THIS BACK ====
     R6 135 41h D20/98 F1          round, node, run hours, done/jobs, failed
@@ -17,9 +18,9 @@ order), so a line is only numbers. The ranking comes last, best w2 first:
     wait 16-98                    not started yet
     stop 7                        was running when the run died (run the round again)
     9 F:train CUDA out of memory  a failure: stage and the first error line
-    12@1.5 160 150 45 47 87       #@lam w2 w2h b s sdg (inflation factors, not ranked)
-    1 3 89 70 45 41 92 30         rank # w2 w2h b s sdg h   (one line per finished job)
-    2 11 91 72 44 40 95 31
+    12@1.5 150                    #@lam w2h (inflation factors, not ranked)
+    3 89                          # w2, best first (one line per finished job)
+    11 91
     ==== END ====
 """
 import argparse
@@ -36,17 +37,17 @@ NODE = "135"
 EPOCH_RE = re.compile(r"^Elapsed: ([\d.]+)s Epoch (\d+)")
 LEGEND = """\
 COLUMNS (do not type)   every number x100, rounded ("27" = 0.27)
-  rank  1 = lowest w2 (the ranked lines are the last lines of the block)
+  ranking  the last lines of the block: # w2, lowest w2 first
   #     job number (JOBS below, the jobs.txt order)
   w2    the ranking: per geometry, W2 between the 1024 draws and the 256 FE results
         over the FE sd, then the RMS over the 8 held-out geometries. 0 = identical;
         ~15 a perfect sampler (estimate); 27 the floor; 100 = the exact FE mean
         with no spread, or the right shape shifted by 1 sd
-  w2h   128 draws against a random half (128) of the FE results, median of 200
+  w2h   (--long) 128 draws against a random half (128) of the FE results, median of 200
         splits: compare it with the floor line (a perfect sampler sits inside it)
-  b     mean offset    s  width error |sd ratio - 1|    w2^2 = b^2 + s^2 + shape^2
-  sdg   geometric mean of the sd ratios (100 = right width, below = too narrow)
-  h     training hours ("-" = inference only, on an earlier checkpoint)
+  b     (--long) mean offset    s  width error |sd ratio - 1|    w2^2 = b^2 + s^2 + shape^2
+  sdg   (--long) geometric mean of the sd ratios (100 = right width, below = too narrow)
+  h     (--long) training hours ("-" = inference only, on an earlier checkpoint)
   #@lam one latent_inflation factor of an inflation job: 256 draws, so compare w2h;
         listed above the ranking, not in it (w2 from 256 draws is not comparable)
   floor 128 of each geometry's FE results against the other 128: median, 5%, 95%"""
@@ -269,13 +270,14 @@ def main():
                 x100(w2.get("sd_ratio_geomean")), "-" if h is None else f"{h:.0f}"]
         if args.long:
             cols += [x100(w2.get("shape")), x100(m.get("crps_norm"))]
-        ranked.append((w2.get("w2", float("inf")), j.num, f"{j.num} " + " ".join(cols) + ("" if w2 else " noplot")))
+        shown = cols if args.long else cols[:1]
+        ranked.append((w2.get("w2", float("inf")), j.num, f"{j.num} " + " ".join(shown) + ("" if w2 else " noplot")))
         for lam, b in sorted((full.get("by_inflation") or {}).items(), key=lambda kv: float(kv[0])):
             s = b.get("summary") or b
             bh = (((b.get("noise") or {}).get("model") or {}).get("w2") or {}).get("p50")
-            infl.append(f"{j.num}@{lam} " + " ".join(
-                [x100(s.get("w2")), x100(bh), x100(s.get("bias")), x100(s.get("sd_gap")),
-                 x100(s.get("sd_ratio_geomean"))]))
+            icols = [x100(s.get("w2")), x100(bh), x100(s.get("bias")), x100(s.get("sd_gap")),
+                     x100(s.get("sd_ratio_geomean"))]
+            infl.append(f"{j.num}@{lam} " + " ".join(icols if args.long else icols[1:2]))
         if args.long:
             print(f"  {j.num:>2}: " + " ".join(f"{k}={v:.4f}" for k, v in sorted(w2.items())
                                                      if isinstance(v, (int, float)))
@@ -303,8 +305,8 @@ def main():
         print(line)
     for line in infl:
         print(line)
-    for rank, (_w, _n, line) in enumerate(sorted(ranked), 1):
-        print(f"{rank} {line}")
+    for _w, _n, line in sorted(ranked):
+        print(line)
     print("==== END ====")
     return 0
 

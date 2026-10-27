@@ -58,6 +58,7 @@ import json
 import multiprocessing as mp
 import os
 import time
+import zlib
 
 import h5py
 import numpy as np
@@ -172,31 +173,66 @@ def _index_array(a) -> np.ndarray:
     return a
 
 
-def _write_entry(root: h5py.Group, sid: int, hierarchy, x_pos, variant: int = 0) -> None:
+def _deflate(a: np.ndarray):
+    """Apply HDF5's shuffle + gzip filters to a whole array, as one chunk.
+
+    Runs in the build workers: gzip in the parent capped a parallel build at
+    ~12 entries/s (60-95 ms per ex3 entry) however many workers fed it. The
+    parent then stores the bytes with ``write_direct_chunk``, and h5py reads
+    them back through the dataset's normal filter pipeline.
+    """
+    a = np.ascontiguousarray(a)
+    if a.size == 0:
+        return a
+    shuffled = a.view(np.uint8).reshape(-1, a.itemsize).T.tobytes()
+    return (a.shape, a.dtype.str, zlib.compress(shuffled, _H5_COMPRESS['compression_opts']))
+
+
+def _put(g: h5py.Group, name: str, packed) -> None:
+    if isinstance(packed, np.ndarray):   # empty: nothing to compress
+        g.create_dataset(name, data=packed, **_H5_COMPRESS)
+        return
+    shape, dtype, payload = packed
+    ds = g.create_dataset(name, shape=shape, dtype=np.dtype(dtype), chunks=shape, **_H5_COMPRESS)
+    ds.id.write_direct_chunk((0,) * len(shape), payload)
+
+
+def _encode_entry(hierarchy, x_pos) -> dict:
+    """One hierarchy as attrs + compressed datasets, ready for :func:`_write_encoded`."""
+    attrs, data = {'num_levels': len(hierarchy)}, {}
+    if x_pos is not None:
+        data['x_pos'] = _deflate(np.asarray(x_pos, dtype=np.float32))
+    for l, entry in enumerate(hierarchy):
+        data[f'L{l}_ftc'] = _deflate(_index_array(entry['ftc']))
+        data[f'L{l}_c_ei'] = _deflate(_index_array(entry['c_ei']))
+        attrs[f'L{l}_n_c'] = int(entry['n_c'])
+        attrs[f'L{l}_mode'] = str(entry.get('mode', 'centroid'))
+        seeds = entry.get('seeds')
+        attrs[f'L{l}_has_seeds'] = seeds is not None
+        if seeds is not None:
+            data[f'L{l}_seeds'] = _deflate(_index_array(seeds))
+        attrs[f'L{l}_has_up'] = 'up_ei' in entry
+        if 'up_ei' in entry:
+            data[f'L{l}_up_ei'] = _deflate(_index_array(entry['up_ei']))
+    return {'attrs': attrs, 'data': data}
+
+
+def _write_encoded(root: h5py.Group, sid: int, encoded: dict, variant: int = 0) -> None:
     """Write one hierarchy. Variant 0 sits at the sample group (unchanged layout);
     variants >0 go in ``v{k}`` subgroups. ``x_pos`` depends only on the fine mesh,
     so it is stored once, on variant 0."""
     sample_g = root.require_group(str(sid))
-    if int(variant) == 0:
-        g = sample_g
-        if x_pos is not None:
-            g.create_dataset('x_pos', data=np.asarray(x_pos, dtype=np.float32), **_H5_COMPRESS)
-    else:
-        g = sample_g.create_group(f'v{int(variant)}')
-    g.attrs['num_levels'] = len(hierarchy)
-    for l, entry in enumerate(hierarchy):
-        g.create_dataset(f'L{l}_ftc', data=_index_array(entry['ftc']), **_H5_COMPRESS)
-        g.create_dataset(f'L{l}_c_ei', data=_index_array(entry['c_ei']), **_H5_COMPRESS)
-        g.attrs[f'L{l}_n_c'] = int(entry['n_c'])
-        g.attrs[f'L{l}_mode'] = str(entry.get('mode', 'centroid'))
-        seeds = entry.get('seeds')
-        g.attrs[f'L{l}_has_seeds'] = seeds is not None
-        if seeds is not None:
-            g.create_dataset(f'L{l}_seeds', data=_index_array(seeds), **_H5_COMPRESS)
-        has_up = 'up_ei' in entry
-        g.attrs[f'L{l}_has_up'] = has_up
-        if has_up:
-            g.create_dataset(f'L{l}_up_ei', data=_index_array(entry['up_ei']), **_H5_COMPRESS)
+    g = sample_g if int(variant) == 0 else sample_g.create_group(f'v{int(variant)}')
+    for name, packed in encoded['data'].items():
+        if name == 'x_pos' and int(variant) != 0:
+            continue
+        _put(g, name, packed)
+    for key, value in encoded['attrs'].items():
+        g.attrs[key] = value
+
+
+def _write_entry(root: h5py.Group, sid: int, hierarchy, x_pos, variant: int = 0) -> None:
+    _write_encoded(root, sid, _encode_entry(hierarchy, x_pos), variant=variant)
 
 
 def _read_entry(g: h5py.Group):
@@ -263,7 +299,7 @@ def _build_one(task):
         from general_modules.positional_features import compute_positional_features
         x_pos = compute_positional_features(ref_pos, edge_index, pp['num'])
 
-    return sid, variant, hierarchy, x_pos
+    return sid, variant, _encode_entry(hierarchy, x_pos)
 
 
 def _resolve_build_workers(config: dict, n_samples: int) -> int:
@@ -311,8 +347,8 @@ def build_cache(h5_file, sample_ids, signature, cache_path,
                 _init_worker(h5_file, coarse_params, pos_params)
                 try:
                     for k, task in enumerate(tasks, 1):
-                        sid, var, hier, xp = _build_one(task)
-                        _write_entry(out, sid, hier, xp, variant=var)
+                        sid, var, enc = _build_one(task)
+                        _write_encoded(out, sid, enc, variant=var)
                         _progress(k)
                 finally:
                     handle = _WORKER.pop('h5', None)
@@ -325,9 +361,9 @@ def build_cache(h5_file, sample_ids, signature, cache_path,
                 ctx = mp.get_context('spawn')
                 with ctx.Pool(num_workers, initializer=_init_worker,
                               initargs=(h5_file, coarse_params, pos_params)) as pool:
-                    for k, (sid, var, hier, xp) in enumerate(
+                    for k, (sid, var, enc) in enumerate(
                             pool.imap_unordered(_build_one, tasks, chunksize=2), 1):
-                        _write_entry(out, sid, hier, xp, variant=var)
+                        _write_encoded(out, sid, enc, variant=var)
                         _progress(k)
         os.replace(tmp_path, cache_path)
     except BaseException:

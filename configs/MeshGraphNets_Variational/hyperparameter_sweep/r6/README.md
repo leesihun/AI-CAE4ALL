@@ -41,6 +41,14 @@ and type back the block between `==== TYPE THIS BACK ====` and `==== END ====`.
   checkpoint; a slot that takes one before that training ends waits for it
   (state `wait`, brief's `wait` line).
 - `run_node.sh`'s header lists every override (`JOBS=`, `REDO=1`, `TRAIN=0`, ...).
+- **Kill everything** (every round's runner and its jobs, any python left
+  running from the repository, then the cache build `.lock`/`.tmp.*` files a
+  killed builder leaves): `bash .../r6/kill_all.sh -n` lists, without `-n` it
+  kills (by PID; SIGTERM, then SIGKILL after 20 s). Killed trainings resume.
+- **The hierarchy cache** (9,600 samples x 2 variants, shared by every job) is
+  built once, by the first job, while the others wait: 48 processes
+  (`hierarchy_cache_build_workers 48`, on the 128-core node), with gzip done in
+  the workers. Rounds 4-5 built it with 8.
 
 ## The design
 

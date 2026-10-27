@@ -152,7 +152,7 @@ hierarchy_variants               2
 hierarchy_seed                   42
 hierarchy_cache_keep             False
 hierarchy_cache_dir              -
-hierarchy_cache_build_workers    8
+hierarchy_cache_build_workers    48
 training_seed                    42
 best_by                          crps
 inference_samples                16
@@ -399,11 +399,14 @@ def self_check(jobs):
         return out
 
     ok = True
-    skip = PATH_KEYS | {"message_passing_num", "mp_per_level"}
+    # hierarchy_cache_build_workers only sets how many CPU processes build the
+    # (identical) hierarchy cache; r6 raised it from 8 to 48 for the 128-core node.
+    build_only = {"hierarchy_cache_build_workers"}
+    skip = PATH_KEYS | build_only | {"message_passing_num", "mp_per_level"}
     for p in PLACEMENTS:
         mine = train_body(Spec(p), f"{p}_ref").as_dict()
         for ref_path, ignore in ((REPO / SWEEP_REL / "r4" / f"config_train_{p}_mmd.txt", skip),
-                                 (REPO / SWEEP_REL / "r5" / "config_train_hybrid_mp28.txt", PATH_KEYS)):
+                                 (REPO / SWEEP_REL / "r5" / "config_train_hybrid_mp28.txt", PATH_KEYS | build_only)):
             if "r5" in str(ref_path) and p != "hybrid":
                 continue
             if not ref_path.is_file():

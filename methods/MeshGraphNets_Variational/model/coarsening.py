@@ -182,10 +182,24 @@ def _fps_euclidean(pos: np.ndarray, k: int) -> list:
 
     min_sq_dists = np.full(N, np.inf, dtype=np.float64)
 
+    # One contiguous column per axis and two reused buffers: the old
+    # `pos - pos[s]` + einsum allocated an [N, 3] temporary every step, which
+    # cost 5-9x more at 30-70k nodes. dx^2 + dy^2 + dz^2 is summed in the same
+    # order as the einsum, so the seeds are bit-identical.
+    x, y, z = (np.ascontiguousarray(pos[:, j]) for j in range(3))
+    tmp = np.empty(N, dtype=np.float64)
+    sq_dists = np.empty(N, dtype=np.float64)
+
     for i in range(k):
         s = seeds[i]
-        diff = pos - pos[s]
-        sq_dists = np.einsum('ij,ij->i', diff, diff)
+        np.subtract(x, x[s], out=tmp)
+        np.multiply(tmp, tmp, out=sq_dists)
+        np.subtract(y, y[s], out=tmp)
+        np.multiply(tmp, tmp, out=tmp)
+        np.add(sq_dists, tmp, out=sq_dists)
+        np.subtract(z, z[s], out=tmp)
+        np.multiply(tmp, tmp, out=tmp)
+        np.add(sq_dists, tmp, out=sq_dists)
         np.minimum(min_sq_dists, sq_dists, out=min_sq_dists)
         min_sq_dists[s] = -1.0  # exclude selected
         if i < k - 1:

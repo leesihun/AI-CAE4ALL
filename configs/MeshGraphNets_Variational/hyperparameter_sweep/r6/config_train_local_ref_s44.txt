@@ -64,7 +64,7 @@ hierarchy_variants               2
 hierarchy_seed                   42
 hierarchy_cache_keep             False
 hierarchy_cache_dir              ../../output/b300_r6/mscache/mgnv_v4096_256
-hierarchy_cache_build_workers    8
+hierarchy_cache_build_workers    48
 training_seed                    44
 best_by                          crps
 inference_samples                16
