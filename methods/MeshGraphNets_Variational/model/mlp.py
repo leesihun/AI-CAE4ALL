@@ -12,18 +12,21 @@ def init_weights(m):
 
 
 class AmpLayerNorm(nn.LayerNorm):
-    """nn.LayerNorm that, with `in_amp_dtype` set, normalizes a bf16/fp16 input in that dtype.
+    """nn.LayerNorm that, under autocast, normalizes a bf16/fp16 input in that dtype.
 
-    Autocast puts layer_norm on its fp32 list, so every MLP output is upcast,
-    normalized in fp32, and kept for backward in fp32: about a fifth of the
-    MGN-V step's kernel time on ex3 (2026-10-27 profile). The half-precision
-    CUDA kernel still accumulates its statistics in fp32; what changes is that
-    the output and the tensor saved for backward are bf16/fp16 (measured on a
-    3090: step 1.20x with checkpointing, 1.06x without; memory -19%). Set by the owning model from `amp_layernorm`.
-    The state dict is nn.LayerNorm's.
+    Autocast puts layer_norm on its fp32 list, so every MLP output would be
+    upcast, normalized in fp32, and kept for backward in fp32: about a fifth of
+    the MGN-V step's kernel time on ex3 (2026-10-27 profile). This is what
+    Transformer Engine's LayerNorm (PhysicsNeMo's MGN) does instead: the
+    half-precision CUDA kernel still accumulates its statistics in fp32, but
+    the output and the tensor saved for backward stay bf16/fp16 (MGN-V on a
+    3090: step 1.20x with checkpointing, 1.06x without; memory -19%). Always on
+    under AMP; outside autocast it is plain nn.LayerNorm. The state dict is
+    nn.LayerNorm's.
     """
 
-    in_amp_dtype = False
+    # Class switch kept for A/B checks (False = autocast's fp32 LayerNorm).
+    in_amp_dtype = True
 
     def forward(self, x):
         if (self.in_amp_dtype and x.dtype in (torch.bfloat16, torch.float16)

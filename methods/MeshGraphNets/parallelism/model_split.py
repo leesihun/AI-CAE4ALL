@@ -12,6 +12,7 @@ from torch_geometric.data import Data
 
 from general_modules.edge_features import EDGE_FEATURE_DIM
 from general_modules.input_noise import InputNoise
+from model.blocks import split_linear
 from model.checkpointing import (
     checkpoint_gn_block,
     process_with_checkpointing,
@@ -724,7 +725,7 @@ class ModelSplitStage(nn.Module):
             unpool_edge_index=up_ei,
             rel_pos=rel_pos,
         )
-        return self.model.skip_projs[str(unpool_level)](torch.cat([skip_x, h_up], dim=-1))
+        return split_linear(self.model.skip_projs[str(unpool_level)], [(skip_x, None), (h_up, None)])
 
     def _extract_level_data(self, graph, level: int) -> dict:
         ld = {

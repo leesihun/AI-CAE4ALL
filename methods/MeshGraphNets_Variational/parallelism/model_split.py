@@ -60,6 +60,7 @@ from torch_geometric.data import Data
 from torch_geometric.utils import scatter
 
 from general_modules.edge_features import EDGE_FEATURE_DIM
+from model.blocks import split_linear
 from model.coarsening import pool_features
 from model.encoder_decoder import Decoder, Encoder, GnBlock
 from model.mlp import build_mlp
@@ -1169,8 +1170,8 @@ class ModelSplitStage(nn.Module):
                     rel_pos=rel_pos,
                 )
 
-                h_merged = self.model.skip_projs[str(unpool_level)](
-                    torch.cat([skip['x'], h_up], dim=-1))
+                h_merged = split_linear(self.model.skip_projs[str(unpool_level)],
+                                        [(skip['x'], None), (h_up, None)])
                 current_graph = Data(x=h_merged,
                                      edge_attr=skip['edge_attr'],
                                      edge_index=skip['edge_index'])

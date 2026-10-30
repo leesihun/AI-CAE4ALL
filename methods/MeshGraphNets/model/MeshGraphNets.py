@@ -5,6 +5,7 @@ from torch_geometric.utils import scatter
 
 from general_modules.edge_features import EDGE_FEATURE_DIM
 from general_modules.input_noise import InputNoise
+from model.blocks import split_linear
 from model.checkpointing import process_with_checkpointing, run_checkpointed
 from model.coarsening import pool_features
 from model.encoder_decoder import Decoder, Encoder, GnBlock
@@ -459,7 +460,8 @@ class EncoderProcessorDecoder(nn.Module):
             # Broadcast: each fine node takes its own cluster's coarse state.
             # `ftc` is already batch-offset by MultiscaleData.__inc__, so this
             # gather is correct at batch_size > 1 with no extra work.
-            return self.skip_projs[i](torch.cat([skip_x, coarse_x[ld['ftc']]], dim=-1))
+            # Project the coarse rows, then broadcast: N_coarse GEMM rows, not N_fine.
+            return split_linear(self.skip_projs[i], [(skip_x, None), (coarse_x, ld['ftc'])])
         src, dst = ld['up_ei']
         rel_pos = ld['fine_pos'][dst] - ld['coarse_centroid'][src]
         h_up = self.unpool_blocks[i](
@@ -468,7 +470,7 @@ class EncoderProcessorDecoder(nn.Module):
             unpool_edge_index=ld['up_ei'],
             rel_pos=rel_pos,
         )
-        return self.skip_projs[i](torch.cat([skip_x, h_up], dim=-1))
+        return split_linear(self.skip_projs[i], [(skip_x, None), (h_up, None)])
 
     def _unpool_merge_branched_level(self, i, branch_xs, skip_x, ld):
         """Unpool a multi-partition level's K branches to fine and merge them
@@ -485,7 +487,7 @@ class EncoderProcessorDecoder(nn.Module):
         h_ups = []
         for b_ld, coarse_x in zip(ld['branches'], branch_xs):
             if not self.learned_interpolation:
-                h_ups.append(coarse_x[b_ld['ftc']])
+                h_ups.append((coarse_x, b_ld['ftc']))
                 continue
             src, dst = b_ld['up_ei']
             rel_pos = ld['fine_pos'][dst] - b_ld['coarse_centroid'][src]
@@ -495,8 +497,8 @@ class EncoderProcessorDecoder(nn.Module):
                 unpool_edge_index=b_ld['up_ei'],
                 rel_pos=rel_pos,
             )
-            h_ups.append(h_up)
-        return self.skip_projs[i](torch.cat([skip_x, *h_ups], dim=-1))
+            h_ups.append((h_up, None))
+        return split_linear(self.skip_projs[i], [(skip_x, None), *h_ups])
 
     def _extract_level_data(self, graph, L):
         """Extract per-level coarsening topology before the encoder drops custom attrs.

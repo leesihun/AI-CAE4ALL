@@ -12,6 +12,10 @@ Usage:
 
 from torch.utils.checkpoint import checkpoint
 
+# preserve_rng_state=False: no checkpointed region draws random numbers (input
+# noise is added before the forward, there is no dropout), so stashing and
+# restoring the CPU/CUDA RNG state on every call is pure overhead.
+
 
 def run_checkpointed(fn, *args, enabled: bool = True):
     """Run fn(*args), optionally under non-reentrant gradient checkpointing.
@@ -23,7 +27,7 @@ def run_checkpointed(fn, *args, enabled: bool = True):
     args may include non-tensors.
     """
     if enabled:
-        return checkpoint(fn, *args, use_reentrant=False)
+        return checkpoint(fn, *args, use_reentrant=False, preserve_rng_state=False)
     return fn(*args)
 
 
@@ -49,7 +53,8 @@ def checkpoint_gn_block(block, x, edge_attr, edge_index, world_edge_attr=None, w
         edge_index,
         world_edge_attr,
         world_edge_index,
-        use_reentrant=False
+        use_reentrant=False,
+        preserve_rng_state=False,
     )
 
 

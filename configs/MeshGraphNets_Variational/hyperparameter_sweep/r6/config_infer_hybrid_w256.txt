@@ -38,7 +38,7 @@ grad_accum_steps                 1
 augment_geometry                 True
 std_noise                        0.0
 use_amp                          True
-use_checkpointing                True
+use_checkpointing                False
 use_compile                      True
 amp_layernorm                    True
 use_ema                          True

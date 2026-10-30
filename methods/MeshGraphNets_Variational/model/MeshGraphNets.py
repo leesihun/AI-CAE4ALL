@@ -1,20 +1,19 @@
 import torch
 import torch.nn as nn
-from torch.utils.checkpoint import checkpoint
 from torch_geometric.data import Data
 from torch_geometric.utils import scatter
 
 from general_modules.edge_features import EDGE_FEATURE_DIM
-from model.blocks import AdaLNZero, apply_adaln
-from model.checkpointing import process_with_checkpointing, run_mlp
+from model.blocks import AdaLNZero, split_linear
+from model.checkpointing import checkpoint, run_graph_blocks, run_mlp
 from model.coarsening import pool_features
 from model.conditional_prior import build_conditional_prior
 from model.encoder_decoder import Decoder, Encoder, GnBlock
 from model.latent import (
-    LATENT_REGS, LATENT_TYPES, Latent, coarsest_parent_maps, coarsest_view,
-    kl_to_standard_normal,
+    LATENT_REGS, LATENT_TYPES, Latent, broadcast_rows, coarsest_parent_maps,
+    coarsest_view, kl_to_standard_normal,
 )
-from model.mlp import AmpLayerNorm, build_mlp, init_weights
+from model.mlp import build_mlp, init_weights
 from model.vae import GNNVariationalEncoder, gather_across_ranks
 
 # z_l rows entering one MMD estimate. MMD is O(rows^2); a 16-graph batch of
@@ -55,12 +54,6 @@ class MeshGraphNets(nn.Module):
                   f'(prior_type=gnn_e2e, family={self.prior.family})')
         else:
             self.prior = None
-
-        # `amp_layernorm`: the MLP LayerNorms keep autocast's dtype (model/mlp.py).
-        if bool(config.get('amp_layernorm', False)):
-            for m in self.modules():
-                if isinstance(m, AmpLayerNorm):
-                    m.in_amp_dtype = True
 
         print('MeshGraphNets model created successfully')
 
@@ -484,19 +477,23 @@ class EncoderProcessorDecoder(nn.Module):
         hybrid: [z_l(ancestor) | z_g slot].
         """
         if not isinstance(z, Latent):
-            return z[:, min(level, z.shape[1] - 1), :][batch_level]
-        z_l = z.l[maps[level]] if level in maps else z.l
+            return broadcast_rows(z[:, min(level, z.shape[1] - 1), :], batch_level)
+        z_l = broadcast_rows(z.l, maps[level]) if level in maps else z.l
         if z.g is None:
             return z_l
-        z_g = z.g[:, min(level, z.g.shape[1] - 1), :][batch_level]
+        z_g = broadcast_rows(z.g[:, min(level, z.g.shape[1] - 1), :], batch_level)
         return torch.cat([z_l, z_g], dim=-1)
 
     @staticmethod
-    def _num_graphs(z, batch):
+    def _num_graphs(z, batch, num_graphs=None):
+        """Graphs in the batch. A PyG Batch's `num_graphs` is a host int; the
+        batch-vector fallback costs a GPU sync."""
         if not isinstance(z, Latent):
             return z.shape[0]
         if z.g is not None:
             return z.g.shape[0]
+        if num_graphs is not None:
+            return int(num_graphs)
         return int(batch.max().item()) + 1
 
     def _pv_loss(self, predicted, original_y, batch, B):
@@ -573,7 +570,7 @@ class EncoderProcessorDecoder(nn.Module):
         if isinstance(z, Latent):
             z_per_node = self._level_z(z, 0, batch_bc, maps)
         else:
-            z_per_node = z[:, 0, :][batch_bc] if z.dim() == 3 else z[batch_bc]
+            z_per_node = broadcast_rows(z[:, 0, :] if z.dim() == 3 else z, batch_bc)
         return z, z_per_node, batch_bc, vae_losses
 
     # ── Forward ──────────────────────────────────────────────────────────────
@@ -606,18 +603,10 @@ class EncoderProcessorDecoder(nn.Module):
                 original_edge_attr, original_batch, use_posterior, fixed_z,
             )
 
-        if self.use_checkpointing and self.training:
-            graph = process_with_checkpointing(
-                self.processer_list, graph,
-                z_fusers=self.z_fusers if self.use_vae else None,
-                z_per_node=z_per_node,
-                adaln=(self.use_vae and self.z_conditioning == 'adaln'),
-            )
-        else:
-            graph = self._run_blocks_eager(
-                self.processer_list, graph,
-                self.z_fusers if self.use_vae else None, z_per_node,
-            )
+        graph = self._run_processor_blocks(
+            self.processer_list, graph,
+            self.z_fusers if self.use_vae else None, z_per_node,
+        )
 
         predicted = self.decoder(graph)
         if self.use_vae:
@@ -626,6 +615,7 @@ class EncoderProcessorDecoder(nn.Module):
 
     def _forward_multiscale(self, graph, use_posterior, fixed_z):
         L = self.multiscale_levels
+        num_graphs = getattr(graph, 'num_graphs', None) if hasattr(graph, 'batch') else None
 
         original_y = getattr(graph, 'y', None)
         original_x = graph.x
@@ -717,7 +707,7 @@ class EncoderProcessorDecoder(nn.Module):
             if self.use_checkpointing and self.training:
                 # Keeps only the inputs; the fine-level [E_up, 2D+3] messages
                 # are rebuilt in backward.
-                h_merged = checkpoint(self._unpool_merge, *args, use_reentrant=False)
+                h_merged = checkpoint(self._unpool_merge, *args)
             else:
                 h_merged = self._unpool_merge(*args)
             current_graph = Data(x=h_merged, edge_attr=skip['edge_attr'], edge_index=skip['edge_index'])
@@ -735,7 +725,7 @@ class EncoderProcessorDecoder(nn.Module):
         predicted = self.decoder(current_graph)
         if self.use_vae:
             aux_loss = self._pv_loss(predicted, original_y, fine_batch,
-                                     self._num_graphs(z, fine_batch))
+                                     self._num_graphs(z, fine_batch, num_graphs))
         return predicted, vae_losses, aux_loss
 
     def _unpool_merge(self, i, h_coarse, h_skip, up_ei, rel_pos):
@@ -746,7 +736,7 @@ class EncoderProcessorDecoder(nn.Module):
             unpool_edge_index=up_ei,
             rel_pos=rel_pos,
         )
-        return self.skip_projs[i](torch.cat([h_skip, h_up], dim=-1))
+        return split_linear(self.skip_projs[i], [(h_skip, None), (h_up, None)])
 
     def _extract_level_data(self, graph, L):
         """Extract per-level coarsening topology from graph before encoder drops custom attrs."""
@@ -778,26 +768,14 @@ class EncoderProcessorDecoder(nn.Module):
         return level_data
 
     def _run_processor_blocks(self, blocks, graph, z_fusers, z_per_node):
-        """Run a list of GnBlocks with optional per-block z injection."""
-        if self.use_checkpointing and self.training:
-            return process_with_checkpointing(
-                blocks, graph, z_fusers=z_fusers, z_per_node=z_per_node,
-                adaln=(self.use_vae and self.z_conditioning == 'adaln'),
-            )
-        return self._run_blocks_eager(blocks, graph, z_fusers, z_per_node)
-
-    def _run_blocks_eager(self, blocks, graph, z_fusers, z_per_node):
-        """Non-checkpointed block loop, shared by both processor paths."""
-        conditioned = z_fusers is not None and z_per_node is not None
-        adaln = conditioned and self.z_conditioning == 'adaln'
-        for j, block in enumerate(blocks):
-            if adaln:
-                graph = apply_adaln(block, graph, z_fusers[j], z_per_node)
-                continue
-            if conditioned:
-                graph.x = self._fuse_z(graph.x, z_per_node, z_fusers[j])
-            graph = block(graph)
-        return graph
+        """A list of GnBlocks with optional per-block z injection, on tensors
+        (one Data out), one checkpoint per block when training with
+        `use_checkpointing`."""
+        return run_graph_blocks(
+            blocks, graph, z_fusers=z_fusers, z_per_node=z_per_node,
+            adaln=(self.use_vae and self.z_conditioning == 'adaln'),
+            checkpointed=self.use_checkpointing and self.training,
+        )
 
     def set_checkpointing(self, enabled: bool):
         self.use_checkpointing = enabled

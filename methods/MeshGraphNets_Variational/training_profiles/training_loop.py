@@ -91,12 +91,16 @@ def _per_node_loss(errors, loss_weights):
     return torch.mean(errors, dim=-1)
 
 
-def _loss_from_errors(errors, loss_weights):
-    """Return mean loss used for backprop plus exact aggregation stats."""
+def _loss_from_errors(errors, loss_weights, sync=True):
+    """Return mean loss used for backprop plus exact aggregation stats.
+
+    sync=False returns the sum as a detached GPU scalar instead of a float: the
+    training step must not wait on the GPU before it has queued the backward.
+    """
     per_node = _per_node_loss(errors, loss_weights)
     loss_sum = per_node.sum()
     loss_count = per_node.numel()
-    return loss_sum / loss_count, loss_sum.item(), loss_count
+    return loss_sum / loss_count, (loss_sum.item() if sync else loss_sum.detach()), loss_count
 
 
 def _recon_errors(predicted, target, recon_loss='huber'):
@@ -344,7 +348,7 @@ def _compose_loss(model, graph, terms):
 
     with torch.amp.autocast('cuda', dtype=terms.amp_dtype, enabled=terms.use_amp):
         errors = _recon_errors(predicted_acc, target_acc, terms.recon_loss_kind)
-        recon_loss, batch_loss_sum, _ = _loss_from_errors(errors, terms.loss_weights)
+        recon_loss, batch_loss_sum, _ = _loss_from_errors(errors, terms.loss_weights, sync=False)
         if terms.use_vae:
             loss = (terms.alpha_recon * recon_loss
                     + terms.reg_weight * reg_loss_val
@@ -665,7 +669,6 @@ def train_prior_epoch(model, dataloader, optimizer, device, config, epoch, ema_m
 
 def train_epoch(model, dataloader, optimizer, device, config, epoch, ema_model=None):
     model.train()
-    total_loss_sum = 0.0
     total_loss_count = 0
     reg_count = 0
 
@@ -711,6 +714,7 @@ def train_epoch(model, dataloader, optimizer, device, config, epoch, ema_model=N
         prior_loss_weight > 0.0 or prior_kl_reg_weight > 0.0
     )
     # GPU accumulators: avoid per-batch .item() syncs (sync once per epoch at result).
+    total_loss_sum_gpu = torch.zeros((), device=device, dtype=torch.float32)
     total_opt_loss_gpu = torch.zeros((), device=device, dtype=torch.float32)
     total_reg_gpu     = torch.zeros((), device=device, dtype=torch.float32) if use_vae else None
     total_aux_gpu     = torch.zeros((), device=device, dtype=torch.float32) if use_vae else None
@@ -764,8 +768,7 @@ def train_epoch(model, dataloader, optimizer, device, config, epoch, ema_model=N
         with sync_ctx:
             scaler.scale(scaled_loss).backward()
 
-        loss_val = batch_loss_sum / batch_loss_count
-        total_loss_sum += batch_loss_sum
+        total_loss_sum_gpu += batch_loss_sum.float()
         total_loss_count += batch_loss_count
         # Accumulate on GPU; .item() deferred to epoch end (one sync per metric).
         total_opt_loss_gpu += loss.detach().float() * batch_loss_count
@@ -793,7 +796,7 @@ def train_epoch(model, dataloader, optimizer, device, config, epoch, ema_model=N
 
         # Update progress bar every 10 batches to reduce memory query overhead
         if batch_idx % 10 == 0:
-            postfix = {'rec': f'{loss_val:.2e}', 'mem': _mem_str()}
+            postfix = {'rec': f'{batch_loss_sum.item() / batch_loss_count:.2e}', 'mem': _mem_str()}
             if use_vae:
                 postfix[latent_reg] = f'{float(reg_loss_val):.2e}'
                 postfix['aux'] = f'{float(aux_loss_val):.2e}'
@@ -808,6 +811,7 @@ def train_epoch(model, dataloader, optimizer, device, config, epoch, ema_model=N
 
     # Sync GPU accumulators once per epoch (vs once per batch previously).
     peak_gb, reserved_gb = _mem_gb()
+    total_loss_sum = total_loss_sum_gpu.item()
     result = {
         'mean': total_loss_sum / total_loss_count,
         'total_mean': total_opt_loss_gpu.item() / total_loss_count,

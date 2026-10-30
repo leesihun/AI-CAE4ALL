@@ -66,6 +66,10 @@ def build_model_and_ema(config, device):
     ema_model = build_ema_model(model, config)
     if ema_model is not None:
         ema_model = ema_model.to(device)
+        # AveragedModel.update_parameters tests `n_averaged == 0` once per
+        # parameter; on the GPU every test is a host sync (~900 per step). The
+        # counter stays on the CPU, where it costs nothing.
+        ema_model.n_averaged = ema_model.n_averaged.cpu()
 
     # Per-block compile with eager fallback (model/compiled_block.py), not a
     # whole-model torch.compile.
@@ -89,8 +93,6 @@ def log_model_summary(model, config, ema_model=None):
         from model import compiled_block
         print("torch.compile: GnBlocks" if not compiled_block._disabled_reason
               else f"torch.compile: OFF ({compiled_block._disabled_reason})")
-    if config.get('amp_layernorm', False):
-        print("LayerNorm in the AMP dtype: ENABLED")
     if ema_model is not None:
         print(f"EMA: ENABLED (decay={config.get('ema_decay', 0.999)})")
     if config.get('use_vae', False):
@@ -212,9 +214,6 @@ def build_model_config(config) -> dict:
         'num_timesteps':     config.get('num_timesteps'),
         'use_world_edges':   config.get('use_world_edges', False),
         'use_checkpointing': config.get('use_checkpointing', False),
-        # Precision, not architecture: recorded so inference normalizes the
-        # way training did. Absent in older checkpoints, which used fp32.
-        'amp_layernorm':     bool(config.get('amp_layernorm', False)),
         'use_multiscale':    config.get('use_multiscale', False),
         'multiscale_levels': config.get('multiscale_levels', 1),
         'mp_per_level':      config.get('mp_per_level', None),

@@ -9,44 +9,27 @@ Usage:
 """
 
 import torch
-from torch.utils.checkpoint import checkpoint
+from torch.utils.checkpoint import checkpoint as _checkpoint
 from torch_geometric.data import Data
+
+from model.blocks import adaln_tensors
+
+
+def checkpoint(fn, *args):
+    """Non-reentrant checkpoint of a region that draws no random numbers.
+
+    `preserve_rng_state=False` (as PhysicsNeMo's processor does): nothing
+    checkpointed in this model samples, so stashing and restoring the CPU and
+    CUDA RNG around every region only costs time. A region that samples
+    (dropout, noise) must not go through here.
+    """
+    return _checkpoint(fn, *args, use_reentrant=False, preserve_rng_state=False)
 
 
 def checkpoint_gn_block(block, x, edge_attr, edge_index, world_edge_attr=None, world_edge_index=None):
-    """
-    Run a GnBlock with gradient checkpointing.
-
-    Args:
-        block: GnBlock module
-        x: Node features [N, latent_dim]
-        edge_attr: Edge features [E, latent_dim]
-        edge_index: Edge connectivity [2, E]
-        world_edge_attr: World edge features [E_world, latent_dim] (optional)
-        world_edge_index: World edge connectivity [2, E_world] (optional)
-
-    Returns:
-        Tuple of (updated_x, updated_edge_attr, updated_world_edge_attr, updated_world_edge_index)
-    """
-    def run_block(x, edge_attr, edge_index, world_edge_attr, world_edge_index):
-        graph = Data(x=x, edge_attr=edge_attr, edge_index=edge_index)
-        if world_edge_attr is not None and world_edge_index is not None:
-            graph.world_edge_attr = world_edge_attr
-            graph.world_edge_index = world_edge_index
-        out = block(graph)
-        out_world_edge_attr = out.world_edge_attr if hasattr(out, 'world_edge_attr') else None
-        out_world_edge_index = out.world_edge_index if hasattr(out, 'world_edge_index') else None
-        return out.x, out.edge_attr, out_world_edge_attr, out_world_edge_index
-
-    return checkpoint(
-        run_block,
-        x,
-        edge_attr,
-        edge_index,
-        world_edge_attr,
-        world_edge_index,
-        use_reentrant=False
-    )
+    """`block.forward_tensors` under gradient checkpointing: (x, edge_attr, world_edge_attr)."""
+    return checkpoint(block.forward_tensors, x, edge_attr, edge_index,
+                      world_edge_attr, world_edge_index)
 
 
 def checkpoint_adaln_block(block, modulation, x, z_per_node, edge_attr, edge_index,
@@ -58,73 +41,69 @@ def checkpoint_adaln_block(block, modulation, x, z_per_node, edge_attr, edge_ind
     them out would add ~3x the node-feature activation for all ~28 blocks.
     Recomputing them on backward is a Linear(z_dim -> 3D) — negligible.
     """
-    def run_block(x, z_per_node, edge_attr, edge_index, world_edge_attr, world_edge_index):
-        shift, scale, gate = modulation(z_per_node)
-        x_mod = x * (1.0 + scale) + shift
-        graph = Data(x=x_mod, edge_attr=edge_attr, edge_index=edge_index)
-        if world_edge_attr is not None and world_edge_index is not None:
-            graph.world_edge_attr = world_edge_attr
-            graph.world_edge_index = world_edge_index
-        out = block(graph)
-        out_world_edge_attr = out.world_edge_attr if hasattr(out, 'world_edge_attr') else None
-        out_world_edge_index = out.world_edge_index if hasattr(out, 'world_edge_index') else None
-        return (x + gate * (out.x - x_mod), out.edge_attr,
-                out_world_edge_attr, out_world_edge_index)
+    def run_block(modulation, x, z_per_node, edge_attr, edge_index, world_edge_attr, world_edge_index):
+        return adaln_tensors(block, modulation, z_per_node, x, edge_attr, edge_index,
+                             world_edge_attr, world_edge_index)
 
-    return checkpoint(
-        run_block,
-        x,
-        z_per_node,
-        edge_attr,
-        edge_index,
-        world_edge_attr,
-        world_edge_index,
-        use_reentrant=False
-    )
+    return checkpoint(run_block, modulation, x, z_per_node, edge_attr, edge_index,
+                      world_edge_attr, world_edge_index)
 
 
-def process_with_checkpointing(processor_list, graph, z_fusers=None, z_per_node=None,
-                               adaln=False):
+def run_blocks(blocks, x, edge_attr, edge_index, world_edge_attr=None, world_edge_index=None,
+               z_fusers=None, z_per_node=None, adaln=False, checkpointed=False):
+    """GnBlocks on plain tensors, one checkpoint per block when `checkpointed`.
+
+    z_fusers: optional per-block VAE conditioning — Linear([x, z]) fusers when
+    adaln=False, AdaLNZero heads when True — with z_per_node [N, z_dim].
+    Returns (x, edge_attr, world_edge_attr).
     """
-    Run processor blocks with gradient checkpointing.
-
-    Args:
-        processor_list: nn.ModuleList of GnBlock modules
-        graph: PyG Data object (after encoding)
-        z_fusers: optional nn.ModuleList of per-block VAE conditioning modules —
-            Linear([x, z]) fusers when adaln=False, AdaLNZero heads when True
-        z_per_node: optional [N, vae_latent_dim] tensor broadcast per node
-        adaln: interpret z_fusers as AdaLN-Zero modulation instead of concat fusers
-
-    Returns:
-        PyG Data object with updated features
-    """
-    x = graph.x
-    edge_attr = graph.edge_attr
-    edge_index = graph.edge_index
-    world_edge_attr = graph.world_edge_attr if hasattr(graph, 'world_edge_attr') else None
-    world_edge_index = graph.world_edge_index if hasattr(graph, 'world_edge_index') else None
-
     conditioned = z_fusers is not None and z_per_node is not None
-    for i, block in enumerate(processor_list):
+    for i, block in enumerate(blocks):
         if conditioned and adaln:
-            x, edge_attr, world_edge_attr, world_edge_index = checkpoint_adaln_block(
-                block, z_fusers[i], x, z_per_node, edge_attr, edge_index,
-                world_edge_attr, world_edge_index
-            )
+            if checkpointed:
+                x, edge_attr, world_edge_attr = checkpoint_adaln_block(
+                    block, z_fusers[i], x, z_per_node, edge_attr, edge_index,
+                    world_edge_attr, world_edge_index)
+            else:
+                x, edge_attr, world_edge_attr = adaln_tensors(
+                    block, z_fusers[i], z_per_node, x, edge_attr, edge_index,
+                    world_edge_attr, world_edge_index)
             continue
         # Concat-based VAE conditioning keeps z on the reconstruction path.
         if conditioned:
             x = z_fusers[i](torch.cat([x, z_per_node], dim=-1))
-        x, edge_attr, world_edge_attr, world_edge_index = checkpoint_gn_block(
-            block, x, edge_attr, edge_index, world_edge_attr, world_edge_index
-        )
+        if checkpointed:
+            x, edge_attr, world_edge_attr = checkpoint_gn_block(
+                block, x, edge_attr, edge_index, world_edge_attr, world_edge_index)
+        else:
+            x, edge_attr, world_edge_attr = block.forward_tensors(
+                x, edge_attr, edge_index, world_edge_attr, world_edge_index)
+    return x, edge_attr, world_edge_attr
 
-    out = Data(x=x, edge_attr=edge_attr, edge_index=edge_index)
-    if world_edge_attr is not None and world_edge_index is not None:
+
+def run_graph_blocks(blocks, graph, z_fusers=None, z_per_node=None, adaln=False,
+                     checkpointed=False):
+    """`run_blocks` on a Data graph: one Data in, one Data out, none per block.
+
+    World edges are carried only when the graph has them; the output carries
+    them exactly when the input did.
+    """
+    world_edge_attr = getattr(graph, 'world_edge_attr', None)
+    world_edge_index = getattr(graph, 'world_edge_index', None)
+    x, edge_attr, world_edge_attr = run_blocks(
+        blocks, graph.x, graph.edge_attr, graph.edge_index, world_edge_attr, world_edge_index,
+        z_fusers=z_fusers, z_per_node=z_per_node, adaln=adaln, checkpointed=checkpointed)
+    out = Data(x=x, edge_attr=edge_attr, edge_index=graph.edge_index)
+    if world_edge_index is not None:
         out.world_edge_attr = world_edge_attr
         out.world_edge_index = world_edge_index
     return out
+
+
+def process_with_checkpointing(processor_list, graph, z_fusers=None, z_per_node=None,
+                               adaln=False):
+    """Processor blocks with one gradient checkpoint per block (see run_graph_blocks)."""
+    return run_graph_blocks(processor_list, graph, z_fusers, z_per_node, adaln, checkpointed=True)
 
 
 def checkpoint_active(module):
@@ -142,7 +121,7 @@ def run_mlp(mlp, x, checkpointed):
     """
     if not checkpointed:
         return mlp(x)
-    return checkpoint(mlp, x, use_reentrant=False)
+    return checkpoint(mlp, x)
 
 
 def run_plain_blocks(blocks, graph, checkpointed):
@@ -152,11 +131,4 @@ def run_plain_blocks(blocks, graph, checkpointed):
     the fine mesh outside the processor, so `process_with_checkpointing` never
     covered them.
     """
-    if not checkpointed:
-        for block in blocks:
-            graph = block(graph)
-        return graph
-    x, edge_attr = graph.x, graph.edge_attr
-    for block in blocks:
-        x, edge_attr, _, _ = checkpoint_gn_block(block, x, edge_attr, graph.edge_index)
-    return Data(x=x, edge_attr=edge_attr, edge_index=graph.edge_index)
+    return run_graph_blocks(blocks, graph, checkpointed=checkpointed)

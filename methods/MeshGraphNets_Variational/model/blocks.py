@@ -5,6 +5,38 @@ from torch_geometric.utils import scatter
 from torch_geometric.data import Data
 
 
+def split_linear(linear, parts):
+    """`linear(torch.cat([t if idx is None else t[idx] for t, idx in parts], -1))`
+    without building the concatenation.
+
+    Each part goes through its own column block of the weight and is gathered
+    afterwards, so autograd keeps the per-part inputs (already alive) instead of
+    an [rows, sum(widths)] concat copy, and node-sized parts are projected on N
+    rows instead of E (the PhysicsNeMo "concat trick"). Columns left over at the
+    end are skipped, which is the same as a zero input there (absent world
+    edges). The bias rides on the first part, before any gather.
+    """
+    weight = linear.weight
+    out = None
+    col = 0
+    for tensor, index in parts:
+        width = tensor.shape[-1]
+        proj = F.linear(tensor, weight[:, col:col + width], linear.bias if out is None else None)
+        if index is not None:
+            proj = proj[index]
+        out = proj if out is None else out + proj
+        col += width
+    return out
+
+
+def _split_mlp(net, parts):
+    """A build_mlp Sequential applied to the virtual concat of `parts`."""
+    h = split_linear(net[0], parts)
+    for i in range(1, len(net)):
+        h = net[i](h)
+    return h
+
+
 class EdgeBlock(nn.Module):
 
     def __init__(self, custom_func:nn.Module):
@@ -12,26 +44,18 @@ class EdgeBlock(nn.Module):
         super(EdgeBlock, self).__init__()
         self.net = custom_func
 
+    def compute(self, x, edge_attr, edge_index):
+        """[E, D] edge update from (sender, receiver, edge) features.
+
+        Same state dict as `net(cat([x[s], x[r], e]))`; the [E, 3D] concat is
+        never built and the two node projections run on N rows.
+        """
+        senders_idx, receivers_idx = edge_index
+        return _split_mlp(self.net, [(x, senders_idx), (x, receivers_idx), (edge_attr, None)])
 
     def forward(self, graph):
-
-        node_attr = graph.x
-        senders_idx, receivers_idx = graph.edge_index
-        edge_attr = graph.edge_attr
-
-        # Split-linear: project node features at [N, D] scale before gathering to
-        # [E, D], instead of gathering first and projecting at [E, 3D] scale.
-        # Equivalent because Linear(cat(s, r, e)) = s@W_s + r@W_r + e@W_e.
-        # Eliminates the [E, 3D] activation that autograd saves for backward in
-        # every GnBlock, cutting activation VRAM roughly in half. State-dict unchanged.
-        first = self.net[0]   # nn.Linear(3D, D)
-        D = node_attr.shape[-1]
-        h_s = F.linear(node_attr, first.weight[:, :D])                    # [N, D]
-        h_r = F.linear(node_attr, first.weight[:, D:2 * D])               # [N, D]
-        h_e = F.linear(edge_attr, first.weight[:, 2 * D:], first.bias)    # [E, D]
-        edge_attr = self.net[1:](h_s[senders_idx] + h_r[receivers_idx] + h_e)
-
-        return Data(x=node_attr, edge_attr=edge_attr, edge_index=graph.edge_index)
+        edge_attr = self.compute(graph.x, graph.edge_attr, graph.edge_index)
+        return Data(x=graph.x, edge_attr=edge_attr, edge_index=graph.edge_index)
 
 
 class NodeBlock(nn.Module):
@@ -40,23 +64,19 @@ class NodeBlock(nn.Module):
         super(NodeBlock, self).__init__()
         self.net = custom_func
 
+    def compute(self, x, edge_attr, edge_index, num_nodes):
+        """[N, D] node update from the sum of incoming edge features.
+
+        Sum aggregation (matches NVIDIA PhysicsNeMo deforming_plate): forces and
+        stresses from neighbors add up, not average.
+        """
+        _, receivers_idx = edge_index
+        agg = scatter(edge_attr, receivers_idx, dim=0, dim_size=num_nodes, reduce='sum')
+        return _split_mlp(self.net, [(x, None), (agg, None)])
+
     def forward(self, graph):
-        # Decompose graph
-        edge_attr = graph.edge_attr # [E, 4] (3D)
-        nodes_to_collect = []
-
-        _, receivers_idx = graph.edge_index # [E, 2] (sender, receiver)
-        num_nodes = graph.num_nodes
-        # Use sum aggregation (matches NVIDIA PhysicsNeMo deforming_plate implementation)
-        # For physics: forces/stresses from neighbors should add up, not average
-        agg_received_edges = scatter(edge_attr, receivers_idx, dim=0, dim_size=num_nodes, reduce='sum')
-
-        nodes_to_collect.append(graph.x)
-        nodes_to_collect.append(agg_received_edges)
-        collected_nodes = torch.cat(nodes_to_collect, dim=-1)
-
-        x = self.net(collected_nodes)
-        return Data(x=x, edge_attr=edge_attr, edge_index=graph.edge_index)
+        x = self.compute(graph.x, graph.edge_attr, graph.edge_index, graph.num_nodes)
+        return Data(x=x, edge_attr=graph.edge_attr, edge_index=graph.edge_index)
 
 class HybridNodeBlock(nn.Module):
     """Node block that aggregates from both mesh and world edges."""
@@ -65,34 +85,33 @@ class HybridNodeBlock(nn.Module):
         super(HybridNodeBlock, self).__init__()
         self.net = custom_func
 
+    def compute(self, x, edge_attr, edge_index, world_edge_attr, world_edge_index, num_nodes):
+        """Separate sum aggregation over mesh and world edges.
+
+        With no world edges the world column block of the first Linear is
+        skipped, which is what an all-zero world aggregate contributed.
+        """
+        _, mesh_receivers = edge_index
+        mesh_agg = scatter(edge_attr, mesh_receivers, dim=0, dim_size=num_nodes, reduce='sum')
+        parts = [(x, None), (mesh_agg, None)]
+        if (world_edge_attr is not None and world_edge_index is not None
+                and world_edge_index.shape[1] > 0):
+            _, world_receivers = world_edge_index
+            parts.append((scatter(world_edge_attr, world_receivers, dim=0,
+                                  dim_size=num_nodes, reduce='sum'), None))
+        return _split_mlp(self.net, parts)
+
     def forward(self, graph):
-        # Aggregate mesh edges
-        mesh_edge_attr = graph.edge_attr
-        _, mesh_receivers = graph.edge_index
-        num_nodes = graph.num_nodes
-        # Use sum aggregation (matches NVIDIA PhysicsNeMo deforming_plate implementation)
-        mesh_agg = scatter(mesh_edge_attr, mesh_receivers, dim=0, dim_size=num_nodes, reduce='sum')
-
-        # Aggregate world edges (if present)
-        if (hasattr(graph, 'world_edge_attr') and hasattr(graph, 'world_edge_index')
-            and graph.world_edge_attr is not None and graph.world_edge_index.shape[1] > 0):
-            world_edge_attr = graph.world_edge_attr
-            _, world_receivers = graph.world_edge_index
-            # Use sum aggregation for world edges as well
-            world_agg = scatter(world_edge_attr, world_receivers, dim=0, dim_size=num_nodes, reduce='sum')
-        else:
-            world_agg = torch.zeros_like(mesh_agg)
-
-        # Concatenate node features with both aggregations
-        collected_nodes = torch.cat([graph.x, mesh_agg, world_agg], dim=-1)
-        x = self.net(collected_nodes)
-
+        world_edge_attr = getattr(graph, 'world_edge_attr', None)
+        world_edge_index = getattr(graph, 'world_edge_index', None)
+        x = self.compute(graph.x, graph.edge_attr, graph.edge_index,
+                         world_edge_attr, world_edge_index, graph.num_nodes)
         return Data(
             x=x,
-            edge_attr=mesh_edge_attr,
+            edge_attr=graph.edge_attr,
             edge_index=graph.edge_index,
-            world_edge_attr=graph.world_edge_attr if hasattr(graph, 'world_edge_attr') else None,
-            world_edge_index=graph.world_edge_index if hasattr(graph, 'world_edge_index') else None
+            world_edge_attr=world_edge_attr,
+            world_edge_index=world_edge_index,
         )
 
 
@@ -115,21 +134,20 @@ class UnpoolBlock(nn.Module):
             rel_pos:           [E_up, 3] relative position per edge
         Returns:
             h_up: [N, D] unpooled fine node features
+
+        E_up is ~(1 + coarse degree) * N: the split first Linear skips an
+        [E_up, 2D+3] concat (which autocast would also promote to fp32, since
+        rel_pos is fp32) and projects on M and N rows instead of E_up.
         """
         src_coarse, dst_fine = unpool_edge_index
-
-        edge_input = torch.cat([
-            h_coarse[src_coarse],
-            h_fine_skip[dst_fine],
-            rel_pos,
-        ], dim=-1)
-        messages = self.edge_mlp(edge_input)
-
+        messages = _split_mlp(self.edge_mlp, [
+            (h_coarse, src_coarse),
+            (h_fine_skip, dst_fine),
+            (rel_pos, None),
+        ])
         agg = scatter(messages, dst_fine, dim=0,
                       dim_size=h_fine_skip.shape[0], reduce='sum')
-
-        h_up = self.node_mlp(torch.cat([h_fine_skip, agg], dim=-1))
-        return h_up
+        return _split_mlp(self.node_mlp, [(h_fine_skip, None), (agg, None)])
 
 
 class AdaLNZero(nn.Module):
@@ -191,17 +209,26 @@ class AdaLNZero(nn.Module):
         return self.net(z_per_node).chunk(3, dim=-1)
 
 
-def apply_adaln(block, graph, modulation, z_per_node):
-    """Run `block` on `graph` with AdaLN-Zero modulation from `z_per_node`.
+def adaln_tensors(block, modulation, z_per_node, x, edge_attr, edge_index,
+                  world_edge_attr=None, world_edge_index=None):
+    """GnBlock.forward_tensors under AdaLN-Zero modulation from `z_per_node`.
 
-    `graph.x` is overwritten with the modulated features (the block consumes
-    them and returns a fresh Data), then the block's own update is re-attached
-    to the UNMODULATED input through the gate.
+    The block runs on the modulated features, then its own update is
+    re-attached to the UNMODULATED input through the gate. Returns
+    (x, edge_attr, world_edge_attr) like `forward_tensors`.
     """
     shift, scale, gate = modulation(z_per_node)
-    x_in = graph.x
-    x_mod = x_in * (1.0 + scale) + shift
-    graph.x = x_mod
-    out = block(graph)
-    out.x = x_in + gate * (out.x - x_mod)
-    return out
+    x_mod = x * (1.0 + scale) + shift
+    x_out, edge_attr, world_edge_attr = block.forward_tensors(
+        x_mod, edge_attr, edge_index, world_edge_attr, world_edge_index)
+    return x + gate * (x_out - x_mod), edge_attr, world_edge_attr
+
+
+def apply_adaln(block, graph, modulation, z_per_node):
+    """`adaln_tensors` on a Data graph; returns a new Data (the input is not modified)."""
+    world_edge_attr = getattr(graph, 'world_edge_attr', None)
+    world_edge_index = getattr(graph, 'world_edge_index', None)
+    x, edge_attr, world_edge_attr = adaln_tensors(
+        block, modulation, z_per_node, graph.x, graph.edge_attr, graph.edge_index,
+        world_edge_attr, world_edge_index)
+    return block.pack(x, edge_attr, graph.edge_index, world_edge_attr, world_edge_index)

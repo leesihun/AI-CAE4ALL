@@ -21,14 +21,20 @@ def _split_first_linear(net, parts):
                left to right; trailing weight columns may stay unused (their
                input is implicitly zero, e.g. absent world edges).
     """
-    first = net[0]
-    weight = first.weight
+    return split_linear(net[0], parts)
+
+
+def split_linear(linear, parts):
+    """``linear(torch.cat([t if idx is None else t[idx] for t, idx in parts],
+    dim=-1))`` without the concat: one column block of the weight per part,
+    gathered after the projection. Same contract as _split_first_linear."""
+    weight = linear.weight
     out = None
     col = 0
     for tensor, index in parts:
         width = tensor.shape[-1]
         # Bias rides on the first part only; per-edge gather preserves it.
-        bias = first.bias if out is None else None
+        bias = linear.bias if out is None else None
         proj = F.linear(tensor, weight[:, col:col + width], bias)
         if index is not None:
             proj = proj[index]
@@ -191,9 +197,11 @@ class AttentionPoolBlock(nn.Module):
         a = pyg_softmax(scores, ftc, num_nodes=num_coarse, dim=0)    # [N, H], fp32
 
         v = h_fine.view(h_fine.shape[0], self.num_heads, self.head_dim)  # [N, H, Dh]
-        weighted = a.unsqueeze(-1).to(v.dtype) * v                       # [N, H, Dh]
+        # Summed in fp32 (see coarsening.pool_features): a half-precision
+        # scatter into M << N rows is a contended emulated atomic.
+        weighted = a.unsqueeze(-1) * v.float()                            # [N, H, Dh]
         pooled = scatter(weighted, ftc, dim=0, dim_size=num_coarse, reduce='sum')
-        return pooled.reshape(num_coarse, self.num_heads * self.head_dim)
+        return pooled.reshape(num_coarse, self.num_heads * self.head_dim).to(h_fine.dtype)
 
 
 class UnpoolBlock(nn.Module):

@@ -5,12 +5,12 @@ import torch
 import torch.nn as nn
 from torch_geometric.data import Data
 from torch_geometric.nn import AttentionalAggregation
-from torch_geometric.utils import scatter
 
 from model.blocks import AdaLNZero, apply_adaln
 from model.checkpointing import checkpoint_active, run_mlp, run_plain_blocks
+from model.coarsening import pool_features
 from model.encoder_decoder import GnBlock
-from model.latent import Latent, coarsest_view
+from model.latent import Latent, broadcast_rows, coarsest_view
 from model.mlp import build_mlp, init_weights
 
 
@@ -599,7 +599,7 @@ class CoarseFMPrior(_ConditionalPriorBase):
         cv = coarsest_view(graph, self.levels)
         B = int(getattr(graph, 'num_graphs', 0) or (int(batch.max().item()) + 1))
         ctx = {
-            'x': scatter(g.x, cv['parent'], dim=0, dim_size=cv['n_c'], reduce='mean'),
+            'x': pool_features(g.x, cv['parent'], cv['n_c']),
             'e': self.coarse_edge_encoder(cv['c_ea']),
             'c_ei': cv['c_ei'],
             'batch': cv['batch'],
@@ -646,20 +646,20 @@ class CoarseFMPrior(_ConditionalPriorBase):
         """(v_l [n_c, C], v_g [B, flat] or None) at per-graph time t [B, 1]."""
         batch, B = ctx['batch'], ctx['B']
         t_emb = self._t_embed(t)
-        t_node = t_emb[batch]
+        t_node = broadcast_rows(t_emb, batch)
         x = self.in_proj(torch.cat([zl_t, ctx['x']], dim=-1))
         tok = self.g_in(torch.cat([zg_t, ctx['pooled']], dim=-1)) if self.hybrid else None
         graph = Data(x=x, edge_attr=ctx['e'], edge_index=ctx['c_ei'])
         for j, block in enumerate(self.blocks):
             if self.hybrid:
-                x_mean = scatter(graph.x, batch, dim=0, dim_size=B, reduce='mean')
+                x_mean = pool_features(graph.x, batch, B)
                 tok = tok + self.g_update[j](torch.cat([tok, x_mean, t_emb], dim=-1))
-                graph.x = graph.x + self.g_out[j](tok)[batch]
+                graph.x = graph.x + broadcast_rows(self.g_out[j](tok), batch)
             graph = apply_adaln(block, graph, self.time_mod[j], t_node)
         v_l = self.out_head(graph.x)
         if not self.hybrid:
             return v_l, None
-        x_mean = scatter(graph.x, batch, dim=0, dim_size=B, reduce='mean')
+        x_mean = pool_features(graph.x, batch, B)
         return v_l, self.g_head(torch.cat([tok, x_mean], dim=-1))
 
     # -- standardization ------------------------------------------------------

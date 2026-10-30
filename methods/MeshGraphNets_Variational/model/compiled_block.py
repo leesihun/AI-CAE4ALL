@@ -1,8 +1,8 @@
 """`use_compile`: each plain GnBlock as one torch.compile'd tensor function, eager when that fails.
 
 A GnBlock is ~20 small kernels (three split Linears, two gathers, SiLUs, a
-LayerNorm, a scatter, a concat, three more Linears, another LayerNorm, two
-residual adds). On ex3 they are memory-bound, and the step spends most of its
+LayerNorm, a scatter, two more split Linears, two more Linears, another
+LayerNorm, two residual adds). On ex3 they are memory-bound, and the step spends most of its
 time on them rather than in the matmuls (2026-10-27 profile: GEMM 22% of
 kernel time). Compiled as one function Inductor fuses the elementwise work into
 the gathers and the scatter: a level-0 block 46 -> 30 ms, the whole training
@@ -26,7 +26,6 @@ case prints one line saying why.
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch_geometric.data import Data
 from torch_geometric.utils import scatter
 
 _compiled = None
@@ -43,22 +42,22 @@ def _passthrough(exc) -> bool:
 
 def _layer_norm(h, w, b, eps: float, amp_ln: bool):
     out = F.layer_norm(h, (h.shape[-1],), w, b, eps)
-    # Under autocast layer_norm returns fp32; `amp_layernorm` keeps the MLP's
-    # dtype (eager AmpLayerNorm does the same in its own kernel).
+    # Under autocast layer_norm returns fp32; AMP keeps the MLP's dtype, as
+    # eager AmpLayerNorm does in its own kernel (model/mlp.py).
     return out.to(h.dtype) if amp_ln else out
 
 
 def gn_tensors(x, ea, s, r, eW0, eb0, eW1, eb1, eW2, eb2, elnw, elnb,
                nW0, nb0, nW1, nb1, nW2, nb2, nlnw, nlnb, eps: float, amp_ln: bool):
-    """GnBlock.forward without world edges: EdgeBlock (split first Linear), sum
-    aggregation, NodeBlock, both residual adds."""
+    """GnBlock.forward_tensors without world edges: EdgeBlock and NodeBlock
+    (both with the split first Linear), sum aggregation, both residual adds."""
     D = x.shape[-1]
     h = (F.linear(x, eW0[:, :D])[s] + F.linear(x, eW0[:, D:2 * D])[r]
          + F.linear(ea, eW0[:, 2 * D:], eb0))
     h = F.silu(F.linear(F.silu(h), eW1, eb1))
     e_out = _layer_norm(F.linear(h, eW2, eb2), elnw, elnb, eps, amp_ln)
     agg = scatter(e_out, r, dim=0, dim_size=x.shape[0], reduce='sum')
-    n = F.silu(F.linear(torch.cat([x, agg], dim=-1), nW0, nb0))
+    n = F.silu(F.linear(x, nW0[:, :D], nb0) + F.linear(agg, nW0[:, D:]))
     n = F.silu(F.linear(n, nW1, nb1))
     n = _layer_norm(F.linear(n, nW2, nb2), nlnw, nlnb, eps, amp_ln)
     return x + n, ea + e_out
@@ -96,18 +95,17 @@ def _disable(reason):
         print(f'use_compile: compiled GnBlocks OFF, training continues eager ({reason})', flush=True)
 
 
-def forward(block, graph):
-    """The compiled block's output Data, or None when the caller should run eager."""
+def run(block, x, ea, ei):
+    """The compiled block's (x, edge_attr), or None when the caller should run eager."""
     if _compiled is None or _disabled_reason is not None:
         return None
     try:
-        x, ea = _compiled(*_args(block, graph.x, graph.edge_attr, graph.edge_index))
+        return _compiled(*_args(block, x, ea, ei))
     except Exception as exc:   # compile or kernel failure: eager from here on
         if _passthrough(exc):
             raise
         _disable(f'{type(exc).__name__}: {str(exc).splitlines()[0][:200] if str(exc) else ""}')
         return None
-    return Data(x=x, edge_attr=ea, edge_index=graph.edge_index)
 
 
 def _self_test(width, device, amp_dtype, use_amp):
@@ -124,8 +122,7 @@ def _self_test(width, device, amp_dtype, use_amp):
         x, ea = x0.clone().requires_grad_(), ea0.clone().requires_grad_()
         with torch.enable_grad(), torch.autocast(device.type, dtype=amp_dtype, enabled=use_amp):
             if fn is None:
-                out = block(Data(x=x, edge_attr=ea, edge_index=ei))
-                ox, oe = out.x, out.edge_attr
+                ox, oe, _ = block.forward_tensors(x, ea, ei)
             else:
                 ox, oe = fn(*_args(block, x, ea, ei))
             loss = ox.float().square().mean() + oe.float().square().mean()

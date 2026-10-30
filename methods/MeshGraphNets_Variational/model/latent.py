@@ -54,6 +54,21 @@ def latent_parts(z):
     return [('z', z)]
 
 
+def broadcast_rows(table, index):
+    """table[index] for a small table read by many rows (z onto nodes, a per-graph
+    token onto its nodes).
+
+    Not `table[index]`: its backward is a sort-based index_put, ~60x slower on
+    that many duplicate indices. index_select's backward is an atomic index_add,
+    which is fast in fp32 and slow in bf16 (emulated atomics on a few contended
+    rows), so a half-precision table goes through fp32. The forward values are
+    unchanged; the backward accumulates in fp32.
+    """
+    if table.dtype in (torch.float16, torch.bfloat16):
+        return table.float().index_select(0, index).to(table.dtype)
+    return table.index_select(0, index)
+
+
 def coarsest_parent_maps(level_data):
     """maps[i]: level-i node -> coarsest-level node, for every level i < L.
 

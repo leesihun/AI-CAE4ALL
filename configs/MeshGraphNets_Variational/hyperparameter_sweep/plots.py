@@ -7,7 +7,8 @@ Reads <round>/jobs.txt and, for each job (or the jobs named), writes:
   loss_<log>.png beside each epoch log of the run (MGN-V train.log; SAR
       train_vae.log / train_sar.log; LDGN train_vae.log / train_ldgn.log).
       One panel per loss component plus the total and the learning rate,
-      train as a line and validation as dots. A component validation does not
+      train as a line and validation as dots, every panel on a log y axis
+      (symlog for a term that reaches zero or below). A component validation does not
       compute is drawn train-only and named in the footer: MGN-V validation
       scores recon + the latent regularizer, never aux or the prior loss, so
       its val `total` is alpha*recon + lambda*reg while the train `total` also
@@ -202,9 +203,16 @@ def plot_curves(curves, out_png, title):
             ax.plot(*zip(*va), "o-", ms=2.5, lw=0.8, color="C1", label="val")
         if tr and not va and key != "lr":
             train_only.append(key)
+        # Every panel on a log axis: the first epochs sit orders of magnitude
+        # above the plateau and flatten it on a linear one. A term that dips to
+        # zero or below (the unbiased MMD estimate) gets symlog, linear only
+        # inside its smallest nonzero |value|.
         vals = [v for _, v in tr + va if math.isfinite(v)]
-        if vals and min(vals) > 0 and (key == "lr" or max(vals) / min(vals) > 20):
+        nonzero = [abs(v) for v in vals if v != 0]
+        if vals and min(vals) > 0:
             ax.set_yscale("log")
+        elif nonzero:
+            ax.set_yscale("symlog", linthresh=min(nonzero))
         name = {"loss": "total (stage loss)", "lr": "learning rate"}.get(key, key)
         ax.set_title(name, fontsize=10)
         ax.set_xlabel("epoch", fontsize=8)

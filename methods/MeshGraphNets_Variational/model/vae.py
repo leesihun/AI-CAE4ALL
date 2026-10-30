@@ -8,10 +8,10 @@ from torch_geometric.data import Data
 from torch_geometric.nn import AttentionalAggregation
 
 from model.checkpointing import checkpoint_active, run_mlp, run_plain_blocks
+from model.coarsening import pool_features
 from model.encoder_decoder import GnBlock
 from model.latent import Latent
 from model.mlp import build_mlp
-from torch_geometric.utils import scatter
 
 
 def gather_across_ranks(z):
@@ -163,7 +163,7 @@ class GNNVariationalEncoder(nn.Module):
         return z, mu, logvar
 
     def _local_heads(self, h, coarse):
-        h_c = scatter(h, coarse['parent'], dim=0, dim_size=coarse['n_c'], reduce='mean')
+        h_c = pool_features(h, coarse['parent'], coarse['n_c'])
         g = Data(x=h_c, edge_attr=self.local_edge_encoder(coarse['c_ea']),
                  edge_index=coarse['c_ei'])
         for mp in self.local_mp_layers:
