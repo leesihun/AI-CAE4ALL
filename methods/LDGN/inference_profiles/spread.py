@@ -170,6 +170,26 @@ def _crps_ensemble(ensemble, truth):
     return term1 - term2
 
 
+def _w2_exact(gt, gen):
+    """Exact 1-D 2-Wasserstein distance between two empirical samples.
+
+    Both quantile functions are steps; between the union of their breakpoints
+    each is constant, so a weighted sum over those pieces is the exact
+    integral. The same number as the hyperparameter sweeps' plots.py
+    (`w2_parts`), so a figure and a ranking agree.
+    """
+    x = np.sort(np.asarray(gen, dtype=np.float64))
+    y = np.sort(np.asarray(gt, dtype=np.float64))
+    n, m = x.size, y.size
+    if n == 0 or m == 0:
+        return float('nan')
+    cuts = np.union1d(np.arange(n + 1) / n, np.arange(m + 1) / m)
+    mid = 0.5 * (cuts[:-1] + cuts[1:])
+    qx = x[np.minimum((mid * n).astype(int), n - 1)]
+    qy = y[np.minimum((mid * m).astype(int), m - 1)]
+    return float(np.sqrt((np.diff(cuts) * (qx - qy) ** 2).sum()))
+
+
 def _spread_scores(gt, gt_scene, gen, gen_scene):
     """Ensemble scores for the spread statistic, paired scene by scene.
 
@@ -184,6 +204,7 @@ def _spread_scores(gt, gt_scene, gen, gen_scene):
         pit_ks         KS distance of the truth ranks from uniform        0
         pit_tails      share of truths in the outer 2%                    0.04
         w1_norm        pooled 1-Wasserstein(gt, gen) / sd(gt)             0
+        w2_norm        pooled exact 2-Wasserstein(gt, gen) / sd(gt)       0
         dmean_norm     pooled (mean gen - mean gt) / sd(gt)               0
         sd_ratio       pooled sd(gen) / sd(gt)                            1
     The last three describe the marginal -- the two curves the histogram draws.
@@ -201,6 +222,7 @@ def _spread_scores(gt, gt_scene, gen, gen_scene):
 
     q = np.linspace(0.0, 1.0, 1001)
     out['w1_norm'] = float(np.abs(np.quantile(gen, q) - np.quantile(gt, q)).mean()) / denom
+    out['w2_norm'] = _w2_exact(gt, gen) / denom
     out['dmean_norm'] = (float(gen.mean()) - float(gt.mean())) / denom
     out['sd_ratio'] = float(gen.std()) / denom
 
@@ -288,7 +310,7 @@ def _plot_spread_histogram(gt, gen, out_path, eval_path=None, rollout_dir=None,
     def _stats(col):
         return (float(col.mean()), float(col.std()), float(col.min()), float(col.max()))
 
-    fig, ax = plt.subplots(figsize=(8, 5))
+    fig, ax = plt.subplots(figsize=(8, 6))
     ax.hist(gt, bins=bin_edges, density=True, alpha=0.55,
             label=f"eval dataset (n={gt.size:,})", color="steelblue")
     ax.hist(gen, bins=bin_edges, density=True, alpha=0.55,
@@ -298,7 +320,7 @@ def _plot_spread_histogram(gt, gen, out_path, eval_path=None, rollout_dir=None,
     score_line = ""
     if scores:
         bits = []
-        for key, target in (('crps_norm', '0'), ('spread_skill', '1'),
+        for key, target in (('w2_norm', '0'), ('crps_norm', '0'), ('spread_skill', '1'),
                             ('pit_ks', '0'), ('sd_ratio', '1')):
             value = scores.get(key)
             if value is not None and np.isfinite(value):
@@ -374,7 +396,9 @@ def _spread_by_group(gt, gt_scene, gen, gen_scene, groups, attr, out_dir,
     can still draw a pooled curve of the right width. Here each group gets its
     own truths, only the draws generated for its scenes, and scores normalized
     by that group's own sd(gt). Writes histogram_compare_<attr>_<value>.png per
-    group and spread_metrics_by_group.json; returns {value: scores}.
+    group and spread_metrics_by_group.json; returns {value: scores}. Each
+    figure's title carries its group's w2_norm and the RMS of w2_norm over all
+    groups (the number the hyperparameter sweeps rank by).
     """
     gt = np.asarray(gt, dtype=np.float64)
     gen = np.asarray(gen, dtype=np.float64)
@@ -385,14 +409,18 @@ def _spread_by_group(gt, gt_scene, gen, gen_scene, groups, attr, out_dir,
 
     by_group = {}
     for value in _group_order(v for v in gt_group if v):
-        g_mask = gt_group == value
         p_mask = gen_group == value
         if not p_mask.any():
             continue
-        scores = _spread_scores(gt[g_mask], gt_scene[g_mask],
+        scores = _spread_scores(gt[gt_group == value], gt_scene[gt_group == value],
                                 gen[p_mask], gen_scene[p_mask])
         scores.pop('pit_ranks', None)
         by_group[value] = scores
+    w2s = [s['w2_norm'] for s in by_group.values() if np.isfinite(s.get('w2_norm', np.nan))]
+    w2_rms = float(np.sqrt(np.mean(np.square(w2s)))) if w2s else float('nan')
+    for value, scores in by_group.items():
+        g_mask = gt_group == value
+        p_mask = gen_group == value
         safe = ''.join(c if c.isalnum() or c in '-.' else '_' for c in value)
         _plot_spread_histogram(
             gt[g_mask], gen[p_mask],
@@ -400,14 +428,16 @@ def _spread_by_group(gt, gt_scene, gen, gen_scene, groups, attr, out_dir,
             eval_path=eval_path, rollout_dir=out_dir, bins=bins,
             clip_quantile=clip_quantile, dpi=dpi, label=label, scores=scores,
             stat=stat,
-            title=f"{attr} {value}: {int(g_mask.sum())} scenes (scores vs this group's sd)")
+            title=(f"{attr} {value}: {int(g_mask.sum())} scenes, scores vs this group's sd"
+                   f"   (w2_norm RMS over {len(w2s)} groups {w2_rms:.3f})"))
         print(f"  [GROUP] {attr}={value} n_gt={int(g_mask.sum())} "
               f"n_gen={int(p_mask.sum())} crps_norm={scores.get('crps_norm', float('nan')):.4f} "
               f"spread_skill={scores.get('spread_skill', float('nan')):.4f} "
               f"dmean_norm={scores['dmean_norm']:.4f} sd_ratio={scores['sd_ratio']:.4f}")
+    print(f"  [GROUP] w2_norm RMS over {len(w2s)} groups = {w2_rms:.4f}")
     path = os.path.join(out_dir, 'spread_metrics_by_group.json')
     with open(path, 'w', encoding='utf-8') as fh:
-        json.dump({'attr': attr, 'groups': by_group}, fh, indent=2)
+        json.dump({'attr': attr, 'w2_norm_rms': w2_rms, 'groups': by_group}, fh, indent=2)
     print(f"  [GROUP] metrics -> {path}")
     return by_group
 
