@@ -8,23 +8,28 @@ reads /proc and nvidia-smi; with py-spy on PATH it also samples each job's main
 thread 10 times, which pauses it for a few milliseconds each). One line per job:
 
     ==== TYPE THIS BACK ====
-    gpu 2 util 64% | hybrid_base | main 105% (top thread 97%) | workers 4 busy: 99 98 97 99 | data-wait 7/10
+    gpu 2 util 64% | hybrid_base | main 125% | workers 4 busy: 61 60 58 57 (R 60% S 38% D 2%, disk 40 MB/s) | data-wait 7/10
+        thread python (main): cpu 47% R 47% S 53% D 0%
+        thread pt_autograd_0: cpu 40% R 40% S 60% D 0%
     ==== END ====
 
 util     mean nvidia-smi utilization over the window (about DCGM GR_ACT).
-main     CPU of the training process, all threads (100% = one core), and its
-         busiest thread.
-workers  DataLoader workers using >5% CPU (the train loader's), each one's CPU.
+main     CPU of the training process, all threads (100% = one core).
+workers  DataLoader workers using >5% CPU, each one's CPU; R/S/D = share of
+         0.1 s samples running / sleeping (queue full, waiting on a pipe) /
+         in disk wait, pooled over all the job's workers; their disk reads.
+thread   the trainer's busiest threads by name (python = forward and the
+         optimizer, pt_autograd_* = backward, pin_memory runs as a python
+         thread), with the same R/S/D shares.
 data-wait  py-spy samples in which the main thread waited for the next batch.
 
 Reading it:
-- workers all near 100% and data-wait high  -> the workers cannot keep up:
-  more num_workers.
-- workers well below 100% but data-wait high -> the batch is ready but stuck
-  between worker and trainer (pin_memory thread / shared-memory hand-off):
-  pin_memory False.
-- top thread near 100% and data-wait low     -> the trainer's own Python thread
-  is the limit (kernel launches, host-side work), not the data.
+- workers near 100% R             -> the workers cannot keep up: more num_workers.
+- workers high D, disk MB/s high  -> reading the hierarchy cache is the limit.
+- workers mostly S                -> batches are ready ahead; the data is not
+  the limit, look at the threads.
+- a non-main python thread near 100% -> the pin_memory thread: pin_memory False.
+- main or pt_autograd near 100% R -> the trainer's own host work is the limit.
 """
 import os
 import re
@@ -137,6 +142,21 @@ def data_wait(pid, n=10):
     return f'{hits}/{got}' if got else 'py-spy failed (permission? try sudo)'
 
 
+def state(stat_path):
+    st = read(stat_path)
+    return st.rsplit(')', 1)[1].split()[0] if st else None
+
+
+def comm(pid, tid):
+    return (read(f'/proc/{pid}/task/{tid}/comm') or '?').strip()
+
+
+def read_bytes(pid):
+    io = read(f'/proc/{pid}/io')
+    m = re.search(r'^read_bytes:\s+(\d+)', io or '', re.M)
+    return int(m.group(1)) if m else 0
+
+
 def main():
     jobs = find_jobs()
     if not jobs:
@@ -144,27 +164,64 @@ def main():
         return 1
     t0 = time.time()
     before = {j['pid']: (thread_ticks(j['pid']),
-                         {w: ticks(f'/proc/{w}/stat') for w in j['workers']}) for j in jobs}
-    util = {}
+                         {w: ticks(f'/proc/{w}/stat') for w in j['workers']},
+                         {w: read_bytes(w) for w in j['workers']}) for j in jobs}
+    # Scheduler state every 0.1 s: R running, S sleeping (a queue, a lock, a
+    # CUDA wait that yields), D uninterruptible (disk). Per thread for the
+    # trainer, pooled over the workers.
+    tstate = {j['pid']: {} for j in jobs}
+    wstate = {j['pid']: {} for j in jobs}
+    util, n = {}, 0
     while time.time() - t0 < WINDOW:
-        gpu_util_sample(util)
-        time.sleep(1)
+        if n % 10 == 0:
+            gpu_util_sample(util)
+        for j in jobs:
+            p = j['pid']
+            try:
+                tids = os.listdir(f'/proc/{p}/task')
+            except OSError:
+                tids = []
+            for tid in tids:
+                s = state(f'/proc/{p}/task/{tid}/stat')
+                if s:
+                    d = tstate[p].setdefault(tid, {})
+                    d[s] = d.get(s, 0) + 1
+            for w in j['workers']:
+                s = state(f'/proc/{w}/stat')
+                if s:
+                    wstate[p][s] = wstate[p].get(s, 0) + 1
+        n += 1
+        time.sleep(0.1)
     dt = time.time() - t0
     lines = [f"gpu_idle {os.uname().nodename} cpus={os.cpu_count()} "
              f"load={os.getloadavg()[0]:.0f} window={dt:.0f}s"]
+
+    def pct(d, k):
+        tot = sum(d.values())
+        return 100 * d.get(k, 0) / tot if tot else 0
+
     for j in jobs:
-        th0, wk0 = before[j['pid']]
-        th1 = thread_ticks(j['pid'])
-        per = sorted((100 * (th1[t] - th0.get(t, 0)) / TICK / dt for t in th1), reverse=True)
+        p = j['pid']
+        th0, wk0, rb0 = before[p]
+        th1 = thread_ticks(p)
+        per = sorted(((100 * (th1[t] - th0.get(t, 0)) / TICK / dt, t) for t in th1), reverse=True)
         wk = sorted((100 * (ticks(f'/proc/{w}/stat') - wk0[w]) / TICK / dt for w in j['workers']),
                     reverse=True)
         busy = [w for w in wk if w > 5]
+        mbs = sum(read_bytes(w) - rb0[w] for w in j['workers']) / dt / 1e6
+        ws = wstate[p]
         u = util.get(j['gpu'].split(',')[0], [])
-        lines.append(
-            f"gpu {j['gpu']} util {sum(u) / len(u):.0f}% | " if u else f"gpu {j['gpu']} util ? | ")
-        lines[-1] += (f"{j['name']} | main {sum(per):.0f}% (top thread {per[0] if per else 0:.0f}%) | "
-                      f"workers {len(busy)} busy: {' '.join(f'{w:.0f}' for w in busy) or '-'} | "
-                      f"data-wait {data_wait(j['pid'])}")
+        head = f"gpu {j['gpu']} util {sum(u) / len(u):.0f}%" if u else f"gpu {j['gpu']} util ?"
+        lines.append(f"{head} | {j['name']} | main {sum(c for c, _ in per):.0f}% | "
+                     f"workers {len(busy)} busy: {' '.join(f'{w:.0f}' for w in busy) or '-'} "
+                     f"(R {pct(ws, 'R'):.0f}% S {pct(ws, 'S'):.0f}% D {pct(ws, 'D'):.0f}%, "
+                     f"disk {mbs:.0f} MB/s) | data-wait {data_wait(p)}")
+        for c, t in per[:5]:
+            if c < 3:
+                break
+            d = tstate[p].get(t, {})
+            lines.append(f"    thread {comm(p, t)}{' (main)' if t == str(p) else ''}: "
+                         f"cpu {c:.0f}% R {pct(d, 'R'):.0f}% S {pct(d, 'S'):.0f}% D {pct(d, 'D'):.0f}%")
     print('==== TYPE THIS BACK ====')
     print('\n'.join(lines))
     print('==== END ====')
