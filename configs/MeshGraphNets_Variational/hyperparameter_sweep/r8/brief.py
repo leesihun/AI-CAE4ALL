@@ -49,7 +49,10 @@ COLUMNS (do not type)   every number x100, rounded ("27" = 0.27)
   b     (--long) mean offset    s  width error |sd ratio - 1|    w2^2 = b^2 + s^2 + shape^2
   sdg   (--long) geometric mean of the sd ratios (100 = right width, below = too narrow)
   h     (--long) training hours ("-" = inference only, on an earlier checkpoint)
-  floor 128 of each geometry's FE results against the other 128: median, 5%, 95%"""
+  floor 128 of each geometry's FE results against the other 128: median, 5%, 95%
+  diag  the base's posterior vs. prior diagnosis (extend_135.sh), w2 per ensemble:
+        floor / posterior mean / posterior sample / prior, their sd ratios, the set
+        of extras it chose; then per geometry (floor/mu/post/prior)"""
 
 
 def cfg(path):
@@ -283,6 +286,8 @@ def main():
                   + " | " + " ".join(f"{k}={v:.4f}" for k, v in sorted(m.items()) if isinstance(v, (int, float))))
 
     s, e = read_text(os.path.join(status_dir, "_start")), read_text(os.path.join(status_dir, "_end"))
+    if alive:   # the first run's _end while a second run (LANE) still goes
+        e = None
     try:
         hours = f"{((float(e) if e else time.time()) - float(s)) / 3600:.0f}" if s else "-"
     except ValueError:
@@ -302,7 +307,14 @@ def main():
         print("stop " + ranges(stop))
     for line in fails:
         print(line)
+    for f in sorted(os.listdir(status_dir)) if os.path.isdir(status_dir) else ():
+        if f.startswith("_abort_"):   # a second run (LANE) that stopped in its checks
+            msg = (read_text(os.path.join(status_dir, f)) or "").splitlines()
+            print(f"ABORT lane {f[len('_abort_'):]} {msg[0] if msg else ''}".rstrip())
     for line in infl:
+        print(line)
+    diag = read_text(os.path.join(out_root, "_diag", "base_brief.txt"))   # extend_135.sh
+    for line in (diag or "").splitlines():
         print(line)
     for _w, _n, line in sorted(ranked):
         print(line)

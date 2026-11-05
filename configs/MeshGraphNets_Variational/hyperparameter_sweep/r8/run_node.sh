@@ -46,7 +46,7 @@
 #
 # Status for brief.py: output/b300_r8/run_logs/<node>/status/
 # <job>.{state,err,trained,train_start,train_end,infer_start,infer_end,inferfail},
-# _start, _end, _abort. Stdout per stage: run_logs/<node>/<job>.<train|infer|plots>.out.
+# _start, _end, _abort (_abort_<LANE> for a LANE run). Stdout per stage: run_logs/<node>/<job>.<train|infer|plots>.out.
 #
 # Overrides, in front of the command (GPUS="0 2 3" bash run_135.sh):
 #   PYTHON (launcher), MGNV_PYTHON (default from ai_cae4all.local.toml),
@@ -58,8 +58,16 @@
 #   REDO=1 (every job again, from scratch), LANE=b (a second run of the SAME round
 #   beside one still going: its own run_<node>_b.out/.pid, and it leaves the
 #   hierarchy cache and the run hours of the first alone; it joins the first's MPS daemon),
+#   WAIT_FREE=1 (with LANE: no job is dealt up front; a slot takes its first job only
+#   once the other run has no job left to start (none 'queued' or 'wait') and no
+#   process of another run has had its card in CUDA_VISIBLE_DEVICES for 3 checks
+#   60 s apart; then it takes the next job of JOBS nobody has taken),
 #   MPS=1 (0: the jobs of one card time-slice instead of sharing it through MPS).
 # Inference-only rerun:  TRAIN=0 JOBS="..." bash run_135.sh
+# Jobs appended to jobs.txt while the round runs (make_sweep.py --extra), one per
+# card as the round's cards free up, reported in the same brief.py block:
+#   LANE=b WAIT_FREE=1 JOBS="hybrid_x hybrid_y" bash run_135.sh
+# extend_135.sh does all of that by itself (diagnosis of the base -> extras -> second run).
 # End the queue early:   touch output/b300_r8/stop_135   (running jobs finish,
 #                        no new job starts; the next run deletes it)
 #
@@ -111,6 +119,7 @@ LOG_ROOT="$OUT_ROOT/run_logs/$NODE"
 STATUS_DIR="$LOG_ROOT/status"
 LANE="${LANE:-}"
 export LANE
+WAIT_FREE="${WAIT_FREE:-0}"
 MPS="${MPS:-1}"
 # MPS pipe: node-local and short (a UNIX socket path has ~100 characters); kill_all.sh uses it too.
 MPS_PIPE="/tmp/b300_mps_$(id -u)"
@@ -129,6 +138,7 @@ while read -r n jid meth tcfg icfg; do
     [ "$n" = "$NODE" ] || continue
     JOB_IDS+=("$jid"); JOB_METHOD+=("$meth"); JOB_TRAIN+=("$tcfg"); JOB_INFER+=("$icfg")
 done < "$JOB_TABLE"
+ALL_IDS=("${JOB_IDS[@]}")   # the whole table, for WAIT_FREE's look at the other run
 NAMED=""   # jobs named in JOBS run again even when done
 if [ -n "${JOBS:-}" ]; then   # a subset, in the order given
     ids=(); ms=(); trs=(); ifs=()
@@ -400,16 +410,81 @@ print('ok' if have.lower() == os.environ['MPS_WANT'].lower() else 'the client la
         { [ ! -f "$STATUS_DIR/_start" ] || [ "$REDO" = "1" ]; } && date +%s > "$STATUS_DIR/_start"
         rm -f "$STATUS_DIR/_end"
     fi
+    # WAIT_FREE: a slot's card is free when the other run has no job left to
+    # start (it never takes the card back) and nothing outside this run has the
+    # card in its CUDA_VISIBLE_DEVICES (a training, an inference, a plots.py, a
+    # diagnose.sh), three times in a row a minute apart (a finished job's plots
+    # run after its inference, a few seconds later).
+    other_lane_alive() {
+        local f pid
+        for f in "$OUT_ROOT"/run_"$NODE"*.pid; do
+            [ -f "$f" ] && [ "$f" != "$PID_FILE" ] || continue
+            pid="$(tr -dc '0-9' < "$f")"
+            [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && return 0
+        done
+        return 1
+    }
+    others_pending() {   # -> a job outside this run that is still to start, or nothing
+        local j s
+        for j in "${ALL_IDS[@]}"; do
+            case " ${JOB_IDS[*]} " in *" $j "*) continue ;; esac
+            s="$(cat "$STATUS_DIR/$j.state" 2>/dev/null)"
+            case "$s" in queued|wait) echo "$j"; return ;; esac
+        done
+    }
+    card_pid() {   # gpu -> a process outside this run with it in CUDA_VISIBLE_DEVICES, or nothing
+        local f
+        for f in $(grep -lzx "CUDA_VISIBLE_DEVICES=$1" /proc/[0-9]*/environ 2>/dev/null); do
+            grep -qzx "LANE=$LANE" "$f" 2>/dev/null && continue   # this run's own
+            f="${f#/proc/}"; echo "${f%%/*}"; return
+        done
+    }
+    wait_free() {   # gpu -> 0 once the card is free, 1 when the queue was stopped
+        local g="$1" ok=0 why last="" j p
+        while :; do
+            [ -e "$OUT_ROOT/stop_$NODE" ] && return 1
+            why=""
+            if other_lane_alive; then
+                j="$(others_pending)"
+                [ -n "$j" ] && why="the other run still has $j to start"
+            fi
+            if [ -z "$why" ]; then
+                p="$(card_pid "$g")"
+                [ -n "$p" ] && why="$(tr '\0' ' ' < "/proc/$p/cmdline" 2>/dev/null | cut -c1-70) (pid $p) is on it"
+            fi
+            if [ -n "$why" ]; then
+                ok=0
+                [ "$why" != "$last" ] && echo "  [gpu $g] waits: $why  $(date '+%m-%d %H:%M')"
+                last="$why"
+            else
+                ok=$((ok + 1))
+                [ "$ok" -ge 3 ] && break
+            fi
+            sleep 60
+        done
+        echo "  [gpu $g] free  $(date '+%m-%d %H:%M')"
+        return 0
+    }
+
     # The first round is dealt before any card starts (slot s takes job s), so
     # a job that fails in seconds cannot let its card steal the next card's job.
     # After that a slot takes the next job nobody has claimed, unless
     # output/b300_r8/stop_<node> exists (touch it to end the queue early).
-    for ((s = 0; s < NG && s < NR; s++)); do mkdir "$QUEUE_DIR/claim_$s"; done
+    # WAIT_FREE deals nothing up front: a slot claims once its card is free.
+    if [ "$WAIT_FREE" != "1" ]; then
+        for ((s = 0; s < NG && s < NR; s++)); do mkdir "$QUEUE_DIR/claim_$s"; done
+    else
+        echo "  WAIT_FREE: each slot waits for its card (the other run's queue empty, its card unused)"
+    fi
     pids=""
     for ((s = 0; s < NG; s++)); do
         gpu="${GPU_ARR[$s]}"
         (
-            [ "$s" -lt "$NR" ] && run_job "$gpu" "${RUN_IDX[$s]}"
+            if [ "$WAIT_FREE" = "1" ]; then
+                wait_free "$gpu" || exit 0
+            elif [ "$s" -lt "$NR" ]; then
+                run_job "$gpu" "${RUN_IDX[$s]}"
+            fi
             for k in "${!RUN_IDX[@]}"; do
                 [ -e "$OUT_ROOT/stop_$NODE" ] && break   # no new jobs; running ones finish
                 mkdir "$QUEUE_DIR/claim_$k" 2>/dev/null || continue
@@ -420,7 +495,8 @@ print('ok' if have.lower() == os.environ['MPS_WANT'].lower() else 'the client la
         sleep 2   # stagger the starts: 7 interpreters importing torch at once
     done
     for pid in $pids; do wait "$pid"; done
-    [ "$TRAIN" = "1" ] && [ -z "$LANE" ] && date +%s > "$STATUS_DIR/_end"
+    # The round's run hours end with the last of its runs.
+    [ "$TRAIN" = "1" ] && ! other_lane_alive && date +%s > "$STATUS_DIR/_end"
 
     # ------------------------------------------------------------- 5. summary
     rc=0
@@ -449,7 +525,8 @@ if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
     echo "If it is not, delete $PID_FILE and start again."
     exit 2
 fi
-rm -f "$STATUS_DIR/_abort"
+ABORT_FILE="$STATUS_DIR/_abort${LANE:+_$LANE}"   # a second run's abort leaves the first's block alone
+rm -f "$ABORT_FILE"
 exec > >(tee -a "$MASTER_LOG") 2>&1
 if [ -e "$OUT_ROOT/stop_$NODE" ] && [ -z "$LANE" ]; then
     echo "removing $OUT_ROOT/stop_$NODE left by an earlier run (it would stop the queue from taking a further job)"
@@ -460,9 +537,9 @@ die() {
     echo
     echo "ABORT: $*"
     echo "Nothing was trained. Full log: $MASTER_LOG"
-    printf '%s\n' "$*" | head -1 | cut -c1-80 > "$STATUS_DIR/_abort"
+    printf '%s\n' "$*" | head -1 | cut -c1-80 > "$ABORT_FILE"
     echo "==== TYPE THIS BACK ===="
-    echo "$TAG $NODE ABORT $(cat "$STATUS_DIR/_abort")"
+    echo "$TAG $NODE ABORT${LANE:+ lane $LANE} $(cat "$ABORT_FILE")"
     echo "==== END ===="
     exit 1
 }

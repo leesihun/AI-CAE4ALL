@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Stop every sweep job of this repository on this node: the queue runners of
-# every round (output/b300_*/run_*.pid) with everything they started, plus any
+# every round (output/b300_*/run_*.pid, extend_*.pid) with everything they started, plus any
 # python of yours still running from inside the repository (a trainer, an
 # inference, a cache builder or a DataLoader worker whose runner already died).
 #
@@ -54,7 +54,7 @@ scan() {   # fills KILL/WHY from one ps snapshot
         COMM[$pid]=$comm
     done < <(ps -eo pid=,ppid=,uid=,comm=)
     # 1. queue runners of every round, with their whole process tree
-    for f in "$REPO"/output/b300_*/run_*.pid; do
+    for f in "$REPO"/output/b300_*/run_*.pid "$REPO"/output/b300_*/extend_*.pid; do
         [ -f "$f" ] || continue
         pid="$(tr -dc '0-9' < "$f")"
         [ -n "$pid" ] && [ -n "${OWNER[$pid]:-}" ] && add_tree "$pid" "runner ${f#"$REPO"/}"
@@ -129,7 +129,7 @@ done
 
 # Pid files whose process is gone, then the cache leftovers (only now: a live
 # builder could still have been writing them).
-for f in "$REPO"/output/b300_*/run_*.pid; do
+for f in "$REPO"/output/b300_*/run_*.pid "$REPO"/output/b300_*/extend_*.pid; do
     [ -f "$f" ] || continue
     pid="$(tr -dc '0-9' < "$f")"
     if [ -z "$pid" ] || ! kill -0 "$pid" 2>/dev/null; then rm -f -- "${f:?}"; fi

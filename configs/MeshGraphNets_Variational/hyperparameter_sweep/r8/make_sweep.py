@@ -4,6 +4,7 @@
     python configs/MeshGraphNets_Variational/hyperparameter_sweep/r8/make_sweep.py            # writes the configs here
     python .../r8/make_sweep.py --plan          # queue, slots and estimated hours; writes nothing
     python .../r8/make_sweep.py --pack 3        # three jobs per card (checkpointing where needed)
+    python .../r8/make_sweep.py --extra encdec  # append EXTRA_ARMS' set (or arms: --extra ld64,ch8)
 
 Standard library only, any Python 3.8+. Round 7 showed that the batch, not the
 step count, sets the cost: 480 epochs at batch 16 alone on a card (w2 68) beat
@@ -17,6 +18,14 @@ THREADS_PER_JOB (rewritten here) and each job's use_checkpointing (on only where
 the estimated peak of PACK jobs would not fit the card). use_checkpointing and
 the slot layout do not enter the resume fingerprint, so the round can be
 stopped, regenerated with another --pack and restarted: every job resumes.
+
+--extra appends trainings after the others while the round runs, and they stay
+in jobs.txt on every later regeneration. A config whose text does not change is
+not rewritten (run_node.sh reruns a job whose config is newer than its result),
+and without --force nothing an existing job reads may change. The running queue
+read jobs.txt when it started; a second run of the round takes the extras as
+its cards free up, and brief.py reports all of them in one block:
+    LANE=b WAIT_FREE=1 JOBS="hybrid_ld64 hybrid_ch8" bash .../r8/run_135.sh
 """
 import argparse
 import dataclasses
@@ -72,6 +81,29 @@ SAMPLE_ARMS = {
     "steps10": (dict(fms=10), "sampling only: prior_fm_steps 10 on the base's checkpoint"),
     "steps100": (dict(fms=100), "sampling only: prior_fm_steps 100 on the base's checkpoint"),
 }
+# Trainings appended while the round runs (--extra SET or --extra arm,arm), chosen by
+# the base's posterior vs. prior diagnosis (diagnose.sh): posterior sample already far
+# above the floor -> the encoder/decoder loses the width (encdec); posterior sample near
+# the floor and prior far above it -> the prior does (prior). r6 tried vae_latent_dim
+# 16/64 and latent_ch 2/8 at batch 4 / 120 epochs: all within its seed noise.
+EXTRA_ARMS = {
+    "encdec": {
+        "ld64": (dict(ld=64), "vae_latent_dim 64"),
+        "ld16": (dict(ld=16), "vae_latent_dim 16"),
+        "ch8": (dict(ch=8), "latent_ch 8 (channels of the local latent)"),
+        "ld64_ch8": (dict(ld=64, ch=8), "vae_latent_dim 64 and latent_ch 8"),
+        "pms0.02": (dict(pms=0.02), "posterior_min_std 0.02"),
+        "ar3000": (dict(ar=3000), "alpha_recon 3000"),
+    },
+    "prior": {
+        "pm6": (dict(pm=6), "prior_mp_layers 6"),
+        "ph256": (dict(ph=256), "prior_hidden_dim 256 (fmbig without the extra blocks)"),
+        "fb8": (dict(fb=8), "prior_fm_blocks 8 (fmbig without the wider prior)"),
+        "fmbig_pm6": (dict(fb=8, ph=256, pm=6), "prior_fm_blocks 8, prior_hidden_dim 256, prior_mp_layers 6"),
+        "pms0.1": (dict(pms=0.1), "posterior_min_std 0.1 (a smoother target for the prior)"),
+    },
+}
+EXTRA_ALL = {arm: v for arms in EXTRA_ARMS.values() for arm, v in arms.items()}
 CARDS = ("0", "2", "3", "4", "5", "6", "7")   # GPU1 left out, as in rounds 6 and 7
 PACK = 1                                      # jobs per card; --pack overrides
 CPUS = 120                                    # of 128: torch threads + 4 DataLoader workers per job
@@ -92,10 +124,10 @@ CKPT_MEM = 0.3
 CARD_GB = 260          # of 288 on a B300, the rest for the CUDA contexts and fragmentation
 
 # Estimated hours, ONLY for the queue plan. EP_H[bs] = hours per epoch, alone on a
-# card without checkpointing: r7's e480_bs16 (alone) finished inside 72 h, so batch 16
-# is at most ~0.14 h; batch 32 guessed. Checkpointing x1.52 (aarl 3090). PACK jobs on
+# card without checkpointing: batch 16 measured in this round (277 s, 135, 7 jobs, one
+# per card, 2026-11-05); batch 32 guessed. Checkpointing x1.52 (aarl 3090). PACK jobs on
 # one card: each runs SHARE[PACK] times slower (guess; r7 measures 1 and 2 per card).
-EP_H = {16: 0.13, 32: 0.11}
+EP_H = {16: 0.077, 32: 0.11}
 CKPT_SLOWDOWN = 1.52
 SHARE = {1: 1.0, 2: 1.5, 3: 2.1, 4: 2.7}
 INFER_H = 2.0
@@ -322,6 +354,7 @@ class Job:
     spec: Spec
     change: str
     source: object = None   # sampling only: the job whose checkpoint it samples
+    extra: bool = False     # appended with --extra: a second run (LANE=b WAIT_FREE=1) takes it
 
 
 def est_hours(job, pack):
@@ -331,16 +364,43 @@ def est_hours(job, pack):
     return EP_H[job.spec.bs] * job.spec.ep * ckpt * SHARE[pack] + INFER_H
 
 
-def build_jobs():
+def extra_arms(requested):
+    """Extra arms already in jobs.txt (kept, in their order), then the requested ones
+    (set names or arm names) not there yet."""
+    table = HERE / "jobs.txt"
+    have = []
+    if table.is_file():
+        for line in table.read_text(encoding="utf-8").splitlines():
+            parts = line.split()
+            if len(parts) >= 2 and not parts[0].startswith("#"):
+                arm = parts[1][len(PLACEMENT) + 1:]
+                if arm in EXTRA_ALL and arm not in have:
+                    have.append(arm)
+    for item in requested:
+        for name in filter(None, item.split(",")):
+            arms = list(EXTRA_ARMS[name]) if name in EXTRA_ARMS else [name]
+            for arm in arms:
+                if arm not in EXTRA_ALL:
+                    raise SystemExit(f"--extra {name}: not a set ({', '.join(EXTRA_ARMS)}) "
+                                     f"or an arm ({', '.join(EXTRA_ALL)})")
+                if arm not in have:
+                    have.append(arm)
+    return have
+
+
+def build_jobs(extras=()):
     """The trainings in ARMS order, with the sampling-only jobs right after the first
-    wave (one per card): they need only the base, which that wave trains."""
+    wave (one per card): they need only the base, which that wave trains. Then the
+    extra arms."""
     base = f"{PLACEMENT}_base"
     train = [Job(f"{PLACEMENT}_{arm}", dataclasses.replace(Spec(), **changes), what)
              for arm, (changes, what) in ARMS.items()]
     sample = [Job(f"{base}_{arm}", dataclasses.replace(Spec(), **changes), what, source=base)
               for arm, (changes, what) in SAMPLE_ARMS.items()]
+    extra = [Job(f"{PLACEMENT}_{arm}", dataclasses.replace(Spec(), **EXTRA_ALL[arm][0]), EXTRA_ALL[arm][1],
+                 extra=True) for arm in extras]
     wave = len(CARDS)
-    return train[:wave] + sample + train[wave:]
+    return train[:wave] + sample + train[wave:] + extra
 
 
 def slot_gpus(pack):
@@ -385,11 +445,16 @@ def header(job, kind, pack):
              "% 4 draws per held-out scene = 1024 per geometry against its 256 FE results (spread_metrics.json)."]
     if job.source:
         lines.insert(4, f"% Trains nothing: samples {job.source}'s checkpoint (waits for it in the queue).")
+    if job.extra:
+        lines.insert(4, "% Added while the round ran (--extra); a second run takes it: LANE=b WAIT_FREE=1 JOBS=...")
     return "\n".join(lines) + "\n%\n" + DATA
 
 
 def write(path, text):
-    path.write_bytes(text.encode("utf-8"))   # LF, no BOM
+    """LF, no BOM; an unchanged file keeps its mtime (run_node.sh compares them)."""
+    data = text.encode("utf-8")
+    if not (path.is_file() and path.read_bytes() == data):
+        path.write_bytes(data)
 
 
 def self_check():
@@ -427,12 +492,15 @@ def self_check():
 def plan(jobs, pack):
     """run_node.sh's dealing: job s on slot s, then each freed slot takes the next job.
 
-    A sampling-only job holds its slot until its source has trained."""
+    A sampling-only job holds its slot until its source has trained. The extra jobs
+    (a second run, WAIT_FREE, one slot per card) start on a card once the first run
+    has started its last job and that card's slots have all finished."""
     gpus = slot_gpus(pack)
     heap = []
     out = []
     end = {}
-    for k, j in enumerate(jobs):
+    first = [j for j in jobs if not j.extra]
+    for k, j in enumerate(first):
         t, s = (0.0, k) if k < len(gpus) else heapq.heappop(heap)
         if j.source:
             t = max(t, end[j.source] - INFER_H)
@@ -440,6 +508,16 @@ def plan(jobs, pack):
         out.append((j, gpus[s], t, t + h))
         end[j.name] = t + h
         heapq.heappush(heap, (t + h, s))
+    last_start = max((t for _j, _g, t, _e in out), default=0.0)
+    free = {c: max([last_start] + [e for _j, g, _t, e in out if g == c]) for c in CARDS}
+    cards = [(t, c) for c, t in free.items()]
+    heapq.heapify(cards)
+    for j in jobs:
+        if j.extra:
+            t, c = heapq.heappop(cards)
+            h = est_hours(j, 1)
+            out.append((j, c, t, t + h))
+            heapq.heappush(cards, (t + h, c))
     return out
 
 
@@ -448,11 +526,15 @@ def main():
     ap.add_argument("--plan", action="store_true", help="print the queue and estimated hours; write nothing")
     ap.add_argument("--pack", type=int, default=PACK, choices=sorted(SHARE), help="jobs per card")
     ap.add_argument("--force", action="store_true",
-                    help=f"regenerate even though output/b300_{ROUND} exists (e.g. to change --pack)")
+                    help=f"regenerate even though output/b300_{ROUND} exists and a job's config changes "
+                         "(e.g. to change --pack)")
+    ap.add_argument("--extra", action="append", default=[], metavar="SET|ARM,ARM",
+                    help=f"append extra trainings: a set ({', '.join(EXTRA_ARMS)}) or arms "
+                         f"({', '.join(EXTRA_ALL)}); arms added before stay")
     args = ap.parse_args()
     pack = args.pack
 
-    jobs = build_jobs()
+    jobs = build_jobs(extra_arms(args.extra))
     peaks = sorted((peak_gb(j.spec, use_checkpointing(j.spec, pack)) for j in jobs if not j.source),
                    reverse=True)
     if sum(peaks[:pack]) > CARD_GB:   # the worst card: the PACK largest jobs together
@@ -465,40 +547,54 @@ def main():
     for k, (j, gpu, t, e) in enumerate(rows, 1):
         ck = use_checkpointing(j.spec, pack)
         peak = "-" if j.source else f"{peak_gb(j.spec, ck):.0f}"
-        table.append(f"| {k} | {j.name} | {j.change} | {gpu} | {'-' if j.source else 'on' if ck else 'off'} | "
+        table.append(f"| {k} | {j.name} | {j.change}{' (extra, second run)' if j.extra else ''} | {gpu} | "
+                     f"{'-' if j.source else 'on' if ck else 'off'} | "
                      f"{peak} | {e - t:.0f} | {t / 24:.1f}-{e / 24:.1f} |")
     n_train = sum(1 for j in jobs if not j.source)
+    extras = [j.name for j in jobs if j.extra]
     summary = (f"{n_train} trainings + {len(jobs) - n_train} sampling-only jobs, seed {SEED}, one run each; "
                f"--pack {pack}: {pack} per card on GPUs "
                f"{', '.join(CARDS)} = {len(slot_gpus(pack))} slots, {threads_per_job(pack)} torch threads per job. "
                f"Estimated makespan {makespan / 24:.1f} days (GUESSED speeds: {EP_H[16]} h per batch-16 epoch alone, "
                f"x{CKPT_SLOWDOWN} with checkpointing, x{SHARE[pack]} per job at {pack} per card; peaks with "
                f"checkpointing guessed at {CKPT_MEM} of the full peak).")
+    if extras:
+        summary += (f" Extra trainings ({len(extras)}): a second run takes them as the cards free up, "
+                    f"LANE=b WAIT_FREE=1 JOBS=\"{' '.join(extras)}\" bash {REL}/run_135.sh; "
+                    "their start-end assumes it was started with the first.")
     if args.plan:
         print(summary)
         print("\n".join(table))
         return 0
 
     out = HERE
-    if (REPO / "output" / f"b300_{ROUND}").exists() and not args.force:
-        raise SystemExit(f"output/b300_{ROUND} exists: the sweep may be running; --force to regenerate anyway")
     if not self_check():
         raise SystemExit("self-check failed: the base drifted from round 6's hybrid_e240 (above)")
-    for old in out.glob("config_*.txt"):
-        old.unlink()
-    lines = []
+    configs, lines = {}, []
     for j in jobs:
         if not j.source:
-            write(out / f"config_train_{j.name}.txt",
-                  header(j, "train", pack) + train_body(j.spec, j.name, pack).text())
-        write(out / f"config_infer_{j.name}.txt",
-              header(j, "infer", pack) + infer_body(j.spec, j.name, pack, j.source).text())
+            configs[out / f"config_train_{j.name}.txt"] = \
+                header(j, "train", pack) + train_body(j.spec, j.name, pack).text()
+        configs[out / f"config_infer_{j.name}.txt"] = \
+            header(j, "infer", pack) + infer_body(j.spec, j.name, pack, j.source).text()
         tcfg = "-" if j.source else f"{REL}/config_train_{j.name}.txt"
         lines.append(f"{NODE} {j.name} mgnv {tcfg} {REL}/config_infer_{j.name}.txt")
+    stale = [p for p in out.glob("config_*.txt") if p not in configs]
+    changed = [p for p, text in configs.items() if p.is_file() and p.read_bytes() != text.encode("utf-8")]
+    if (stale or changed) and (REPO / "output" / f"b300_{ROUND}").exists() and not args.force:
+        raise SystemExit(f"output/b300_{ROUND} exists (the sweep may be running) and this would "
+                         + ", ".join(f"{'remove' if p in stale else 'change'} {p.name}" for p in stale + changed)
+                         + "; --force to regenerate anyway")
+    for p in stale:
+        p.unlink()
+    for p, text in configs.items():
+        write(p, text)
     write(out / "jobs.txt",
           f"# B300 large-batch hybrid sweep {ROUND}: node job method train_config|- infer_config. "
           f"Generated by make_sweep.py --pack {pack}.\n"
           "# Run order = line order; job k starts on slot k, then each freed slot takes the next line.\n"
+          + (f"# The last {len(extras)} (--extra) were added while the round ran; a second run takes them: "
+             f"LANE=b WAIT_FREE=1 JOBS=\"...\".\n" if extras else "")
           + "\n".join(lines) + "\n")
     write_run_135(pack)
     readme = out / "README.md"
@@ -507,7 +603,8 @@ def main():
         text = text[:text.index(JOBS_MARK)]
     write(readme, text + JOBS_MARK + "\n\n" + summary + "\n\n" + "\n".join(table) + "\n")
     print(summary)
-    print(f"wrote {out} ({len(jobs)} jobs, run_135.sh for --pack {pack})")
+    print(f"wrote {out} ({len(jobs)} jobs, run_135.sh for --pack {pack}; "
+          f"{len(changed)} config(s) changed, {len(stale)} removed)")
     return 0
 
 
