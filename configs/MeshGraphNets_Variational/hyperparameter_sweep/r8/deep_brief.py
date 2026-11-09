@@ -51,7 +51,10 @@ COLUMNS (do not type)   w2 numbers x100 ("27" = 0.27), floor/post/prior as in br
   lat   (base, e360) latent, for ho ts tr in turn. g (per-graph part): centroid offset (prior vs
         posterior, over the posterior cloud's radius; >100 = outside it) / between-geometry over
         within (100 = the geometries' clouds overlap as much as they spread) / prior sd over
-        posterior sd. l (per coarse node): offset / sd ratio"""
+        posterior sd. l (per coarse node): offset / sd ratio
+  sig   (base, e360, held-out) per latent part, the encoder's sigma over the spread of the posterior
+        means across one geometry's draws (>>1: the sampled z is mostly noise around the mean)
+  off   (base, e360, held-out) per geometry, the prior's centroid offset x100 per part (g/l order as listed)"""
 
 
 def x(v):
@@ -202,6 +205,14 @@ def main():
             l_ = " ".join(lat_part(d[s], "l", ("centroid_offset_mean", "prior_over_post_sd"))
                           for s in ("ho", "ts", "tr"))
             print(f"{n} lat {gp} {g} l {l_}")
+        if ho and ho.get("latent"):
+            sig = " ".join(f"{p} {r['sigma_over_sd_means']:.2g}"
+                           for p, r in ho.get("latent_geomean_over_groups", {}).items()
+                           if r.get("sigma_over_sd_means") is not None)
+            off = " ".join(f"{v}:" + "/".join(x(ho["latent"][v][p].get("centroid_offset"))
+                                             for p in sorted(ho["latent"][v]))
+                           for v in ho["latent"])
+            print(f"{n} sig {sig} off {off}")
     print("==== END ====")
     return 0
 
