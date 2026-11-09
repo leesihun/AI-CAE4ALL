@@ -17,6 +17,9 @@ FOUR ENSEMBLES PER GEOMETRY (one value per FE result of that geometry)
     posterior mean    encode the FE result, decode mu                 (no sampling)
     posterior sample  encode the FE result, decode a z ~ q(z | y, g)
     prior             decode a z ~ p(z | g), the deployed sampler
+    std_normal        decode a z ~ N(0, I), the same shape as the prior's draw: the
+                      learned conditional prior ablated without retraining (the
+                      MMD/KL regularizer pulls the aggregate posterior toward it)
 
 SCORE  (the same numbers as the sweeps' plots.py noise block)
 
@@ -44,6 +47,27 @@ the posterior cloud's top principal directions (posterior_vs_prior.latent_table)
 Beside it, the posterior's own sigma against the sd of its means: sigma >> sd
 means the encoder barely tells the FE results of one geometry apart.
 
+Per geometry the W2 also splits into its parts (bias, sd ratio, shape), and
+the latent line adds where the prior's cloud sits: the distance between the
+prior's and the posterior's centroids over the posterior cloud's radius
+(> 1: the prior is centred outside it), and for the per-graph part how far
+the geometries' posterior centroids lie apart over their own radius (>> 1:
+the latent carries the geometry, and the prior has to predict where).
+
+WHICH GEOMETRIES  (--split)
+
+    heldout   the config's infer_dataset (default): the unseen geometries scored
+    train     the training file's geometries the model trained on
+    val       ... the validation geometries (checkpoint selection saw them)
+    test      ... the test geometries (never seen)
+
+train/val/test are setup.py's split, dataset.split(0.8, 0.1, 0.1, split_seed)
+grouped by split_group_attr; --n-groups N takes N of them evenly spaced. The
+same geometries scored on train and test separate a prior that has not
+learned what it was shown (train bad) from one that does not carry over to
+new geometries (train good, test bad). Fewer FE results per geometry (64 on
+ex3's training file) give a higher floor; compare gaps within one split.
+
 Writes posterior_vs_prior_groups_<tag>.json, one histogram figure, and ends
 with a ==== TYPE THIS BACK ==== block.
 """
@@ -64,6 +88,7 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO_ROOT)
 sys.path.insert(0, os.path.join(REPO_ROOT, 'misc'))
 
+from general_modules.grouped_split import grouped_split_ids       # noqa: E402
 from general_modules.load_config import load_config               # noqa: E402
 from general_modules.renamed_keys import migrate_checkpoint_config  # noqa: E402
 from inference_profiles.rollout import (                          # noqa: E402
@@ -71,12 +96,12 @@ from inference_profiles.rollout import (                          # noqa: E402
     _load_conditional_prior, _load_model_from_checkpoint,
     _spread_index, _spread_stat,
 )
-from model.latent import latent_parts                              # noqa: E402
+from model.latent import latent_parts, lmap                        # noqa: E402
 from posterior_vs_prior import latent_table, resolve_device       # noqa: E402
 
 os.chdir(REPO_ROOT)   # config paths are relative to the method directory
 
-ENSEMBLES = ('floor', 'posterior_mean', 'posterior_sample', 'prior')
+ENSEMBLES = ('floor', 'posterior_mean', 'posterior_sample', 'prior', 'std_normal')
 SPLITS = 200          # plots.py SPLITS
 SPLIT_SEED = 0        # plots.py SPLIT_SEED: the same permutations, so the same floor
 
@@ -123,9 +148,10 @@ def summarize(rows):
 def split_scores(spreads, order, splits=SPLITS):
     """Every ensemble against the second half of each geometry's FE results.
 
-    spreads[group] = {'truth', 'posterior_mean', 'posterior_sample', 'prior'},
+    spreads[group] = {'truth', 'posterior_mean', 'posterior_sample', 'prior', ...},
     each [n] and aligned to the same FE results. Returns
-    ({ensemble: {key: {p50, p5, p95}}}, {group: {ensemble: median w2}}, k).
+    ({ensemble: {key: {p50, p5, p95}}}, {group: {ensemble: median w2}},
+     {group: {ensemble: {bias, sd_ratio, shape}: median}}, k).
     """
     rng = np.random.default_rng(SPLIT_SEED)
     perms = {v: [rng.permutation(spreads[v]['truth'].size) for _ in range(splits)] for v in order}
@@ -144,7 +170,7 @@ def split_scores(spreads, order, splits=SPLITS):
                 row = geometry_row(ref, src[ia], pooled_sd)
                 if row is not None:
                     rows[e][v] = row
-                    per_group[v][e].append(row['w2'])
+                    per_group[v][e].append(row)
         for e in ENSEMBLES:
             if rows[e]:
                 runs[e].append(summarize(rows[e]))
@@ -155,9 +181,12 @@ def split_scores(spreads, order, splits=SPLITS):
             vals = np.asarray([r[key] for r in runs[e]])
             out[e][key] = {'p50': float(np.median(vals)), 'p5': float(np.percentile(vals, 5)),
                            'p95': float(np.percentile(vals, 95))}
-    med = {v: {e: float(np.median(per_group[v][e])) if per_group[v][e] else float('nan')
-               for e in ENSEMBLES} for v in order}
-    return out, med, k
+    def median(rows, key):
+        return float(np.median([r[key] for r in rows])) if rows else float('nan')
+    med = {v: {e: median(per_group[v][e], 'w2') for e in ENSEMBLES} for v in order}
+    parts = {v: {e: {key: median(per_group[v][e], key) for key in ('bias', 'sd_ratio', 'shape')}
+                 for e in ENSEMBLES} for v in order}
+    return out, med, parts, k
 
 
 def paired(est, truth):
@@ -188,6 +217,14 @@ def latent_summary(post_mu, prior_z, post_sigma):
     lat['sigma_over_sd_means'] = (lat['posterior_sigma_rms'] / lat['sd_post_means_rms']
                                   if lat['sd_post_means_rms'] > 0 else float('nan'))
     lat['dims'] = int(sd_mu.size)
+    # Where the prior's cloud sits: centroid distance over the radius of the
+    # posterior cloud the decoder trains on (spread of the means + sigma).
+    mu2 = np.asarray(post_mu, np.float64).reshape(len(post_mu), -1)
+    pz2 = np.asarray(prior_z, np.float64).reshape(len(prior_z), -1)
+    within = float((sd_mu ** 2).sum() + (sig ** 2).mean(axis=0).sum())
+    lat['centroid_offset'] = (float(np.linalg.norm(pz2.mean(axis=0) - mu2.mean(axis=0))) / math.sqrt(within)
+                              if within > 0 else float('nan'))
+    lat['_centroid'], lat['_within'] = mu2.mean(axis=0), within   # main() pops both
     return lat
 
 
@@ -254,7 +291,7 @@ def run_group(model, prior, ctx, truths, fields, ch, stat, batch, temperature, l
     dsd = np.asarray(ctx.delta_std, np.float32)
     base = ctx.build_step_graph(np.zeros((ctx.num_nodes, ctx.input_dim), dtype=np.float32))
     N = ctx.num_nodes
-    sp = {'posterior_mean': [], 'posterior_sample': [], 'prior': []}
+    sp = {'posterior_mean': [], 'posterior_sample': [], 'prior': [], 'std_normal': []}
     lat = {'mu': {}, 'sigma': {}, 'prior': {}}
 
     def make_batch(idx):
@@ -283,9 +320,12 @@ def run_group(model, prior, ctx, truths, fields, ch, stat, batch, temperature, l
             b = make_batch(idx)
             zp = prior.sample(b, temperature=temperature, inflation=lam)
             pred_p = model(b, add_noise=False, use_posterior=False, fixed_z=zp)[0]
+            zn = lmap(torch.randn_like, zp)
+            pred_n = model(make_batch(idx), add_noise=False, use_posterior=False, fixed_z=zn)[0]
         sp['posterior_sample'] += spreads(pred_z, m)
         sp['posterior_mean'] += spreads(pred_mu, m)
         sp['prior'] += spreads(pred_p, m)
+        sp['std_normal'] += spreads(pred_n, m)
         keep(lat['mu'], mu, m)
         keep(lat['prior'], zp, m)
         sig = {n: np.exp(0.5 * a) for n, a in _np_parts(logvar).items()}
@@ -313,10 +353,12 @@ def write_figure(path, order, spreads, med, tag, label):
     fig, axes = plt.subplots(rows, cols, figsize=(4.2 * cols, 3.4 * rows), squeeze=False)
     style = {'posterior_sample': ('#2878B5', '-', 'posterior sample'),
              'prior': ('#D65F32', '-', 'prior (deployed)'),
-             'posterior_mean': ('#6E7781', '--', 'posterior mean')}
+             'posterior_mean': ('#6E7781', '--', 'posterior mean'),
+             'std_normal': ('#4C9A2A', ':', 'N(0, I)')}
     for ax, v in zip(axes.flat, order):
         s = spreads[v]
-        allv = np.concatenate([s[e] for e in ('truth', 'posterior_mean', 'posterior_sample', 'prior')])
+        allv = np.concatenate([s[e] for e in ('truth', 'posterior_mean', 'posterior_sample', 'prior',
+                                              'std_normal')])
         allv = allv[np.isfinite(allv)]
         bins = np.linspace(allv.min(), allv.max() if allv.max() > allv.min() else allv.min() + 1, 31)
         ax.hist(s['truth'], bins=bins, density=True, color='#C9CED6', label='FE')
@@ -325,7 +367,7 @@ def write_figure(path, order, spreads, med, tag, label):
                     linewidth=1.8, label=lab)
         m = med[v]
         ax.set_title(f"{v}: W2x100 floor {100 * m['floor']:.0f} | post {100 * m['posterior_sample']:.0f}"
-                     f" | prior {100 * m['prior']:.0f}", fontsize=9)
+                     f" | prior {100 * m['prior']:.0f} | N(0,I) {100 * m['std_normal']:.0f}", fontsize=9)
         ax.set_xlabel(label, fontsize=8)
     for ax in list(axes.flat)[len(order):]:
         ax.axis('off')
@@ -347,6 +389,11 @@ def main():
     ap.add_argument('--splits', type=int, default=SPLITS)
     ap.add_argument('--out', default=None, help='default: <inference_output_dir>/../diag')
     ap.add_argument('--tag', default=None)
+    ap.add_argument('--split', default='heldout', choices=('heldout', 'train', 'val', 'test'),
+                    help="heldout = the config's infer_dataset; train/val/test = that part of "
+                         "the training file (setup.py's grouped 0.8/0.1/0.1 split)")
+    ap.add_argument('--dataset', default=None, help='another HDF5 than the split reads')
+    ap.add_argument('--n-groups', type=int, default=None, help='N geometries, evenly spaced')
     ap.add_argument('--max-groups', type=int, default=None, help='smoke tests only')
     ap.add_argument('--max-per-group', type=int, default=None, help='smoke tests only')
     a = ap.parse_args()
@@ -377,13 +424,27 @@ def main():
         cfg['hierarchy_seed'] = cfg['hierarchy_seed'][0]
 
     attr = cfg.get('split_group_attr')
-    h5_path = cfg.get('eval_dataset') or cfg.get('infer_dataset')
+    if a.dataset:
+        h5_path = _abs(a.dataset)
+    elif a.split == 'heldout':
+        h5_path = cfg.get('eval_dataset') or cfg.get('infer_dataset')
+    else:
+        h5_path = cfg['dataset_dir']
     if not attr:
         raise SystemExit('the config has no split_group_attr; use misc/posterior_vs_prior.py')
     groups = _eval_dataset_groups(h5_path, attr)
     if not groups:
         raise SystemExit(f'{h5_path}: not every scene carries metadata attr {attr!r}')
-    order = _group_order(groups.values())[:a.max_groups]
+    order = _group_order(groups.values())
+    if a.split != 'heldout':
+        # training_profiles/setup.py: dataset.split(0.8, 0.1, 0.1, seed=split_seed)
+        part = grouped_split_ids(h5_path, sorted(groups, key=int), attr, 0.8, 0.1,
+                                 int(cfg.get('split_seed', 42)))[('train', 'val', 'test').index(a.split)]
+        keep = {str(groups[s]) for s in part}
+        order = [v for v in order if v in keep]
+    if a.n_groups and len(order) > a.n_groups:
+        order = [order[i] for i in np.linspace(0, len(order) - 1, a.n_groups).round().astype(int)]
+    order = order[:a.max_groups]
     input_var, out_var = int(cfg['input_var']), int(cfg['output_var'])
     cond_var = int(cfg.get('cond_var', 0) or 0)
     rows = 3 + np.asarray(ch)
@@ -419,7 +480,7 @@ def main():
                                                a.batch, temperature, lam)
             nodes[v] = int(ctx.num_nodes)
 
-    scores, med, k = split_scores(spreads, order, a.splits)
+    scores, med, w2parts, k = split_scores(spreads, order, a.splits)
     pair = {e: paired(np.concatenate([spreads[v][e] for v in order]) -
                       np.concatenate([np.full(spreads[v]['truth'].size, spreads[v]['truth'].mean())
                                       for v in order]),
@@ -441,7 +502,18 @@ def main():
                       'prior_over_post_sd_top_k': gm('prior_over_post_sd_along_top_k', 'pca'),
                       'post_var_frac_top_k': gm('post_var_frac_in_top_k', 'pca'),
                       'prior_var_frac_top_k': gm('prior_var_frac_in_top_k', 'pca'),
-                      'sigma_over_sd_means': gm('sigma_over_sd_means')}
+                      'sigma_over_sd_means': gm('sigma_over_sd_means'),
+                      'centroid_offset_mean': float(np.mean([x['centroid_offset'] for x in vals])),
+                      'centroid_offset_max': float(np.max([x['centroid_offset'] for x in vals]))}
+        cents = [latents[v][p].pop('_centroid') for v in order if p in latents[v]]
+        within = [latents[v][p].pop('_within') for v in order if p in latents[v]]
+        # Between-geometry spread of the posterior centroids over the clouds'
+        # own radius. Per-graph parts only: an l slot is a coarse node, and
+        # coarse nodes of two meshes do not correspond.
+        if p != 'l' and len(cents) > 1 and len({c.size for c in cents}) == 1:
+            c = np.stack(cents)
+            between = float(np.sqrt(((c - c.mean(axis=0)) ** 2).sum(axis=1).mean()))
+            lat_rms[p]['between_over_within'] = between / math.sqrt(float(np.mean(within)))
 
     tag = a.tag or os.path.splitext(os.path.basename(a.config))[0].replace('config_infer_', '')
     out_dir = _abs(a.out) if a.out else os.path.join(
@@ -453,9 +525,11 @@ def main():
     out = os.path.join(out_dir, f'posterior_vs_prior_groups_{tag}.json')
     with open(out, 'w', encoding='utf-8') as fh:
         json.dump({'config': a.config, 'modelpath': cfg['modelpath'], 'epoch': ck.get('epoch'),
+                   'split': a.split, 'dataset': h5_path,
                    'latent_type': cfg.get('latent_type', 'global'), 'attr': attr, 'k': k,
                    'splits': a.splits, 'prior_temperature': temperature, 'latent_inflation': lam,
-                   'scores': scores, 'per_group_w2_median': med, 'paired_within_geometry': pair,
+                   'scores': scores, 'per_group_w2_median': med, 'per_group_parts_median': w2parts,
+                   'paired_within_geometry': pair,
                    'latent': latents, 'latent_geomean_over_groups': lat_rms, 'verdict': lines,
                    'figure': fig, 'nodes': nodes,
                    'spreads': {v: {e: s.tolist() for e, s in spreads[v].items()} for v in order}},
@@ -468,16 +542,17 @@ def main():
     n_fe = sorted({spreads[v]['truth'].size for v in order})
     print(f'\n  wrote {out}\n  figure {fig}\n')
     print('==== TYPE THIS BACK ====')
-    print(f"posterior_vs_prior {tag} ep={ck.get('epoch')} {cfg.get('latent_type', 'global')} groups={len(order)} "
+    print(f"posterior_vs_prior {tag} ep={ck.get('epoch')} {cfg.get('latent_type', 'global')} split={a.split} groups={len(order)} "
           f"n={n_fe[0] if len(n_fe) == 1 else n_fe} k={k}")
     print('w2x100 p50[p5-p95]: ' + ' | '.join(f'{e} {band(e)}' for e in ENSEMBLES))
     print('sd_ratio geomean: ' + ' | '.join(
         f"{e} {scores[e]['sd_ratio_geomean']['p50']:.2f}" for e in ENSEMBLES))
     print('bias rms x100: ' + ' | '.join(
         f"{e} {100 * scores[e]['bias']['p50']:.0f}" for e in ENSEMBLES))
-    print('per geom w2x100 floor/mu/post/prior: ' + ' '.join(
+    print('per geom w2x100 floor/mu/post/prior/N(0,I): ' + ' '.join(
         f"{v}:{100 * med[v]['floor']:.0f}/{100 * med[v]['posterior_mean']:.0f}/"
-        f"{100 * med[v]['posterior_sample']:.0f}/{100 * med[v]['prior']:.0f}" for v in order))
+        f"{100 * med[v]['posterior_sample']:.0f}/{100 * med[v]['prior']:.0f}/"
+        f"{100 * med[v]['std_normal']:.0f}" for v in order))
     print('paired (within geom) mu r={:.2f} rmse/sd={:.2f} | post r={:.2f} rmse/sd={:.2f}'.format(
         pair['posterior_mean']['corr'], pair['posterior_mean']['rmse_over_sd'],
         pair['posterior_sample']['corr'], pair['posterior_sample']['rmse_over_sd']))
@@ -486,7 +561,12 @@ def main():
         print(f"latent {p} ({r['dims']}d): prior/post sd {r['prior_over_post_sd']:.2f}, "
               f"top-k {r['prior_over_post_sd_top_k']:.2f}, var in top-k post "
               f"{r['post_var_frac_top_k']:.2f} prior {r['prior_var_frac_top_k']:.2f}, "
-              f"sigma/sd(mu) {r['sigma_over_sd_means']:.2f}")
+              f"sigma/sd(mu) {r['sigma_over_sd_means']:.2f}, centroid offset "
+              f"{r['centroid_offset_mean']:.2f} (max {r['centroid_offset_max']:.2f})"
+              + (f", between/within {r['between_over_within']:.2f}" if 'between_over_within' in r else ''))
+    print('per geom prior bias/sd/shape x100: ' + ' '.join(
+        f"{v}:{100 * w2parts[v]['prior']['bias']:+.0f}/{100 * w2parts[v]['prior']['sd_ratio']:.0f}/"
+        f"{100 * w2parts[v]['prior']['shape']:.0f}" for v in order))
     for ln in lines:
         print(ln)
     print('==== END ====')
