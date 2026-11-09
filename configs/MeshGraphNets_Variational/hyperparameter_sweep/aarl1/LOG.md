@@ -117,3 +117,19 @@ under MPS:
 - Expected ends: `ref`, `mmd0` and `aux0` about 2026-11-10 16:00 (inference included); `nofreeze` about
   2026-11-11 morning.
 - Card 3 became free when the other user's job ended. The round stays on cards 0 and 1.
+
+## 2026-11-09: round stopped at the user's request (15:30)
+
+- The user said: "다 죽여. 지금 변경했어. 아직 안해도돼" (kill everything; they changed something; no need to
+  run it yet).
+- `kill_all.sh` signalled 79 processes. Before running it I checked that only this round's processes had
+  their cwd in the checkout. The other user's jobs (905553 on card 2, 2888998 on card 3) are untouched and
+  still running.
+- Cleanup: MPS daemon gone, `/tmp/aarl1_mps_0` removed, the 6.5 GB hierarchy cache removed. Cards 0 and 1
+  are empty.
+- When stopped, `ref`, `aux0` and `mmd0` were at epoch 62 of 120 and `nofreeze` at 61. That is inside the
+  joint phase, so no inference and no score.
+- Their `model.pth` (best so far) and train logs are pulled to local `output/aarl1/`.
+- The resume states (`*.resume`) are still on aarl. They resume only under the same config fingerprint, so
+  they are useless if the change touches these configs.
+- The local pull loop is stopped.

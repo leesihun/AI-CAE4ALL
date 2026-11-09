@@ -293,10 +293,14 @@ def anova_shares(Y):
 class Geometry:
     """Encode / decode / prior flow for one geometry's graph."""
 
-    def __init__(self, model, prior, ctx, ch, stat, batch, steps, temperature, inflation):
+    def __init__(self, model, prior, ctx, ch, stat, batch, steps, temperature, inflation, grad_batch=2):
         self.model, self.prior, self.ctx = model, prior, ctx
         self.inner = getattr(model, 'model', model)
         self.ch, self.stat, self.batch = ch, stat, batch
+        # backward through the decoder keeps every activation (~17 GiB per 86k-node
+        # graph in fp32), so it runs in its own, smaller chunks; the prior is coarse-only
+        self.grad_batch, self.flow_chunk = grad_batch, 256
+        self.stage = 'setup'
         self.steps, self.amp, self.inflation = steps, math.sqrt(max(temperature, 1e-6)), inflation
         self.dm = np.asarray(ctx.delta_mean, np.float32)
         self.dsd = np.asarray(ctx.delta_std, np.float32)
@@ -352,19 +356,39 @@ class Geometry:
             return v.mean(dim=1)
         return v.std(dim=1, unbiased=False)
 
+    # chunking ------------------------------------------------------------
+
+    def _chunks(self, n, attr, body):
+        """[body(s, m)] over [0, n) in chunks of self.<attr>; a CUDA OOM halves
+        the chunk for the rest of the geometry and retries it."""
+        out, s = [], 0
+        while s < n:
+            m = min(getattr(self, attr), n - s)
+            try:
+                out.append(body(s, m))
+            except torch.cuda.OutOfMemoryError:
+                if m <= 1:
+                    raise
+                oom = True
+            else:
+                oom = False
+                s += m
+            if oom:   # outside the handler, so the failed chunk's tensors are released
+                torch.cuda.empty_cache()
+                setattr(self, attr, max(1, m // 2))
+                print(f'  CUDA OOM in {self.stage} at {attr}={m}: now {getattr(self, attr)}', flush=True)
+        return out
+
     # encode / decode -----------------------------------------------------
 
     def encode(self, fields):
-        mg, ml, sg, sl = [], [], [], []
-        for s in range(0, len(fields), self.batch):
-            chunk = fields[s:s + self.batch]
-            m = len(chunk)
+        def body(s, m):
             with torch.no_grad():
-                _, mu, logvar = self.inner.posterior(self.graphs(m, chunk))
-            mg.append(mu.g.double().cpu().numpy())
-            ml.append(mu.l.double().cpu().numpy().reshape(m, -1, self.C))
-            sg.append(np.exp(0.5 * logvar.g.double().cpu().numpy()))
-            sl.append(np.exp(0.5 * logvar.l.double().cpu().numpy()).reshape(m, -1, self.C))
+                _, mu, logvar = self.inner.posterior(self.graphs(m, fields[s:s + m]))
+            return (mu.g.double().cpu().numpy(), mu.l.double().cpu().numpy().reshape(m, -1, self.C),
+                    np.exp(0.5 * logvar.g.double().cpu().numpy()),
+                    np.exp(0.5 * logvar.l.double().cpu().numpy()).reshape(m, -1, self.C))
+        mg, ml, sg, sl = zip(*self._chunks(len(fields), 'batch', body))
         mu_g, mu_l = np.concatenate(mg), np.concatenate(ml)
         if mu_l.shape[1] != self.n_c:
             raise RuntimeError(f'posterior has {mu_l.shape[1]} coarse nodes, the prior {self.n_c}')
@@ -378,29 +402,26 @@ class Geometry:
 
     def decode(self, G, L):
         """Spread statistic of each decoded (g [M, S, D], l [M, n_c, C]) in z space."""
-        out = []
-        for s in range(0, len(G), self.batch):
-            m = min(self.batch, len(G) - s)
+        def body(s, m):
             with torch.no_grad():
                 pred = self.model(self.graphs(m), add_noise=False, use_posterior=False,
                                   fixed_z=self._latent(G[s:s + m], L[s:s + m]))[0]
-            out += self._stats_np(pred, m)
-        return np.asarray(out, np.float64)
+            return self._stats_np(pred, m)
+        return np.asarray([v for c in self._chunks(len(G), 'batch', body) for v in c], np.float64)
 
     def gradients(self, G, L):
         """d statistic / d u (standardized) at each (g, l): ([M, S*D], [M, n_c*C])."""
-        gg, gl = [], []
-        for s in range(0, len(G), self.batch):
-            m = min(self.batch, len(G) - s)
+        def body(s, m):
             z = self._latent(G[s:s + m], L[s:s + m])
             zg, zl = z.g.requires_grad_(True), z.l.requires_grad_(True)
             with torch.enable_grad():
                 pred = self.model(self.graphs(m), add_noise=False, use_posterior=False,
                                   fixed_z=Latent(zg, zl))[0]
                 self._stats_torch(pred, m).sum().backward()
-            gg.append(zg.grad.double().cpu().numpy().reshape(m, -1) * self.z_scale)
-            gl.append((zl.grad.double().cpu().numpy().reshape(m, self.n_c, self.C)
-                       * self.zl_scale).reshape(m, -1))
+            return (zg.grad.double().cpu().numpy().reshape(m, -1) * self.z_scale,
+                    (zl.grad.double().cpu().numpy().reshape(m, self.n_c, self.C)
+                     * self.zl_scale).reshape(m, -1))
+        gg, gl = zip(*self._chunks(len(G), 'grad_batch', body))
         return np.concatenate(gg), np.concatenate(gl)
 
     # standardization -----------------------------------------------------
@@ -419,13 +440,12 @@ class Geometry:
 
     # prior ---------------------------------------------------------------
 
-    def flow(self, eg, el, chunk=256):
+    def flow(self, eg, el):
         """Integrate the prior from noise eg [M, S*D], el [M, n_c, C] (already
         temperature-scaled); returns u ([M, S*D], [M, n_c*C])."""
         p = self.prior
-        ug, ul = [], []
-        for s in range(0, len(eg), chunk):
-            m = min(chunk, len(eg) - s)
+
+        def body(s, m):
             with torch.no_grad(), _autocast_disabled_for(self.cond1['x']):
                 ctx = p._replicate(p._float_ctx(self.cond1), m)
                 zl = torch.from_numpy(np.ascontiguousarray(el[s:s + m], np.float32)
@@ -436,8 +456,8 @@ class Geometry:
                     cl, cg = p._integrate(torch.zeros_like(zl), torch.zeros_like(zg), ctx, self.steps)
                     zl1 = cl + self.inflation * (zl1 - cl)
                     zg1 = cg + self.inflation * (zg1 - cg)
-            ug.append(zg1.double().cpu().numpy())
-            ul.append(zl1.double().cpu().numpy().reshape(m, -1))
+            return zg1.double().cpu().numpy(), zl1.double().cpu().numpy().reshape(m, -1)
+        ug, ul = zip(*self._chunks(len(eg), 'flow_chunk', body))
         return np.concatenate(ug), np.concatenate(ul)
 
     def fm_errors(self, Ug, Ul, rng, bins=4, reps=2):
@@ -456,17 +476,16 @@ class Geometry:
                 z0l = rng.standard_normal(Ul.shape)
                 tgt_g, tgt_l = Ug - s_ * z0g, Ul - s_ * z0l
                 xg, xl = (1 - s_ * t) * z0g + t * Ug, (1 - s_ * t) * z0l + t * Ul
-                eg, el = [], []
-                for s in range(0, n, 256):
-                    m = min(256, n - s)
+                def body(s, m, t=t, xg=xg, xl=xl, tgt_g=tgt_g, tgt_l=tgt_l):
                     with torch.no_grad(), _autocast_disabled_for(self.cond1['x']):
                         ctx = p._replicate(p._float_ctx(self.cond1), m)
                         tt = torch.full((m, 1), t, device=self.dev)
                         v_l, v_g = p.velocity(
                             torch.from_numpy(xl[s:s + m].reshape(m * self.n_c, self.C)).float().to(self.dev),
                             torch.from_numpy(xg[s:s + m]).float().to(self.dev), tt, ctx)
-                    eg.append(v_g.double().cpu().numpy() - tgt_g[s:s + m])
-                    el.append(v_l.double().cpu().numpy().reshape(m, -1) - tgt_l[s:s + m])
+                    return (v_g.double().cpu().numpy() - tgt_g[s:s + m],
+                            v_l.double().cpu().numpy().reshape(m, -1) - tgt_l[s:s + m])
+                eg, el = zip(*self._chunks(n, 'flow_chunk', body))
                 out.append((t, np.concatenate(eg), np.concatenate(el), tgt_g, tgt_l))
         return out
 
@@ -545,6 +564,7 @@ def run_group(geo, probe, truths, fields, seed, grad_draws):
     n = len(fields)
     S, D, C, n_c = geo.S, geo.D, geo.C, geo.n_c
     sp = {'truth': np.asarray(truths, np.float64)}
+    geo.stage = 'encode'
     mu_g, mu_l, sg, sl = geo.encode(fields)
     ps_g = mu_g + sg * rng.standard_normal(mu_g.shape)
     ps_l = mu_l + sl * rng.standard_normal(mu_l.shape)
@@ -557,6 +577,7 @@ def run_group(geo, probe, truths, fields, seed, grad_draws):
     # prior: iid, no write-back, no g dice, no l dice (one shared noise set)
     eg = rng.standard_normal((n, S * D)) * geo.amp
     el = rng.standard_normal((n, n_c, C)) * geo.amp
+    geo.stage = 'prior flow'
     probe.record = True
     U = {'prior': geo.flow(eg, el)}
     probe.record = False
@@ -586,12 +607,14 @@ def run_group(geo, probe, truths, fields, seed, grad_draws):
         'std_normal': Z['std_normal'],
     }
     for k, (G, L) in pairs.items():
+        geo.stage = f'decode {k}'
         sp[k] = geo.decode(G, L)
 
     # grid: K g-noises (rows) x K l-noises (columns)
     K = int(math.isqrt(n))
     ag = rng.standard_normal((K, S * D)) * geo.amp
     al = rng.standard_normal((K, n_c, C)) * geo.amp
+    geo.stage = 'grid'
     ug_grid, ul_grid = geo.flow(np.repeat(ag, K, axis=0), np.tile(al, (K, 1, 1)))
     sp['grid'] = geo.decode(*geo.z_of(ug_grid, ul_grid))
 
@@ -651,6 +674,7 @@ def run_group(geo, probe, truths, fields, seed, grad_draws):
         pr[part]['pr_prior'] = participation_ratio(U['prior'][idx])
 
     # FM regression error on posterior samples
+    geo.stage = 'fm errors'
     errs = geo.fm_errors(U['post_sample'][0], U['post_sample'][1], rng)
     wl = dirs['l']['w']
     wj = dirs['j']['w']
@@ -678,6 +702,7 @@ def run_group(geo, probe, truths, fields, seed, grad_draws):
     grad = {}
     if grad_draws > 0:
         pick = np.unique(np.linspace(0, n - 1, min(grad_draws, n)).round().astype(int))
+        geo.stage = 'decoder gradients'
         gg, gl = geo.gradients(mu_g[pick], mu_l[pick])
         var_y = float(y.var()) or float('nan')
 
@@ -692,6 +717,19 @@ def run_group(geo, probe, truths, fields, seed, grad_draws):
         grad['cos_wj'] = float(abs(gj @ wj) / (np.linalg.norm(gj) or 1.0))
         grad['g_norm_share'] = float(np.mean(np.sum(gg ** 2, axis=1)
                                              / (np.sum(gg ** 2, axis=1) + np.sum(gl ** 2, axis=1))))
+        # the decoder's own sensitive l direction (mean gradient): no linear fit needed
+        wgl = gl.mean(axis=0)
+        wgl = wgl / (np.linalg.norm(wgl) or 1.0)
+        grad['coherence'] = float(np.mean(np.abs(gl @ wgl) / (np.linalg.norm(gl, axis=1) + 1e-30)))
+        c_l = U['mu'][1].mean(axis=0)
+        ref = (U['post_sample'][1] - c_l) @ wgl
+        grad['along'] = {k: along((U[k][1] - c_l) @ wgl, ref) for k in ('prior', 'nowrite', 'g0', 'l0')}
+        # first-order output shift from the latent centroid's move, posterior samples -> k, in FE sd
+        sd_y = float(y.std()) or float('nan')
+        grad['lin_bias'] = {k: {p: float(np.mean((U[k][i].mean(axis=0) - U['post_sample'][i].mean(axis=0))
+                                                 @ G_.T) / sd_y)
+                                for p, i, G_ in (('g', 0, gg), ('l', 1, gl))}
+                            for k in ('prior', 'nowrite', 'g0')}
 
     clean = {k: {kk: vv for kk, vv in d.items() if kk not in ('w', 'coef', 'centre')}
              for k, d in dirs.items()}
@@ -783,6 +821,15 @@ def brief_lines(scores, pair, groups, order):
                f"{_x(sup('g', 'prior', 'precision'))}/{_x(sup('g', 'prior', 'recall'))}"
                + f" PR l {med(lambda r: r['supports']['l']['pr_post_mu']):.1f}/"
                f"{med(lambda r: r['supports']['l']['pr_prior']):.1f}")
+    ga = lambda k, key: med(lambda r: r['grad']['along'][k][key] if r['grad'] else float('nan'))   # noqa: E731
+    lb = lambda k, p: med(lambda r: abs(r['grad']['lin_bias'][k][p]) if r['grad'] else float('nan'))   # noqa: E731
+    L['gd'] = (f"gd coh {_x(med(lambda r: r['grad']['coherence'] if r['grad'] else float('nan')))} "
+               + ' '.join(f"{k}:{_x(med(lambda r, k=k: abs(r['grad']['along'][k]['offset']) if r['grad'] else float('nan')))}"
+                          f"/{_x(ga(k, 'sd_ratio'))}/{_x(ga(k, 'w2'))}"
+                          for k in ('prior', 'nowrite', 'g0', 'l0'))
+               + ' lin ' + ' '.join(f"{k}:{_x(lb(k, 'g'))}/{_x(lb(k, 'l'))}/"
+                                    f"{_x(med(lambda r, k=k: abs(r['yhat'][k]['actual_bias'])))}"
+                                    for k in ('prior', 'nowrite', 'g0')))
     return L
 
 
@@ -798,7 +845,10 @@ def geom_lines(med, groups, order):
             f" wl {_sx(r['along']['l']['prior']['offset'])}/{_x(r['along']['l']['prior']['sd_ratio'])}"
             f" nw {_sx(r['along']['l']['nowrite']['offset'])}"
             f" grid {_x(r['grid'].get('out', {}).get('row', float('nan')))}/"
-            f"{_x(r['grid'].get('out', {}).get('col', float('nan')))}")
+            f"{_x(r['grid'].get('out', {}).get('col', float('nan')))}"
+            + (f" gd {_sx(r['grad']['along']['prior']['offset'])}/{_x(r['grad']['along']['prior']['sd_ratio'])}"
+               f" lin {_sx(r['grad']['lin_bias']['prior']['l'])}/{_sx(r['yhat']['prior']['actual_bias'])}"
+               if r['grad'] else ''))
     return out
 
 
@@ -863,8 +913,8 @@ def figures(spreads, groups, med, order, stem):
             ax.set_title(f"grid g {_x(o['row'])} l {_x(o['col'])}", fontsize=6)
         ax.set_xticks([])
         ax.set_yticks([])
-    fig.suptitle(f'l along w_l (grey: posterior samples, R2 per geometry in the brief); '
-                 f'grid: rows = g noise, columns = l noise', fontsize=8)
+    fig.suptitle('l along w_l (grey: posterior samples, R2 per geometry in the brief); '
+                 'grid: rows = g noise, columns = l noise', fontsize=8)
     fig.tight_layout()
     written.append(f'{stem}_lat.png')
     fig.savefig(written[-1], dpi=110)
@@ -878,6 +928,8 @@ def main():
     ap.add_argument('--modelpath', default=None, help="another checkpoint than the config's")
     ap.add_argument('--gpu', type=int, default=None, help="card; default the config's gpu_ids")
     ap.add_argument('--batch', type=int, default=8, help='graphs per forward (memory only)')
+    ap.add_argument('--grad-batch', type=int, default=2,
+                    help='graphs per decoder backward (memory only; ~17 GiB each at 86k nodes)')
     ap.add_argument('--splits', type=int, default=SPLITS)
     ap.add_argument('--grad-draws', type=int, default=16,
                     help='posterior means per geometry for the decoder gradient (0 = skip)')
@@ -971,10 +1023,19 @@ def main():
                         if cond_var else None)
                 ctx = _SampleContext(cfg, norm, nd0[0:3].T, np.concatenate([edge0, edge0[[1, 0]]], axis=1),
                                      part_ids, dev, cond_feat=cond)
-                geo = Geometry(model, prior, ctx, ch, stat, a.batch, prior.num_steps, temperature, lam)
+                geo = Geometry(model, prior, ctx, ch, stat, a.batch, prior.num_steps, temperature, lam,
+                               a.grad_batch)
                 print(f'  {attr}={v}: {len(ids)} FE results, {ctx.num_nodes} nodes, '
                       f'{geo.n_c} coarse nodes', flush=True)
-                spreads[v], groups[v] = run_group(geo, probe, truths, fields, 1000 + gi, a.grad_draws)
+                try:
+                    spreads[v], groups[v] = run_group(geo, probe, truths, fields, 1000 + gi, a.grad_draws)
+                except torch.cuda.OutOfMemoryError:
+                    gib = torch.cuda.get_device_properties(dev).total_memory / 2 ** 30
+                    raise SystemExit(f'CUDA OOM {attr}={v} {ctx.num_nodes} nodes, in {geo.stage} at one '
+                                     f'graph (card {gib:.0f} GiB, peak '
+                                     f'{torch.cuda.max_memory_allocated(dev) / 2 ** 30:.0f} GiB)')
+                del geo
+                torch.cuda.empty_cache()
     finally:
         probe.close()
 
@@ -1010,7 +1071,7 @@ def main():
     print('==== TYPE THIS BACK ====')
     print(f"anatomy {tag} ep={ck.get('epoch')} split={a.split} groups={len(order)} "
           f"n={n_fe[0] if len(n_fe) == 1 else n_fe} k={k}")
-    for key in ('w2', 'pc', 'grid', 'dir', 'fm'):
+    for key in ('w2', 'pc', 'grid', 'dir', 'fm', 'gd'):
         print(lines[key])
     for ln in glines:
         print(ln)

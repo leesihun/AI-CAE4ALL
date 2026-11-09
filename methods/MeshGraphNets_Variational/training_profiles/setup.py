@@ -235,6 +235,9 @@ def build_model_config(config) -> dict:
         'latent_type':       str(config.get('latent_type', 'global')).lower().strip(),
         'latent_ch':         config.get('latent_ch', 4),
         'vae_local_mp_layers': config.get('vae_local_mp_layers', 2),
+        # Not architecture-defining, but the decoder reads z differently under
+        # it, so inference must run with the value training used.
+        'local_inject':      str(config.get('local_inject', 'all')).lower().strip(),
         # Provenance only: which regularizer shaped the posterior.
         'latent_reg':        str(config.get('latent_reg', 'mmd')).lower().strip(),
         # Architecture-defining: 'adaln' renames every per-block conditioning
@@ -274,6 +277,13 @@ def build_model_config(config) -> dict:
             config.get('prior_fm_velocity_arch', 'mlp')
         ).lower().strip(),
         'prior_fm_blocks':          config.get('prior_fm_blocks', 4),
+        # latent_type local / hybrid only. prior_arch / prior_tf_heads shape
+        # the prior; prior_param changes what its heads mean; prior_fm_draws
+        # is training-only, kept for provenance.
+        'prior_arch':               str(config.get('prior_arch', 'gnn')).lower().strip(),
+        'prior_param':              str(config.get('prior_param', 'velocity')).lower().strip(),
+        'prior_tf_heads':           config.get('prior_tf_heads', 4),
+        'prior_fm_draws':           config.get('prior_fm_draws', 1),
         'prior_fm_moments':         config.get('prior_fm_moments', False),
         'prior_fm_moment_hidden_dim': config.get(
             'prior_fm_moment_hidden_dim',

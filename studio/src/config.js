@@ -81,13 +81,18 @@ export function backendDefaultsFor(modelId, mode) {
   };
 }
 
+// COARSE_ONLY_KEYS in cae_suite/specs/meshgraphnets_variational.py.
+const MGNV_COARSE_ONLY = keys(`latent_ch vae_local_mp_layers local_inject prior_arch prior_param prior_tf_heads prior_fm_draws`);
+
 /** The keys the MGN-V spec warns are ignored for the chosen latent variant
  * (MGNV-LATENT-INACTIVE, MGNV-LATENT-KL-WEIGHT, MGNV-LATENT-MMD-WEIGHT in
  * cae_suite/specs/meshgraphnets_variational.py); unset means the spec default
  * (latent_type global, latent_reg mmd). */
 function mgnvLatentInactive(key, config) {
   const pick = (name, fallback) => String(config?.[name] ?? "").trim().toLowerCase() || fallback;
-  if (["latent_ch", "vae_local_mp_layers"].includes(key)) return pick("latent_type", "global") === "global";
+  if (MGNV_COARSE_ONLY.includes(key)) return pick("latent_type", "global") === "global";
+  if (key === "lambda_mmd_g") return pick("latent_type", "global") !== "hybrid" || pick("latent_reg", "mmd") !== "mmd";
+  if (key === "prior_tf_heads") return pick("prior_arch", "gnn") !== "transformer";
   if (key === "kl_weight") return pick("latent_reg", "mmd") !== "kl";
   if (key === "lambda_mmd") return pick("latent_reg", "mmd") === "kl";
   return false;
@@ -506,7 +511,9 @@ export function renderConfig() {
     // is the whole reason nobody noticed the trainer ignores it under multiscale.
     const dispositionHelp = key === "message_passing_num" && disposition === "inactive"
       ? "Ignored while use_multiscale is True — the trainer prints this and uses mp_per_level for depth instead. Set use_multiscale False for this value to take effect."
-      : spec.modelId === "meshgraphnets-v" && disposition === "inactive" && ["latent_ch", "vae_local_mp_layers"].includes(key) ? "Ignored with latent_type global (the default) — set latent_type local or hybrid for this value to take effect."
+      : spec.modelId === "meshgraphnets-v" && disposition === "inactive" && MGNV_COARSE_ONLY.includes(key) && !["local", "hybrid"].includes(String(node.config?.latent_type ?? "").trim().toLowerCase()) ? "Ignored with latent_type global (the default) — set latent_type local or hybrid for this value to take effect."
+      : spec.modelId === "meshgraphnets-v" && disposition === "inactive" && key === "prior_tf_heads" ? "Ignored unless prior_arch is transformer."
+      : spec.modelId === "meshgraphnets-v" && disposition === "inactive" && key === "lambda_mmd_g" ? "Ignored unless latent_type is hybrid and latent_reg is mmd — it weighs the hybrid z_g MMD."
       : spec.modelId === "meshgraphnets-v" && disposition === "inactive" && key === "kl_weight" ? "Ignored unless latent_reg is kl — the default regularizer is mmd, weighted by lambda_mmd."
       : spec.modelId === "meshgraphnets-v" && disposition === "inactive" && key === "lambda_mmd" ? "Ignored with latent_reg kl — kl_weight weights the regularizer instead."
       : disposition === "unknown" ? "This key is not accepted by the selected model. Clear its value to remove it before running preflight again."

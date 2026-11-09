@@ -5,6 +5,7 @@ import torch
 import torch.nn as nn
 from torch_geometric.data import Data
 from torch_geometric.nn import AttentionalAggregation
+from torch_geometric.utils import to_dense_batch
 
 from model.blocks import AdaLNZero, apply_adaln
 from model.checkpointing import checkpoint_active, run_mlp, run_plain_blocks
@@ -491,6 +492,59 @@ class ConditionalFMPrior(_ConditionalPriorBase):
         return z.view(B, n, self.num_z, self.z_dim).to(cond.dtype)
 
 
+# CoarseFMPrior velocity networks and output parameterizations.
+PRIOR_ARCHS = ('gnn', 'transformer')
+# Submodules of the transformer velocity net (DiT init applies to these only).
+_TF_MODULES = ('l_in', 'cond_mlp', 'tf_blocks', 'final_mod', 'l_head',
+               'g_tok_in', 'g_tok_head')
+PRIOR_PARAMS = ('velocity', 'x')
+# x-prediction turns x into v by dividing by (1 - s*t); near t = 1 that
+# vanishes, so the divisor is floored (JiT, Li & He 2025, use 0.05 too).
+X_PRED_MIN_DENOM = 0.05
+
+
+class _AdaLNTransformerBlock(nn.Module):
+    """DiT block (Peebles & Xie 2023): self-attention + MLP, AdaLN-Zero on c.
+
+    h [B, T, D] tokens, c [B, cond_dim] one condition per graph, mask [B, T]
+    True for real tokens. Padded tokens are never attended to. The six
+    modulation vectors come from one zero-initialized Linear, so at init both
+    gates are 0 and the block is the identity.
+    """
+
+    def __init__(self, dim, heads, cond_dim, mlp_ratio=4):
+        super().__init__()
+        if dim % heads:
+            raise ValueError(f'prior_tf_heads ({heads}) must divide the velocity width ({dim})')
+        self.heads = int(heads)
+        self.norm1 = nn.LayerNorm(dim, elementwise_affine=False, eps=1e-6)
+        self.qkv = nn.Linear(dim, 3 * dim)
+        self.proj = nn.Linear(dim, dim)
+        self.norm2 = nn.LayerNorm(dim, elementwise_affine=False, eps=1e-6)
+        self.mlp = nn.Sequential(
+            nn.Linear(dim, mlp_ratio * dim),
+            nn.GELU(approximate='tanh'),
+            nn.Linear(mlp_ratio * dim, dim),
+        )
+        self.ada = nn.Sequential(nn.SiLU(), nn.Linear(cond_dim, 6 * dim))
+
+    def reset_identity(self):
+        nn.init.zeros_(self.ada[1].weight)
+        nn.init.zeros_(self.ada[1].bias)
+
+    def forward(self, h, c, mask):
+        B, T, D = h.shape
+        sh1, sc1, g1, sh2, sc2, g2 = self.ada(c).unsqueeze(1).chunk(6, dim=-1)
+        x = self.norm1(h) * (1.0 + sc1) + sh1
+        q, k, v = (self.qkv(x).view(B, T, 3, self.heads, D // self.heads)
+                   .permute(2, 0, 3, 1, 4))
+        a = torch.nn.functional.scaled_dot_product_attention(
+            q, k, v, attn_mask=mask[:, None, None, :])
+        h = h + g1 * self.proj(a.transpose(1, 2).reshape(B, T, D))
+        x = self.norm2(h) * (1.0 + sc2) + sh2
+        return h + g2 * self.mlp(x)
+
+
 class CoarseFMPrior(_ConditionalPriorBase):
     """Flow-matching prior for latent_type local / hybrid.
 
@@ -509,6 +563,22 @@ class CoarseFMPrior(_ConditionalPriorBase):
     each other through the whole integration. g_head reads [token | node mean]
     and emits v_g [B, num_z*D].
 
+    prior_arch transformer replaces both the coarse GNN and the token with
+    one DiT-style transformer over the tokens of each graph: one per
+    coarsest node, Linear([z_l_t | cond_x | position code]), and (hybrid) one
+    per z_g slot, Linear(z_g_t slot) + a slot embedding. Every block attends
+    over all of them, so a node sees the whole coarse graph rather than its
+    prior_fm_blocks-hop neighbourhood, and z_g is one more set of tokens rather
+    than a node mean. Time and the attention-pooled trunk enter as one
+    AdaLN-Zero condition per graph. The position code is the coarsest centroid,
+    centred and RMS-scaled per graph, with sin/cos features at 1, 2, 4, 8.
+
+    prior_param x makes the heads predict the clean z1 instead of the velocity;
+    the velocity v = (x - s z_t) / max(1 - s t, X_PRED_MIN_DENOM) is what is
+    regressed and integrated, so the loss and the sampler are unchanged.
+    prior_fm_draws K regresses K (z0, t) pairs per posterior sample, running
+    the trunk once.
+
     The path, solver, temperature and `inflation` follow ConditionalFMPrior.
     z_l is standardized per channel (zl_shift / zl_scale), z_g per flat
     coordinate (z_shift / z_scale) -- fitted at the prior freeze, identity
@@ -521,15 +591,29 @@ class CoarseFMPrior(_ConditionalPriorBase):
     family = 'fm'
     sigma_min = 1e-4
     use_conditional_moments = False
-    velocity_arch = 'coarse_gnn'
 
     def __init__(self, config):
         latent_type = str(config.get('latent_type', 'local')).lower().strip()
         if latent_type not in ('local', 'hybrid'):
             raise ValueError(f"CoarseFMPrior is for latent_type local/hybrid, got '{latent_type}'")
-        super().__init__(config, build_pool=(latent_type == 'hybrid'))
+        arch = str(config.get('prior_arch', 'gnn')).lower().strip()
+        if arch not in PRIOR_ARCHS:
+            raise ValueError(f"prior_arch must be one of {PRIOR_ARCHS}, got '{arch}'")
+        param = str(config.get('prior_param', 'velocity')).lower().strip()
+        if param not in PRIOR_PARAMS:
+            raise ValueError(f"prior_param must be one of {PRIOR_PARAMS}, got '{param}'")
+        fm_draws = int(config.get('prior_fm_draws', 1))
+        if fm_draws < 1:
+            raise ValueError(f'prior_fm_draws must be >= 1, got {fm_draws}')
+        # The transformer reads the pooled trunk in its condition for local
+        # too; the GNN only for the hybrid token.
+        super().__init__(config, build_pool=(latent_type == 'hybrid' or arch == 'transformer'))
         self.latent_type = latent_type
         self.hybrid = latent_type == 'hybrid'
+        self.arch = arch
+        self.param = param
+        self.fm_draws = fm_draws
+        self.velocity_arch = 'coarse_' + arch
         self.latent_ch = int(config.get('latent_ch', 4))
         self.levels = int(config.get('multiscale_levels', 1))
         self.num_steps = int(config.get('prior_fm_steps', 20))
@@ -549,6 +633,47 @@ class CoarseFMPrior(_ConditionalPriorBase):
         self.register_buffer('t_freqs', freqs, persistent=False)
         t_dim = 2 * freqs.numel()
 
+        if self.arch == 'gnn':
+            self._build_gnn_velocity(config, H, Hv, t_dim)
+        else:
+            self._build_transformer_velocity(config, H, Hv, t_dim)
+        if self.hybrid:
+            self.register_buffer('z_shift', torch.zeros(self.flat_dim))
+            self.register_buffer('z_scale', torch.ones(self.flat_dim))
+        self.register_buffer('zl_shift', torch.zeros(self.latent_ch))
+        self.register_buffer('zl_scale', torch.ones(self.latent_ch))
+
+        self.apply(init_weights)
+        with torch.no_grad():
+            if self.arch == 'gnn':
+                for m in self.time_mod:
+                    m.reset_identity()
+                # Near-zero velocity at init; the token's write-back starts closed.
+                self.out_head.weight.mul_(0.01)
+                if self.hybrid:
+                    self.g_head.weight.mul_(0.01)
+                    for lin in self.g_out:
+                        nn.init.zeros_(lin.weight)
+                        nn.init.zeros_(lin.bias)
+            else:
+                # DiT init: xavier Linears in the velocity net, every block and
+                # the final modulation the identity, zero heads. The trunk keeps
+                # init_weights like the GNN path.
+                for name, m in self.named_modules():
+                    if isinstance(m, nn.Linear) and name.startswith(_TF_MODULES):
+                        nn.init.xavier_uniform_(m.weight)
+                        nn.init.zeros_(m.bias)
+                for blk in self.tf_blocks:
+                    blk.reset_identity()
+                heads = (self.final_mod[1], self.l_head) + (
+                    (self.g_tok_head,) if self.hybrid else ())
+                for lin in heads:
+                    nn.init.zeros_(lin.weight)
+                    nn.init.zeros_(lin.bias)
+                if self.hybrid:
+                    nn.init.normal_(self.slot_emb, std=0.02)
+
+    def _build_gnn_velocity(self, config, H, Hv, t_dim):
         self.coarse_edge_encoder = build_mlp(int(config.get('edge_var')), Hv, Hv)
         self.in_proj = nn.Linear(self.latent_ch + H, Hv)
         self.blocks = nn.ModuleList([
@@ -567,22 +692,24 @@ class CoarseFMPrior(_ConditionalPriorBase):
                 nn.Linear(Hv, Hv) for _ in range(self.velocity_blocks)
             ])
             self.g_head = nn.Linear(2 * Hv, self.flat_dim)
-            self.register_buffer('z_shift', torch.zeros(self.flat_dim))
-            self.register_buffer('z_scale', torch.ones(self.flat_dim))
-        self.register_buffer('zl_shift', torch.zeros(self.latent_ch))
-        self.register_buffer('zl_scale', torch.ones(self.latent_ch))
 
-        self.apply(init_weights)
-        with torch.no_grad():
-            for m in self.time_mod:
-                m.reset_identity()
-            # Near-zero velocity at init; the token's write-back starts closed.
-            self.out_head.weight.mul_(0.01)
-            if self.hybrid:
-                self.g_head.weight.mul_(0.01)
-                for lin in self.g_out:
-                    nn.init.zeros_(lin.weight)
-                    nn.init.zeros_(lin.bias)
+    def _build_transformer_velocity(self, config, H, Hv, t_dim):
+        heads = int(config.get('prior_tf_heads', 4))
+        pos_freqs = torch.tensor([1.0, 2.0, 4.0, 8.0]) * math.pi
+        self.register_buffer('pos_freqs', pos_freqs, persistent=False)
+        pe_dim = 3 * (1 + 2 * pos_freqs.numel())
+        self.l_in = nn.Linear(self.latent_ch + H + pe_dim, Hv)
+        self.cond_mlp = nn.Sequential(nn.Linear(t_dim + H, Hv), nn.SiLU(), nn.Linear(Hv, Hv))
+        self.tf_blocks = nn.ModuleList([
+            _AdaLNTransformerBlock(Hv, heads, Hv) for _ in range(self.velocity_blocks)
+        ])
+        self.final_norm = nn.LayerNorm(Hv, elementwise_affine=False, eps=1e-6)
+        self.final_mod = nn.Sequential(nn.SiLU(), nn.Linear(Hv, 2 * Hv))
+        self.l_head = nn.Linear(Hv, self.latent_ch)
+        if self.hybrid:
+            self.g_tok_in = nn.Linear(self.z_dim, Hv)
+            self.slot_emb = nn.Parameter(torch.zeros(self.num_z, Hv))
+            self.g_tok_head = nn.Linear(Hv, self.z_dim)
 
     # -- conditioning ---------------------------------------------------------
 
@@ -600,14 +727,28 @@ class CoarseFMPrior(_ConditionalPriorBase):
         B = int(getattr(graph, 'num_graphs', 0) or (int(batch.max().item()) + 1))
         ctx = {
             'x': pool_features(g.x, cv['parent'], cv['n_c']),
-            'e': self.coarse_edge_encoder(cv['c_ea']),
-            'c_ei': cv['c_ei'],
             'batch': cv['batch'],
             'B': B,
         }
-        if self.hybrid:
+        if self.arch == 'gnn':
+            ctx['e'] = self.coarse_edge_encoder(cv['c_ea'])
+            ctx['c_ei'] = cv['c_ei']
+        else:
+            ctx['pe'] = self._position_code(cv['pos'], cv['batch'], B)
+        if hasattr(self, 'pool'):
             ctx['pooled'] = self.pool(g.x, batch)
         return ctx
+
+    def _position_code(self, pos, batch, B):
+        """[n_c, 27]: per-graph centred, RMS-scaled centroid + sin/cos at 1, 2, 4, 8."""
+        p = pos.float()
+        if p.shape[1] < 3:
+            p = torch.nn.functional.pad(p, (0, 3 - p.shape[1]))
+        p = p - pool_features(p, batch, B)[batch]
+        rms = pool_features(p.pow(2).sum(dim=-1, keepdim=True), batch, B).sqrt()
+        p = p / rms.clamp(min=1e-6)[batch]
+        ang = (p.unsqueeze(-1) * self.pos_freqs).flatten(1)
+        return torch.cat([p, torch.sin(ang), torch.cos(ang)], dim=-1)
 
     @staticmethod
     def _replicate(ctx, n):
@@ -616,19 +757,19 @@ class CoarseFMPrior(_ConditionalPriorBase):
             return ctx
         n_c = ctx['x'].shape[0]
         B = ctx['B']
-        E = ctx['c_ei'].shape[1]
         dev = ctx['x'].device
-        node_off = (torch.arange(n, device=dev) * n_c).repeat_interleave(E)
         graph_off = (torch.arange(n, device=dev) * B).repeat_interleave(n_c)
         out = {
-            'x': ctx['x'].repeat(n, 1),
-            'e': ctx['e'].repeat(n, 1),
-            'c_ei': ctx['c_ei'].repeat(1, n) + node_off.unsqueeze(0),
             'batch': ctx['batch'].repeat(n) + graph_off,
             'B': B * n,
         }
-        if 'pooled' in ctx:
-            out['pooled'] = ctx['pooled'].repeat(n, 1)
+        for key in ('x', 'e', 'pe', 'pooled'):
+            if key in ctx:
+                out[key] = ctx[key].repeat(n, 1)
+        if 'c_ei' in ctx:
+            E = ctx['c_ei'].shape[1]
+            node_off = (torch.arange(n, device=dev) * n_c).repeat_interleave(E)
+            out['c_ei'] = ctx['c_ei'].repeat(1, n) + node_off.unsqueeze(0)
         return out
 
     @staticmethod
@@ -644,6 +785,41 @@ class CoarseFMPrior(_ConditionalPriorBase):
 
     def velocity(self, zl_t, zg_t, t, ctx):
         """(v_l [n_c, C], v_g [B, flat] or None) at per-graph time t [B, 1]."""
+        net = self._gnn_net if self.arch == 'gnn' else self._transformer_net
+        out_l, out_g = net(zl_t, zg_t, t, ctx)
+        if self.param == 'velocity':
+            return out_l, out_g
+        # x-prediction: the heads give z1; v = (z1 - s z_t) / (1 - s t).
+        s = 1.0 - self.sigma_min
+        den = (1.0 - s * t).clamp(min=X_PRED_MIN_DENOM)
+        v_l = (out_l - s * zl_t) / den[ctx['batch']]
+        v_g = None if out_g is None else (out_g - s * zg_t) / den
+        return v_l, v_g
+
+    def _transformer_net(self, zl_t, zg_t, t, ctx):
+        """Raw head outputs of the DiT velocity net (see the class docstring)."""
+        batch, B = ctx['batch'], ctx['B']
+        c = self.cond_mlp(torch.cat([self._t_embed(t), ctx['pooled']], dim=-1))
+        h_l = self.l_in(torch.cat([zl_t, ctx['x'], ctx['pe']], dim=-1))
+        # coarse rows are graph-sorted (draw-major copies too), as
+        # to_dense_batch needs; h[mask] restores the row order.
+        h, mask = to_dense_batch(h_l, batch, batch_size=B)
+        G = self.num_z if self.hybrid else 0
+        if self.hybrid:
+            tok = self.g_tok_in(zg_t.view(B, self.num_z, self.z_dim)) + self.slot_emb
+            h = torch.cat([tok, h], dim=1)
+            mask = torch.cat([mask.new_ones(B, G), mask], dim=1)
+        for blk in self.tf_blocks:
+            h = blk(h, c, mask)
+        shift, scale = self.final_mod(c).unsqueeze(1).chunk(2, dim=-1)
+        h = self.final_norm(h) * (1.0 + scale) + shift
+        out_l = self.l_head(h[:, G:][mask[:, G:]])
+        if not self.hybrid:
+            return out_l, None
+        return out_l, self.g_tok_head(h[:, :G]).reshape(B, self.flat_dim)
+
+    def _gnn_net(self, zl_t, zg_t, t, ctx):
+        """Raw head outputs of the coarse-GNN + token velocity net."""
         batch, B = ctx['batch'], ctx['B']
         t_emb = self._t_embed(t)
         t_node = broadcast_rows(t_emb, batch)
@@ -698,24 +874,27 @@ class CoarseFMPrior(_ConditionalPriorBase):
         """Conditional flow-matching MSE on a detached posterior sample Latent.
 
         One t per graph, shared by z_g and every coarsest node of that graph.
-        hybrid sums the z_l and z_g regressions.
+        hybrid sums the z_l and z_g regressions. With prior_fm_draws K each
+        target is regressed from K independent (z0, t) draws; the trunk context
+        is computed once and replicated draw-major, like sample_n.
         """
         if objective == 'moment':
             raise ValueError('the coarse FM prior has no moment head')
         if objective not in ('all', 'flow'):
             raise ValueError("FM objective must be 'all', 'moment' or 'flow'")
+        K = self.fm_draws
         with _autocast_disabled_for(cond['x']):
-            ctx = self._float_ctx(cond)
+            ctx = self._replicate(self._float_ctx(cond), K)
             s = 1.0 - self.sigma_min
             t = torch.rand(ctx['B'], 1, device=ctx['x'].device)
             t_l = t[ctx['batch']]
-            z1_l = (target_z.l.float() - self.zl_shift) / self.zl_scale
+            z1_l = ((target_z.l.float() - self.zl_shift) / self.zl_scale).repeat(K, 1)
             z0_l = torch.randn_like(z1_l)
             zl_t = (1.0 - s * t_l) * z0_l + t_l * z1_l
             zg_t = tgt_g = None
             if self.hybrid:
                 z1_g = target_z.g.reshape(target_z.g.shape[0], -1).float()
-                z1_g = (z1_g - self.z_shift) / self.z_scale
+                z1_g = ((z1_g - self.z_shift) / self.z_scale).repeat(K, 1)
                 z0_g = torch.randn_like(z1_g)
                 zg_t = (1.0 - s * t) * z0_g + t * z1_g
                 tgt_g = z1_g - s * z0_g
@@ -1004,6 +1183,11 @@ def build_prior_config(config):
             config.get('prior_fm_velocity_arch', 'mlp')
         ).lower().strip(),
         'prior_fm_blocks': config.get('prior_fm_blocks', 4),
+        # latent_type local / hybrid (CoarseFMPrior) only:
+        'prior_arch': str(config.get('prior_arch', 'gnn')).lower().strip(),
+        'prior_param': str(config.get('prior_param', 'velocity')).lower().strip(),
+        'prior_tf_heads': config.get('prior_tf_heads', 4),
+        'prior_fm_draws': config.get('prior_fm_draws', 1),
         'prior_fm_moments': config.get('prior_fm_moments', False),
         'prior_fm_moment_hidden_dim': config.get(
             'prior_fm_moment_hidden_dim',

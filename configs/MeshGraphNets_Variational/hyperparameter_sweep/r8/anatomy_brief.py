@@ -20,11 +20,11 @@ OUT_ROOT = os.path.join(REPO, "output", f"b300_{ROUND}")
 JOBS = ["hybrid_base", "hybrid_e360"]
 # which brief lines each (job, part) prints; the first job gets the most
 LINES = {
-    ("hybrid_base", "ho"): ["w2", "pc", "grid", "dir", "fm"],
+    ("hybrid_base", "ho"): ["w2", "pc", "grid", "dir", "fm", "gd"],
     ("hybrid_base", "jt"): ["w2", "dir"],
-    ("hybrid_base", "ts"): ["w2", "grid", "dir"],
-    ("hybrid_base", "tr"): ["w2", "grid", "dir"],
-    ("hybrid_e360", "ho"): ["w2", "grid", "dir"],
+    ("hybrid_base", "ts"): [],   # typed back 11-09; gd is in it only after ANAT_REDO=1
+    ("hybrid_base", "tr"): ["w2", "grid", "dir", "gd"],
+    ("hybrid_e360", "ho"): ["w2", "grid", "dir", "gd"],
     ("hybrid_e360", "jt"): ["w2"],
     ("hybrid_e360", "ts"): ["w2"],
     ("hybrid_e360", "tr"): ["w2", "dir"],
@@ -66,8 +66,14 @@ stream), l = per coarse node latent (256 nodes x 4)
        posterior samples (ps) and prior draws (pr); cos = |cos(gradient, decisive direction)|;
        pr l / nw / g = k-NN precision/recall vs posterior samples (prior l, nowrite l, prior g);
        PR l = participation ratio (effective dims) of posterior means / prior draws
+  gd   the l direction the DECODER is sensitive to (mean output gradient over posterior means; no
+       fit, unlike dir's wl): coh = how much the per-draw gradients agree with it (100 = one
+       direction); per set prior/nowrite/g0/l0: |offset| in posterior-sample sd / sd ratio / 1-D W2;
+       lin set: |output bias predicted to first order from the g move| / from the l move /
+       |actual output bias| (in FE sd) for prior/nowrite/g0
   geom (base ho) per geometry: w2 mu/prior/nowrite/g0/l0/g_prior/l_prior | ph FE/mu/prior/nowrite/
-       g0/l0 | r2 l/joint | wl prior offset (signed)/sd ratio | nw nowrite offset | grid g/l share"""
+       g0/l0 | r2 l/joint | wl prior offset (signed)/sd ratio | nw nowrite offset | grid g/l share |
+       gd prior offset (signed)/sd ratio | lin l-predicted bias / actual bias (signed)"""
 
 
 def load(job, part):

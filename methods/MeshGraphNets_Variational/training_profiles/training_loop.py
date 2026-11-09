@@ -439,6 +439,17 @@ def log_training_config(config):
             if p_family == 'gmm':
                 p_kl = config.get('prior_kl_reg_weight', 0.02)
                 print(f"Prior (gnn_e2e, family=gmm): nll_weight={p_w} kl_anchor={p_kl}")
+            elif str(config.get('latent_type', 'global')).lower().strip() != 'global':
+                arch = str(config.get('prior_arch', 'gnn')).lower().strip()
+                print(f"Prior (coarse FM): fm_weight={p_w} arch={arch} "
+                      f"blocks={config.get('prior_fm_blocks', 4)} "
+                      + (f"heads={config.get('prior_tf_heads', 4)} " if arch == 'transformer' else "")
+                      + f"velocity_hidden={config.get('prior_velocity_hidden_dim', config.get('prior_hidden_dim'))} "
+                      f"param={config.get('prior_param', 'velocity')} "
+                      f"fm_draws={config.get('prior_fm_draws', 1)} "
+                      f"local_inject={config.get('local_inject', 'all')} "
+                      f"solver={config.get('prior_fm_solver', 'heun')} "
+                      f"steps={config.get('prior_fm_steps', 20)}")
             else:
                 print(f"Prior (gnn_e2e, family=fm): fm_weight={p_w} "
                       f"velocity={config.get('prior_fm_velocity_arch', 'mlp')} "

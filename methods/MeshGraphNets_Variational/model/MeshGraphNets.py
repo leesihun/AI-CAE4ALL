@@ -10,8 +10,8 @@ from model.coarsening import pool_features
 from model.conditional_prior import build_conditional_prior
 from model.encoder_decoder import Decoder, Encoder, GnBlock
 from model.latent import (
-    LATENT_REGS, LATENT_TYPES, Latent, broadcast_rows, coarsest_parent_maps,
-    coarsest_view, kl_to_standard_normal,
+    LATENT_REGS, LATENT_TYPES, LOCAL_INJECT_MODES, Latent, broadcast_rows,
+    coarsest_parent_maps, coarsest_view, kl_to_standard_normal,
 )
 from model.mlp import build_mlp, init_weights
 from model.vae import GNNVariationalEncoder, gather_across_ranks
@@ -290,6 +290,33 @@ class EncoderProcessorDecoder(nn.Module):
         self.latent_reg = str(config.get('latent_reg', 'mmd')).lower().strip()
         if self.latent_reg not in LATENT_REGS:
             raise ValueError(f"latent_reg must be one of {LATENT_REGS}, got '{self.latent_reg}'")
+        # Which V-cycle levels read z_l. 'all' (default): every level, a finer
+        # node reading its coarsest ancestor's z_l. 'coarsest': only the
+        # coarsest level; finer levels see zeros in the z_l columns, so (hybrid)
+        # they are conditioned on z_g alone. The conditioning width and every
+        # parameter shape are unchanged, so the key changes behaviour, not
+        # the checkpoint layout.
+        self.local_inject = str(config.get('local_inject', 'all')).lower().strip()
+        if self.local_inject not in LOCAL_INJECT_MODES:
+            raise ValueError(f"local_inject must be one of {LOCAL_INJECT_MODES}, "
+                             f"got '{self.local_inject}'")
+        # lambda_mmd_g weighs the z_g MMD (default: lambda_mmd, the old summed
+        # objective). The trainer multiplies the returned 'mmd' term by
+        # lambda_mmd, so _mmd scales its z_g part by lambda_mmd_g / lambda_mmd.
+        # 0 drops the z_g MMD entirely (no gather, no kernel): z_g is then
+        # shaped only by reconstruction and the prior. Hybrid only: with
+        # global z_g is the whole latent and lambda_mmd already weighs it.
+        self.mmd_g_scale = 1.0
+        if self.latent_reg == 'mmd' and self.latent_type == 'hybrid':
+            lam = float(config.get('lambda_mmd', 1.0))
+            lam_g = float(config.get('lambda_mmd_g', lam))
+            if lam_g < 0.0:
+                raise ValueError(f'lambda_mmd_g must be >= 0, got {lam_g}')
+            if lam_g != lam and lam == 0.0:
+                raise ValueError('lambda_mmd_g != lambda_mmd needs lambda_mmd > 0 '
+                                 '(the z_g weight is applied relative to it)')
+            if lam_g != lam:
+                self.mmd_g_scale = lam_g / lam
         # Width of the vector each conditioning module reads per node.
         self.z_cond_dim = {
             'global': self.vae_latent_dim,
@@ -311,7 +338,11 @@ class EncoderProcessorDecoder(nn.Module):
         print(f"  VAE latent: {self.latent_type}"
               + ("" if self.latent_type == 'local' else f" (z_g {self.num_z} slots x {self.vae_latent_dim})")
               + ("" if self.latent_type == 'global' else f" (z_l {self.latent_ch} ch per coarsest node)")
-              + f", regularizer {self.latent_reg}")
+              + f", regularizer {self.latent_reg}"
+              + ("" if self.latent_type != 'hybrid' or self.mmd_g_scale == 1.0
+                 else f" (z_g MMD x{self.mmd_g_scale:g})")
+              + ("" if self.latent_type == 'global' or self.local_inject == 'all'
+                 else f", z_l injected at the {self.local_inject} level only"))
         if self.vae_graph_aware:
             print(f"  VAE encoder: graph-aware (x [N,{self.node_input_size}] fused with y [N,{self.node_output_size}])")
         print(f"  VAE posterior σ floor: {self.vae_posterior_min_std}")
@@ -423,6 +454,10 @@ class EncoderProcessorDecoder(nn.Module):
         of the batch -- and is NOT gathered: the row count differs per rank, and
         a single batch already holds hundreds of rows. Above
         LOCAL_MMD_MAX_ROWS it is subsampled, since MMD costs rows^2.
+
+        The z_g term is scaled by mmd_g_scale (lambda_mmd_g / lambda_mmd) and
+        skipped at 0; every rank holds the same config, so the gather stays
+        collective-consistent.
         """
         if not isinstance(z, Latent):
             z_mmd = z.float()
@@ -430,8 +465,9 @@ class EncoderProcessorDecoder(nn.Module):
                 z_mmd = gather_across_ranks(z_mmd)
             return GNNVariationalEncoder.mmd_loss(z_mmd, bandwidth=self.mmd_bandwidth)
         total = torch.zeros((), device=z.l.device, dtype=torch.float32)
-        if z.g is not None:
-            total = total + self._mmd(z.g)
+        if z.g is not None and self.mmd_g_scale > 0.0:
+            mmd_g = self._mmd(z.g)
+            total = total + (mmd_g if self.mmd_g_scale == 1.0 else self.mmd_g_scale * mmd_g)
         z_l = z.l.float()
         if z_l.shape[0] > LOCAL_MMD_MAX_ROWS:
             keep = torch.randperm(z_l.shape[0], device=z_l.device)[:LOCAL_MMD_MAX_ROWS]
@@ -474,11 +510,17 @@ class EncoderProcessorDecoder(nn.Module):
 
         global: slot min(level, num_z-1) of z_g, per graph. local: z_l of each
         node's coarsest ancestor (the coarsest level reads z_l directly).
-        hybrid: [z_l(ancestor) | z_g slot].
+        hybrid: [z_l(ancestor) | z_g slot]. With local_inject 'coarsest' the
+        z_l columns of every finer level are zero.
         """
         if not isinstance(z, Latent):
             return broadcast_rows(z[:, min(level, z.shape[1] - 1), :], batch_level)
-        z_l = broadcast_rows(z.l, maps[level]) if level in maps else z.l
+        if level not in maps:
+            z_l = z.l
+        elif self.local_inject == 'coarsest':
+            z_l = z.l.new_zeros(maps[level].shape[0], z.l.shape[1])
+        else:
+            z_l = broadcast_rows(z.l, maps[level])
         if z.g is None:
             return z_l
         z_g = broadcast_rows(z.g[:, min(level, z.g.shape[1] - 1), :], batch_level)

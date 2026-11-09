@@ -81,10 +81,13 @@ KEY_CATALOGS.sdfflow = [...new Set([
 // Latent placement and regularizer (cae_suite/specs/meshgraphnets_variational.py
 // VAR_KEYS, validate_latent_placement): latent_type global | local | hybrid
 // (local is what the retired HI-MGNflow route trained, hybrid is HI-MGN-hybrid),
-// the local latent's width and posterior depth, and mmd | kl regularization.
+// the local latent's width and posterior depth, and mmd | kl regularization;
+// then the local/hybrid switches (validate_coarse_prior): which levels read
+// z_l, the hybrid z_g MMD weight, and the coarse FM prior's net/target/draws.
 KEY_CATALOGS.meshgraphnetsV = [...new Set([
   ...KEY_CATALOGS.meshgraphnetsV,
-  ...keys(`latent_type latent_ch vae_local_mp_layers latent_reg kl_weight`)
+  ...keys(`latent_type latent_ch vae_local_mp_layers latent_reg kl_weight`),
+  ...keys(`local_inject lambda_mmd_g prior_arch prior_param prior_tf_heads prior_fm_draws`)
 ])].sort();
 
 export const MODEL_CATALOG = {
@@ -487,6 +490,10 @@ export const CHOICES = {
   z_conditioning: ["concat", "adaln"],
   // MGNV-LATENT-TYPE / MGNV-LATENT-REG.
   latent_reg: ["mmd", "kl"],
+  // MGNV-LATENT-CHOICE (LOCAL_INJECT_MODES / PRIOR_ARCHS / PRIOR_PARAMS).
+  local_inject: ["all", "coarsest"],
+  prior_arch: ["gnn", "transformer"],
+  prior_param: ["velocity", "x"],
   spread_stat: ["range", "mean", "std", "mag_max"],
   // SAR-SCOPE-001 (cae_suite/specs/sar.py SAMPLE_SCOPES) and LDGN-SCOPE-001.
   sample_scope: ["geometry", "scene"],
@@ -1429,6 +1436,12 @@ export const HELP = {
   spread_stat: "How spread_channel is reduced to one number per realization for the spread histogram: range (max - min), mean or std of one channel, or mag_max — the largest per-node vector magnitude over a list of channels (spread_channel 0, 1, 2 = max total displacement). range is degenerate on displacement-driven fields.",
   latent_reg: "MeshGraphNets-V regularizer pulling the posterior toward N(0, I): mmd (batch-level, weight lambda_mmd) or kl (per-sample KL, weight kl_weight).",
   latent_ch: "Channels of the local latent z_l on every coarsest node (latent_type local/hybrid). Checkpoint architecture.",
+  local_inject: "Which V-cycle levels read the local latent z_l (latent_type local/hybrid). all (default): every level, a finer node reading its coarsest ancestor's z_l. coarsest: only the coarsest level; finer levels see zeros in the z_l columns, so with hybrid they are conditioned on z_g alone. Same parameters, so a checkpoint loads under either value.",
+  lambda_mmd_g: "MMD weight of the global latent z_g (latent_type hybrid, latent_reg mmd). Defaults to lambda_mmd; 0 drops the z_g MMD, leaving z_g shaped by reconstruction and the prior only. lambda_mmd still weighs z_l.",
+  prior_arch: "Velocity network of the coarse-level flow prior (latent_type local/hybrid). gnn (default): message passing over the coarsest graph plus a pooled z_g token. transformer: full attention over every coarsest node (+ one token per z_g slot), AdaLN-conditioned on t and the pooled context; depth prior_fm_blocks, width prior_velocity_hidden_dim, heads prior_tf_heads. Checkpoint architecture.",
+  prior_param: "What the coarse flow prior's head predicts (latent_type local/hybrid). velocity (default): the flow velocity. x: the clean latent z1, converted to a velocity for training and sampling. Checkpoint architecture.",
+  prior_tf_heads: "Attention heads of the transformer coarse prior (prior_arch transformer only, default 4). Must divide the prior velocity width. Checkpoint architecture.",
+  prior_fm_draws: "Noise/time draws per posterior sample in the coarse flow prior's training loss (latent_type local/hybrid, default 1). K > 1 regresses K (z0, t) pairs per sample, costing K prior passes per step.",
   vae_local_mp_layers: "Message-passing depth of the coarse-node posterior head that emits z_l (latent_type local/hybrid). Checkpoint architecture.",
   kl_weight: "KL weight. MeshGraphNets-V (latent_reg kl): weight of the per-sample KL to N(0, I), averaged per latent coordinate, default 1e-3. SDFFlow VAE: too high collapses the posterior toward the prior (reconstructions lose detail); too low makes the latent space hard for the flow model to cover.",
   fm_arch: "Flow-matching trunk: mlp or dit. dit attends across latent tokens, so it needs latent_tokens > 1.",

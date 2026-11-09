@@ -91,6 +91,14 @@ VAR_KEYS = frozenset(
         # posterior head. latent_reg picks the regularizer pulling the posterior
         # toward N(0, I): 'mmd' (lambda_mmd) or per-sample 'kl' (kl_weight).
         "latent_type", "latent_ch", "vae_local_mp_layers", "latent_reg", "kl_weight",
+        # local/hybrid only. local_inject: which V-cycle levels read z_l ('all'
+        # or 'coarsest'; behaviour only, same checkpoint layout). lambda_mmd_g:
+        # hybrid z_g MMD weight (default lambda_mmd, 0 drops it). prior_arch:
+        # the coarse FM velocity net ('gnn' or 'transformer', heads
+        # prior_tf_heads); prior_param: its head predicts the 'velocity' or the
+        # clean 'x'; prior_fm_draws: (z0, t) pairs per posterior sample.
+        "local_inject", "lambda_mmd_g", "prior_arch", "prior_param", "prior_tf_heads",
+        "prior_fm_draws",
         # All-gather z across DDP ranks before MMD so the two-sample estimator
         # sees the GLOBAL batch instead of the per-rank one (default True).
         "mmd_gather_ranks",
@@ -348,9 +356,16 @@ def validate_variational(ctx: SpecValidationContext) -> None:
     validate_spread_keys(ctx)
 
 
-# Mirror of LATENT_TYPES / LATENT_REGS in the runtime's model/latent.py.
+# Mirror of LATENT_TYPES / LATENT_REGS / LOCAL_INJECT_MODES in the runtime's
+# model/latent.py and PRIOR_ARCHS / PRIOR_PARAMS in model/conditional_prior.py.
 LATENT_TYPES = ("global", "local", "hybrid")
 LATENT_REGS = ("mmd", "kl")
+LOCAL_INJECT_MODES = ("all", "coarsest")
+PRIOR_ARCHS = ("gnn", "transformer")
+PRIOR_PARAMS = ("velocity", "x")
+# Keys read only by the coarse-level path (model/MeshGraphNets.py + CoarseFMPrior).
+COARSE_ONLY_KEYS = ("latent_ch", "vae_local_mp_layers", "local_inject", "prior_arch",
+                    "prior_param", "prior_tf_heads", "prior_fm_draws")
 
 
 def validate_latent_placement(ctx: SpecValidationContext) -> None:
@@ -394,9 +409,25 @@ def validate_latent_placement(ctx: SpecValidationContext) -> None:
                 "lambda_mmd is set but latent_reg is 'kl'; it is ignored (kl_weight "
                 "weights the KL term).",
                 field_name="lambda_mmd", promote_in_strict=True)
+    if "lambda_mmd_g" in values:
+        lam_g = numeric(values["lambda_mmd_g"])
+        lam = numeric(values.get("lambda_mmd", 1.0))
+        if lam_g is None or lam_g < 0:
+            ctx.add("MGNV-LATENT-MMD-WEIGHT", Severity.ERROR,
+                    "lambda_mmd_g must be a non-negative number.", field_name="lambda_mmd_g")
+        elif latent_type != "hybrid" or reg != "mmd":
+            ctx.add("MGNV-LATENT-INACTIVE", Severity.WARNING,
+                    "lambda_mmd_g weighs the z_g MMD of latent_type hybrid with latent_reg "
+                    "mmd; it is ignored here.",
+                    field_name="lambda_mmd_g", promote_in_strict=True)
+        elif lam == 0 and lam_g != 0:
+            ctx.add("MGNV-LATENT-MMD-WEIGHT", Severity.ERROR,
+                    "lambda_mmd_g is applied relative to lambda_mmd, which is 0; set "
+                    "lambda_mmd > 0.",
+                    field_name="lambda_mmd_g")
 
     if latent_type == "global":
-        for name in ("latent_ch", "vae_local_mp_layers"):
+        for name in COARSE_ONLY_KEYS:
             if name in values:
                 ctx.add("MGNV-LATENT-INACTIVE", Severity.WARNING,
                         f"{name} only applies to latent_type local/hybrid; it is ignored "
@@ -405,6 +436,7 @@ def validate_latent_placement(ctx: SpecValidationContext) -> None:
         return
 
     validate_positive_fields(ctx, ("latent_ch", "vae_local_mp_layers"), "MGNV-LATENT-POSITIVE")
+    validate_coarse_prior(ctx)
     if ctx.mode != "train":
         # Inference rebuilds the architecture from the checkpoint model_config.
         return
@@ -436,6 +468,51 @@ def validate_latent_placement(ctx: SpecValidationContext) -> None:
         ctx.add("MGNV-LATENT-PIPELINE", Severity.ERROR,
                 why + "is not wired through the model_split pipeline (global only).",
                 field_name="parallel_mode")
+
+
+def validate_coarse_prior(ctx: SpecValidationContext) -> None:
+    """local_inject and the CoarseFMPrior switches (latent_type local/hybrid).
+
+    The runtime raises on a bad enum, on prior_fm_draws < 1, and when
+    prior_tf_heads does not divide the velocity width; checking here reports
+    them before the native process starts.
+    """
+    values = ctx.values
+    for name, choices, default in (("local_inject", LOCAL_INJECT_MODES, "all"),
+                                   ("prior_arch", PRIOR_ARCHS, "gnn"),
+                                   ("prior_param", PRIOR_PARAMS, "velocity")):
+        value = str(values.get(name, default)).lower().strip()
+        if value not in choices:
+            ctx.add("MGNV-LATENT-CHOICE", Severity.ERROR,
+                    f"{name} must be one of {', '.join(choices)}; got {values[name]!r}.",
+                    field_name=name)
+    if "prior_fm_draws" in values:
+        draws = integer(values["prior_fm_draws"])
+        if draws is None or draws < 1:
+            ctx.add("MGNV-LATENT-POSITIVE", Severity.ERROR,
+                    f"prior_fm_draws must be an integer >= 1; got {values['prior_fm_draws']!r}.",
+                    field_name="prior_fm_draws")
+    if "prior_tf_heads" not in values:
+        return
+    heads = integer(values["prior_tf_heads"])
+    if heads is None or heads < 1:
+        ctx.add("MGNV-LATENT-POSITIVE", Severity.ERROR,
+                f"prior_tf_heads must be an integer >= 1; got {values['prior_tf_heads']!r}.",
+                field_name="prior_tf_heads")
+        return
+    if str(values.get("prior_arch", "gnn")).lower().strip() != "transformer":
+        ctx.add("MGNV-LATENT-INACTIVE", Severity.WARNING,
+                "prior_tf_heads only applies to prior_arch transformer; it is ignored.",
+                field_name="prior_tf_heads", promote_in_strict=True)
+        return
+    # Velocity width, as CoarseFMPrior resolves it.
+    width = integer(values.get("prior_velocity_hidden_dim",
+                               values.get("prior_hidden_dim", values.get("latent_dim", 128))))
+    if width is not None and width % heads:
+        ctx.add("MGNV-LATENT-HEADS", Severity.ERROR,
+                f"prior_tf_heads ({heads}) must divide the prior velocity width ({width}, "
+                f"prior_velocity_hidden_dim / prior_hidden_dim / latent_dim).",
+                field_name="prior_tf_heads")
 
 
 # Mirror of SPREAD_STATS / VECTOR_SPREAD_STATS in both trees'

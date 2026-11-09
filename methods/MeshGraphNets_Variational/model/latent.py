@@ -22,6 +22,8 @@ from torch_geometric.utils import scatter
 
 LATENT_TYPES = ('global', 'local', 'hybrid')
 LATENT_REGS = ('mmd', 'kl')
+# Which V-cycle levels read z_l (MeshGraphNets._level_z).
+LOCAL_INJECT_MODES = ('all', 'coarsest')
 
 
 class Latent(NamedTuple):
@@ -87,7 +89,7 @@ def coarsest_view(graph, levels):
     """Coarsest-level topology read straight off a batched graph.
 
     Returns {'parent': [N] fine node -> coarsest node, 'n_c', 'c_ei', 'c_ea',
-    'batch': [n_c] coarsest node -> graph}. The posterior encoder and the
+    'pos': [n_c, 3] coarsest centroids, 'batch': [n_c] coarsest node -> graph}. The posterior encoder and the
     coarse prior both need it and neither runs the V-cycle, so this reads the
     same `fine_to_coarse_{i}` / `coarse_*_{i}` attributes the model does.
     """
@@ -103,7 +105,8 @@ def coarsest_view(graph, levels):
             "(fine_to_coarse_0 ...), but the batch carries none.")
     last = len(level_data) - 1
     parent = coarsest_parent_maps(level_data)[0]
-    n_c = graph[f'coarse_centroid_{last}'].shape[0]
+    pos = graph[f'coarse_centroid_{last}']
+    n_c = pos.shape[0]
     batch = getattr(graph, 'batch', None)
     if batch is None:
         batch = torch.zeros(graph.x.shape[0], dtype=torch.long, device=graph.x.device)
@@ -112,6 +115,7 @@ def coarsest_view(graph, levels):
         'n_c': n_c,
         'c_ei': graph[f'coarse_edge_index_{last}'],
         'c_ea': graph[f'coarse_edge_attr_{last}'],
+        'pos': pos,
         'batch': scatter(batch, parent, dim=0, dim_size=n_c, reduce='min'),
     }
 

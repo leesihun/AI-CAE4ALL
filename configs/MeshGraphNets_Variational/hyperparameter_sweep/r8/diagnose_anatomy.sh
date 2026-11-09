@@ -71,8 +71,8 @@ print(LocalSettings.load(Path('.')).resolve_python('meshgraphnets-v', 'meshgraph
     fi
     [ -x "$MGNV_PYTHON" ] || command -v "$MGNV_PYTHON" >/dev/null 2>&1 \
         || { echo "MGN-V interpreter '$MGNV_PYTHON' does not exist."; exit 2; }
-    ( cd "$METHOD" && "$MGNV_PYTHON" -B misc/latent_anatomy.py --help 2>/dev/null ) | grep -q -- "--grad-draws" \
-        || { echo "misc/latent_anatomy.py is missing or broken: git pull first"; exit 2; }
+    ( cd "$METHOD" && "$MGNV_PYTHON" -B misc/latent_anatomy.py --help 2>/dev/null ) | grep -q -- "--grad-batch" \
+        || { echo "misc/latent_anatomy.py is missing or old (no --grad-batch): git pull first"; exit 2; }
     n=0
     for job in $("$PYTHON" -B "$SWEEP_DIR/anatomy_brief.py" --list | tr -d '\r'); do
         cfg="$SWEEP_DIR/config_infer_$job.txt"
@@ -110,8 +110,11 @@ part() {
     mkdir -p "$out"
     local plog="$out/anat_$tag.log"
     log "$job $tag on GPU $gpu"
-    ( cd "$METHOD" && CUDA_VISIBLE_DEVICES="$gpu" PYTHONUNBUFFERED=1 "$MGNV_PYTHON" -B \
-        misc/latent_anatomy.py --config "../../$cfg" --gpu 0 --batch 16 \
+    # --grad-batch 2: the decoder backward holds ~17 GiB per 86k-node graph (fp32);
+    # any stage that still runs out of memory halves its chunk and retries
+    ( cd "$METHOD" && CUDA_VISIBLE_DEVICES="$gpu" PYTHONUNBUFFERED=1 \
+        PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True "$MGNV_PYTHON" -B \
+        misc/latent_anatomy.py --config "../../$cfg" --gpu 0 --batch 16 --grad-batch 2 \
         --out "../../$out" --tag "anat_$tag" "$@" ) > "$plog" 2>&1
     local rc=$?
     if [ $rc -ne 0 ] || [ ! -f "$json" ]; then

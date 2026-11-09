@@ -39,6 +39,16 @@ and the gap splits as  floor -> posterior sample (encode/decode)  and
 posterior sample -> prior (the prior). The posterior ensembles are encoded from
 held-out FE results, so they exist only here: deployment has no FE result.
 
+WHICH PART CARRIES THE DRAW  (hybrid only; paired, not scored as ensembles)
+
+    g_shuffle         decode (mu_g of another FE result of the geometry, mu_l)
+    l_shuffle         decode (mu_g, mu_l of another FE result of the geometry)
+
+Each FE result's decode is correlated with that FE value within its geometry
+(`paired_within_geometry`), beside the posterior mean's. g_shuffle as good as
+the posterior mean: the decoder reads nothing of the draw from z_g. l_shuffle
+near 0: z_l carries all of it. "Another" = the next one in its batch.
+
 LATENT  (per geometry, per latent part: g = per-graph slots, l = coarse nodes)
 
 The posterior means of the n FE results form a cloud; the prior's n draws for
@@ -96,7 +106,7 @@ from inference_profiles.rollout import (                          # noqa: E402
     _load_conditional_prior, _load_model_from_checkpoint,
     _spread_index, _spread_stat,
 )
-from model.latent import latent_parts, lmap                        # noqa: E402
+from model.latent import Latent, latent_parts, lmap                # noqa: E402
 from posterior_vs_prior import latent_table, resolve_device       # noqa: E402
 
 os.chdir(REPO_ROOT)   # config paths are relative to the method directory
@@ -192,6 +202,8 @@ def split_scores(spreads, order, splits=SPLITS):
 def paired(est, truth):
     """Reconstruction of each FE result by its own encode/decode."""
     est, truth = np.asarray(est, np.float64), np.asarray(truth, np.float64)
+    ok = np.isfinite(est)
+    est, truth = est[ok], truth[ok]
     sd = float(truth.std())
     r = float(np.corrcoef(est, truth)[0, 1]) if sd > 0 and est.std() > 0 else float('nan')
     return {'corr': r, 'rmse_over_sd': float(np.sqrt(np.mean((est - truth) ** 2))) / sd
@@ -275,6 +287,19 @@ def _np_parts(z):
     return {name: t.float().cpu().numpy() for name, t in latent_parts(z)}
 
 
+def _shuffled(mu, m, part):
+    """mu with one part taken from the next graph of the batch (graph i reads i+1's).
+
+    Every graph of a batch is the same geometry, so the l rows ([m * n_c, C],
+    graph-major) line up node for node.
+    """
+    g, l = mu
+    if part == 'g':
+        return Latent(torch.roll(g, -1, dims=0), l)
+    n_c = l.shape[0] // m
+    return Latent(g, torch.roll(l.reshape(m, n_c, -1), -1, dims=0).reshape(l.shape))
+
+
 def _per_graph(arr, name, m):
     """[m, S, D] from a part: g is [m, S, D] already; l is [m * n_c, C]."""
     if name == 'l':
@@ -322,6 +347,14 @@ def run_group(model, prior, ctx, truths, fields, ch, stat, batch, temperature, l
             pred_p = model(b, add_noise=False, use_posterior=False, fixed_z=zp)[0]
             zn = lmap(torch.randn_like, zp)
             pred_n = model(make_batch(idx), add_noise=False, use_posterior=False, fixed_z=zn)[0]
+            if isinstance(mu, Latent) and mu.g is not None and mu.l is not None and m > 1:
+                for part in ('g', 'l'):
+                    pred_s = model(make_batch(idx), add_noise=False, use_posterior=False,
+                                   fixed_z=_shuffled(mu, m, part))[0]
+                    sp.setdefault(f'{part}_shuffle', []).extend(spreads(pred_s, m))
+            elif isinstance(mu, Latent) and mu.g is not None and mu.l is not None:
+                for part in ('g', 'l'):   # a lone graph has nothing to swap with: no entry
+                    sp.setdefault(f'{part}_shuffle', []).append(float('nan'))
         sp['posterior_sample'] += spreads(pred_z, m)
         sp['posterior_mean'] += spreads(pred_mu, m)
         sp['prior'] += spreads(pred_p, m)
@@ -485,7 +518,8 @@ def main():
                       np.concatenate([np.full(spreads[v]['truth'].size, spreads[v]['truth'].mean())
                                       for v in order]),
                       np.concatenate([spreads[v]['truth'] - spreads[v]['truth'].mean() for v in order]))
-            for e in ('posterior_mean', 'posterior_sample')}
+            for e in ('posterior_mean', 'posterior_sample', 'g_shuffle', 'l_shuffle')
+            if all(e in spreads[v] for v in order)}
     lines = verdict(scores)
 
     parts = sorted({p for v in order for p in latents[v]})
@@ -555,7 +589,8 @@ def main():
         f"{100 * med[v]['std_normal']:.0f}" for v in order))
     print('paired (within geom) mu r={:.2f} rmse/sd={:.2f} | post r={:.2f} rmse/sd={:.2f}'.format(
         pair['posterior_mean']['corr'], pair['posterior_mean']['rmse_over_sd'],
-        pair['posterior_sample']['corr'], pair['posterior_sample']['rmse_over_sd']))
+        pair['posterior_sample']['corr'], pair['posterior_sample']['rmse_over_sd'])
+        + ''.join(f" | {e} r={pair[e]['corr']:.2f}" for e in ('g_shuffle', 'l_shuffle') if e in pair))
     for p in parts:
         r = lat_rms[p]
         print(f"latent {p} ({r['dims']}d): prior/post sd {r['prior_over_post_sd']:.2f}, "
