@@ -87,7 +87,7 @@ KEY_CATALOGS.sdfflow = [...new Set([
 KEY_CATALOGS.meshgraphnetsV = [...new Set([
   ...KEY_CATALOGS.meshgraphnetsV,
   ...keys(`latent_type latent_ch vae_local_mp_layers latent_reg kl_weight`),
-  ...keys(`local_inject lambda_mmd_g prior_arch prior_param prior_tf_heads prior_fm_draws`)
+  ...keys(`local_inject lambda_mmd_g prior_arch prior_param prior_tf_heads prior_fm_draws prior_cond_noise`)
 ])].sort();
 
 export const MODEL_CATALOG = {
@@ -1442,6 +1442,7 @@ export const HELP = {
   prior_param: "What the coarse flow prior's head predicts (latent_type local/hybrid). velocity (default): the flow velocity. x: the clean latent z1, converted to a velocity for training and sampling. Checkpoint architecture.",
   prior_tf_heads: "Attention heads of the transformer coarse prior (prior_arch transformer only, default 4). Must divide the prior velocity width. Checkpoint architecture.",
   prior_fm_draws: "Noise/time draws per posterior sample in the coarse flow prior's training loss (latent_type local/hybrid, default 1). K > 1 regresses K (z0, t) pairs per sample, costing K prior passes per step.",
+  prior_cond_noise: "Training-only noise on the coarse flow prior's condition (latent_type local/hybrid, default 0 = off). Adds Gaussian noise of this fraction of each context row's RMS to the trunk features the prior reads, so it cannot memorize the training geometries; sampling sees the clean context. 0.1 is a mild setting.",
   vae_local_mp_layers: "Message-passing depth of the coarse-node posterior head that emits z_l (latent_type local/hybrid). Checkpoint architecture.",
   kl_weight: "KL weight. MeshGraphNets-V (latent_reg kl): weight of the per-sample KL to N(0, I), averaged per latent coordinate, default 1e-3. SDFFlow VAE: too high collapses the posterior toward the prior (reconstructions lose detail); too low makes the latent space hard for the flow model to cover.",
   fm_arch: "Flow-matching trunk: mlp or dit. dit attends across latent tokens, so it needs latent_tokens > 1.",

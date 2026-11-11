@@ -82,7 +82,7 @@ export function backendDefaultsFor(modelId, mode) {
 }
 
 // COARSE_ONLY_KEYS in cae_suite/specs/meshgraphnets_variational.py.
-const MGNV_COARSE_ONLY = keys(`latent_ch vae_local_mp_layers local_inject prior_arch prior_param prior_tf_heads prior_fm_draws`);
+const MGNV_COARSE_ONLY = keys(`latent_ch vae_local_mp_layers local_inject prior_arch prior_param prior_tf_heads prior_fm_draws prior_cond_noise`);
 
 /** The keys the MGN-V spec warns are ignored for the chosen latent variant
  * (MGNV-LATENT-INACTIVE, MGNV-LATENT-KL-WEIGHT, MGNV-LATENT-MMD-WEIGHT in

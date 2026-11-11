@@ -17,6 +17,7 @@ from general_modules.mesh_utils_fast import (
     edges_to_triangles_optimized,
 )
 from model.conditional_prior import (
+    TF_DROPOUT,
     analytical_prior_kl_loss,
     mixture_nll,
     sample_from_mixture,
@@ -57,6 +58,36 @@ def _unwrap_for_submodule(model):
     return m
 
 
+class _EmaModel(AveragedModel):
+    """AveragedModel whose EMA update never syncs with the GPU.
+
+    torch's update_parameters hands `n_averaged.to(device)` to multi_avg_fn; with
+    the counter kept on the CPU (setup.py) that is a pageable host->device copy,
+    which blocks until the queue drains, once per step. The EMA fn ignores the
+    count, so it gets the CPU tensor. Same math otherwise (copy on the first
+    update, foreach lerp per device/dtype group after, buffers copied)."""
+
+    def update_parameters(self, model):
+        from torch.utils._foreach_utils import _group_tensors_by_device_and_dtype
+        if self.multi_avg_fn is None:
+            return super().update_parameters(model)
+        mine = list(self.module.parameters()) + (list(self.module.buffers()) if self.use_buffers else [])
+        theirs = list(model.parameters()) + (list(model.buffers()) if self.use_buffers else [])
+        mine = [p.detach() for p in mine]
+        theirs = [q.detach().to(p.device) for p, q in zip(mine, theirs)]
+        if self.n_averaged == 0:
+            for p, q in zip(mine, theirs):
+                p.copy_(q)
+        else:
+            grouped = _group_tensors_by_device_and_dtype([mine, theirs])
+            for (_device, _), ([ps, qs], _) in grouped.items():
+                self.multi_avg_fn(ps, qs, self.n_averaged)
+        if not self.use_buffers:
+            for b_swa, b_model in zip(self.module.buffers(), model.buffers()):
+                b_swa.detach().copy_(b_model.detach().to(b_swa.device))
+        self.n_averaged += 1
+
+
 def build_ema_model(model, config):
     """Create an EMA shadow model if use_ema is enabled.
 
@@ -66,7 +97,7 @@ def build_ema_model(model, config):
     if not config.get('use_ema', False):
         return None
     decay = float(config.get('ema_decay', 0.999))
-    ema_model = AveragedModel(model, multi_avg_fn=get_ema_multi_avg_fn(decay=decay))
+    ema_model = _EmaModel(model, multi_avg_fn=get_ema_multi_avg_fn(decay=decay))
     # Disable gradients on shadow parameters
     for p in ema_model.parameters():
         p.requires_grad_(False)
@@ -447,7 +478,9 @@ def log_training_config(config):
                       + f"velocity_hidden={config.get('prior_velocity_hidden_dim', config.get('prior_hidden_dim'))} "
                       f"param={config.get('prior_param', 'velocity')} "
                       f"fm_draws={config.get('prior_fm_draws', 1)} "
-                      f"local_inject={config.get('local_inject', 'all')} "
+                      f"cond_noise={config.get('prior_cond_noise', 0.0)} "
+                      + (f"tf_dropout={TF_DROPOUT} " if arch == 'transformer' else "")
+                      + f"local_inject={config.get('local_inject', 'all')} "
                       f"solver={config.get('prior_fm_solver', 'heun')} "
                       f"steps={config.get('prior_fm_steps', 20)}")
             else:

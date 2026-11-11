@@ -112,7 +112,7 @@ class GNNVariationalEncoder(nn.Module):
             self.local_mu_head = nn.Linear(latent_dim, self.latent_ch)
             self.local_logvar_head = nn.Linear(latent_dim, self.latent_ch)
 
-    def forward(self, y, edge_index, edge_attr, batch, x=None, coarse=None):
+    def forward(self, y, edge_index, edge_attr, batch, x=None, coarse=None, num_graphs=None):
         """
         Args:
             y:          [N, node_output_size] per-node target delta
@@ -143,18 +143,19 @@ class GNNVariationalEncoder(nn.Module):
         g = Data(x=h, edge_attr=e, edge_index=edge_index)
         g = run_plain_blocks(self.mp_layers, g, ckpt)
         if self.latent_type == 'global':
-            return self._global_heads(g.x, batch)
+            return self._global_heads(g.x, batch, num_graphs)
         if coarse is None:
             raise ValueError(f"latent_type '{self.latent_type}' needs the coarsest-level "
                              f"topology (coarse=coarsest_view(graph))")
         z_l, mu_l, lv_l = self._local_heads(g.x, coarse)
         if self.latent_type == 'local':
             return Latent(None, z_l), Latent(None, mu_l), Latent(None, lv_l)
-        z_g, mu_g, lv_g = self._global_heads(g.x, batch)
+        z_g, mu_g, lv_g = self._global_heads(g.x, batch, coarse.get('num_graphs', num_graphs))
         return Latent(z_g, z_l), Latent(mu_g, mu_l), Latent(lv_g, lv_l)
 
-    def _global_heads(self, h, batch):
-        h_graph = self.attention_pool(h, batch)
+    def _global_heads(self, h, batch, num_graphs=None):
+        # dim_size: without it PyG's softmax/reduce read batch.max() back (a host sync)
+        h_graph = self.attention_pool(h, batch, dim_size=num_graphs)
         B = h_graph.shape[0]
         mu = self.mu_head(h_graph).view(B, self.num_z, self.vae_latent_dim)
         logvar = self.logvar_head(h_graph).view(B, self.num_z, self.vae_latent_dim).clamp(min=self.min_logvar)

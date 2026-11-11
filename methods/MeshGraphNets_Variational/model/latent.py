@@ -117,6 +117,8 @@ def coarsest_view(graph, levels):
         'c_ea': graph[f'coarse_edge_attr_{last}'],
         'pos': pos,
         'batch': scatter(batch, parent, dim=0, dim_size=n_c, reduce='min'),
+        # host int when the graph is a PyG Batch (lets pools skip a batch.max() sync)
+        'num_graphs': (int(graph.num_graphs) if getattr(graph, 'num_graphs', None) else None),
     }
 
 

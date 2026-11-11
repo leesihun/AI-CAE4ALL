@@ -5,7 +5,6 @@ import torch
 import torch.nn as nn
 from torch_geometric.data import Data
 from torch_geometric.nn import AttentionalAggregation
-from torch_geometric.utils import to_dense_batch
 
 from model.blocks import AdaLNZero, apply_adaln
 from model.checkpointing import checkpoint_active, run_mlp, run_plain_blocks
@@ -81,7 +80,38 @@ class _ConditionalPriorBase(nn.Module):
         e = run_mlp(self.edge_encoder, graph.edge_attr, ckpt)
         g = Data(x=h, edge_attr=e, edge_index=graph.edge_index)
         g = run_plain_blocks(self.mp_layers, g, ckpt)
-        return self.pool(g.x, batch)
+        B = getattr(graph, 'num_graphs', None)
+        return self.pool(g.x, batch, dim_size=int(B) if B else None)
+
+
+def _max_rows_per_graph(graph, rows):
+    """Host int: the most rows of `rows` (a per-graph-concatenated attribute of
+    `graph`) any one graph has, read from the PyG Batch's CPU collate slices, so
+    nothing is read back from the GPU. None when the graph carries no slices."""
+    sl = getattr(graph, '_slice_dict', None)
+    if not sl:
+        return None if getattr(graph, 'batch', None) is not None else int(rows.shape[0])
+    for key, store_rows in graph.items():
+        if store_rows is rows:
+            s = sl.get(key)
+            if torch.is_tensor(s) and not s.is_cuda and s.numel() > 1:
+                return int((s[1:] - s[:-1]).max())
+    return None
+
+
+def _dense_pack(x, batch, B, M=None):
+    """to_dense_batch(x, batch, batch_size=B) for graph-sorted rows (fill 0),
+    plus each row's flat slot in [B * M], so dense.view(B*M, -1)[slot] gives x's
+    rows back in order (what dense[mask] gives). With a host M this never syncs;
+    to_dense_batch reads the max graph size back from the GPU."""
+    num = torch.zeros(B, dtype=torch.long, device=x.device).scatter_add_(0, batch, torch.ones_like(batch))
+    if M is None:
+        M = int(num.max())
+    start = torch.cumsum(num, 0) - num
+    slot = torch.arange(x.shape[0], device=x.device) - start[batch] + batch * M
+    out = x.new_zeros(B * M, x.shape[-1]).index_copy(0, slot, x)
+    mask = torch.zeros(B * M, dtype=torch.bool, device=x.device).index_fill_(0, slot, True)
+    return out.view(B, M, -1), mask.view(B, M), slot
 
 
 class _FiLMResidualBlock(nn.Module):
@@ -501,6 +531,11 @@ PRIOR_PARAMS = ('velocity', 'x')
 # x-prediction turns x into v by dividing by (1 - s*t); near t = 1 that
 # vanishes, so the divisor is floored (JiT, Li & He 2025, use 0.05 too).
 X_PRED_MIN_DENOM = 0.05
+# Dropout of the transformer velocity net, in training only: on the attention
+# weights and on both residual branches. Fixed, not a key -- r9's transformer
+# fit the training geometries and over-fit the held-out ones. Functional, so
+# the state_dict is the same as before it existed.
+TF_DROPOUT = 0.1
 
 
 class _AdaLNTransformerBlock(nn.Module):
@@ -538,11 +573,13 @@ class _AdaLNTransformerBlock(nn.Module):
         x = self.norm1(h) * (1.0 + sc1) + sh1
         q, k, v = (self.qkv(x).view(B, T, 3, self.heads, D // self.heads)
                    .permute(2, 0, 3, 1, 4))
+        p = TF_DROPOUT if self.training else 0.0
         a = torch.nn.functional.scaled_dot_product_attention(
-            q, k, v, attn_mask=mask[:, None, None, :])
-        h = h + g1 * self.proj(a.transpose(1, 2).reshape(B, T, D))
+            q, k, v, attn_mask=mask[:, None, None, :], dropout_p=p)
+        a = self.proj(a.transpose(1, 2).reshape(B, T, D))
+        h = h + g1 * torch.nn.functional.dropout(a, p, self.training)
         x = self.norm2(h) * (1.0 + sc2) + sh2
-        return h + g2 * self.mlp(x)
+        return h + g2 * torch.nn.functional.dropout(self.mlp(x), p, self.training)
 
 
 class CoarseFMPrior(_ConditionalPriorBase):
@@ -605,6 +642,9 @@ class CoarseFMPrior(_ConditionalPriorBase):
         fm_draws = int(config.get('prior_fm_draws', 1))
         if fm_draws < 1:
             raise ValueError(f'prior_fm_draws must be >= 1, got {fm_draws}')
+        cond_noise = float(config.get('prior_cond_noise', 0.0))
+        if cond_noise < 0:
+            raise ValueError(f'prior_cond_noise must be >= 0, got {cond_noise}')
         # The transformer reads the pooled trunk in its condition for local
         # too; the GNN only for the hybrid token.
         super().__init__(config, build_pool=(latent_type == 'hybrid' or arch == 'transformer'))
@@ -613,6 +653,7 @@ class CoarseFMPrior(_ConditionalPriorBase):
         self.arch = arch
         self.param = param
         self.fm_draws = fm_draws
+        self.cond_noise = cond_noise
         self.velocity_arch = 'coarse_' + arch
         self.latent_ch = int(config.get('latent_ch', 4))
         self.levels = int(config.get('multiscale_levels', 1))
@@ -735,8 +776,10 @@ class CoarseFMPrior(_ConditionalPriorBase):
             ctx['c_ei'] = cv['c_ei']
         else:
             ctx['pe'] = self._position_code(cv['pos'], cv['batch'], B)
+            ctx['M'] = _max_rows_per_graph(graph, cv['pos'])
         if hasattr(self, 'pool'):
-            ctx['pooled'] = self.pool(g.x, batch)
+            # dim_size: without it PyG's softmax/reduce read index.max() back (a host sync)
+            ctx['pooled'] = self.pool(g.x, batch, dim_size=B)
         return ctx
 
     def _position_code(self, pos, batch, B):
@@ -762,6 +805,7 @@ class CoarseFMPrior(_ConditionalPriorBase):
         out = {
             'batch': ctx['batch'].repeat(n) + graph_off,
             'B': B * n,
+            'M': ctx.get('M'),
         }
         for key in ('x', 'e', 'pe', 'pooled'):
             if key in ctx:
@@ -802,8 +846,8 @@ class CoarseFMPrior(_ConditionalPriorBase):
         c = self.cond_mlp(torch.cat([self._t_embed(t), ctx['pooled']], dim=-1))
         h_l = self.l_in(torch.cat([zl_t, ctx['x'], ctx['pe']], dim=-1))
         # coarse rows are graph-sorted (draw-major copies too), as
-        # to_dense_batch needs; h[mask] restores the row order.
-        h, mask = to_dense_batch(h_l, batch, batch_size=B)
+        # dense packing needs; gathering `slot` restores the row order.
+        h, mask, slot = _dense_pack(h_l, batch, B, ctx.get('M'))
         G = self.num_z if self.hybrid else 0
         if self.hybrid:
             tok = self.g_tok_in(zg_t.view(B, self.num_z, self.z_dim)) + self.slot_emb
@@ -813,7 +857,7 @@ class CoarseFMPrior(_ConditionalPriorBase):
             h = blk(h, c, mask)
         shift, scale = self.final_mod(c).unsqueeze(1).chunk(2, dim=-1)
         h = self.final_norm(h) * (1.0 + scale) + shift
-        out_l = self.l_head(h[:, G:][mask[:, G:]])
+        out_l = self.l_head(h[:, G:].reshape(-1, h.shape[-1])[slot])
         if not self.hybrid:
             return out_l, None
         return out_l, self.g_tok_head(h[:, :G]).reshape(B, self.flat_dim)
@@ -877,6 +921,11 @@ class CoarseFMPrior(_ConditionalPriorBase):
         hybrid sums the z_l and z_g regressions. With prior_fm_draws K each
         target is regressed from K independent (z0, t) draws; the trunk context
         is computed once and replicated draw-major, like sample_n.
+
+        prior_cond_noise s > 0 (training only) adds Gaussian noise of s times
+        each row's RMS to the trunk context (the pooled node features and the
+        attention-pooled vector), separately per draw. Being relative to the
+        row, it cannot be escaped by scaling the features up.
         """
         if objective == 'moment':
             raise ValueError('the coarse FM prior has no moment head')
@@ -885,6 +934,13 @@ class CoarseFMPrior(_ConditionalPriorBase):
         K = self.fm_draws
         with _autocast_disabled_for(cond['x']):
             ctx = self._replicate(self._float_ctx(cond), K)
+            if self.training and self.cond_noise > 0:
+                ctx = dict(ctx)
+                for key in ('x', 'pooled'):
+                    if key in ctx:
+                        v = ctx[key]
+                        rms = v.detach().pow(2).mean(dim=-1, keepdim=True).sqrt()
+                        ctx[key] = v + self.cond_noise * rms * torch.randn_like(v)
             s = 1.0 - self.sigma_min
             t = torch.rand(ctx['B'], 1, device=ctx['x'].device)
             t_l = t[ctx['batch']]
@@ -1188,6 +1244,7 @@ def build_prior_config(config):
         'prior_param': str(config.get('prior_param', 'velocity')).lower().strip(),
         'prior_tf_heads': config.get('prior_tf_heads', 4),
         'prior_fm_draws': config.get('prior_fm_draws', 1),
+        'prior_cond_noise': config.get('prior_cond_noise', 0.0),
         'prior_fm_moments': config.get('prior_fm_moments', False),
         'prior_fm_moment_hidden_dim': config.get(
             'prior_fm_moment_hidden_dim',

@@ -119,9 +119,14 @@ def run_mlp(mlp, x, checkpointed):
     backward (two Linear outputs, two SiLU outputs, the pre-LayerNorm output);
     checkpointed it keeps only its raw [E, edge_var] input.
     """
+    from model import compiled_block
+
+    def fn(t):
+        out = compiled_block.run_mlp(mlp, t)
+        return mlp(t) if out is None else out
     if not checkpointed:
-        return mlp(x)
-    return checkpoint(mlp, x)
+        return fn(x)
+    return checkpoint(fn, x)
 
 
 def run_plain_blocks(blocks, graph, checkpointed):

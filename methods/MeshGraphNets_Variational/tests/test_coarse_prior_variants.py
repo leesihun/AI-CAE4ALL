@@ -5,6 +5,9 @@
   prior_arch     gnn | transformer
   prior_param    velocity | x     -- what the prior's heads predict
   prior_fm_draws K >= 1           -- (z0, t) draws per posterior sample
+  prior_cond_noise s >= 0         -- relative noise on the prior's context (training)
+
+and the transformer's fixed dropout (TF_DROPOUT, not a key).
 
 What must hold:
 
@@ -29,7 +32,7 @@ if str(MGN_ROOT) not in sys.path:
     sys.path.insert(0, str(MGN_ROOT))
 
 from general_modules.mesh_dataset import MeshGraphDataset          # noqa: E402
-from model.conditional_prior import CoarseFMPrior                   # noqa: E402
+from model.conditional_prior import TF_DROPOUT, CoarseFMPrior       # noqa: E402
 from model.latent import Latent, coarsest_parent_maps               # noqa: E402
 from model.MeshGraphNets import MeshGraphNets                       # noqa: E402
 from training_profiles.setup import build_model_config              # noqa: E402
@@ -274,10 +277,73 @@ def test_fm_draws_replicate_the_context_draw_major(dataset_path):
     assert torch.all(rep["batch"][1:] >= rep["batch"][:-1])     # still graph-sorted
 
 
+# -- transformer dropout / prior_cond_noise ---------------------------------
+
+def test_transformer_dropout_is_training_only_and_keeps_the_state_dict(dataset_path):
+    assert TF_DROPOUT > 0
+    _, model, loader = _build(dataset_path, prior_arch="transformer", prior_tf_heads=2)
+    prior = model.prior
+    _jitter(prior)
+    graph = next(iter(loader))
+    with torch.no_grad():
+        ctx = prior._float_ctx(prior.condition(graph.clone()))
+        zl = torch.randn(ctx["x"].shape[0], LATENT_CH)
+        zg = torch.randn(ctx["B"], prior.flat_dim)
+        t = torch.full((ctx["B"], 1), 0.5)
+        prior.eval()
+        e1, _ = prior.velocity(zl, zg, t, ctx)
+        e2, _ = prior.velocity(zl, zg, t, ctx)
+        prior.train()
+        t1, _ = prior.velocity(zl, zg, t, ctx)
+        t2, _ = prior.velocity(zl, zg, t, ctx)
+    assert torch.equal(e1, e2)
+    assert not torch.allclose(t1, t2)
+    # functional dropout: the blocks' parameters are the ones r9 checkpoints hold
+    block = {k.split(".", 2)[2] for k in prior.state_dict() if k.startswith("tf_blocks.0.")}
+    assert block == {f"{m}.{w}" for m in ("qkv", "proj", "mlp.0", "mlp.2", "ada.1")
+                     for w in ("weight", "bias")}
+
+
+@pytest.mark.parametrize("arch", ["gnn", "transformer"])
+def test_cond_noise_perturbs_the_training_context_only(dataset_path, arch, monkeypatch):
+    sigma = 0.3
+    _, model, loader = _build(dataset_path, prior_arch=arch, prior_tf_heads=2,
+                              prior_fm_draws=2, prior_cond_noise=sigma)
+    prior = model.prior
+    assert prior.cond_noise == sigma
+    graph = next(iter(loader))
+    with torch.no_grad():
+        z, _, _ = model.model.posterior(graph.clone())
+        cond = prior.condition(graph.clone())
+    clean = prior._replicate(prior._float_ctx(cond), 2)
+    seen = []
+    real_velocity = prior.velocity
+    def spy(zl_t, zg_t, t, ctx):
+        seen.append({k: ctx[k] for k in ("x", "pooled", "batch") if k in ctx})
+        return real_velocity(zl_t, zg_t, t, ctx)
+    monkeypatch.setattr(prior, "velocity", spy)
+
+    prior.train()
+    assert torch.isfinite(prior.fm_loss(cond, z))
+    for key in ("x", "pooled"):
+        noise = seen[-1][key] - clean[key]
+        rel = noise.pow(2).mean(-1).sqrt() / clean[key].pow(2).mean(-1).sqrt()
+        assert abs(rel.mean().item() - sigma) < 0.35 * sigma
+        n_c = cond[key].shape[0]
+        assert not torch.allclose(noise[:n_c], noise[n_c:])   # own noise per draw
+    assert torch.equal(seen[-1]["batch"], clean["batch"])
+
+    prior.eval()
+    prior.fm_loss(cond, z)
+    for key in ("x", "pooled"):
+        assert torch.equal(seen[-1][key], clean[key])
+
+
 @pytest.mark.parametrize("key,value,match", [
     ("prior_arch", "mlp", "prior_arch must be one of"),
     ("prior_param", "eps", "prior_param must be one of"),
     ("prior_fm_draws", 0, "prior_fm_draws must be >= 1"),
+    ("prior_cond_noise", -0.1, "prior_cond_noise must be >= 0"),
     ("prior_tf_heads", 5, "prior_tf_heads"),
     ("local_inject", "fine", "local_inject must be one of"),
 ])
@@ -294,7 +360,8 @@ def test_bad_values_are_rejected(dataset_path, key, value, match):
 def test_full_recipe_runs_with_every_switch_on(dataset_path):
     cfg, model, loader = _build(
         dataset_path, local_inject="coarsest", lambda_mmd_g=0.0,
-        prior_arch="transformer", prior_param="x", prior_fm_draws=2, prior_tf_heads=2)
+        prior_arch="transformer", prior_param="x", prior_fm_draws=2, prior_tf_heads=2,
+        prior_cond_noise=0.1)
     ema = build_ema_model(model, cfg)
     device = torch.device("cpu")
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)

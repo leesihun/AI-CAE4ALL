@@ -772,6 +772,11 @@ class EncoderProcessorDecoder(nn.Module):
 
     def _unpool_merge(self, i, h_coarse, h_skip, up_ei, rel_pos):
         """Level i's learned unpool, then the skip merge."""
+        from model import compiled_block
+        out = compiled_block.run_unpool(self.unpool_blocks[i], self.skip_projs[i],
+                                        h_coarse, h_skip, up_ei, rel_pos)
+        if out is not None:
+            return out
         h_up = self.unpool_blocks[i](
             h_coarse=h_coarse,
             h_fine_skip=h_skip,
