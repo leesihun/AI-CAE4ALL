@@ -17,7 +17,6 @@ from general_modules.mesh_utils_fast import (
     edges_to_triangles_optimized,
 )
 from model.conditional_prior import (
-    TF_DROPOUT,
     analytical_prior_kl_loss,
     mixture_nll,
     sample_from_mixture,
@@ -479,7 +478,8 @@ def log_training_config(config):
                       f"param={config.get('prior_param', 'velocity')} "
                       f"fm_draws={config.get('prior_fm_draws', 1)} "
                       f"cond_noise={config.get('prior_cond_noise', 0.0)} "
-                      + (f"tf_dropout={TF_DROPOUT} " if arch == 'transformer' else "")
+                      + (f"tf_dropout={config.get('prior_tf_dropout', 0.0)} "
+                         if arch == 'transformer' else "")
                       + f"local_inject={config.get('local_inject', 'all')} "
                       f"solver={config.get('prior_fm_solver', 'heun')} "
                       f"steps={config.get('prior_fm_steps', 20)}")

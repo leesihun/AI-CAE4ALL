@@ -531,11 +531,6 @@ PRIOR_PARAMS = ('velocity', 'x')
 # x-prediction turns x into v by dividing by (1 - s*t); near t = 1 that
 # vanishes, so the divisor is floored (JiT, Li & He 2025, use 0.05 too).
 X_PRED_MIN_DENOM = 0.05
-# Dropout of the transformer velocity net, in training only: on the attention
-# weights and on both residual branches. Fixed, not a key -- r9's transformer
-# fit the training geometries and over-fit the held-out ones. Functional, so
-# the state_dict is the same as before it existed.
-TF_DROPOUT = 0.1
 
 
 class _AdaLNTransformerBlock(nn.Module):
@@ -545,13 +540,18 @@ class _AdaLNTransformerBlock(nn.Module):
     True for real tokens. Padded tokens are never attended to. The six
     modulation vectors come from one zero-initialized Linear, so at init both
     gates are 0 and the block is the identity.
+
+    dropout (prior_tf_dropout) acts in training only, on the attention weights
+    and on both residual branches. It is functional, so the state_dict does
+    not depend on it.
     """
 
-    def __init__(self, dim, heads, cond_dim, mlp_ratio=4):
+    def __init__(self, dim, heads, cond_dim, mlp_ratio=4, dropout=0.0):
         super().__init__()
         if dim % heads:
             raise ValueError(f'prior_tf_heads ({heads}) must divide the velocity width ({dim})')
         self.heads = int(heads)
+        self.dropout = float(dropout)
         self.norm1 = nn.LayerNorm(dim, elementwise_affine=False, eps=1e-6)
         self.qkv = nn.Linear(dim, 3 * dim)
         self.proj = nn.Linear(dim, dim)
@@ -573,7 +573,7 @@ class _AdaLNTransformerBlock(nn.Module):
         x = self.norm1(h) * (1.0 + sc1) + sh1
         q, k, v = (self.qkv(x).view(B, T, 3, self.heads, D // self.heads)
                    .permute(2, 0, 3, 1, 4))
-        p = TF_DROPOUT if self.training else 0.0
+        p = self.dropout if self.training else 0.0
         a = torch.nn.functional.scaled_dot_product_attention(
             q, k, v, attn_mask=mask[:, None, None, :], dropout_p=p)
         a = self.proj(a.transpose(1, 2).reshape(B, T, D))
@@ -645,6 +645,9 @@ class CoarseFMPrior(_ConditionalPriorBase):
         cond_noise = float(config.get('prior_cond_noise', 0.0))
         if cond_noise < 0:
             raise ValueError(f'prior_cond_noise must be >= 0, got {cond_noise}')
+        tf_dropout = float(config.get('prior_tf_dropout', 0.0))
+        if not 0.0 <= tf_dropout < 1.0:
+            raise ValueError(f'prior_tf_dropout must be in [0, 1), got {tf_dropout}')
         # The transformer reads the pooled trunk in its condition for local
         # too; the GNN only for the hybrid token.
         super().__init__(config, build_pool=(latent_type == 'hybrid' or arch == 'transformer'))
@@ -736,13 +739,15 @@ class CoarseFMPrior(_ConditionalPriorBase):
 
     def _build_transformer_velocity(self, config, H, Hv, t_dim):
         heads = int(config.get('prior_tf_heads', 4))
+        dropout = float(config.get('prior_tf_dropout', 0.0))
         pos_freqs = torch.tensor([1.0, 2.0, 4.0, 8.0]) * math.pi
         self.register_buffer('pos_freqs', pos_freqs, persistent=False)
         pe_dim = 3 * (1 + 2 * pos_freqs.numel())
         self.l_in = nn.Linear(self.latent_ch + H + pe_dim, Hv)
         self.cond_mlp = nn.Sequential(nn.Linear(t_dim + H, Hv), nn.SiLU(), nn.Linear(Hv, Hv))
         self.tf_blocks = nn.ModuleList([
-            _AdaLNTransformerBlock(Hv, heads, Hv) for _ in range(self.velocity_blocks)
+            _AdaLNTransformerBlock(Hv, heads, Hv, dropout=dropout)
+            for _ in range(self.velocity_blocks)
         ])
         self.final_norm = nn.LayerNorm(Hv, elementwise_affine=False, eps=1e-6)
         self.final_mod = nn.Sequential(nn.SiLU(), nn.Linear(Hv, 2 * Hv))
@@ -1243,6 +1248,7 @@ def build_prior_config(config):
         'prior_arch': str(config.get('prior_arch', 'gnn')).lower().strip(),
         'prior_param': str(config.get('prior_param', 'velocity')).lower().strip(),
         'prior_tf_heads': config.get('prior_tf_heads', 4),
+        'prior_tf_dropout': config.get('prior_tf_dropout', 0.0),
         'prior_fm_draws': config.get('prior_fm_draws', 1),
         'prior_cond_noise': config.get('prior_cond_noise', 0.0),
         'prior_fm_moments': config.get('prior_fm_moments', False),

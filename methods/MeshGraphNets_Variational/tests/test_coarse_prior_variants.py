@@ -6,8 +6,7 @@
   prior_param    velocity | x     -- what the prior's heads predict
   prior_fm_draws K >= 1           -- (z0, t) draws per posterior sample
   prior_cond_noise s >= 0         -- relative noise on the prior's context (training)
-
-and the transformer's fixed dropout (TF_DROPOUT, not a key).
+  prior_tf_dropout p in [0, 1)    -- the transformer prior's dropout (training)
 
 What must hold:
 
@@ -32,7 +31,7 @@ if str(MGN_ROOT) not in sys.path:
     sys.path.insert(0, str(MGN_ROOT))
 
 from general_modules.mesh_dataset import MeshGraphDataset          # noqa: E402
-from model.conditional_prior import TF_DROPOUT, CoarseFMPrior       # noqa: E402
+from model.conditional_prior import CoarseFMPrior                   # noqa: E402
 from model.latent import Latent, coarsest_parent_maps               # noqa: E402
 from model.MeshGraphNets import MeshGraphNets                       # noqa: E402
 from training_profiles.setup import build_model_config              # noqa: E402
@@ -279,11 +278,8 @@ def test_fm_draws_replicate_the_context_draw_major(dataset_path):
 
 # -- transformer dropout / prior_cond_noise ---------------------------------
 
-def test_transformer_dropout_is_training_only_and_keeps_the_state_dict(dataset_path):
-    assert TF_DROPOUT > 0
-    _, model, loader = _build(dataset_path, prior_arch="transformer", prior_tf_heads=2)
-    prior = model.prior
-    _jitter(prior)
+def _velocity_pairs(prior, loader):
+    """Two eval and two train velocities of the same input."""
     graph = next(iter(loader))
     with torch.no_grad():
         ctx = prior._float_ctx(prior.condition(graph.clone()))
@@ -296,12 +292,31 @@ def test_transformer_dropout_is_training_only_and_keeps_the_state_dict(dataset_p
         prior.train()
         t1, _ = prior.velocity(zl, zg, t, ctx)
         t2, _ = prior.velocity(zl, zg, t, ctx)
+    return e1, e2, t1, t2
+
+
+def test_transformer_dropout_is_training_only_and_keeps_the_state_dict(dataset_path):
+    _, model, loader = _build(dataset_path, prior_arch="transformer", prior_tf_heads=2,
+                              prior_tf_dropout=0.1)
+    prior = model.prior
+    assert all(b.dropout == 0.1 for b in prior.tf_blocks)
+    _jitter(prior)
+    e1, e2, t1, t2 = _velocity_pairs(prior, loader)
     assert torch.equal(e1, e2)
     assert not torch.allclose(t1, t2)
-    # functional dropout: the blocks' parameters are the ones r9 checkpoints hold
+    # functional dropout: the blocks' parameters are the same with or without it
     block = {k.split(".", 2)[2] for k in prior.state_dict() if k.startswith("tf_blocks.0.")}
     assert block == {f"{m}.{w}" for m in ("qkv", "proj", "mlp.0", "mlp.2", "ada.1")
                      for w in ("weight", "bias")}
+
+
+def test_transformer_dropout_defaults_to_off(dataset_path):
+    _, model, loader = _build(dataset_path, prior_arch="transformer", prior_tf_heads=2)
+    prior = model.prior
+    assert all(b.dropout == 0.0 for b in prior.tf_blocks)
+    _jitter(prior)
+    _, _, t1, t2 = _velocity_pairs(prior, loader)
+    assert torch.equal(t1, t2)
 
 
 @pytest.mark.parametrize("arch", ["gnn", "transformer"])
@@ -344,6 +359,8 @@ def test_cond_noise_perturbs_the_training_context_only(dataset_path, arch, monke
     ("prior_param", "eps", "prior_param must be one of"),
     ("prior_fm_draws", 0, "prior_fm_draws must be >= 1"),
     ("prior_cond_noise", -0.1, "prior_cond_noise must be >= 0"),
+    ("prior_tf_dropout", -0.1, "prior_tf_dropout must be in"),
+    ("prior_tf_dropout", 1.0, "prior_tf_dropout must be in"),
     ("prior_tf_heads", 5, "prior_tf_heads"),
     ("local_inject", "fine", "local_inject must be one of"),
 ])
@@ -361,7 +378,7 @@ def test_full_recipe_runs_with_every_switch_on(dataset_path):
     cfg, model, loader = _build(
         dataset_path, local_inject="coarsest", lambda_mmd_g=0.0,
         prior_arch="transformer", prior_param="x", prior_fm_draws=2, prior_tf_heads=2,
-        prior_cond_noise=0.1)
+        prior_cond_noise=0.1, prior_tf_dropout=0.1)
     ema = build_ema_model(model, cfg)
     device = torch.device("cpu")
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)

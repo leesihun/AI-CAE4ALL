@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# B300 round 10 (HI-MGN-hybrid coarse prior against over-fitting: transformer dropout, condition noise, depth, EMA, GNN k8; 3 seeds) on node 135's cards as one queue.
+# B300 round 10 (HI-MGN-hybrid coarse prior against over-fitting: transformer dropout 0.1/0.3, condition noise, depth, GNN k8; 3 seeds) on node 135's cards as one queue.
 # Do not call this file directly; run, from the repo root or anywhere:
 #
 #   bash configs/MeshGraphNets_Variational/hyperparameter_sweep/r10/run_135.sh
@@ -22,7 +22,7 @@
 #   1. environment  launcher python imports cae_suite; the MGN-V interpreter
 #                   imports torch / torch_geometric / h5py and runs a bf16
 #                   matmul and a scatter on GPU 0; the checkout has split_group_attr
-#                   and round 10's prior code (TF_DROPOUT, prior_cond_noise).
+#                   and round 10's prior code (prior_tf_dropout, prior_cond_noise).
 #   2. data         every dataset a config names exists (exact case), and so
 #                   does the checkpoint of every inference-only job; the
 #                   held-out file is the 256-draw one (draws_per_shape 256,
@@ -610,9 +610,9 @@ print(info)
     echo "                    $(printf '%s\n' "$out" | sed -n 2p)"
     grep -q "split_group_attr" "$method_dir/general_modules/mesh_dataset.py" \
         || die "this checkout's $method_dir has no split_group_attr: the train/test split would leak geometries. Pull first."
-    { grep -q "^TF_DROPOUT" "$method_dir/model/conditional_prior.py" \
+    { grep -q "prior_tf_dropout" "$method_dir/model/conditional_prior.py" \
         && grep -q "prior_cond_noise" "$method_dir/model/conditional_prior.py"; } \
-        || die "this checkout's $method_dir has no transformer dropout / prior_cond_noise (round 10's code). Pull first."
+        || die "this checkout's $method_dir has no prior_tf_dropout / prior_cond_noise (round 10's code). Pull first."
 done
 MGNV_PYTHON="${MGNV_PYTHON:-}"
 

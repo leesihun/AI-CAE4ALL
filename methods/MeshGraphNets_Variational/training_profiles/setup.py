@@ -278,11 +278,13 @@ def build_model_config(config) -> dict:
         ).lower().strip(),
         'prior_fm_blocks':          config.get('prior_fm_blocks', 4),
         # latent_type local / hybrid only. prior_arch / prior_tf_heads shape
-        # the prior; prior_param changes what its heads mean; prior_fm_draws
-        # and prior_cond_noise are training-only, kept for provenance.
+        # the prior; prior_param changes what its heads mean; prior_fm_draws,
+        # prior_cond_noise and prior_tf_dropout are training-only, kept for
+        # provenance.
         'prior_arch':               str(config.get('prior_arch', 'gnn')).lower().strip(),
         'prior_param':              str(config.get('prior_param', 'velocity')).lower().strip(),
         'prior_tf_heads':           config.get('prior_tf_heads', 4),
+        'prior_tf_dropout':         config.get('prior_tf_dropout', 0.0),
         'prior_fm_draws':           config.get('prior_fm_draws', 1),
         'prior_cond_noise':         config.get('prior_cond_noise', 0.0),
         'prior_fm_moments':         config.get('prior_fm_moments', False),

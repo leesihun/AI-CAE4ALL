@@ -95,12 +95,12 @@ VAR_KEYS = frozenset(
         # or 'coarsest'; behaviour only, same checkpoint layout). lambda_mmd_g:
         # hybrid z_g MMD weight (default lambda_mmd, 0 drops it). prior_arch:
         # the coarse FM velocity net ('gnn' or 'transformer', heads
-        # prior_tf_heads); prior_param: its head predicts the 'velocity' or the
-        # clean 'x'; prior_fm_draws: (z0, t) pairs per posterior sample;
-        # prior_cond_noise: relative noise on the prior's trunk context in its
-        # training loss.
+        # prior_tf_heads, training dropout prior_tf_dropout); prior_param: its
+        # head predicts the 'velocity' or the clean 'x'; prior_fm_draws: (z0, t)
+        # pairs per posterior sample; prior_cond_noise: relative noise on the
+        # prior's trunk context in its training loss.
         "local_inject", "lambda_mmd_g", "prior_arch", "prior_param", "prior_tf_heads",
-        "prior_fm_draws", "prior_cond_noise",
+        "prior_tf_dropout", "prior_fm_draws", "prior_cond_noise",
         # All-gather z across DDP ranks before MMD so the two-sample estimator
         # sees the GLOBAL batch instead of the per-rank one (default True).
         "mmd_gather_ranks",
@@ -367,7 +367,8 @@ PRIOR_ARCHS = ("gnn", "transformer")
 PRIOR_PARAMS = ("velocity", "x")
 # Keys read only by the coarse-level path (model/MeshGraphNets.py + CoarseFMPrior).
 COARSE_ONLY_KEYS = ("latent_ch", "vae_local_mp_layers", "local_inject", "prior_arch",
-                    "prior_param", "prior_tf_heads", "prior_fm_draws", "prior_cond_noise")
+                    "prior_param", "prior_tf_heads", "prior_tf_dropout", "prior_fm_draws",
+                    "prior_cond_noise")
 
 
 def validate_latent_placement(ctx: SpecValidationContext) -> None:
@@ -476,7 +477,7 @@ def validate_coarse_prior(ctx: SpecValidationContext) -> None:
     """local_inject and the CoarseFMPrior switches (latent_type local/hybrid).
 
     The runtime raises on a bad enum, on prior_fm_draws < 1, on
-    prior_cond_noise < 0, and when
+    prior_cond_noise < 0, on prior_tf_dropout outside [0, 1), and when
     prior_tf_heads does not divide the velocity width; checking here reports
     them before the native process starts.
     """
@@ -501,6 +502,17 @@ def validate_coarse_prior(ctx: SpecValidationContext) -> None:
             ctx.add("MGNV-LATENT-POSITIVE", Severity.ERROR,
                     f"prior_cond_noise must be a number >= 0; got {values['prior_cond_noise']!r}.",
                     field_name="prior_cond_noise")
+    is_transformer = str(values.get("prior_arch", "gnn")).lower().strip() == "transformer"
+    if "prior_tf_dropout" in values:
+        drop = numeric(values["prior_tf_dropout"])
+        if drop is None or not 0 <= drop < 1:
+            ctx.add("MGNV-LATENT-RANGE", Severity.ERROR,
+                    f"prior_tf_dropout must be a number in [0, 1); got {values['prior_tf_dropout']!r}.",
+                    field_name="prior_tf_dropout")
+        elif not is_transformer:
+            ctx.add("MGNV-LATENT-INACTIVE", Severity.WARNING,
+                    "prior_tf_dropout only applies to prior_arch transformer; it is ignored.",
+                    field_name="prior_tf_dropout", promote_in_strict=True)
     if "prior_tf_heads" not in values:
         return
     heads = integer(values["prior_tf_heads"])
@@ -509,7 +521,7 @@ def validate_coarse_prior(ctx: SpecValidationContext) -> None:
                 f"prior_tf_heads must be an integer >= 1; got {values['prior_tf_heads']!r}.",
                 field_name="prior_tf_heads")
         return
-    if str(values.get("prior_arch", "gnn")).lower().strip() != "transformer":
+    if not is_transformer:
         ctx.add("MGNV-LATENT-INACTIVE", Severity.WARNING,
                 "prior_tf_heads only applies to prior_arch transformer; it is ignored.",
                 field_name="prior_tf_heads", promote_in_strict=True)

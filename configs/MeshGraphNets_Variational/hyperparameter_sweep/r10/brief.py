@@ -241,10 +241,10 @@ ARMS = {
     "base": None,
     "gnn_k8": "base",       # k8 on the GNN prior
     "tfk8_r9": "base",      # r9's gfix_tf_k8, without dropout (R3, R4)
-    "tfd": "tfk8_r9",       # the same + dropout: the dropout's effect
+    "tfd": "tfk8_r9",       # the same + dropout 0.1: the dropout's effect
     "tfd_cn": "tfd",
     "tfd_d2": "tfd",
-    "tfd_ema": "tfd",
+    "tfd_p3": "tfd",        # dropout 0.3 against 0.1
 }
 JID_RE = re.compile(r"^hybrid_(.+)_s(\d+)$")
 

@@ -18,17 +18,17 @@ Standard library only, any Python 3.8+. Round 9 said where the prior's error is:
 So round 10 keeps the transformer and k8 and adds regularization against over-fitting the
 120 training geometries:
 
-  dropout   0.1 in every transformer block (attention weights and both residual branches).
-            Fixed in model/conditional_prior.py (TF_DROPOUT), not a key, so EVERY
-            transformer arm here has it; r9's gfix_tf_k8 (seeds 42, 43) is the same setting
-            without it, read from output/b300_r9.
+  tfd       prior_tf_dropout 0.1 (new key, default 0 = r9's behaviour): dropout on the
+            attention weights and on both residual branches of every transformer block, in
+            training only. r9's gfix_tf_k8 (seeds 42, 43) is the same setting at 0, read
+            from output/b300_r9, so 0 / 0.1 / 0.3 (tfd_p3) is a dropout dose curve.
+  p3        prior_tf_dropout 0.3: strong dropout (DDPM-style diffusion nets use 0.1-0.3)
   cn        prior_cond_noise 0.1: training-only Gaussian noise, 0.1 x each row's RMS, on
             the trunk context the prior reads (pooled node features and the pooled vector)
   d2        prior_fm_blocks 2: half the transformer depth
-  ema       ema_decay 0.999 (from 0.99): ~2 epochs of averaging instead of ~0.2. It is the
-            whole model's EMA, so the joint phase's simulator is averaged longer too; the
-            ho posterior column shows whether that moved it.
   gnn_k8    the base's GNN prior with prior_fm_draws 8: does k8 help the under-fitting GNN?
+
+The cn and d2 arms keep tfd's dropout 0.1, so each is read against tfd.
 
 Three seeds per arm (training_seed 42, 43, 44). The base already has two: r8's hybrid_e360
 (seed 42) and r9's hybrid_base_s43, so only seed 44 of it trains here. Edit this file,
@@ -55,13 +55,14 @@ PLACEMENT = "hybrid"
 # r8's hybrid_e360: r6 hybrid_ref (mp_per_level 4, 6, 8, 6, 4, coarsening 4096, 256)
 # at batch 16 and 360 epochs. beta_aux 10, voronoi_clusters and mp_per_level are fixed.
 REF = dict(lr="1e-4", ep=360, bs=16, ar=1000, w=128, mmd=1.0, ld=32, ch=4, ph=128, pm=3, pms=0.05, fms=30,
-           inj="all", mmdg=None, arch="gnn", param="velocity", k=1, fmb=4, ema=0.99, cn=0.0)
+           inj="all", mmdg=None, arch="gnn", param="velocity", k=1, fmb=4, cn=0.0, drop=0.0)
 MP = (4, 6, 8, 6, 4)
 VORONOI = (4096, 256)
 REF_JOB = ("r8", "hybrid_e360")   # the base at seed 42, trained in round 8
 SEEDS = (42, 43, 44)
 GFIX = dict(mmdg=0.0, inj="coarsest")
-TFD = dict(GFIX, arch="transformer", k=8)   # r9's gfix_tf_k8; the dropout comes with the code
+TFK8 = dict(GFIX, arch="transformer", k=8)   # r9's gfix_tf_k8 (no dropout)
+TFD = dict(TFK8, drop=0.1)
 
 # arm -> (changes from REF, what it is, seeds). Order = run order: job k on slot k,
 # the slots being cards 0-7 once, then again (--pack 2), so job k and job k+8 share a card.
@@ -69,11 +70,11 @@ TFD = dict(GFIX, arch="transformer", k=8)   # r9's gfix_tf_k8; the dropout comes
 # only) comes last.
 ARMS = {
     "gnn_k8": (dict(k=8), "the base's GNN prior with 8 FM draws per posterior sample (prior_fm_draws 8)", SEEDS),
-    "tfd": (TFD, "r9's gfix_tf_k8 (gfix + transformer prior + prior_fm_draws 8), now with the fixed "
-                 "transformer dropout 0.1", SEEDS),
+    "tfd": (TFD, "r9's gfix_tf_k8 (gfix + transformer prior + prior_fm_draws 8) with "
+                 "transformer dropout 0.1 (prior_tf_dropout 0.1)", SEEDS),
+    "tfd_p3": (dict(TFD, drop=0.3), "tfd with dropout 0.3 (prior_tf_dropout 0.3)", SEEDS),
     "tfd_cn": (dict(TFD, cn=0.1), "tfd + noise on the prior's condition (prior_cond_noise 0.1)", SEEDS),
     "tfd_d2": (dict(TFD, fmb=2), "tfd with 2 transformer blocks instead of 4 (prior_fm_blocks 2)", SEEDS),
-    "tfd_ema": (dict(TFD, ema=0.999), "tfd with a 10x longer EMA (ema_decay 0.999)", SEEDS),
     "base": (dict(), "the base: r8 hybrid_e360 (seed 42 = r8's run, seed 43 = r9's hybrid_base_s43)", (44,)),
 }
 # Runs of earlier rounds that brief.py shows beside this round's (it reads them where they are).
@@ -130,8 +131,8 @@ class Spec:
     param: str = REF["param"]
     k: int = REF["k"]
     fmb: int = REF["fmb"]
-    ema: float = REF["ema"]
     cn: float = REF["cn"]
+    drop: float = REF["drop"]
     seed: int = SEEDS[0]
 
 
@@ -317,13 +318,14 @@ def train_body(spec, job, pack):
         b.set("prior_fm_blocks", spec.fmb,
               after="prior_param" if "prior_param" in b.keys()
               else "prior_arch" if "prior_arch" in b.keys() else "prior_hidden_dim")
+    if spec.drop != REF["drop"]:
+        b.set("prior_tf_dropout", f"{spec.drop:g}",
+              after="prior_fm_blocks" if "prior_fm_blocks" in b.keys() else "prior_arch")
     if spec.k != REF["k"]:
         b.set("prior_fm_draws", spec.k, after="prior_nll_weight")
     if spec.cn != REF["cn"]:
         b.set("prior_cond_noise", f"{spec.cn:g}",
               after="prior_fm_draws" if "prior_fm_draws" in b.keys() else "prior_nll_weight")
-    if spec.ema != REF["ema"]:
-        b.set("ema_decay", f"{spec.ema:g}")
     b.set("prior_fm_steps", spec.fms)
     b.set("use_checkpointing", use_checkpointing(spec, pack))
     b.set("resume_training", "True")
@@ -407,8 +409,6 @@ DATA = """\
 
 def header(job, kind, pack):
     lines = [f"% ex3 B300 hybrid coarse-prior sweep ({ROUND}), job {job.name}: {DISPLAY}",
-             *(["% The transformer prior trains with dropout 0.1 (TF_DROPOUT in model/conditional_prior.py)."]
-               if job.spec.arch == "transformer" else []),
              f"% Role: {job.change}",
              f"% Base: {REF_JOB[0]} {REF_JOB[1]} (360 epochs, batch 16); seed 42 is that run, 43 r9's hybrid_base_s43.",
              f"% Generated by {REL}/make_sweep.py --pack {pack}; edit that file, not this one.",
@@ -438,7 +438,7 @@ def self_check():
         return out
 
     build_only = {"hierarchy_cache_build_workers", "use_checkpointing", "use_compile"}
-    stands_for = {"base": dict(), "tfk8_r9": TFD}
+    stands_for = {"base": dict(), "tfk8_r9": TFK8}
     ok = True
     for arm, runs in REFERENCE_RUNS.items():
         for rnd, name, seed in runs:
