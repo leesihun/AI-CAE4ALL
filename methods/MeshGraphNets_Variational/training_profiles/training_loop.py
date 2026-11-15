@@ -283,6 +283,79 @@ class _ObjectiveTerms:
         self.compute_prior_path = self.has_gnn_prior and (
             self.prior_loss_weight > 0.0 or self.prior_kl_reg_weight > 0.0
         )
+        # zg_anchor_weight: per-sample KL of the z_g posterior to the snapshot
+        # taken when local_warmup_epochs ended (set_zg_anchor). Before that
+        # snapshot exists the term is off.
+        self.zg_anchor = getattr(inner_model, 'zg_anchor', None)
+        self.zg_anchor_weight = (float(config.get('zg_anchor_weight', 0.0) or 0.0)
+                                 if self.zg_anchor is not None else 0.0)
+        self.num_timesteps = n_steps
+        self.zg_anchor_sum = 0.0
+        self.zg_anchor_count = 0
+
+
+def _anchor_keys(graph, num_timesteps):
+    """One integer per graph naming its training sample (and time step)."""
+    keys = graph.sample_id.view(-1).long()
+    t = getattr(graph, 'time_idx', None)
+    if t is not None and num_timesteps > 1:
+        keys = keys * int(num_timesteps) + t.view(-1).long()
+    return keys
+
+
+@torch.no_grad()
+def snapshot_zg_posterior(model, dataloader, device, config):
+    """The z_g posterior (mu, logvar) of every training sample, in eval mode.
+
+    Taken once, when local_warmup_epochs ends: during the warmup the processor
+    read z_g alone, so this posterior is one the decoder uses. zg_anchor_weight
+    then keeps each sample's z_g near it while z_l comes in (TS-DSAE's second
+    stage). Returns (sorted keys, mu, logvar) on `device`.
+    """
+    bare = _bare(model)
+    inner = bare.model
+    n_steps = int(config.get('num_timesteps', 1) or 1)
+    was_training = bare.training
+    bare.eval()
+    keys, mus, lvs = [], [], []
+    for g in dataloader:
+        g = _move_graph_to_device(g, device, config)
+        _, mu, lv = inner.posterior(g)
+        keys.append(_anchor_keys(g, n_steps))
+        mus.append(mu.g.float())
+        lvs.append(lv.g.float())
+    if was_training:
+        bare.train()
+    keys, order = torch.sort(torch.cat(keys))
+    mu, lv = torch.cat(mus)[order], torch.cat(lvs)[order]
+    first = torch.ones_like(keys, dtype=torch.bool)
+    first[1:] = keys[1:] != keys[:-1]
+    keys, mu, lv = keys[first], mu[first], lv[first]
+    print(f"\n  [zg-anchor] z_g posterior of {keys.numel()} training samples kept: "
+          f"sd(mu) {float(mu.std()):.4f}, mean sigma {float((0.5 * lv).exp().mean()):.4f}")
+    return keys, mu, lv
+
+
+def set_zg_anchor(model, anchor):
+    """Attach (or with None, drop) the z_g snapshot the anchor term reads."""
+    bare = _bare(model)
+    if anchor is not None:
+        device = next(bare.parameters()).device
+        anchor = tuple(t.to(device) for t in anchor)
+    bare.zg_anchor = anchor
+
+
+def _zg_anchor_kl(graph, mu, logvar, terms):
+    """Mean over graphs and coordinates of KL(q(z_g | y) || q_snapshot(z_g | y))."""
+    keys_s, mu_s, lv_s = terms.zg_anchor
+    keys = _anchor_keys(graph, terms.num_timesteps)
+    idx = torch.searchsorted(keys_s, keys).clamp(max=keys_s.numel() - 1)
+    hit = (keys_s[idx] == keys).to(torch.float32)
+    mu, lv = mu.float(), logvar.float()
+    m_s, l_s = mu_s[idx], lv_s[idx]
+    kl = 0.5 * (l_s - lv + (lv.exp() + (mu - m_s).pow(2)) / l_s.exp() - 1.0)
+    per_graph = kl.flatten(1).mean(1) * hit
+    return per_graph.sum() / hit.sum().clamp(min=1.0)
 
 
 def latent_reg_weight(config):
@@ -389,6 +462,12 @@ def _compose_loss(model, graph, terms):
                 loss = loss + terms.prior_kl_reg_weight * kl_anchor_val
             if prior_outputs is not None and terms.prior_loss_weight > 0.0:
                 loss = loss + terms.prior_loss_weight * prior_loss_val
+            if terms.zg_anchor_weight > 0.0 and vae_losses.get('mu') is not None:
+                anchor_val = _zg_anchor_kl(graph, vae_losses['mu'].g,
+                                           vae_losses['logvar'].g, terms)
+                loss = loss + terms.zg_anchor_weight * anchor_val
+                terms.zg_anchor_sum = terms.zg_anchor_sum + anchor_val.detach()
+                terms.zg_anchor_count += 1
         else:
             loss = recon_loss
 
@@ -481,7 +560,11 @@ def log_training_config(config):
                       + (f"tf_dropout={config.get('prior_tf_dropout', 0.0)} "
                          if arch == 'transformer' else "")
                       + f"local_inject={config.get('local_inject', 'all')} "
-                      f"solver={config.get('prior_fm_solver', 'heun')} "
+                      f"local_dropout={config.get('local_dropout', 0.0)} "
+                      + (f"local_warmup={config.get('local_warmup_epochs')} "
+                         f"zg_anchor={config.get('zg_anchor_weight', 0.0)} "
+                         if int(config.get('local_warmup_epochs', 0) or 0) > 0 else "")
+                      + f"solver={config.get('prior_fm_solver', 'heun')} "
                       f"steps={config.get('prior_fm_steps', 20)}")
             else:
                 print(f"Prior (gnn_e2e, family=fm): fm_weight={p_w} "
@@ -713,6 +796,12 @@ def train_prior_epoch(model, dataloader, optimizer, device, config, epoch, ema_m
 
 def train_epoch(model, dataloader, optimizer, device, config, epoch, ema_model=None):
     model.train()
+    # local_warmup_epochs: the first N epochs withhold every graph's z_l, so the
+    # processor learns to read z_g before z_l is there to compete with it.
+    enc = getattr(_bare(model), 'model', None)
+    if hasattr(enc, 'local_withhold_all'):
+        enc.local_withhold_all = (enc.latent_type == 'hybrid'
+                                  and epoch < int(config.get('local_warmup_epochs', 0) or 0))
     total_loss_count = 0
     reg_count = 0
 
@@ -871,6 +960,11 @@ def train_epoch(model, dataloader, optimizer, device, config, epoch, ema_model=N
             result['prior_loss_mean'] = total_prior_loss_gpu.item() / reg_count
             if prior_kl_reg_weight > 0.0:
                 result['kl_anchor_mean'] = total_kl_anchor_gpu.item() / reg_count
+    if objective_terms.zg_anchor_count > 0:
+        result['zg_anchor_mean'] = (float(objective_terms.zg_anchor_sum)
+                                    / objective_terms.zg_anchor_count)
+    if getattr(enc, 'local_withhold_all', False):
+        enc.local_withhold_all = False
     return result
 
 

@@ -87,7 +87,7 @@ KEY_CATALOGS.sdfflow = [...new Set([
 KEY_CATALOGS.meshgraphnetsV = [...new Set([
   ...KEY_CATALOGS.meshgraphnetsV,
   ...keys(`latent_type latent_ch vae_local_mp_layers latent_reg kl_weight`),
-  ...keys(`local_inject lambda_mmd_g prior_arch prior_param prior_tf_heads prior_tf_dropout prior_fm_draws prior_cond_noise`)
+  ...keys(`local_inject local_dropout local_warmup_epochs zg_anchor_weight posterior_max_std_g lambda_mmd_g prior_arch prior_param prior_tf_heads prior_tf_dropout prior_fm_draws prior_cond_noise`)
 ])].sort();
 
 export const MODEL_CATALOG = {
@@ -1437,6 +1437,10 @@ export const HELP = {
   latent_reg: "MeshGraphNets-V regularizer pulling the posterior toward N(0, I): mmd (batch-level, weight lambda_mmd) or kl (per-sample KL, weight kl_weight).",
   latent_ch: "Channels of the local latent z_l on every coarsest node (latent_type local/hybrid). Checkpoint architecture.",
   local_inject: "Which V-cycle levels read the local latent z_l (latent_type local/hybrid). all (default): every level, a finer node reading its coarsest ancestor's z_l. coarsest: only the coarsest level; finer levels see zeros in the z_l columns, so with hybrid they are conditioned on z_g alone. Same parameters, so a checkpoint loads under either value.",
+  local_dropout: "Training-only share of graphs whose local latent z_l the processor does not see (latent_type hybrid only, default 0 = off). Each graph of a training batch gets zeros in place of its z_l with this probability, so it has to be reconstructed from the global latent z_g alone; without it z_l carries the whole draw and z_g is ignored. The regularizer and the prior's targets keep the full z_l. Range [0, 1); eval, inference and sampling never withhold. Adds no weights, so a checkpoint loads with any value.",
+  local_warmup_epochs: "Training only (latent_type hybrid, single GPU): for the first N epochs every graph's z_l is withheld from the processor, so it learns to read z_g first. Checkpoint selection restarts when z_l comes in. 0 (default) = off.",
+  zg_anchor_weight: "Training only (latent_type hybrid, needs local_warmup_epochs > 0): weight of a per-sample KL keeping each training sample's z_g posterior near the one it had when the warmup ended, so z_l cannot take over what z_g learned. 0 (default) = off.",
+  posterior_max_std_g: "Cap on the posterior std of the global latent z_g (latent_type global/hybrid); 0 (default) = no cap. Must be >= posterior_min_std; equal to it pins the z_g std. Persisted in the checkpoint.",
   lambda_mmd_g: "MMD weight of the global latent z_g (latent_type hybrid, latent_reg mmd). Defaults to lambda_mmd; 0 drops the z_g MMD, leaving z_g shaped by reconstruction and the prior only. lambda_mmd still weighs z_l.",
   prior_arch: "Velocity network of the coarse-level flow prior (latent_type local/hybrid). gnn (default): message passing over the coarsest graph plus a pooled z_g token. transformer: full attention over every coarsest node (+ one token per z_g slot), AdaLN-conditioned on t and the pooled context; depth prior_fm_blocks, width prior_velocity_hidden_dim, heads prior_tf_heads. Checkpoint architecture.",
   prior_param: "What the coarse flow prior's head predicts (latent_type local/hybrid). velocity (default): the flow velocity. x: the clean latent z1, converted to a velocity for training and sampling. Checkpoint architecture.",

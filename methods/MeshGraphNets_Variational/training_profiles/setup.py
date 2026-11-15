@@ -238,6 +238,15 @@ def build_model_config(config) -> dict:
         # Not architecture-defining, but the decoder reads z differently under
         # it, so inference must run with the value training used.
         'local_inject':      str(config.get('local_inject', 'all')).lower().strip(),
+        # Training-only (hybrid): share of graphs whose z_l the processor did
+        # not see. Kept for provenance; eval and inference never withhold.
+        'local_dropout':     config.get('local_dropout', 0.0),
+        # The z_g posterior std cap is part of the encoder's forward, so a
+        # posterior pass at inference must use the trained value. The warmup
+        # and anchor are training-only, kept for provenance.
+        'posterior_max_std_g': config.get('posterior_max_std_g', 0),
+        'local_warmup_epochs': config.get('local_warmup_epochs', 0),
+        'zg_anchor_weight':  config.get('zg_anchor_weight', 0.0),
         # Provenance only: which regularizer shaped the posterior.
         'latent_reg':        str(config.get('latent_reg', 'mmd')).lower().strip(),
         # Architecture-defining: 'adaln' renames every per-block conditioning

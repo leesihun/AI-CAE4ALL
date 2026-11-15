@@ -72,7 +72,7 @@ class GNNVariationalEncoder(nn.Module):
     def __init__(self, node_output_size, edge_input_size, latent_dim, vae_latent_dim,
                  num_mp_layers=2, node_input_size=None, graph_aware=False,
                  posterior_min_std=0, num_z=1, latent_type='global', latent_ch=4,
-                 local_mp_layers=2):
+                 local_mp_layers=2, posterior_max_std_g=0):
         super().__init__()
         self.latent_type = str(latent_type)
         # Set by the owning model from `use_checkpointing` (training only).
@@ -81,6 +81,10 @@ class GNNVariationalEncoder(nn.Module):
         self.has_local = self.latent_type in ('local', 'hybrid')
         self.graph_aware = bool(graph_aware)
         self.min_logvar = 2.0 * math.log(max(float(posterior_min_std), 1e-6))
+        # Cap on the z_g posterior std (0 = none). Equal to posterior_min_std
+        # pins sigma_g; either way z_g cannot stay a noise channel.
+        max_std_g = float(posterior_max_std_g or 0)
+        self.max_logvar_g = 2.0 * math.log(max_std_g) if max_std_g > 0 else None
         self.num_z = int(num_z)
         self.vae_latent_dim = int(vae_latent_dim)
         self.node_encoder = build_mlp(node_output_size, latent_dim, latent_dim)
@@ -158,7 +162,8 @@ class GNNVariationalEncoder(nn.Module):
         h_graph = self.attention_pool(h, batch, dim_size=num_graphs)
         B = h_graph.shape[0]
         mu = self.mu_head(h_graph).view(B, self.num_z, self.vae_latent_dim)
-        logvar = self.logvar_head(h_graph).view(B, self.num_z, self.vae_latent_dim).clamp(min=self.min_logvar)
+        logvar = self.logvar_head(h_graph).view(B, self.num_z, self.vae_latent_dim).clamp(
+            min=self.min_logvar, max=self.max_logvar_g)
         std = torch.exp(0.5 * logvar)
         z = mu + std * torch.randn_like(std)
         return z, mu, logvar

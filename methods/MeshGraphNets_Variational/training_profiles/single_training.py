@@ -29,6 +29,8 @@ from training_profiles.training_loop import (
     freeze_moments_for_residual_fit,
     log_training_config,
     run_periodic_test,
+    set_zg_anchor,
+    snapshot_zg_posterior,
     train_epoch,
     train_prior_epoch,
     validate_epoch,
@@ -165,6 +167,13 @@ def single_worker(config, config_filename='config.txt'):
     prior_freeze = int(config.get('prior_freeze_epoch', 0) or 0)
     moment_calibration = int(config.get('prior_moment_calibration_epochs', 0) or 0)
     moment_switch = prior_freeze + moment_calibration
+    # local_warmup_epochs > 0 (hybrid): z_l withheld from every graph until
+    # then; zg_anchor_weight > 0 keeps each sample's z_g near the posterior it
+    # had at that point. See training_loop.snapshot_zg_posterior.
+    hybrid = str(config.get('latent_type', 'global')).lower().strip() == 'hybrid'
+    local_warmup = int(config.get('local_warmup_epochs', 0) or 0) if hybrid else 0
+    zg_anchor_on = local_warmup > 0 and float(config.get('zg_anchor_weight', 0) or 0) > 0
+    zg_anchor = None
 
     best_valid_loss = float('inf')
     last_valid_loss = float('inf')
@@ -203,6 +212,9 @@ def single_worker(config, config_filename='config.txt'):
         best_valid_loss = state['best_valid_loss']
         last_valid_loss = state['last_valid_loss']
         last_saved_epoch = state['last_saved_epoch']
+        zg_anchor = state.get('zg_anchor')
+        if zg_anchor is not None:
+            set_zg_anchor(model, zg_anchor)
         del state
 
     print("\n" + "=" * 60)
@@ -225,6 +237,16 @@ def single_worker(config, config_filename='config.txt'):
     try:
         resume.restore_rng()
         for epoch in range(start_epoch, total_epochs):
+            if local_warmup and epoch == local_warmup:
+                # The warmup model reads z_g only; checkpoint selection
+                # restarts so the kept model is one that has seen z_l.
+                print(f"\n  [local-warmup] epoch {epoch}: z_l enters the processor; "
+                      f"checkpoint selection restarts")
+                best_valid_loss = float('inf')
+                last_saved_epoch = -1
+                if zg_anchor_on and zg_anchor is None:
+                    zg_anchor = snapshot_zg_posterior(model, train_loader, device, config)
+                    set_zg_anchor(model, zg_anchor)
             if prior_freeze and epoch == prior_freeze:
                 optimizer, scheduler = freeze_for_prior_fit(
                     model, ema_model, train_loader, device, config,
@@ -337,6 +359,8 @@ def single_worker(config, config_filename='config.txt'):
                 train_reg   = train_metrics.get('reg_mean', 0.0)
                 train_aux   = train_metrics.get('aux_mean', 0.0)
                 train_total = train_metrics.get('total_mean', train_loss)
+                zg_str = (f" zg_anchor={train_metrics['zg_anchor_mean']:.2e}"
+                          if 'zg_anchor_mean' in train_metrics else '')
                 if do_val:
                     valid_reg   = valid_metrics.get('reg_mean', 0.0)
                     valid_total = valid_metrics.get('total_mean', valid_loss)
@@ -346,14 +370,14 @@ def single_worker(config, config_filename='config.txt'):
                         crps_str = f" | CRPS  {valid_learned_prior_metrics['crps']:.2e}"
                     print(
                         f"Epoch {epoch}/{total_epochs} LR: {current_lr:.2e} | "
-                        f"Train  recon={train_loss:.2e} {reg_name}={train_reg:.2e} aux={train_aux:.2e} total={train_total:.2e} | "
+                        f"Train  recon={train_loss:.2e} {reg_name}={train_reg:.2e} aux={train_aux:.2e}{zg_str} total={train_total:.2e} | "
                         f"Valid  recon={valid_loss:.2e} {reg_name}={valid_reg:.2e} total={valid_total:.2e}"
                         f"{crps_str}{vram_str}"
                     )
                 else:
                     print(
                         f"Epoch {epoch}/{total_epochs} LR: {current_lr:.2e} | "
-                        f"Train  recon={train_loss:.2e} {reg_name}={train_reg:.2e} aux={train_aux:.2e} total={train_total:.2e}"
+                        f"Train  recon={train_loss:.2e} {reg_name}={train_reg:.2e} aux={train_aux:.2e}{zg_str} total={train_total:.2e}"
                         f"{vram_str}"
                     )
             else:
@@ -412,7 +436,8 @@ def single_worker(config, config_filename='config.txt'):
                         train_extra = ''.join(
                             f" {short}={train_metrics[key]:.4e}"
                             for key, short in (('aux_mean', 'aux'), ('prior_loss_mean', 'prior'),
-                                               ('kl_anchor_mean', 'kl_anchor'))
+                                               ('kl_anchor_mean', 'kl_anchor'),
+                                               ('zg_anchor_mean', 'zg_anchor'))
                             if key in train_metrics)
                         f.write(
                             f"Elapsed: {elapsed:.2f}s Epoch {epoch} LR: {current_lr:.4e} | "
@@ -445,6 +470,8 @@ def single_worker(config, config_filename='config.txt'):
                     'best_valid_loss': best_valid_loss, 'last_valid_loss': last_valid_loss,
                     'last_saved_epoch': last_saved_epoch,
                     'elapsed': time.time() - start_time,
+                    'zg_anchor': (None if zg_anchor is None
+                                  else tuple(t.detach().cpu() for t in zg_anchor)),
                 })
 
         resume.finish()

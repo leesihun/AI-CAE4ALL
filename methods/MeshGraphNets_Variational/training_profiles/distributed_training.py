@@ -279,6 +279,13 @@ def _train_worker_inner(rank, world_size, config, gpu_ids, config_filename):
             raise NotImplementedError(
                 'prior_freeze_epoch is supported on a single GPU only (one arm per '
                 'card); set gpu_ids to one card or prior_freeze_epoch 0')
+        if int(config.get('local_warmup_epochs', 0) or 0) > 0:
+            # The z_g snapshot is one full pass over the training set and the
+            # checkpoint selection restarts at the warmup's end; neither is
+            # wired through the DDP ranks. Preflight refuses this too.
+            raise NotImplementedError(
+                'local_warmup_epochs is supported on a single GPU only; set gpu_ids '
+                'to one card or local_warmup_epochs 0')
         train_metrics = train_epoch(ddp_model, train_loader, optimizer, device, config, epoch, ema_model=ema_model)
 
         # Synchronize stop decision across all ranks — if ANY rank wants to stop,

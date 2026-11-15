@@ -344,6 +344,19 @@ def _self_test_extras(width, device, amp_dtype, use_amp):
              [*unpool.parameters(), *skip.parameters()], use_amp, device, amp_dtype)
 
 
+def _raise_recompile_limit(limit=64):
+    """One compiled function serves every encoder MLP, so it collects a variant per
+    (in_features, dtype, requires_grad) and again after the DataLoader's
+    pin_memory thread changes num_threads (a dynamo global-state guard): more
+    than the default 8. Past the limit dynamo runs that call eager, and an eager
+    checkpoint recompute of a compiled forward saves different tensors
+    (CheckpointError)."""
+    import torch._dynamo.config as cfg
+    name = 'recompile_limit' if hasattr(cfg, 'recompile_limit') else 'cache_size_limit'
+    if getattr(cfg, name, limit) < limit:
+        setattr(cfg, name, limit)
+
+
 def enable(models, device, amp_dtype, use_amp):
     """Mark every eligible GnBlock of `models` (the model, its EMA copy) compiled,
     after a self-test of each block width; then self-test the fused and extras
@@ -362,6 +375,7 @@ def enable(models, device, amp_dtype, use_amp):
     if device.type != 'cuda':
         _disable('not a CUDA device')
         return 0
+    _raise_recompile_limit()
     # The self-test GnBlocks must use the model's LayerNorm setting.
     from model.mlp import AmpLayerNorm
     amp_ln = any(getattr(n, 'in_amp_dtype', False) for m in models for n in m.modules()

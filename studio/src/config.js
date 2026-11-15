@@ -92,6 +92,8 @@ function mgnvLatentInactive(key, config) {
   const pick = (name, fallback) => String(config?.[name] ?? "").trim().toLowerCase() || fallback;
   if (MGNV_COARSE_ONLY.includes(key)) return pick("latent_type", "global") === "global";
   if (key === "lambda_mmd_g") return pick("latent_type", "global") !== "hybrid" || pick("latent_reg", "mmd") !== "mmd";
+  if (["local_dropout", "local_warmup_epochs", "zg_anchor_weight"].includes(key)) return pick("latent_type", "global") !== "hybrid";
+  if (key === "posterior_max_std_g") return pick("latent_type", "global") === "local";
   if (key === "prior_tf_heads" || key === "prior_tf_dropout") return pick("prior_arch", "gnn") !== "transformer";
   if (key === "kl_weight") return pick("latent_reg", "mmd") !== "kl";
   if (key === "lambda_mmd") return pick("latent_reg", "mmd") === "kl";
@@ -514,6 +516,8 @@ export function renderConfig() {
       : spec.modelId === "meshgraphnets-v" && disposition === "inactive" && MGNV_COARSE_ONLY.includes(key) && !["local", "hybrid"].includes(String(node.config?.latent_type ?? "").trim().toLowerCase()) ? "Ignored with latent_type global (the default) — set latent_type local or hybrid for this value to take effect."
       : spec.modelId === "meshgraphnets-v" && disposition === "inactive" && ["prior_tf_heads", "prior_tf_dropout"].includes(key) ? "Ignored unless prior_arch is transformer."
       : spec.modelId === "meshgraphnets-v" && disposition === "inactive" && key === "lambda_mmd_g" ? "Ignored unless latent_type is hybrid and latent_reg is mmd — it weighs the hybrid z_g MMD."
+      : spec.modelId === "meshgraphnets-v" && disposition === "inactive" && ["local_dropout", "local_warmup_epochs", "zg_anchor_weight"].includes(key) ? "Ignored unless latent_type is hybrid — it withholds z_l so that z_g has to carry the draw, which needs both."
+      : spec.modelId === "meshgraphnets-v" && disposition === "inactive" && key === "posterior_max_std_g" ? "Ignored with latent_type local — it caps the std of z_g, which local does not have."
       : spec.modelId === "meshgraphnets-v" && disposition === "inactive" && key === "kl_weight" ? "Ignored unless latent_reg is kl — the default regularizer is mmd, weighted by lambda_mmd."
       : spec.modelId === "meshgraphnets-v" && disposition === "inactive" && key === "lambda_mmd" ? "Ignored with latent_reg kl — kl_weight weights the regularizer instead."
       : disposition === "unknown" ? "This key is not accepted by the selected model. Clear its value to remove it before running preflight again."

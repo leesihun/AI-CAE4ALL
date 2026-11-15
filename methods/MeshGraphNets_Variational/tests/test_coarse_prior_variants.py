@@ -1,6 +1,10 @@
 """The coarse-prior and latent-placement switches added for the hybrid prior.
 
   local_inject   all | coarsest   -- which V-cycle levels read z_l
+  local_dropout  p in [0, 1)      -- share of training graphs decoded without z_l
+  local_warmup_epochs N, zg_anchor_weight w -- z_l withheld for N epochs, then
+                                    z_g kept near its posterior at that point
+  posterior_max_std_g s >= 0      -- cap on the z_g posterior std
   lambda_mmd_g   >= 0             -- weight of the z_g MMD (default lambda_mmd)
   prior_arch     gnn | transformer
   prior_param    velocity | x     -- what the prior's heads predict
@@ -32,12 +36,13 @@ if str(MGN_ROOT) not in sys.path:
 
 from general_modules.mesh_dataset import MeshGraphDataset          # noqa: E402
 from model.conditional_prior import CoarseFMPrior                   # noqa: E402
-from model.latent import Latent, coarsest_parent_maps               # noqa: E402
+from model.latent import Latent, coarsest_parent_maps, coarsest_view  # noqa: E402
 from model.MeshGraphNets import MeshGraphNets                       # noqa: E402
 from training_profiles.setup import build_model_config              # noqa: E402
 from training_profiles.training_loop import (                       # noqa: E402
-    build_ema_model, evaluate_vae_learned_prior_epoch, freeze_for_prior_fit,
-    train_epoch, train_prior_epoch,
+    _ObjectiveTerms, _zg_anchor_kl, build_ema_model, evaluate_vae_learned_prior_epoch,
+    freeze_for_prior_fit, set_zg_anchor, snapshot_zg_posterior, train_epoch,
+    train_prior_epoch,
 )
 from torch_geometric.loader import DataLoader                       # noqa: E402
 
@@ -86,10 +91,12 @@ def test_defaults_build_the_gnn_prior_with_its_old_modules(dataset_path):
         assert any(k.startswith(name + ".") for k in keys), name
     assert not any(k.startswith(("tf_blocks", "l_in", "cond_mlp")) for k in keys)
     assert model.model.local_inject == "all" and model.model.mmd_g_scale == 1.0
+    assert model.model.local_dropout == 0.0
 
     saved = build_model_config(cfg)
     assert (saved["local_inject"], saved["prior_arch"], saved["prior_param"]) == (
         "all", "gnn", "velocity")
+    assert saved["local_dropout"] == 0.0
 
 
 # -- local_inject -----------------------------------------------------------
@@ -132,6 +139,111 @@ def test_local_inject_coarsest_changes_the_prediction_not_the_parameters(dataset
         a, *_ = base(graph.clone(), fixed_z=z)
         b, *_ = coarse_only(graph.clone(), fixed_z=z)
     assert torch.isfinite(b).all() and not torch.allclose(a, b)
+
+
+# -- local_dropout ----------------------------------------------------------
+
+def _watch_latents(model):
+    """Record the posterior's output and every Latent the processor reads."""
+    sim = model.model
+    encoded, read = [], []
+    sim.vae_encoder.register_forward_hook(lambda module, args, out: encoded.append(out))
+    level_z = sim._level_z
+
+    def spy(z, *args, **kwargs):
+        read.append(z)
+        return level_z(z, *args, **kwargs)
+
+    sim._level_z = spy
+    return encoded, read
+
+
+def test_local_dropout_withholds_z_l_from_whole_graphs(dataset_path):
+    _, model, loader = _build(dataset_path, local_dropout=0.5)
+    sim = model.model
+    assert sim.local_dropout == 0.5
+    encoded, read = _watch_latents(model)
+    graph = next(iter(loader))
+    owner = coarsest_view(graph, sim.multiscale_levels)["batch"]
+
+    model.train()
+    states = set()
+    for seed in range(12):
+        torch.manual_seed(seed)
+        encoded.clear(); read.clear()
+        _, _, losses, _, _ = model(graph.clone())
+        (z_q, mu_q, logvar_q), z = encoded[0], read[0]
+        assert len(read) == sim.multiscale_levels + 1 and all(r is z for r in read)
+        # z_g, and the posterior the regularizer and the prior are fed, are whole
+        assert z.g is z_q.g
+        assert losses["mu"] is mu_q and losses["logvar"] is logvar_q
+        assert torch.count_nonzero(z_q.l) == z_q.l.numel()
+        for b in range(graph.num_graphs):
+            rows = owner == b
+            kept = torch.equal(z.l[rows], z_q.l[rows])
+            assert kept or torch.count_nonzero(z.l[rows]) == 0
+            states.add(kept)
+    assert states == {True, False}
+
+
+def test_local_dropout_is_off_in_eval_and_for_an_external_z(dataset_path):
+    _, model, loader = _build(dataset_path, local_dropout=0.5)
+    sim = model.model
+    sim.local_dropout = 1.0 - 1e-9          # would withhold every graph
+    encoded, read = _watch_latents(model)
+    graph = next(iter(loader))
+
+    model.eval()
+    with torch.no_grad():
+        model(graph.clone(), use_posterior=True)
+    assert read[0] is encoded[0][0]
+
+    model.train()
+    read.clear()
+    with torch.no_grad():
+        z = model.prior.sample(graph.clone())
+        model(graph.clone(), fixed_z=z)
+    assert torch.equal(read[0].l, z.l) and torch.count_nonzero(read[0].l) > 0
+
+
+def test_local_dropout_leaves_the_losses_and_changes_only_the_prediction(dataset_path):
+    _, base, loader = _build(dataset_path)
+    _, dropped, _ = _build(dataset_path, local_dropout=0.5)
+    assert base.state_dict().keys() == dropped.state_dict().keys()
+    _jitter(base)
+    dropped.load_state_dict(base.state_dict())
+    dropped.model.local_dropout = 1.0 - 1e-9
+    graph = next(iter(loader))
+    base.train(); dropped.train()
+    torch.manual_seed(3)
+    a, _, losses_a, _, _ = base(graph.clone())
+    torch.manual_seed(3)
+    b, _, losses_b, _, _ = dropped(graph.clone())
+    assert torch.equal(losses_a["mmd"], losses_b["mmd"])
+    for part_a, part_b in zip(losses_a["mu"], losses_b["mu"]):
+        assert torch.equal(part_a, part_b)
+    assert torch.isfinite(b).all() and not torch.allclose(a, b)
+
+
+def test_a_graph_without_z_l_is_reconstructed_through_z_g(dataset_path):
+    _, model, loader = _build(dataset_path, local_dropout=0.5)
+    _jitter(model)
+    sim = model.model
+    sim.local_dropout = 1.0 - 1e-9
+    graph = next(iter(loader))
+    model.train()
+    predicted, target, _, _, _ = model(graph.clone())
+    (predicted - target).pow(2).mean().backward()
+    encoder = sim.vae_encoder
+    assert encoder.mu_head.weight.grad.abs().sum() > 0
+    local_grad = encoder.local_mu_head.weight.grad
+    assert local_grad is None or torch.count_nonzero(local_grad) == 0
+
+
+def test_local_dropout_is_hybrid_only(dataset_path):
+    # local has no z_g to fall back on: the key is ignored, as the spec warns
+    _, model, _ = _build(dataset_path, latent_type="local", local_dropout=0.5)
+    assert model.model.local_dropout == 0.0
 
 
 # -- lambda_mmd_g -----------------------------------------------------------
@@ -354,7 +466,95 @@ def test_cond_noise_perturbs_the_training_context_only(dataset_path, arch, monke
         assert torch.equal(seen[-1][key], clean[key])
 
 
+# -- posterior_max_std_g ----------------------------------------------------
+
+def test_posterior_max_std_g_caps_z_g_only(dataset_path):
+    cfg, model, loader = _build(dataset_path, posterior_max_std_g=0.1)
+    _jitter(model, scale=1.0)
+    graph = next(iter(loader))
+    with torch.no_grad():
+        _, _, lv = model.model.posterior(graph.clone())
+    assert (lv.g.exp().sqrt() <= 0.1 + 1e-6).all()
+    assert (lv.l.exp().sqrt() > 0.1 + 1e-6).any()
+    assert build_model_config(cfg)["posterior_max_std_g"] == 0.1
+
+    _, base, _ = _build(dataset_path)
+    assert base.model.vae_encoder.max_logvar_g is None
+    assert base.state_dict().keys() == model.state_dict().keys()
+
+
+def test_posterior_max_std_g_rejects_a_cap_below_the_floor(dataset_path):
+    with pytest.raises(ValueError, match="posterior_max_std_g"):
+        _build(dataset_path, posterior_min_std=0.2, posterior_max_std_g=0.1)
+    _, model, _ = _build(dataset_path, latent_type="local", posterior_max_std_g=0.1)
+    assert model.model.posterior_max_std_g == 0.0
+
+
+# -- local_warmup_epochs + zg_anchor_weight ---------------------------------
+
+def test_local_withhold_all_zeroes_every_graph_in_training_only(dataset_path):
+    _, model, loader = _build(dataset_path)
+    sim = model.model
+    encoded, read = _watch_latents(model)
+    graph = next(iter(loader))
+    sim.local_withhold_all = True
+
+    model.train()
+    _, _, losses, _, _ = model(graph.clone())
+    (z_q, mu_q, _), z = encoded[0], read[0]
+    assert torch.count_nonzero(z.l) == 0 and z.g is z_q.g
+    assert losses["mu"] is mu_q and torch.count_nonzero(z_q.l) == z_q.l.numel()
+
+    model.eval()
+    encoded.clear(); read.clear()
+    with torch.no_grad():
+        model(graph.clone(), use_posterior=True)
+    assert read[0] is encoded[0][0]
+
+
+def test_train_epoch_withholds_z_l_during_the_warmup_only(dataset_path):
+    cfg, model, loader = _build(dataset_path, local_warmup_epochs=1)
+    _, read = _watch_latents(model)
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+    device = torch.device("cpu")
+
+    train_epoch(model, loader, optimizer, device, cfg, 0)
+    assert read and all(torch.count_nonzero(z.l) == 0 for z in read)
+    assert model.model.local_withhold_all is False
+    read.clear()
+    train_epoch(model, loader, optimizer, device, cfg, 1)
+    assert all(torch.count_nonzero(z.l) > 0 for z in read)
+
+
+def test_zg_anchor_snapshot_is_per_sample_and_zero_at_the_snapshot(dataset_path):
+    cfg, model, loader = _build(dataset_path, local_warmup_epochs=1, zg_anchor_weight=1.0)
+    _jitter(model)
+    device = torch.device("cpu")
+    keys, mu, lv = snapshot_zg_posterior(model, loader, device, cfg)
+    assert keys.numel() == len(loader.dataset) == mu.shape[0] == lv.shape[0]
+    assert torch.all(keys[1:] > keys[:-1])
+    set_zg_anchor(model, (keys, mu, lv))
+
+    terms = _ObjectiveTerms(cfg, model, False, torch.float32, None)
+    assert terms.zg_anchor_weight == 1.0
+    graph = next(iter(loader))
+    model.eval()
+    with torch.no_grad():
+        _, mu_b, lv_b = model.model.posterior(graph.clone())
+    at_snapshot = _zg_anchor_kl(graph, mu_b.g, lv_b.g, terms)
+    moved = _zg_anchor_kl(graph, mu_b.g + 0.5, lv_b.g, terms)
+    assert abs(float(at_snapshot)) < 1e-5 and float(moved) > 1e-3
+
+    model.train()
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+    out = train_epoch(model, loader, optimizer, device, cfg, 1)
+    assert np.isfinite(out["zg_anchor_mean"]) and out["zg_anchor_mean"] >= 0
+    set_zg_anchor(model, None)
+    assert "zg_anchor_mean" not in train_epoch(model, loader, optimizer, device, cfg, 2)
+
+
 @pytest.mark.parametrize("key,value,match", [
+    ("posterior_max_std_g", -0.1, "posterior_max_std_g must be >= 0"),
     ("prior_arch", "mlp", "prior_arch must be one of"),
     ("prior_param", "eps", "prior_param must be one of"),
     ("prior_fm_draws", 0, "prior_fm_draws must be >= 1"),
@@ -363,6 +563,8 @@ def test_cond_noise_perturbs_the_training_context_only(dataset_path, arch, monke
     ("prior_tf_dropout", 1.0, "prior_tf_dropout must be in"),
     ("prior_tf_heads", 5, "prior_tf_heads"),
     ("local_inject", "fine", "local_inject must be one of"),
+    ("local_dropout", -0.1, "local_dropout must be in"),
+    ("local_dropout", 1.0, "local_dropout must be in"),
 ])
 def test_bad_values_are_rejected(dataset_path, key, value, match):
     overrides = {key: value}
@@ -376,7 +578,7 @@ def test_bad_values_are_rejected(dataset_path, key, value, match):
 
 def test_full_recipe_runs_with_every_switch_on(dataset_path):
     cfg, model, loader = _build(
-        dataset_path, local_inject="coarsest", lambda_mmd_g=0.0,
+        dataset_path, local_inject="coarsest", lambda_mmd_g=0.0, local_dropout=0.5,
         prior_arch="transformer", prior_param="x", prior_fm_draws=2, prior_tf_heads=2,
         prior_cond_noise=0.1, prior_tf_dropout=0.1)
     ema = build_ema_model(model, cfg)

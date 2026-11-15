@@ -98,7 +98,13 @@ VAR_KEYS = frozenset(
         # prior_tf_heads, training dropout prior_tf_dropout); prior_param: its
         # head predicts the 'velocity' or the clean 'x'; prior_fm_draws: (z0, t)
         # pairs per posterior sample; prior_cond_noise: relative noise on the
-        # prior's trunk context in its training loss.
+        # prior's trunk context in its training loss. local_dropout: hybrid,
+        # training only; share of graphs whose z_l the processor does not see,
+        # so they are reconstructed from z_g alone. local_warmup_epochs: hybrid,
+        # the first N epochs withhold every graph's z_l; zg_anchor_weight then
+        # keeps each sample's z_g near its posterior at the warmup's end.
+        # posterior_max_std_g: cap on the z_g posterior std (0 = none).
+        "local_dropout", "local_warmup_epochs", "zg_anchor_weight", "posterior_max_std_g",
         "local_inject", "lambda_mmd_g", "prior_arch", "prior_param", "prior_tf_heads",
         "prior_tf_dropout", "prior_fm_draws", "prior_cond_noise",
         # All-gather z across DDP ranks before MMD so the two-sample estimator
@@ -371,6 +377,75 @@ COARSE_ONLY_KEYS = ("latent_ch", "vae_local_mp_layers", "local_inject", "prior_a
                     "prior_cond_noise")
 
 
+def _validate_zg_revival(ctx: SpecValidationContext, latent_type: str) -> None:
+    """posterior_max_std_g, local_warmup_epochs and zg_anchor_weight."""
+    values = ctx.values
+    if "posterior_max_std_g" in values:
+        cap = numeric(values["posterior_max_std_g"])
+        floor = numeric(values.get("posterior_min_std", 0)) or 0.0
+        if cap is None or cap < 0:
+            ctx.add("MGNV-LATENT-RANGE", Severity.ERROR,
+                    "posterior_max_std_g must be a non-negative number (0 = no cap).",
+                    field_name="posterior_max_std_g")
+        elif 0 < cap < floor:
+            ctx.add("MGNV-LATENT-RANGE", Severity.ERROR,
+                    f"posterior_max_std_g {cap:g} is below posterior_min_std {floor:g}; "
+                    f"set it >= the floor (equal pins the z_g std).",
+                    field_name="posterior_max_std_g")
+        elif cap > 0 and latent_type == "local":
+            ctx.add("MGNV-LATENT-INACTIVE", Severity.WARNING,
+                    "posterior_max_std_g caps the z_g std; latent_type local has no z_g, "
+                    "so it is ignored.",
+                    field_name="posterior_max_std_g", promote_in_strict=True)
+    warmup = 0
+    if "local_warmup_epochs" in values:
+        raw = numeric(values["local_warmup_epochs"])
+        if raw is None or raw < 0 or raw != int(raw):
+            ctx.add("MGNV-LATENT-RANGE", Severity.ERROR,
+                    "local_warmup_epochs must be a non-negative integer (0 = off).",
+                    field_name="local_warmup_epochs")
+        elif latent_type != "hybrid":
+            if raw > 0:
+                ctx.add("MGNV-LATENT-INACTIVE", Severity.WARNING,
+                        "local_warmup_epochs withholds z_l so that z_g is learned first, "
+                        "which needs both (latent_type hybrid); it is ignored here.",
+                        field_name="local_warmup_epochs", promote_in_strict=True)
+        else:
+            warmup = int(raw)
+    if warmup > 0:
+        epochs = numeric(values.get("training_epochs", 0)) or 0
+        freeze = numeric(values.get("prior_freeze_epoch", 0)) or 0
+        end = freeze if freeze > 0 else epochs
+        if end and warmup >= end:
+            ctx.add("MGNV-LATENT-RANGE", Severity.ERROR,
+                    f"local_warmup_epochs {warmup} leaves no joint epoch with z_l before "
+                    f"{'prior_freeze_epoch' if freeze > 0 else 'training_epochs'} {int(end)}.",
+                    field_name="local_warmup_epochs")
+        gpus = values.get("gpu_ids", 0)
+        if isinstance(gpus, (list, tuple)) and len(gpus) > 1:
+            ctx.add("MGNV-LATENT-WARMUP-GPU", Severity.ERROR,
+                    "local_warmup_epochs is implemented for a single GPU only: the z_g "
+                    "snapshot and the checkpoint-selection restart are not wired through "
+                    "DDP ranks.",
+                    field_name="gpu_ids", hint="one arm per card, or local_warmup_epochs 0")
+    if "zg_anchor_weight" in values:
+        w = numeric(values["zg_anchor_weight"])
+        if w is None or w < 0:
+            ctx.add("MGNV-LATENT-RANGE", Severity.ERROR,
+                    "zg_anchor_weight must be a non-negative number.",
+                    field_name="zg_anchor_weight")
+        elif w > 0 and latent_type != "hybrid":
+            ctx.add("MGNV-LATENT-INACTIVE", Severity.WARNING,
+                    "zg_anchor_weight anchors z_g after a z_l warmup, which needs "
+                    "latent_type hybrid; it is ignored here.",
+                    field_name="zg_anchor_weight", promote_in_strict=True)
+        elif w > 0 and warmup == 0:
+            ctx.add("MGNV-LATENT-RANGE", Severity.ERROR,
+                    "zg_anchor_weight anchors z_g to its posterior at the end of "
+                    "local_warmup_epochs; with no warmup there is nothing to anchor to.",
+                    field_name="zg_anchor_weight", hint="set local_warmup_epochs > 0")
+
+
 def validate_latent_placement(ctx: SpecValidationContext) -> None:
     """latent_type / latent_reg and the features only the global latent has.
 
@@ -428,6 +503,18 @@ def validate_latent_placement(ctx: SpecValidationContext) -> None:
                     "lambda_mmd_g is applied relative to lambda_mmd, which is 0; set "
                     "lambda_mmd > 0.",
                     field_name="lambda_mmd_g")
+    if "local_dropout" in values:
+        drop = numeric(values["local_dropout"])
+        if drop is None or not 0 <= drop < 1:
+            ctx.add("MGNV-LATENT-RANGE", Severity.ERROR,
+                    f"local_dropout must be a number in [0, 1); got {values['local_dropout']!r}.",
+                    field_name="local_dropout")
+        elif latent_type != "hybrid":
+            ctx.add("MGNV-LATENT-INACTIVE", Severity.WARNING,
+                    "local_dropout withholds z_l so that z_g has to carry the draw, which "
+                    "needs both (latent_type hybrid); it is ignored here.",
+                    field_name="local_dropout", promote_in_strict=True)
+    _validate_zg_revival(ctx, latent_type)
 
     if latent_type == "global":
         for name in COARSE_ONLY_KEYS:

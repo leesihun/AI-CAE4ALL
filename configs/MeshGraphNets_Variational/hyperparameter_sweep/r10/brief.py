@@ -76,6 +76,34 @@ COLUMNS (do not type)   every number x100, rounded ("27" = 0.27)
   floor 128 of each geometry's FE results against the other 128: median, 5%, 95%
 """
 
+# One aN line read out, printed under the legend. Korean where the terminal can print it.
+EXAMPLE = "a0 66/95/75 m78 ho 27/29/78 tr 56/57/82 g0 l100"
+READING_KO = """\
+ONE aN LINE (do not type)   %s
+  66/95/75   seed 42/43/44 각각의 held-out W2
+  m          그 평균
+  ho a/b/c   held-out geometry 8개에서 floor / posterior / prior
+  tr         학습 geometry 16개에서 같은 세 값. draw가 64개뿐이라 floor가 56으로 높습니다.
+  g0 l100    z_g는 죽어 있고 z_l이 draw를 전부 실어 나른다는 뜻입니다. 모든 arm이 같습니다.
+""" % EXAMPLE
+READING_EN = """\
+ONE aN LINE (do not type)   %s
+  66/95/75   the held-out W2 of seeds 42/43/44
+  m          their mean
+  ho a/b/c   on the 8 held-out geometries: floor / posterior / prior
+  tr         the same three on 16 training geometries. Only 64 draws each, so the floor is high (56).
+  g0 l100    z_g is dead and z_l carries the whole draw. Every arm reads the same.
+""" % EXAMPLE
+
+
+def reading():
+    """The Korean block, or the English one where stdout cannot encode Korean."""
+    try:
+        READING_KO.encode(getattr(sys.stdout, "encoding", None) or "ascii")
+    except (UnicodeError, LookupError):
+        return READING_EN
+    return READING_KO
+
 
 def cfg(path):
     """Flat `key value` config -> {lowercased key: first token}, comments stripped."""
@@ -328,7 +356,7 @@ def main():
         refs.append(r)
 
     print(LEGEND)
-    print()
+    print(reading())
     print("JOBS (do not type)")
     width = max(len(j.jid) for j in refs + jobs)
     for j in refs + jobs:

@@ -317,6 +317,32 @@ class EncoderProcessorDecoder(nn.Module):
                                  '(the z_g weight is applied relative to it)')
             if lam_g != lam:
                 self.mmd_g_scale = lam_g / lam
+        # local_dropout p: in training, each graph's z_l is withheld from the
+        # processor (zeros at every level) with probability p, so that graph is
+        # reconstructed from z_g alone. Without it nothing asks z_g to carry
+        # anything: z_l already holds the whole draw, and the processor learns
+        # to read only that. Only what the processor reads changes: the
+        # regularizer and the posterior the prior is fitted to keep the full
+        # z_l. Hybrid only (local has no z_g to fall back on); no parameters;
+        # off in eval and whenever z comes from outside.
+        p_drop = float(config.get('local_dropout', 0.0))
+        if not 0.0 <= p_drop < 1.0:
+            raise ValueError(f'local_dropout must be in [0, 1), got {p_drop}')
+        self.local_dropout = p_drop if self.latent_type == 'hybrid' else 0.0
+        # Set per epoch by the trainer during `local_warmup_epochs`: every
+        # graph's z_l is withheld (local_dropout 1), so the processor first
+        # learns to read z_g. Plain attribute, off in eval.
+        self.local_withhold_all = False
+        # posterior_max_std_g: cap on the z_g posterior std (0 = none), so z_g
+        # cannot stay a channel whose noise swamps its mean.
+        self.posterior_max_std_g = float(config.get('posterior_max_std_g', 0) or 0)
+        if self.posterior_max_std_g < 0:
+            raise ValueError(f'posterior_max_std_g must be >= 0, got {self.posterior_max_std_g}')
+        if 0 < self.posterior_max_std_g < self.vae_posterior_min_std:
+            raise ValueError(f'posterior_max_std_g ({self.posterior_max_std_g}) must be >= '
+                             f'posterior_min_std ({self.vae_posterior_min_std})')
+        if self.latent_type == 'local':
+            self.posterior_max_std_g = 0.0
         # Width of the vector each conditioning module reads per node.
         self.z_cond_dim = {
             'global': self.vae_latent_dim,
@@ -333,6 +359,7 @@ class EncoderProcessorDecoder(nn.Module):
             latent_type=self.latent_type,
             latent_ch=self.latent_ch,
             local_mp_layers=int(config.get('vae_local_mp_layers', 2)),
+            posterior_max_std_g=self.posterior_max_std_g,
         )
         self.vae_encoder.use_checkpointing = self.use_checkpointing
         print(f"  VAE latent: {self.latent_type}"
@@ -342,10 +369,14 @@ class EncoderProcessorDecoder(nn.Module):
               + ("" if self.latent_type != 'hybrid' or self.mmd_g_scale == 1.0
                  else f" (z_g MMD x{self.mmd_g_scale:g})")
               + ("" if self.latent_type == 'global' or self.local_inject == 'all'
-                 else f", z_l injected at the {self.local_inject} level only"))
+                 else f", z_l injected at the {self.local_inject} level only")
+              + ("" if self.local_dropout == 0.0
+                 else f", z_l withheld from {self.local_dropout:g} of the training graphs"))
         if self.vae_graph_aware:
             print(f"  VAE encoder: graph-aware (x [N,{self.node_input_size}] fused with y [N,{self.node_output_size}])")
-        print(f"  VAE posterior σ floor: {self.vae_posterior_min_std}")
+        print(f"  VAE posterior σ floor: {self.vae_posterior_min_std}"
+              + ("" if self.posterior_max_std_g == 0.0
+                 else f", z_g σ cap: {self.posterior_max_std_g}"))
         print(f"  VAE z conditioning: {self.z_conditioning}")
 
         if not self.use_multiscale:
@@ -526,6 +557,17 @@ class EncoderProcessorDecoder(nn.Module):
         z_g = broadcast_rows(z.g[:, min(level, z.g.shape[1] - 1), :], batch_level)
         return torch.cat([z_l, z_g], dim=-1)
 
+    def _withhold_local(self, z, coarse):
+        """local_dropout: zero the z_l of a random share of the batch's graphs.
+
+        Whole graphs, not single coarse nodes: a graph that keeps part of its
+        z_l can still read the draw from that part. Zeros rather than noise,
+        so "no z_l" is a value the posterior (N(0, I)-shaped) almost never
+        emits and the processor can tell the two cases apart.
+        """
+        keep = torch.rand(z.g.shape[0], device=z.l.device) >= self.local_dropout
+        return Latent(z.g, z.l * keep[coarse['batch']].unsqueeze(-1).to(z.l.dtype))
+
     @staticmethod
     def _num_graphs(z, batch, num_graphs=None):
         """Graphs in the batch. A PyG Batch's `num_graphs` is a host int; the
@@ -609,6 +651,14 @@ class EncoderProcessorDecoder(nn.Module):
             original_batch, N, device, graph.x.dtype, use_posterior, fixed_z=fixed_z,
             coarse=coarse,
         )
+        # 'mu' is set only on the posterior path; the losses above already hold
+        # the full posterior, so withholding z_l here reaches the processor alone.
+        if self.training and vae_losses['mu'] is not None and isinstance(z, Latent) \
+                and z.g is not None and z.l is not None:
+            if self.local_withhold_all:
+                z = Latent(z.g, torch.zeros_like(z.l))
+            elif self.local_dropout > 0.0:
+                z = self._withhold_local(z, coarse)
         if isinstance(z, Latent):
             z_per_node = self._level_z(z, 0, batch_bc, maps)
         else:
