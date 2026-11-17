@@ -142,7 +142,12 @@ def method_path(value):
 
 
 def x100(v):
-    return "-" if v is None else str(int(round(v * 100)))
+    """"-" = not there yet; "nan" = the number exists and is NaN or infinite (type it as it is)."""
+    if v is None:
+        return "-"
+    if v != v or v in (float("inf"), float("-inf")):
+        return "nan"
+    return str(int(round(v * 100)))
 
 
 def load_json(path):
@@ -314,7 +319,7 @@ def arm_lines(arms):
         return [w for _s, w, _h, _t in sorted(arms.get(arm, [])) if w is not None]
 
     def mark(w, other):
-        if len(w) < 2 or len(other) < 2:
+        if len(w) < 2 or len(other) < 2 or any(v != v for v in w + other):   # a NaN seed: no mark
             return " "
         return "+" if max(w) < min(other) else "-" if min(w) > max(other) else "="
 
@@ -328,7 +333,8 @@ def arm_lines(arms):
         if arm != "base":
             marks = mark(w, w2s("base")) + (mark(w, w2s(anchor)) if anchor != "base" else "")
             marks = marks.rstrip() + " " if marks.strip() else ""
-        line = f"a{k} {marks}" + "/".join(x100(v) for _s, v, _h, _t in rows) + f" m{x100(mean(w))}"
+        m = float("nan") if any(v != v for v in w) else mean(w)   # a NaN seed: no mean either
+        line = f"a{k} {marks}" + "/".join(x100(v) for _s, v, _h, _t in rows) + f" m{x100(m)}"
         for tag, idx in (("ho", 2), ("tr", 3)):
             ds = [r[idx] for r in rows if r[idx]]
             line += f" {tag} " + "/".join(x100(mean([d[0][i] for d in ds])) for i in range(3))
