@@ -4,6 +4,7 @@
     python configs/MeshGraphNets_Variational/hyperparameter_sweep/r11/unseen_brief.py
     python .../r11/unseen_brief.py --long      # every number, not for typing
     python .../r11/unseen_brief.py --figures   # also one histogram per geometry, the seeds overlaid
+    python .../r11/unseen_brief.py --why       # a second short block: what the seeds differ in
 
 Standard library only (--figures needs matplotlib and is skipped without it).
 It reads what posterior_vs_prior_groups.py left for three sets of geometries:
@@ -230,6 +231,213 @@ def per_geometry(d, ensemble="prior"):
     return {v: e.get(ensemble) for v, e in ((d or {}).get("per_group_w2_median") or {}).items()}
 
 
+# ------------------------------------------------------------------ why (what the seeds differ in)
+
+TRIM = 0.10    # the share of the draws left out of the T line's score
+CARRY = 0.90   # h: the smallest share of the draws that carries this much of W2^2
+# (arm, set, how many geometries the seeds disagree on). The block is the first; --long adds the rest.
+WHY_SHORT = (("base", "ho", 2),)
+WHY_ALL = (("base", "ho", 2), ("base", "ts", 1), ("tfk8", "ho", 2), ("tfk8", "ts", 1))
+WHY_LEGEND = """\
+COLUMNS (do not type)
+  Every line is a letter, the arm and the set where they apply, then whole numbers with spaces
+  between them. Scores are x100. The LAST number of every line is a check digit (the last digit
+  of the sum of the line's other numbers): type it too, it catches a mistyped number.
+  Seeds are in the order 42 43 (44); "-" = not there.
+
+  F          the floors of each set on the block: without the worst draws, on one scale (see T)
+  T aN set   the prior per seed, scored two other ways. First all seeds WITHOUT the 10% of the
+             draws that are farthest off; then all seeds on ONE scale for the whole set (W2 in the
+             field's units over the RMS of the geometries' FE sd, so a geometry whose FE barely
+             scatters cannot dominate).
+               seeds close in the first group  = they differ in a few draws only
+               seeds close in the second group = they differ on geometries with little FE scatter
+  D aN set   a geometry on which the seeds DISAGREE most:
+             geometry, worst seed's score, best seed's score, h, m, f, check
+  B aN set   the geometry that is BAD IN EVERY seed: geometry, its best seed's score, h, m, f, check
+             (h, m: of the worst seed on a D line, of the best seed on a B line)
+               h  how many % of the draws carry 90% of the error:
+                  about 10 or less = a few draws went somewhere else; about 90 = every draw is off
+               m  % of the error that is the mean (the whole cloud sits in the wrong place)
+               f  the geometry's FE sd as % of the median geometry's (far below 100 = FE barely
+                  scatters here, so a small error is many sd)
+"""
+
+
+def couple(x, y):
+    """The quantile coupling of two sorted samples as (mass, squared difference) pieces; the masses sum to 1."""
+    n, m = len(x), len(y)
+    if n == m:
+        return [(1.0 / n, (a - b) ** 2) for a, b in zip(x, y)]
+    out = []
+    i = j = t = 0
+    while i < n and j < m:
+        nx, ny = (i + 1) * m, (j + 1) * n
+        t2 = min(nx, ny)
+        out.append(((t2 - t) / (n * m), (x[i] - y[j]) ** 2))
+        i += nx == t2
+        j += ny == t2
+        t = t2
+    return out
+
+
+def trimmed(pieces, trim=TRIM):
+    """W2^2 without the `trim` share of the mass that is farthest off."""
+    left, total = trim, 0.0
+    for w, d in sorted(pieces, key=lambda p: -p[1]):
+        if left >= w:
+            left -= w
+            continue
+        total += (w - left) * d
+        left = 0.0
+    return total / (1.0 - trim)
+
+
+def carried(pieces, share=CARRY):
+    """The smallest share of the mass that carries `share` of W2^2 (None when W2 is 0)."""
+    total = sum(w * d for w, d in pieces)
+    if total <= 0.0:
+        return None
+    acc = mass = 0.0
+    for w, d in sorted(pieces, key=lambda p: -p[1]):
+        need = share * total - acc
+        if w * d >= need:
+            return mass + need / d
+        acc += w * d
+        mass += w
+    return mass
+
+
+def why(datas, splits=SPLITS):
+    """The seeds of one arm on one set, with the split protocol, scored three ways.
+
+    Returns None or {order, plain/trim/one: [per seed], floor: {plain, trim, one},
+    geo: {geometry: [median score per seed]}}.
+    """
+    spreads = [d.get("spreads") or {} for d in datas]
+    if not spreads:
+        return None
+    order = []
+    for v, s0 in spreads[0].items():
+        truth = s0.get("truth") or []
+        if len(truth) >= 4 and finite(truth) and all(
+                v in s and len(s[v].get("prior") or []) == len(truth) and finite(s[v]["prior"])
+                for s in spreads):
+            order.append(v)
+    if not order:
+        return None
+    n_seed = len(datas)
+    k = min(len(spreads[0][v]["truth"]) // 2 for v in order)
+    rng = random.Random(0)
+    kinds = ("plain", "trim", "one")
+    runs_ = {kind: [[] for _ in range(n_seed + 1)] for kind in kinds}   # the last column is the floor
+    per_geo = {v: [[] for _ in range(n_seed)] for v in order}
+    for _ in range(splits):
+        rows = {kind: [[] for _ in range(n_seed + 1)] for kind in kinds}
+        scale = 0.0
+        for v in order:
+            truth = spreads[0][v]["truth"]
+            perm = rng.sample(range(len(truth)), len(truth))
+            ia, ib = perm[:k], perm[k:]
+            ref = sorted(truth[i] for i in ib)
+            var = sd(ref) ** 2
+            if var <= 0.0:
+                continue
+            scale += var
+            samples = [[s[v]["prior"][i] for i in ia] for s in spreads] + [[truth[i] for i in ia]]
+            for col, sample in enumerate(samples):
+                pieces = couple(sorted(sample), ref)
+                w2 = sum(w * d for w, d in pieces)
+                rows["plain"][col].append(w2 / var)
+                rows["trim"][col].append(trimmed(pieces) / var)
+                rows["one"][col].append(w2)
+                if col < n_seed:
+                    per_geo[v][col].append(math.sqrt(w2 / var))
+        if scale <= 0.0:
+            continue
+        for col in range(n_seed + 1):
+            runs_["plain"][col].append(math.sqrt(B.mean(rows["plain"][col])))
+            runs_["trim"][col].append(math.sqrt(B.mean(rows["trim"][col])))
+            runs_["one"][col].append(math.sqrt(sum(rows["one"][col]) / scale))
+    if not runs_["plain"][0]:
+        return None
+    med = {kind: [statistics.median(c) for c in runs_[kind]] for kind in kinds}
+    return {"order": order, "plain": med["plain"][:-1], "trim": med["trim"][:-1], "one": med["one"][:-1],
+            "floor": {kind: med[kind][-1] for kind in kinds},
+            "geo": {v: [statistics.median(c) for c in cols] for v, cols in per_geo.items()}}
+
+
+def whole(v):
+    """x100 as a whole number, None when it is missing."""
+    return None if v is None or v != v or abs(v) == float("inf") else int(round(100 * v))
+
+
+def checked(label, values):
+    """One line of the block: the label, whole numbers ('-' = missing), then the check digit."""
+    return (f"{label} " + " ".join("-" if v is None else str(v) for v in values)
+            + f" {sum(v for v in values if v is not None) % 10}")
+
+
+def why_lines(arms, data, arm_num, wanted=WHY_SHORT):
+    """The R11W block's lines, the geometry legend of each set, and one plain sentence per line."""
+    floors, totals, cases, names, notes = {}, [], [], {}, []
+
+    def span(vals):
+        return whole(max(vals) - min(vals)) if len(vals) > 1 else None
+    for arm, part, n_disagree in wanted:
+        rs = arms.get(arm) or []
+        ds = [data[r["label"], part] for r in rs]
+        good = [d for d in ds if score(d, "prior") is not None and finite([score(d, "prior")])]
+        res = why(good) if good else None
+        if not res:
+            continue
+        first = good[0]
+        full = list(first.get("spreads") or {})
+        names.setdefault(part, (first.get("attr") or "group", full))
+        floors.setdefault(part, res["floor"])
+        tag = f"a{arm_num[arm]} {part}"
+        totals.append(checked(f"T {tag}", [whole(x) for x in res["trim"] + res["one"]]))
+        if len(good) > 1:
+            notes.append(f"T {tag}: the seeds are {span(res['plain'])} apart as scored "
+                         f"({' '.join(str(whole(x)) for x in res['plain'])}), {span(res['trim'])} without "
+                         f"the worst {round(100 * TRIM)}% of the draws, {span(res['one'])} on one scale")
+        fe_sd = {v: sd(first["spreads"][v]["truth"]) for v in res["order"]}
+        mid = statistics.median(fe_sd.values())
+
+        def case(letter, v, seed, scores):
+            s = good[seed]["spreads"][v]
+            pieces = couple(sorted(s["prior"]), sorted(s["truth"]))
+            w2 = sum(w * d for w, d in pieces)
+            dm = sum(s["prior"]) / len(s["prior"]) - sum(s["truth"]) / len(s["truth"])
+            h, m = whole(carried(pieces)), whole(dm * dm / w2) if w2 > 0.0 else None
+            f = whole(fe_sd[v] / mid) if mid > 0.0 else None
+            said = []
+            if f is not None and f < 50:
+                said.append("FE barely scatters here, so the score is inflated")
+            if h is not None and h <= 25:
+                said.append(f"{h}% of the draws went somewhere else")
+            elif m is not None and m >= 50:
+                said.append("the whole cloud sits in the wrong place")
+            elif h is not None:
+                said.append("the width or the shape is off")
+            notes.append(f"{letter} {tag} geometry {full.index(v) + 1} ({v}): " + "; ".join(said))
+            return checked(f"{letter} {tag}", [full.index(v) + 1] + [whole(x) for x in scores] + [h, m, f])
+
+        geo, used = res["geo"], []
+        if len(good) > 1:
+            for v in sorted(geo, key=lambda v: min(geo[v]) - max(geo[v]))[:n_disagree]:
+                used.append(v)
+                cases.append(case("D", v, geo[v].index(max(geo[v])), [max(geo[v]), min(geo[v])]))
+        rest = [v for v in geo if v not in used]
+        if rest:
+            v = max(rest, key=lambda v: min(geo[v]))
+            cases.append(case("B", v, geo[v].index(min(geo[v])), [min(geo[v])]))
+    lines = []
+    if floors:
+        lines.append(checked("F", [whole(floors[p][kind]) for p in floors for kind in ("trim", "one")]))
+    return lines + totals + cases, names, notes
+
+
 # ------------------------------------------------------------------ figures
 
 def figures(arms, data, arm_num):
@@ -288,6 +496,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--long", action="store_true", help="every run and every geometry, not for typing")
     ap.add_argument("--figures", action="store_true", help="per-geometry histograms under output/b300_r11/_diag")
+    ap.add_argument("--why", action="store_true",
+                    help="a second short block: what the seeds of the base and tfk8 differ in")
     ap.add_argument("--runs", action="store_true",
                     help="for unseen_135.sh: label, infer config, diag dir, checkpoint of every run")
     args = ap.parse_args()
@@ -305,6 +515,24 @@ def main():
                 os.path.join(r["ddir"], f"posterior_vs_prior_groups_{part}.json"))
     arm_num = {arm: k for k, arm in enumerate(B.ARMS)}
     arms = {arm: sorted((r for r in all_runs if r["arm"] == arm), key=lambda r: r["seed"]) for arm in B.ARMS}
+
+    if args.why:
+        lines, names, notes = why_lines(arms, data, arm_num, WHY_ALL if args.long else WHY_SHORT)
+        print(WHY_LEGEND)
+        for part, (attr, order) in names.items():
+            print(f"GEOMETRIES of {part} (do not type)   {attr}: "
+                  + " ".join(f"{i}={v}" for i, v in enumerate(order, 1)))
+        print()
+        print("WHAT THE LINES SAY (do not type)")
+        for note in notes:
+            print("  " + note)
+        print()
+        print("==== TYPE THIS BACK ====")
+        print(f"{B.ROUND.upper()}W {B.NODE}")
+        for line in lines:
+            print(line)
+        print("==== END ====")
+        return 0
 
     print(LEGEND)
     print(reading())
