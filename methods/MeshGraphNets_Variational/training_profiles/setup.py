@@ -241,6 +241,9 @@ def build_model_config(config) -> dict:
         # Training-only (hybrid): share of graphs whose z_l the processor did
         # not see. Kept for provenance; eval and inference never withhold.
         'local_dropout':     config.get('local_dropout', 0.0),
+        # Training-only: width of the input kernel in the conditional MMD
+        # (0 = plain MMD). Kept for provenance.
+        'mmd_cond_width':    config.get('mmd_cond_width', 0),
         # The z_g posterior std cap is part of the encoder's forward, so a
         # posterior pass at inference must use the trained value. The warmup
         # and anchor are training-only, kept for provenance.
@@ -278,6 +281,9 @@ def build_model_config(config) -> dict:
         # fm family only:
         'prior_fm_steps':           config.get('prior_fm_steps', 20),
         'prior_fm_solver':          str(config.get('prior_fm_solver', 'heun')).lower().strip(),
+        # Training-time density AND the sampler's step grid, so inference
+        # must integrate on the grid training used.
+        'prior_fm_time_power':      config.get('prior_fm_time_power', 1.0),
         'prior_velocity_hidden_dim': config.get(
             'prior_velocity_hidden_dim',
             config.get('prior_hidden_dim', config.get('latent_dim')),

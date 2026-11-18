@@ -257,6 +257,7 @@ class ConditionalFMPrior(_ConditionalPriorBase):
         if self.solver not in ('heun', 'euler'):
             raise ValueError(
                 f"prior_fm_solver must be 'heun' or 'euler', got '{self.solver}'")
+        self.time_power = _fm_time_power(config)
         self.flat_dim = self.num_z * self.z_dim
         self.velocity_hidden_dim = int(config.get(
             'prior_velocity_hidden_dim',
@@ -427,7 +428,7 @@ class ConditionalFMPrior(_ConditionalPriorBase):
             if objective == 'moment':
                 return self.moment_loss_weight * moment_loss
             z0 = torch.randn_like(z1)
-            t = torch.rand(z1.shape[0], 1, device=z1.device)
+            t = _fm_train_time(z1.shape[0], self.time_power, z1.device)
             s = 1.0 - self.sigma_min
             z_t = (1.0 - s * t) * z0 + t * z1
             target_v = z1 - s * z0
@@ -446,11 +447,11 @@ class ConditionalFMPrior(_ConditionalPriorBase):
         t=1, which is exactly where first-order Euler overshoots into the z
         tails — the "Gen_max spike" that forced prior_fm_steps from 20 up to
         100. Heun at ~25 steps is more accurate than Euler at 100 and half the
-        cost. 'euler' keeps the old integrator for comparison.
+        cost. 'euler' keeps the old integrator for comparison. The time points
+        follow prior_fm_time_power (_fm_time_steps; evenly spaced at 1).
         """
-        dt = 1.0 / steps
-        for k in range(steps):
-            t = torch.full((z.shape[0], 1), k * dt, device=z.device)
+        for t_k, dt in _fm_time_steps(steps, self.time_power):
+            t = torch.full((z.shape[0], 1), t_k, device=z.device)
             v1 = self.velocity(z, t, c)
             if self.solver == 'euler':
                 z = z + dt * v1
@@ -665,6 +666,7 @@ class CoarseFMPrior(_ConditionalPriorBase):
         if self.solver not in ('heun', 'euler'):
             raise ValueError(
                 f"prior_fm_solver must be 'heun' or 'euler', got '{self.solver}'")
+        self.time_power = _fm_time_power(config)
         self.flat_dim = self.num_z * self.z_dim
         H = self.hidden_dim
         Hv = int(config.get('prior_velocity_hidden_dim',
@@ -947,7 +949,7 @@ class CoarseFMPrior(_ConditionalPriorBase):
                         rms = v.detach().pow(2).mean(dim=-1, keepdim=True).sqrt()
                         ctx[key] = v + self.cond_noise * rms * torch.randn_like(v)
             s = 1.0 - self.sigma_min
-            t = torch.rand(ctx['B'], 1, device=ctx['x'].device)
+            t = _fm_train_time(ctx['B'], self.time_power, ctx['x'].device)
             t_l = t[ctx['batch']]
             z1_l = ((target_z.l.float() - self.zl_shift) / self.zl_scale).repeat(K, 1)
             z0_l = torch.randn_like(z1_l)
@@ -968,9 +970,8 @@ class CoarseFMPrior(_ConditionalPriorBase):
     # -- sampling -------------------------------------------------------------
 
     def _integrate(self, zl, zg, ctx, steps):
-        dt = 1.0 / steps
-        for k in range(steps):
-            t = torch.full((ctx['B'], 1), k * dt, device=zl.device)
+        for t_k, dt in _fm_time_steps(steps, self.time_power):
+            t = torch.full((ctx['B'], 1), t_k, device=zl.device)
             v1_l, v1_g = self.velocity(zl, zg, t, ctx)
             if self.solver == 'euler':
                 zl = zl + dt * v1_l
@@ -1043,6 +1044,36 @@ def build_conditional_prior(config):
     if family != 'fm':
         raise ValueError(f"Unknown prior_family '{family}' (expected 'fm' or 'gmm')")
     return ConditionalFMPrior(prior_config)
+
+
+def _fm_time_power(config):
+    """prior_fm_time_power p > 0 (default 1): see _fm_train_time / _fm_time_grid."""
+    p = float(config.get('prior_fm_time_power', 1.0))
+    if not p > 0.0:
+        raise ValueError(f'prior_fm_time_power must be > 0, got {p}')
+    return p
+
+
+def _fm_train_time(n, power, device):
+    """[n, 1] FM training times t = u**power, u ~ U(0, 1).
+
+    t = 0 is the noise end of the path. With power 1 this is the uniform t of
+    plain conditional FM; power p > 1 puts more of the loss near the noise
+    end, where a draw's mode is decided (P(t < 0.1) = 0.1**(1/p)).
+    """
+    t = torch.rand(n, 1, device=device)
+    return t if power == 1.0 else t.pow(power)
+
+
+def _fm_time_steps(steps, power):
+    """The sampler's (t_k, dt_k), k < steps, on the grid t_k = (k/steps)**power,
+    so the solver steps are as dense as the training times. Power 1 gives the
+    evenly spaced steps exactly as before."""
+    dt = 1.0 / steps
+    if power == 1.0:
+        return [(k * dt, dt) for k in range(steps)]
+    grid = [(k / steps) ** power for k in range(steps + 1)]
+    return [(grid[k], grid[k + 1] - grid[k]) for k in range(steps)]
 
 
 def _autocast_disabled_for(tensor):
@@ -1236,6 +1267,7 @@ def build_prior_config(config):
         # fm family only:
         'prior_fm_steps': config.get('prior_fm_steps', 20),
         'prior_fm_solver': config.get('prior_fm_solver', 'heun'),
+        'prior_fm_time_power': config.get('prior_fm_time_power', 1.0),
         'prior_velocity_hidden_dim': config.get(
             'prior_velocity_hidden_dim',
             config.get('prior_hidden_dim', config.get('latent_dim')),

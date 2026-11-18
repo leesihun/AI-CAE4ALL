@@ -246,6 +246,7 @@ is the authoritative key catalog.
 | `alpha_recon` | Reconstruction-loss weight |
 | `lambda_mmd` | Aggregate-posterior MMD weight (keep low ≈0.1) |
 | `mmd_bandwidth` | `fixed` or `median` (median stays sensitive at high latent dim) |
+| `mmd_cond_width` | `0` (default) = plain MMD. `> 0` (needs `latent_reg mmd`): the MMD compares the pairs (input, z) with (input, N(0,I)) through a product kernel, so it is zero only when q(z \| geometry) = N(0,I) for every geometry. The input is a fixed per-graph summary (mean and std of every node and edge input feature); the kernel width is this value times the median squared distance between two graphs in the batch. Training only |
 | `beta_aux` | Weight of the peak-to-valley MSE on the decoded `pv_channel` field (keep high ≈1.0) |
 | `pv_channel` | Output channel the peak-to-valley term reads (default 2, the displacement layout's `z_disp`) |
 | `posterior_min_std` | Floor on posterior std (≈0.05) |
@@ -266,6 +267,7 @@ is the authoritative key catalog.
 | `prior_hidden_dim` | Prior hidden width (defaults to `latent_dim`) |
 | `prior_fm_steps` | ODE steps for FM sampling (default 20). Sampling-only, never affects training |
 | `prior_fm_solver` | `heun` (default, 2nd-order) or `euler`. Heun@30 ≈ 27x more accurate than Euler@100, and cheaper |
+| `prior_fm_time_power` | `1` (default) = uniform flow time. `p > 1`: training draws t = u^p and the sampler grid is t_k = (k/steps)^p, so both are dense near the noise end (t = 0), where the flow decides which outcome a draw goes to. Global and coarse FM priors; inference uses the trained value |
 | `prior_velocity_hidden_dim` | (`fm`) velocity-network width (defaults to `prior_hidden_dim`) |
 | `prior_fm_velocity_arch` | (`fm`) `mlp` (default) or `residual_film` (`prior_fm_blocks` pre-norm residual blocks, FiLM-conditioned on graph context + t) |
 | `prior_fm_blocks` | (`fm`, `residual_film`) number of residual blocks (default 4) |

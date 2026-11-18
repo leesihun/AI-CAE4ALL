@@ -565,14 +565,16 @@ def log_training_config(config):
                          f"zg_anchor={config.get('zg_anchor_weight', 0.0)} "
                          if int(config.get('local_warmup_epochs', 0) or 0) > 0 else "")
                       + f"solver={config.get('prior_fm_solver', 'heun')} "
-                      f"steps={config.get('prior_fm_steps', 20)}")
+                      f"steps={config.get('prior_fm_steps', 20)} "
+                      f"time_power={config.get('prior_fm_time_power', 1.0)}")
             else:
                 print(f"Prior (gnn_e2e, family=fm): fm_weight={p_w} "
                       f"velocity={config.get('prior_fm_velocity_arch', 'mlp')} "
                       f"velocity_hidden={config.get('prior_velocity_hidden_dim', config.get('prior_hidden_dim'))} "
                       f"moments={config.get('prior_fm_moments', False)} "
                       f"solver={config.get('prior_fm_solver', 'heun')} "
-                      f"steps={config.get('prior_fm_steps', 20)}")
+                      f"steps={config.get('prior_fm_steps', 20)} "
+                      f"time_power={config.get('prior_fm_time_power', 1.0)}")
     else:
         print("VAE: disabled")
 

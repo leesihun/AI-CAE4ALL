@@ -105,7 +105,7 @@ VAR_KEYS = frozenset(
         # keeps each sample's z_g near its posterior at the warmup's end.
         # posterior_max_std_g: cap on the z_g posterior std (0 = none).
         "local_dropout", "local_warmup_epochs", "zg_anchor_weight", "posterior_max_std_g",
-        "local_inject", "lambda_mmd_g", "prior_arch", "prior_param", "prior_tf_heads",
+        "local_inject", "lambda_mmd_g", "mmd_cond_width", "prior_arch", "prior_param", "prior_tf_heads",
         "prior_tf_dropout", "prior_fm_draws", "prior_cond_noise",
         # All-gather z across DDP ranks before MMD so the two-sample estimator
         # sees the GLOBAL batch instead of the per-rank one (default True).
@@ -115,7 +115,7 @@ VAR_KEYS = frozenset(
         "alpha_recon", "beta_aux", "pv_channel", "lambda_mmd", "mmd_bandwidth",
         "posterior_min_std", "num_z", "inference_samples", "prior_type",
         "use_conditional_prior", "prior_family", "prior_nll_weight",
-        "prior_fm_steps", "prior_fm_solver", "prior_mp_layers", "prior_hidden_dim",
+        "prior_fm_steps", "prior_fm_solver", "prior_fm_time_power", "prior_mp_layers", "prior_hidden_dim",
         "prior_temperature", "prior_kl_reg_weight", "prior_cov_rank",
         # FM velocity-MLP width (defaults to prior_hidden_dim) and the
         # condition-dependent mean/scale head of the FM base; both persist in
@@ -220,6 +220,17 @@ def validate_variational(ctx: SpecValidationContext) -> None:
                     "prior_fm_solver must be 'heun' (2nd-order, default) or 'euler'.",
                     field_name="prior_fm_solver",
                 )
+
+            if "prior_fm_time_power" in values:
+                power = numeric(values["prior_fm_time_power"])
+                if power is None or power <= 0:
+                    ctx.add(
+                        "MGNV-FM-TIME",
+                        Severity.ERROR,
+                        "prior_fm_time_power must be a number > 0 (1 = uniform flow time, "
+                        "> 1 = more training and sampler steps near the noise end).",
+                        field_name="prior_fm_time_power",
+                    )
 
             arch = str(values.get("prior_fm_velocity_arch", "mlp")).lower()
             if arch not in {"mlp", "residual_film"}:
@@ -503,6 +514,16 @@ def validate_latent_placement(ctx: SpecValidationContext) -> None:
                     "lambda_mmd_g is applied relative to lambda_mmd, which is 0; set "
                     "lambda_mmd > 0.",
                     field_name="lambda_mmd_g")
+    if "mmd_cond_width" in values:
+        width = numeric(values["mmd_cond_width"])
+        if width is None or width < 0:
+            ctx.add("MGNV-LATENT-MMD-COND", Severity.ERROR,
+                    "mmd_cond_width must be a number >= 0 (0 = plain MMD).",
+                    field_name="mmd_cond_width")
+        elif width > 0 and reg != "mmd":
+            ctx.add("MGNV-LATENT-MMD-COND", Severity.ERROR,
+                    "mmd_cond_width conditions the MMD on the input; it needs latent_reg mmd.",
+                    field_name="mmd_cond_width")
     if "local_dropout" in values:
         drop = numeric(values["local_dropout"])
         if drop is None or not 0 <= drop < 1:

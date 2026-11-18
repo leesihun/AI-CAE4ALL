@@ -1,0 +1,80 @@
+% SAOI warpage inference, HI-MGN-hybrid -- SM-L345U-MAIN board, BOTTOM half
+%
+% Checkpoint: bot.pth from config_train_bot.txt. The _infer_ file is ONE part geometry, the
+% _compare_ file its real realizations; rollout.py draws inference_samples from the prior and
+% histograms the generated peak-to-valley spread against the real one (target width ratio 1).
+% Architecture keys mirror the train config; rollout.py takes them from the checkpoint anyway.
+model                            meshgraphnets-v
+mode                             inference
+gpu_ids                          0
+parallel_mode                    ddp
+split_seed                       42
+training_seed                    20260916
+dataset_dir                      ../../dataset/SAOI/saoi_train_bot.h5
+infer_dataset                    ../../dataset/SAOI/test_SM-L345U-MAIN_infer_bot.h5
+eval_dataset                     ../../dataset/SAOI/test_SM-L345U-MAIN_compare_bot.h5
+modelpath                        ../../output/meshgraphnets-v/saoi_hybrid_run/bot.pth
+log_file_dir                     ../../output/meshgraphnets-v/saoi_hybrid_run/bot.infer_sm_l345u_main.log
+inference_output_dir             ../../output/meshgraphnets-v/saoi_hybrid_run/infer/bot/sm_l345u_main
+infer_timesteps                  1
+inference_samples                2000
+make_histogram                   True
+show_histogram                   False
+save_rollouts                    False
+input_var                        3
+output_var                       3
+cond_var                         3
+feature_loss_weights             0.1, 0.1, 1
+use_node_types                   False
+positional_features              4
+time_integration                 ar_ot
+batch_size                       16
+learningr                        0.0001
+num_workers                      4
+std_noise                        0.0
+use_amp                          True
+use_checkpointing                False
+use_ema                          True
+ema_decay                        0.99
+test_batch_idx                   0, 1
+plot_feature_idx                 2
+use_world_edges                  False
+use_multiscale                   True
+edge_var                         8
+latent_dim                       128
+message_passing_num              28
+use_deformed_edge                True
+displacement_indices             0, 1, 2
+coarsening_type                  voronoi_seedmean
+multiscale_levels                2
+voronoi_clusters                 4096, 256
+mp_per_level                     4, 6, 8, 6, 4
+hierarchy_variants               2
+hierarchy_seed                   42
+hierarchy_cache_keep             True
+use_vae                          True
+vae_latent_dim                   32
+vae_encoder_mp_layers            3
+vae_graph_aware                  True
+latent_type                      hybrid
+latent_ch                        4
+vae_local_mp_layers              2
+latent_reg                       mmd
+recon_loss                       mse
+alpha_recon                      1000
+lambda_mmd                       1
+mmd_bandwidth                    median
+posterior_min_std                0.05
+beta_aux                         10
+z_conditioning                   adaln
+use_conditional_prior            True
+prior_type                       gnn_e2e
+prior_family                     fm
+prior_mp_layers                  3
+prior_hidden_dim                 128
+prior_nll_weight                 1
+prior_grad_to_encoder            0.0
+prior_fm_steps                   30
+prior_fm_solver                  heun
+prior_freeze_epoch               700
+prior_temperature                1.0

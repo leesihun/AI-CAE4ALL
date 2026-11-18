@@ -180,7 +180,8 @@ class GNNVariationalEncoder(nn.Module):
         return z, mu, logvar
 
     @staticmethod
-    def mmd_loss(z_posterior, kernel_sigmas=(0.5, 1.0, 2.0, 4.0, 8.0), bandwidth='fixed'):
+    def mmd_loss(z_posterior, kernel_sigmas=(0.5, 1.0, 2.0, 4.0, 8.0), bandwidth='fixed',
+                 cond_kernel=None):
         """Multi-scale RBF MMD² between z_posterior and N(0, I).
 
         Implements the InfoVAE objective (Zhao et al. 2019): match the aggregate
@@ -205,6 +206,13 @@ class GNNVariationalEncoder(nn.Module):
                               median pairwise squared distance each step and keeps the
                               multi-scale multipliers, so the kernel stays in its
                               sensitive regime at any latent dim.
+            cond_kernel:    optional [B, B] kernel between the rows' conditions
+                            (mmd_cond_width). Every z kernel is multiplied by it,
+                            so the statistic compares the pairs (c, z) with
+                            (c, eps), eps ~ N(0, I) drawn independently of c:
+                            zero only when q(z | c) = N(0, I) for every c. The
+                            averages are weighted by it, so a constant kernel
+                            gives the plain MMD exactly.
 
         Returns:
             Scalar MMD² estimate (biased V-statistic). Non-negative.
@@ -214,7 +222,8 @@ class GNNVariationalEncoder(nn.Module):
             num_z = z_posterior.shape[1]
             for i in range(num_z):
                 mmd_acc = mmd_acc + GNNVariationalEncoder.mmd_loss(
-                    z_posterior[:, i, :], kernel_sigmas=kernel_sigmas, bandwidth=bandwidth
+                    z_posterior[:, i, :], kernel_sigmas=kernel_sigmas, bandwidth=bandwidth,
+                    cond_kernel=cond_kernel,
                 )
             return mmd_acc / num_z
 
@@ -231,11 +240,19 @@ class GNNVariationalEncoder(nn.Module):
             two_sigma_sqs = [med * m for m in (0.25, 0.5, 1.0, 2.0, 4.0)]
         else:
             two_sigma_sqs = [z_posterior.new_tensor(2.0 * s * s) for s in kernel_sigmas]
+        if cond_kernel is None:
+            avg = torch.mean
+        else:
+            w = cond_kernel.to(z_posterior.dtype)
+            w = w / w.sum()
+
+            def avg(k):
+                return (k * w).sum()
         mmd_total = z_posterior.new_zeros(())
         for two_sigma_sq in two_sigma_sqs:
             mmd_total = mmd_total + (
-                torch.exp(-xx / two_sigma_sq).mean()
-                + torch.exp(-yy / two_sigma_sq).mean()
-                - 2.0 * torch.exp(-xy / two_sigma_sq).mean()
+                avg(torch.exp(-xx / two_sigma_sq))
+                + avg(torch.exp(-yy / two_sigma_sq))
+                - 2.0 * avg(torch.exp(-xy / two_sigma_sq))
             )
         return mmd_total / len(two_sigma_sqs)

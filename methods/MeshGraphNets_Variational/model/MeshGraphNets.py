@@ -317,6 +317,20 @@ class EncoderProcessorDecoder(nn.Module):
                                  '(the z_g weight is applied relative to it)')
             if lam_g != lam:
                 self.mmd_g_scale = lam_g / lam
+        # mmd_cond_width w > 0 (latent_reg mmd): the MMD compares the pairs
+        # (condition, z) with (condition, N(0,I)) instead of z alone, through a
+        # product kernel whose condition part is an RBF of width w times the
+        # median distance (_mmd_cond_kernel). The plain MMD asks the AGGREGATE
+        # q(z) over every geometry to be N(0,I), which allows each geometry's
+        # draws to sit in their own corner; this one asks q(z | geometry) to be
+        # N(0,I) for every geometry, so z keeps what the input does not tell.
+        # Smaller w compares only near-identical inputs; large w tends to the
+        # plain MMD. 0 (default) is the plain MMD. Training only.
+        self.mmd_cond_width = float(config.get('mmd_cond_width', 0) or 0)
+        if self.mmd_cond_width < 0:
+            raise ValueError(f'mmd_cond_width must be >= 0, got {self.mmd_cond_width}')
+        if self.mmd_cond_width > 0 and self.latent_reg != 'mmd':
+            raise ValueError("mmd_cond_width needs latent_reg mmd")
         # local_dropout p: in training, each graph's z_l is withheld from the
         # processor (zeros at every level) with probability p, so that graph is
         # reconstructed from z_g alone. Without it nothing asks z_g to carry
@@ -371,7 +385,9 @@ class EncoderProcessorDecoder(nn.Module):
               + ("" if self.latent_type == 'global' or self.local_inject == 'all'
                  else f", z_l injected at the {self.local_inject} level only")
               + ("" if self.local_dropout == 0.0
-                 else f", z_l withheld from {self.local_dropout:g} of the training graphs"))
+                 else f", z_l withheld from {self.local_dropout:g} of the training graphs")
+              + ("" if self.mmd_cond_width == 0.0
+                 else f", MMD conditioned on the input (width {self.mmd_cond_width:g})"))
         if self.vae_graph_aware:
             print(f"  VAE encoder: graph-aware (x [N,{self.node_input_size}] fused with y [N,{self.node_output_size}])")
         print(f"  VAE posterior σ floor: {self.vae_posterior_min_std}"
@@ -462,6 +478,11 @@ class EncoderProcessorDecoder(nn.Module):
             losses = {'mmd': zero, 'kl': zero, 'mu': mu, 'logvar': logvar}
             if self.latent_reg == 'kl':
                 losses['kl'] = self._kl(mu, logvar)
+            elif self.mmd_cond_width > 0:
+                losses['mmd'] = self._mmd(
+                    z, cond=self._mmd_condition(original_x, original_edge_index,
+                                                original_edge_attr, batch, z),
+                    row_batch=None if coarse is None else coarse['batch'])
             else:
                 losses['mmd'] = self._mmd(z)
             return z, losses
@@ -477,8 +498,59 @@ class EncoderProcessorDecoder(nn.Module):
                if self.latent_type == 'hybrid' else None)
         return Latent(z_g, z_l)
 
-    def _mmd(self, z):
+    def _mmd_condition(self, x, edge_index, edge_attr, batch, z):
+        """[B, F] per-graph summary of the input the prior conditions on.
+
+        Mean and std over each graph's nodes of every node input feature, and
+        over its edges of every edge feature (relative positions and lengths,
+        so the size and proportions of the geometry). Fixed and detached: a
+        learned summary could make every graph look alike and switch the
+        conditioning off.
+        """
+        if isinstance(z, Latent):
+            B = (z.g.shape[0] if z.g is not None
+                 else int(batch.max().item()) + 1)
+        else:
+            B = z.shape[0]
+
+        def stats(v, index):
+            v = v.float()
+            m = pool_features(v, index, B)
+            # A column constant inside each graph (thickness, the imposed
+            # displacement) must give sd 0: the batch standardization of
+            # _mmd_cond_kernel would turn float32 round-off into a live
+            # column. So the std is centred before squaring, and the mean of
+            # ~1e5 fp32 values (off by ~1e-4) is corrected by the mean of
+            # the residuals first.
+            m = m + pool_features(v - m[index], index, B)
+            sd = pool_features((v - m[index]).pow(2), index, B).sqrt()
+            return [m, sd]
+
+        parts = stats(x, batch) + stats(edge_attr, batch[edge_index[0]])
+        return torch.cat(parts, dim=-1).detach()
+
+    def _mmd_cond_kernel(self, cond):
+        """[n, n] RBF kernel between per-graph conditions [n, F].
+
+        Each feature is standardized over the n graphs; the squared width is
+        mmd_cond_width times the median squared distance between two graphs.
+        """
+        n = cond.shape[0]
+        if n < 2:
+            return cond.new_ones(n, n)
+        c = cond.float()
+        c = (c - c.mean(dim=0)) / c.std(dim=0, unbiased=False).clamp(min=1e-3)
+        d2 = torch.cdist(c, c).pow(2)
+        off = ~torch.eye(n, dtype=torch.bool, device=c.device)
+        med = d2[off].median().clamp(min=1e-6)
+        return torch.exp(-d2 / (self.mmd_cond_width * med))
+
+    def _mmd(self, z, cond=None, row_batch=None):
         """MMD(q(z), N(0,I)) per part, summed.
+
+        cond [B, F] (mmd_cond_width > 0): per-graph conditions; each part then
+        uses the conditional statistic of GNNVariationalEncoder.mmd_loss, the
+        z_l rows reading their graph's condition through row_batch.
 
         z_g (one row per graph) is gathered across ranks as before. z_l has a
         row per coarsest node -- its own aggregate posterior over every cluster
@@ -494,16 +566,27 @@ class EncoderProcessorDecoder(nn.Module):
             z_mmd = z.float()
             if self.mmd_gather_ranks:
                 z_mmd = gather_across_ranks(z_mmd)
-            return GNNVariationalEncoder.mmd_loss(z_mmd, bandwidth=self.mmd_bandwidth)
+                if cond is not None:
+                    cond = gather_across_ranks(cond)
+            if cond is None:
+                return GNNVariationalEncoder.mmd_loss(z_mmd, bandwidth=self.mmd_bandwidth)
+            return GNNVariationalEncoder.mmd_loss(
+                z_mmd, bandwidth=self.mmd_bandwidth, cond_kernel=self._mmd_cond_kernel(cond))
         total = torch.zeros((), device=z.l.device, dtype=torch.float32)
         if z.g is not None and self.mmd_g_scale > 0.0:
-            mmd_g = self._mmd(z.g)
+            mmd_g = self._mmd(z.g, cond)
             total = total + (mmd_g if self.mmd_g_scale == 1.0 else self.mmd_g_scale * mmd_g)
         z_l = z.l.float()
+        keep = None
         if z_l.shape[0] > LOCAL_MMD_MAX_ROWS:
             keep = torch.randperm(z_l.shape[0], device=z_l.device)[:LOCAL_MMD_MAX_ROWS]
             z_l = z_l[keep]
-        return total + GNNVariationalEncoder.mmd_loss(z_l, bandwidth=self.mmd_bandwidth)
+        if cond is None:
+            return total + GNNVariationalEncoder.mmd_loss(z_l, bandwidth=self.mmd_bandwidth)
+        rows = row_batch if keep is None else row_batch[keep]
+        k_l = self._mmd_cond_kernel(cond)[rows][:, rows]
+        return total + GNNVariationalEncoder.mmd_loss(z_l, bandwidth=self.mmd_bandwidth,
+                                                      cond_kernel=k_l)
 
     @staticmethod
     def _kl(mu, logvar):
