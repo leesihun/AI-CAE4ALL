@@ -52,6 +52,11 @@ ENSEMBLES  (each as many draws as the geometry has FE results, same noise)
     Pr Qr  a checkpoint with EMA weights also holds the trained ones. Pr, Qr
            are P and Q with those (encoder, prior and decoder all non-EMA):
            (Q - P) - (Qr - Pr) is what the EMA costs the prior
+    M      the point halfway between two posteriors of this geometry (the mean
+           of FE result i and of FE result i + n/2, with the first one's
+           noise), decoded: what the decoder does with a draw that lies
+           BETWEEN two outcomes. It is one direction off the posterior, the
+           one a prior that averages two outcomes takes; see mid_out, mid_snap
 
 NUMBERS PER GEOMETRY
 
@@ -82,6 +87,15 @@ NUMBERS PER GEOMETRY
     enc_shift  posterior means of the trained encoder against the EMA
            encoder's, in posterior sigma: 0 = the encoder the prior was
            trained on is the one this script reads the posterior from.
+    mid_out / mid_snap   from M. With a, b the decoded values of the two
+           posterior samples and m the decoded value of their midpoint:
+           mid_out = rms of how far m lies OUTSIDE [a, b], over the FE sd
+           (0 = always between the two: no holes between posteriors);
+           mid_snap = median of min(1, 2 |(m - a) / (b - a) - 0.5|) over the
+           pairs with |b - a| > 0.5 FE sd: 0 = m is the average of the two
+           (the decoder blends, a draw between two outcomes gives an
+           in-between result), 1 = m equals one of them (the decoder snaps:
+           only which posterior a draw is nearest to matters).
 
 TRAINING  The training config beside the inference config
 (config_infer_X.txt -> config_train_X.txt, or --train-config) gives the epoch
@@ -145,7 +159,8 @@ os.chdir(REPO_ROOT)   # config paths are relative to the method directory
 
 TAUS = (0.1, 0.25, 0.5, 0.75, 0.9)
 COMMIT = tuple(f'c{int(round(100 * t))}' for t in TAUS)
-DECODED = ('P', 'O', 'Q', 'Qf', 'R5', 'Qc', 'Qcs', 'Qm', 'Qg', 'Ql', 'Px', 'Qx')   # with the EMA weights
+DECODED = ('P', 'O', 'Q', 'Qf', 'R5', 'Qc', 'Qcs', 'Qm', 'Qg', 'Ql', 'Px', 'Qx', 'M')   # with the EMA weights
+MID_PAIRS = 4                # mid_snap needs this many pairs whose two ends differ by > 0.5 FE sd
 DECODED_RAW = ('Pr', 'Qr')                                                    # with the trained ones
 ENSEMBLES = ('floor',) + DECODED[:4] + ('S',) + DECODED[4:] + DECODED_RAW + COMMIT
 STD_BUFFERS = ('prior.z_shift', 'prior.z_scale', 'prior.zl_shift', 'prior.zl_scale')
@@ -569,8 +584,10 @@ def run_group(geo, truths, fields, seed, check=False):
     U['Qc'] = U['Q'] - mQ + mP
     U['Qcs'] = (U['Q'] - mQ) * (sP / np.maximum(sQ, 1e-6)) + mP
     U['Qm'] = rank_map(U['Q'], U['P'])
+    other = np.roll(np.arange(n), n // 2)   # another FE result's posterior sample
+    if n > 1:   # halfway between two posteriors of this geometry
+        U['M'] = 0.5 * (Mu + Mu[other]) + Sg * eps
     if dg:   # which latent: one from the prior, the other from a posterior sample
-        other = np.roll(np.arange(n), n // 2)   # another FE result's posterior sample
         U['Qg'] = np.concatenate([U['Q'][:, :dg], U['P'][:, dg:]], axis=1)
         U['Ql'] = np.concatenate([U['P'][:, :dg], U['Q'][:, dg:]], axis=1)
         U['Px'] = np.concatenate([U['P'][other, :dg], U['P'][:, dg:]], axis=1)
@@ -584,6 +601,18 @@ def run_group(geo, truths, fields, seed, check=False):
     for e in DECODED_RAW:
         if e in Ur:
             spreads[e] = geo.decode(Ur[e], raw=True)
+
+    # between two posteriors: does the decoder blend them, snap to one, or break
+    if 'M' in spreads:
+        a, b, m = spreads['P'], spreads['P'][other], spreads['M']
+        sd = float(truth.std())
+        if sd > 0:
+            out['mid_out'] = rms(np.maximum(0.0, np.maximum(np.minimum(a, b) - m, m - np.maximum(a, b)))) / sd
+            apart = np.abs(b - a) > 0.5 * sd
+            out['mid_pairs'] = int(apart.sum())
+            if out['mid_pairs'] >= MID_PAIRS:
+                lam = (m[apart] - a[apart]) / (b[apart] - a[apart])
+                out['mid_snap'] = float(np.median(np.minimum(1.0, 2.0 * np.abs(lam - 0.5))))
 
     # nearest posterior component: no decode ------------------------------
     geo.stage = 'snap'
@@ -792,7 +821,12 @@ def training_record(config_path, train_config, ck):
             return int(float(tc.get(key)))
         except (TypeError, ValueError):
             return None
+    try:   # > 0: the prior loss also trains the encoder (with no freeze, a joint run)
+        grad_enc = float(tc.get('prior_grad_to_encoder', 0.0) or 0.0)
+    except (TypeError, ValueError):
+        grad_enc = None
     rec = {'config': path, 'kept': ck.get('epoch'), 'freeze': number('prior_freeze_epoch') or 0,
+           'grad_enc': grad_enc,
            'total': number('training_epochs'), 'best_by': str(tc.get('best_by', 'recon')).lower(),
            'val_interval': number('val_interval'), 'log': None, 'val': [], 'loss': []}
     log = tc.get('log_file_dir')

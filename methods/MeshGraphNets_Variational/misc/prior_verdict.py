@@ -76,6 +76,8 @@ CAUSES = (
     ('frozen', 'the cost of training the prior on a frozen posterior'),
     ('pair', 'z_g and z_l belong together and the prior does not pair them'),
     ('tail', 'the prior-only epochs after the freeze did not shrink the gap'),
+    ('holes', 'a point between two posteriors decodes to an output outside both'),
+    ('blend', 'a point between two posteriors decodes to an in-between output'),
 )
 NUMBER = {key: i + 1 for i, (key, _) in enumerate(CAUSES)}
 
@@ -288,6 +290,9 @@ def summarize(doc):
         'ema_buffers': None if ema is None or ema.get('buffers_equal') is None
         else (1.0 if ema['buffers_equal'] else 0.0),
         'enc_shift': med('enc_shift'),
+        # the midpoint of two posteriors, decoded: None = an older JSON without M
+        'mid_out': med('mid_out'), 'mid_snap': med('mid_snap'),
+        'grad_enc': (doc.get('training') or {}).get('grad_enc'),
         'best_by': (doc.get('training') or {}).get('best_by'),
         'val_interval': (doc.get('training') or {}).get('val_interval'),
     }
@@ -425,6 +430,13 @@ def _gap(s):
     return sc['Q'] - sc['P'] if fin(sc.get('Q')) and fin(sc.get('P')) else None
 
 
+def is_joint(s):
+    """The run trained the prior and the encoder together: no prior freeze and
+    the prior loss reaching the encoder."""
+    s = s or {}
+    return bool(fin(s.get('ep_freeze')) and s['ep_freeze'] == 0 and fin(s.get('grad_enc')) and s['grad_enc'] > 0)
+
+
 def far_corr(parts):
     """Rank correlation, over the unseen geometries, between how far a geometry's
     input embedding lies from the training ones and its prior gap."""
@@ -549,9 +561,12 @@ def causes(parts):
     if fin(ul):
         kept = s.get('ep_kept') if fin(s.get('ep_kept')) else s.get('epoch')
         unfit = fin(kept) and fin(s.get('ep_freeze')) and 0 < kept < s['ep_freeze']
+        never = fin(s.get('ep_freeze')) and s['ep_freeze'] == 0
         put('scale', any(fin(x) and not 0.5 <= x <= 2.0 for x in (ul, ug)),
             f'size after standardization: z_l {_f(ul, 2)}, z_g {_f(ug, 2)} (1 is right; YES outside 0.5-2)'
-            + ('; the standardization is fitted at the freeze and this checkpoint is from before it' if unfit else ''))
+            + ('; the standardization is fitted at the freeze and this checkpoint is from before it' if unfit
+               else '; the standardization is fitted at the freeze and this run has none: this is the size '
+                    'the prior was trained on' if never else ''))
     else:
         put('scale', '?', 'not recorded')
     if fin(s.get('ov_l')):
@@ -639,8 +654,13 @@ def causes(parts):
         put('sampling', abs(temp - 1.0) > 1e-6 or abs(infl - 1.0) > 1e-6, f'temperature {_f(temp, 2)}, inflation {_f(infl, 2)}')
     else:
         put('sampling', '?', 'not recorded')
-    put('frozen', '?', 'needs a run that trains the prior and the encoder together; what this run shows is '
-                       'whether the frozen target is hard to fit (17, 23, 24) and what the tail bought (38)')
+    if is_joint(s):
+        put('frozen', 'no', 'this run trains the prior and the encoder together (no freeze, the prior loss '
+                            'reaches the encoder): its gap is not the price of a frozen posterior. Compare it '
+                            'with a frozen run\'s gap')
+    else:
+        put('frozen', '?', 'needs a run that trains the prior and the encoder together; what this run shows is '
+                           'whether the frozen target is hard to fit (17, 23, 24) and what the tail bought (38)')
     jt = parts.get(JOINT)
     gj = _gap(jt)
     if fin(s.get('ep_freeze')) and s['ep_freeze'] == 0:
@@ -655,6 +675,20 @@ def causes(parts):
         put('tail', G > gj - thr,
             f'gap {_w(gj)} at the joint-phase checkpoint (epoch {_n(jt.get("epoch"))}), {_w(G)} at the kept one: '
             f'{_w(gj - G)} smaller (YES below {_w(thr)})')
+
+    # the decoder between two posteriors ----------------------------------------
+    mo, ms = s.get('mid_out'), s.get('mid_snap')
+    if not fin(mo):
+        put('holes', '?', 'this JSON predates the midpoint test (M)')
+        put('blend', '?', 'this JSON predates the midpoint test (M)')
+    else:
+        put('holes', mo >= big, f'the midpoint of two posteriors decodes {_w(mo)} outside its two ends '
+                                f'(rms over the FE sd, x100; YES from {_w(big)})')
+        if fin(ms):
+            put('blend', ms < 0.5, f'where the midpoint\'s output lies between its two ends: {_f(ms, 2)} '
+                                   f'(0 = their average, 1 = one of them; YES below 0.50)')
+        else:
+            put('blend', '?', 'too few pairs of FE results that differ by more than half the FE sd')
 
     return [(NUMBER[key], key, name) + rows[key] for key, name in CAUSES]
 
@@ -696,6 +730,9 @@ def block(parts):
                          + [whole(main.get('ep_pos')),
                             whole(last / kept) if fin(kept) and fin(last) and kept > 0 else None,
                             whole(jt.get('P')), whole(jt.get('Q'))]))
+    if fin(main.get('mid_out')):   # absent from a JSON written before the midpoint test
+        lines.append(checked('de', [whole((main.get('sc') or {}).get('M')), whole(main.get('mid_out')),
+                                    whole(main.get('mid_snap'))]))
     rows = causes(parts)
     if rows:
         lines.append(cause_line(rows))
@@ -729,6 +766,9 @@ COLUMNS (do not type)   whole numbers = x100. The LAST number of every line is a
        exact one after; where the kept epoch lies in the epochs it was chosen from (0 = first,
        100 = last); validation CRPS at the last epoch over the kept epoch's; P and Q of the
        joint-phase checkpoint (<stem>.joint.pth) on the held-out geometries
+  de   the decoder halfway between two posteriors of one geometry, on the first part: its score M
+       (compare with P); how far its output lies outside the two ends (0 = never); where it lies
+       between them (0 = their average: the decoder blends; 100 = one of them: the decoder snaps)
   cs  the numbers of the CAUSES found, then `u`, then the numbers that cannot be told here
 """
 
@@ -903,6 +943,23 @@ def verdict(parts, label='', short=False):
                     f"{_f(s.get('ov_g'), 2)} (below 0.3 = isolated points, above 1 = the draws are not told apart). "
                     f"Size after standardization z_l {_f(s.get('u_rms_l'), 2)} z_g {_f(s.get('u_rms_g'), 2)} "
                     f"(1 is right)")
+
+    # the decoder between two posteriors -----------------------------------------
+    if fin(s.get('mid_out')):
+        line = (f'decoder halfway between two posteriors of one geometry: score {_w(sc.get("M"))} (posterior '
+                f'{_w(P)}); its output lies {_w(s["mid_out"])} outside its two ends, and at '
+                f'{_f(s.get("mid_snap"), 2)} between them (0 = their average, 1 = one of them). ')
+        if status.get('holes') == 'YES':
+            line += ('Between posteriors the decoder gives outputs neither end has: a draw off the posterior '
+                     'is wrong by itself.')
+        elif status.get('blend') == 'YES':
+            line += ('The decoder blends: a draw between two outcomes gives an in-between output, so draws '
+                     'that miss their component fill the space between the outcomes.')
+        elif status.get('blend') == 'no':
+            line += ('The decoder snaps to one of the two: a draw between posteriors still gives a valid '
+                     'outcome, what counts is which posterior it is nearest to.')
+        body.append(line)
+        body.append('        (one direction only: the segment between two posteriors, not every way of being off)')
 
     # calibration, concentration ----------------------------------------------
     if fin(s.get('pit_lo')):

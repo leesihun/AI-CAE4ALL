@@ -8,8 +8,8 @@ setting of round 12, two jobs per card.
 
 Standard library only, any Python 3.8+. Every run is r12's `joint`: prior_freeze_epoch 0
 (one objective for all 360 epochs) and the prior's loss reaching the encoder
-(prior_grad_to_encoder 1). Twenty runs, ten settings x seeds 42/43. The first eight
-settings fill the 16 slots; the last two wait for a freed slot.
+(prior_grad_to_encoder 1). Twenty-four runs, twelve settings x seeds 42/43. The first eight
+settings fill the 16 slots; the last four wait for a freed slot.
 
     joint            r12's joint, nothing else changed (the control of this round).
     joint_tp2        prior_fm_time_power 2: the flow time is drawn as u^2 in training and the
@@ -29,7 +29,13 @@ settings fill the 16 slots; the last two wait for a freed slot.
     joint_tp3        prior_fm_time_power 3: P(t < 0.1) = 0.46.
     joint_cmmd1      mmd_cond_width 1: the MMD weighted by how alike two geometries are.
                      Measured on ex3 batches it hardly sees a per-node dependence of z_l on
-                     the geometry, so it is last.
+                     the geometry, so it is in the second wave.
+    joint_ph256      prior_hidden_dim 256: the prior's trunk and its velocity network twice as
+                     wide. With joint_fmb8 it asks whether the prior network is too small for
+                     its target; the prior diagnosis reads its field error and its gap on the
+                     training geometries. (r8, two parts, 240 epochs, one seed: 90 against 85.)
+    joint_fmb8       prior_fm_blocks 8: the velocity network twice as deep, so a coarse node
+                     sees 8 hops instead of 4. (r8: 87 against 85.)
 
 The base (two parts, not run here) is r8 hybrid_e360, r9 hybrid_base_s43 and r10
 hybrid_base_s44. Edit this file, never a generated config.
@@ -37,7 +43,7 @@ hybrid_base_s44. Edit this file, never a generated config.
 --pack sets the jobs per card, and with it run_135.sh's GPUS and THREADS_PER_JOB
 (rewritten here) and each job's use_checkpointing (on only where the estimated peak of
 PACK jobs would not fit the card). The default here is 2: 16 jobs on cards 0-7 at
-once, checkpointing on, the other four as slots free. use_checkpointing and the slot layout do not enter the resume
+once, checkpointing on, the other eight as slots free. use_checkpointing and the slot layout do not enter the resume
 fingerprint, so the round can be stopped, regenerated with another --pack (--force) and
 restarted: every job resumes.
 """
@@ -64,7 +70,7 @@ SEEDS = (42, 43)
 
 # setting -> (changes from REF, what it is, seeds). Order = run order: job k on slot k
 # (cards 0-7, then 0-7 again at --pack 2), then each freed slot takes the next job. Seed 42
-# of the first eight settings, then their seed 43, then the last two settings.
+# of the first eight settings, then their seed 43, then the last four settings.
 # frz "auto" = prior_freeze_epoch at 2/3 of training_epochs (240); genc = prior_grad_to_encoder;
 # pms = posterior_min_std; tp = prior_fm_time_power; cw = mmd_cond_width; reg/klw = latent_reg
 # and kl_weight; lt = latent_type.
@@ -85,6 +91,9 @@ SETTINGS = {
     "joint_tp3": (dict(JOINT, tp=3.0), "joint, flow time denser at the noise end "
                                        "(prior_fm_time_power 3)", SEEDS),
     "joint_cmmd1": (dict(JOINT, cw=1.0), "joint, MMD weighted by geometry likeness (mmd_cond_width 1)", SEEDS),
+    "joint_ph256": (dict(JOINT, ph=256), "joint, the prior twice as wide (prior_hidden_dim 256)", SEEDS),
+    "joint_fmb8": (dict(JOINT, fmb=8), "joint, the prior's velocity network twice as deep "
+                                       "(prior_fm_blocks 8)", SEEDS),
 }
 # Runs of earlier rounds that brief.py shows beside this round's (it reads them where they are).
 # Their configs equal the setting they stand for except the seed and the paths (self_check).
