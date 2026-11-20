@@ -106,7 +106,7 @@ physics.
 | --- | --- |
 | Sources (4) | CAD, HDF5 Dataset, Design Parameters, Saved ML Model |
 | Preparation (1) | Geometry → HDF5 Dataset |
-| Models (9) | one per live route: MeshGraphNets, MeshGraphNets-V (`latent_type` global / local / hybrid = HI-MGN-V / HI-MGNflow / HI-MGN-hybrid), Transolver, FNO, DeepONet, Point-DeepONet, SimulGen-VAE, SDFFlow, Simple MLP. HI-MGNflow (`chi-mgnflow`) was merged into `meshgraphnets-v` as `latent_type local` on 2026-10-19; the old repo is in `junk/legacy_HI_MGNFlow/` |
+| Models (9) | one per live route: MeshGraphNets, MeshGraphNets-V (`latent_type` global / local / hybrid = HI-MGN-V / HI-MGNflow / HI-MGN-hybrid), Transolver, FNO, DeepONet, Point-DeepONet, SimulGen-VAE, SDFFlow, Simple MLP. HI-MGNflow (`chi-mgnflow`) was merged into `meshgraphnets-v` as `latent_type local` on 2026-10-19; the old repo is in git history (commit `9db47d6`) |
 | Execution (2) | Inference Run, CAD Generator |
 | Optimization (1) | Optimization |
 | Evaluation (3) | Evaluate Predictions, Train Metrics, Compare Models |

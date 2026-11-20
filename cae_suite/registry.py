@@ -28,21 +28,34 @@ class ResolvedMethod:
     entrypoint: Path
 
 
+# Routes whose method directory is local-only (git-ignored): they register only
+# when methods/<Name>/ is present, so a fresh checkout neither lists them nor
+# fails its install check on them.
+OPTIONAL_SPEC_BUILDERS = (build_sar_spec, build_ldgn_spec)
+
+
+def default_specs(suite_root: Path) -> tuple[MethodSpec, ...]:
+    specs = [
+        build_meshgraphnets_spec(),
+        build_variational_spec(),
+        build_neural_operator_spec(),
+        build_transolver_spec(),
+        build_sdfflow_spec(),
+        build_simulgenvae_spec(),
+        build_geometry_ingest_spec(),
+        build_mlp_spec(),
+    ]
+    for builder in OPTIONAL_SPEC_BUILDERS:
+        spec = builder()
+        if (suite_root / spec.repository).is_dir():
+            specs.append(spec)
+    return tuple(specs)
+
+
 class MethodRegistry:
     def __init__(self, suite_root: Path, specs: tuple[MethodSpec, ...] | None = None) -> None:
         self.suite_root = suite_root.resolve()
-        self.specs = specs or (
-            build_meshgraphnets_spec(),
-            build_variational_spec(),
-            build_neural_operator_spec(),
-            build_transolver_spec(),
-            build_sdfflow_spec(),
-            build_simulgenvae_spec(),
-            build_geometry_ingest_spec(),
-            build_mlp_spec(),
-            build_sar_spec(),
-            build_ldgn_spec(),
-        )
+        self.specs = specs or default_specs(self.suite_root)
         self._by_model: dict[str, MethodSpec] = {}
         for spec in self.specs:
             for model_id in spec.model_ids:

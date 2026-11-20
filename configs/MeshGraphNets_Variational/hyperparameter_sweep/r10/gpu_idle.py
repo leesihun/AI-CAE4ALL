@@ -38,6 +38,9 @@ import subprocess
 import time
 
 WINDOW = 20
+# The MGN-V entrypoint was MeshGraphNets_main.py until 2026-11-19; a round
+# started before the rename still runs under the old name.
+MGNV_ENTRYPOINTS = ('MeshGraphNets_Variational_main.py', 'MeshGraphNets_main.py')
 TICK = os.sysconf('SC_CLK_TCK')
 
 
@@ -92,7 +95,7 @@ def find_jobs():
     procs = {p: cmdline(p) for p in pids}
     jobs = []
     for p, cmd in procs.items():
-        if 'MeshGraphNets_main.py' not in cmd or 'spawn_main' in cmd:
+        if not any(n in cmd for n in MGNV_ENTRYPOINTS) or 'spawn_main' in cmd:
             continue
         m = re.search(r'--config\s+(\S+)', cmd)
         name = os.path.basename(m.group(1)) if m else '?'
@@ -160,7 +163,7 @@ def read_bytes(pid):
 def main():
     jobs = find_jobs()
     if not jobs:
-        print('no running MeshGraphNets_main.py found')
+        print('no running MGN-V training found')
         return 1
     t0 = time.time()
     before = {j['pid']: (thread_ticks(j['pid']),

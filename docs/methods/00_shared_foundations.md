@@ -12,7 +12,7 @@ reference it.
 MeshGraphNets, HI-MGN, BSMS-GNN, MeshGraphNets-Variational, Transolver, and the
 four Neural-Operator backends **all read the same file layout with no conversion
 step**. (SDFFlow is the exception — it uses a different SDF layout, documented in
-[10_SDFFlow.md](10_SDFFlow.md).)
+[09_SDFFlow.md](09_SDFFlow.md).)
 
 ```text
 dataset.h5

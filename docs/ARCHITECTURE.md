@@ -46,7 +46,7 @@ parameters→outputs regressor
 (`MLP/`, modes `train`/`inference`) that reads a separate `X[S,N]`/`Y[S,M]` HDF5,
 stores normalization in its checkpoint, and needs no GPU. See
 [MLP/CLAUDE.md](../methods/MLP/CLAUDE.md),
-[docs/methods/12_MLP.md](methods/12_MLP.md), and
+[docs/methods/11_MLP.md](methods/11_MLP.md), and
 [CONFIGURATION.md](CONFIGURATION.md).
 
 Alongside the ML methods, the same launcher routes one **non-ML data-prep
@@ -55,7 +55,7 @@ it meshes CAD/geometry (STEP/IGES/STL) into the shared mesh HDF5 contract — a 
 for MeshGraphNets and a point cloud for the operators/Transolver — so a raw part can
 feed any method with no conversion step. It trains nothing and needs no GPU. See
 [methods/GeometryIngest/README.md](../methods/GeometryIngest/README.md),
-[docs/methods/11_Geometry_Ingest.md](methods/11_Geometry_Ingest.md), and
+[docs/methods/10_Geometry_Ingest.md](methods/10_Geometry_Ingest.md), and
 [CONFIGURATION.md](CONFIGURATION.md).
 
 ### 1.1 The core idea: one launcher, eight native runtimes
@@ -82,7 +82,7 @@ not preserve an old snapshot. Use `git ls-files '*.py'` for tracked Python
 files, `git ls-files 'configs/**/config*.txt'` for checked-in templates, and
 `python AI_CAE4ALL_main.py --audit-configs --no-color` for the authoritative
 live config audit. The route registry currently exposes 10 model IDs across
-seven ML repositories plus `geometry_ingest`. HI-MGNflow (`chi-mgnflow`) was merged into `meshgraphnets-v` as `latent_type local` on 2026-10-19; the old repo is in `junk/legacy_HI_MGNFlow/`.
+seven ML repositories plus `geometry_ingest`. HI-MGNflow (`chi-mgnflow`) was merged into `meshgraphnets-v` as `latent_type local` on 2026-10-19; the old repo is in git history (commit `9db47d6`).
 
 ---
 
@@ -141,11 +141,15 @@ AI-CAE4ALL/
 ├── output/                       # THE ONLY artifact root: checkpoints, logs, rollouts, samples
 ├── studio/                       # the Studio: browser UI + local Python API bridge
 ├── inference/                    # stand-alone CPU inference bundle + PyInstaller spec
-├── docs/                         # all documentation (this file included)
-│   ├── ARCHITECTURE.md CONFIGURATION.md README.md
-│   ├── guides/ reference/ methods/ research/ images/
-└── tests/                        # launcher / MethodSpec contract tests
+└── docs/                         # all documentation (this file included)
+    ├── ARCHITECTURE.md CONFIGURATION.md README.md
+    └── guides/ reference/ methods/ research/ videos/
 ```
+
+`methods/SAR/`, `methods/LDGN/` and their `configs/` directories are optional,
+git-ignored routes: `default_specs()` registers them only where the directory
+exists. There is no root `tests/`; the launcher is covered by
+`--audit-configs` and the Studio backend tests.
 
 Two layout invariants are worth stating explicitly:
 
@@ -503,7 +507,7 @@ substantially extended.
 
 ## 7. Method 2 — MeshGraphNets (variational)
 
-`model meshgraphnets-v` → `methods/MeshGraphNets_Variational/MeshGraphNets_main.py`.
+`model meshgraphnets-v` → `methods/MeshGraphNets_Variational/MeshGraphNets_Variational_main.py`.
 Modes: `train`, `inference`.
 
 A probabilistic variant of the deterministic simulator. It keeps the graph,
@@ -531,7 +535,7 @@ the bipartite `UnpoolBlock`.
   coarse-node posterior head, and a coarse-node flow-matching prior; HI-MGNflow),
   or `hybrid` (both; HI-MGN-hybrid). `local`/`hybrid` train single-stage and
   jointly, need `use_multiscale True` and `prior_family fm`, and are rejected
-  with `parallel_mode model_split`. HI-MGNflow (`chi-mgnflow`) was merged into `meshgraphnets-v` as `latent_type local` on 2026-10-19; the old repo is in `junk/legacy_HI_MGNFlow/`.
+  with `parallel_mode model_split`. HI-MGNflow (`chi-mgnflow`) was merged into `meshgraphnets-v` as `latent_type local` on 2026-10-19; the old repo is in git history (commit `9db47d6`).
 - **Learned conditional prior**
   ([model/conditional_prior.py](../methods/MeshGraphNets_Variational/model/conditional_prior.py)):
   instead of sampling `z ~ N(0,I)`, a graph-conditional prior can be jointly
@@ -795,7 +799,7 @@ scores were ever claimed here.
 | `dataset/deterministic/ex2_dynamic_contact_infer.h5` | mesh methods | ex2 held-out inference set: 5 unseen scenes × 50 timesteps; rollout is seeded from t=0 and scored against t=1..49 |
 | `dataset/hex_dataset.h5` | mesh methods | Same mesh with the state rows zeroed — legacy, superseded by `ex1_static_thermoelastic_infer.h5` |
 
-Dataset builders live in the method repos (`methods/SDFFlow/build_dataset.py`
+Dataset builders live in the method repos (`methods/SDFFlow/scripts/build_dataset.py`
 for SDFFlow) and under `dataset/` for the mesh methods.
 
 ---
@@ -859,7 +863,7 @@ in sync:
 | `model` value | Repo | Entrypoint | Modes |
 | --- | --- | --- | --- |
 | `meshgraphnets` | `MeshGraphNets/` | `MeshGraphNets_main.py` | train, inference |
-| `meshgraphnets-v` | `methods/MeshGraphNets_Variational/` | `MeshGraphNets_main.py` | train, inference |
+| `meshgraphnets-v` | `methods/MeshGraphNets_Variational/` | `MeshGraphNets_Variational_main.py` | train, inference |
 | `point_deeponet`, `deeponet`, `fno` | `Neural_Operator/` | `main.py` | train, inference |
 | `transolver` | `Transolver/` | `Transolver_main.py` | train, inference |
 | `sdfflow` | `methods/SDFFlow/` | `SDFFlow_main.py` | train, train_vae, train_fm, sample, reconstruct, interpolate, optimize, evaluate |

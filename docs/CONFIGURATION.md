@@ -53,7 +53,7 @@ snapshot, as the current count.
 | `geometry_ingest` | `methods/GeometryIngest/` | `ingest`, `inspect` |
 
 HI-MGNflow (`chi-mgnflow`) was merged into `meshgraphnets-v` as `latent_type local`
-on 2026-10-19; the old repo is in `junk/legacy_HI_MGNFlow/`.
+on 2026-10-19; the old repo is in git history (commit `9db47d6`).
 
 ## Exact key catalogs and defaults
 

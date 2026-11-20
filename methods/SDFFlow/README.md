@@ -46,7 +46,7 @@ leave the rest unspecified. It needs DeepJEB's FEA labels appended to the
 dataset once:
 
 ```bash
-cd methods/SDFFlow && python add_fea_conditions.py --h5 ../../dataset/geometry_generation/ex1_deepjeb.h5     --csv D:/CAE_datasets_raw/deepjeb/Scalar/bracket_labels.csv --dry_run   # then without --dry_run
+cd methods/SDFFlow && python scripts/add_fea_conditions.py --h5 ../../dataset/geometry_generation/ex1_deepjeb.h5     --csv D:/CAE_datasets_raw/deepjeb/Scalar/bracket_labels.csv --dry_run   # then without --dry_run
 ```
 
 No checked-in config trains it any more: set `condition_names` to the FEA
@@ -128,8 +128,8 @@ unprefixed.
 Build a synthetic smoke dataset or a real-mesh dataset from this repository:
 
 ```powershell
-python methods/SDFFlow/build_dataset.py --output dataset/synthetic256.h5 --synthetic 256
-python methods/SDFFlow/build_dataset.py --output dataset/parts.h5 --mesh_dir ./meshes --repair --near_sigmas 0.01,0.05
+python methods/SDFFlow/scripts/build_dataset.py --output dataset/synthetic256.h5 --synthetic 256
+python methods/SDFFlow/scripts/build_dataset.py --output dataset/parts.h5 --mesh_dir ./meshes --repair --near_sigmas 0.01,0.05
 ```
 
 `--near_sigmas` (default `0.01,0.05`) lists the near-surface Gaussian offsets;
@@ -187,9 +187,9 @@ existing sidecar unless told otherwise (`--allow_missing`, `--overwrite`), and
 
 ```bash
 cd methods/SDFFlow
-python add_fea_conditions.py --h5 ../../dataset/geometry_generation/ex1_deepjeb.h5 --csv D:/CAE_datasets_raw/deepjeb/Scalar/bracket_labels.csv --dry_run
-python add_fea_conditions.py --h5 ../../dataset/geometry_generation/ex1_deepjeb.h5 --csv D:/CAE_datasets_raw/deepjeb/Scalar/bracket_labels.csv
-python add_fea_conditions.py --list_names
+python scripts/add_fea_conditions.py --h5 ../../dataset/geometry_generation/ex1_deepjeb.h5 --csv D:/CAE_datasets_raw/deepjeb/Scalar/bracket_labels.csv --dry_run
+python scripts/add_fea_conditions.py --h5 ../../dataset/geometry_generation/ex1_deepjeb.h5 --csv D:/CAE_datasets_raw/deepjeb/Scalar/bracket_labels.csv
+python scripts/add_fea_conditions.py --list_names
 ```
 
 The dataset then reports `cond_names = bbox_x, bbox_y, bbox_z, volume, area` +

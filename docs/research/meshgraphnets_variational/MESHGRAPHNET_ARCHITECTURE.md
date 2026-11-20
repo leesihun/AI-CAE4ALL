@@ -14,7 +14,7 @@ The authoritative modules are:
 
 ## Runtime Entry Points
 
-`MeshGraphNets_main.py` loads a text config and dispatches by `mode`:
+`MeshGraphNets_Variational_main.py` loads a text config and dispatches by `mode`:
 
 | Mode | Runtime path |
 | --- | --- |

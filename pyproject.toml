@@ -19,5 +19,5 @@ test = ["pytest>=7.4"]
 packages = ["cae_suite", "cae_suite.specs"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["studio/studio_backend"]
 addopts = "-q"

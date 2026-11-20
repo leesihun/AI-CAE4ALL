@@ -36,7 +36,7 @@ python AI_CAE4ALL_main.py --config <path> --check # full layered preflight for o
 2026-10-19: `errors=0, warnings=0`; the 30 `FLOW-COST` advisories of 2026-09-23
 belonged to the HI-MGNflow `chi-mgnflow` configs, which were merged into
 `meshgraphnets-v` as `latent_type local` on 2026-10-19; the old repo is in
-`junk/legacy_HI_MGNFlow/`). A single
+git history (commit `9db47d6`)). A single
 `--check` goes further: it also runs the filesystem, environment, dataset, and
 native-probe layers, the last three inside the *target method's* interpreter.
 

@@ -271,7 +271,7 @@ def _validate_sdf_against_config(result: PreflightResult, field_name: str) -> No
     """Cross-check SDFFlow `condition_names` against the dataset's vocabulary.
 
     The FEA-named conditions of the ex5 track live in the optional `cond_extra`
-    sidecar (`methods/SDFFlow/add_fea_conditions.py`). Natively the membership
+    sidecar (`methods/SDFFlow/scripts/add_fea_conditions.py`). Natively the membership
     check runs in the FM stage, i.e. AFTER the VAE has trained for hours, so a
     dataset that has never had the sidecar written turns a typo into a wasted
     training run. The probe now returns the merged vocabulary; check it here.
@@ -302,7 +302,7 @@ def _validate_sdf_against_config(result: PreflightResult, field_name: str) -> No
             field_name="condition_names",
             location=result.parsed.location("condition_names"),
             hint="Non-geometric conditions live in the 'cond_extra' sidecar. Write it first "
-            "with methods/SDFFlow/add_fea_conditions.py (FEA labels) or "
+            "with methods/SDFFlow/scripts/add_fea_conditions.py (FEA labels) or "
             "add_mcb_class_conditions.py (MCB class_* / --hole_count).",
         )
 

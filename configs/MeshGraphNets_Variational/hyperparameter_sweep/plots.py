@@ -1,6 +1,6 @@
 """Loss curves and per-geometry histograms for every job of a sweep round.
 
-    python configs/MeshGraphNets_Variational/hyperparameter_sweep/plots.py r3 [job ...]
+    python configs/MeshGraphNets_Variational/hyperparameter_sweep/plots.py r13 [job ...]
 
 Reads <round>/jobs.txt and, for each job (or the jobs named), writes:
 
@@ -46,7 +46,7 @@ Then prints, per job, the per-geometry W2 parts, CRPS and generated/true
 width (x100).
 
 Needs numpy, h5py, matplotlib and torch: run it with a method interpreter
-(the MGN-V, SAR or LDGN venv), from anywhere.
+(the MGN-V venv, or SAR's/LDGN's for their runs), from anywhere.
 """
 import argparse
 import importlib.util
@@ -257,7 +257,8 @@ def job_losses(job, out_root):
 
 # ----------------------------------------------------- per-geometry spread
 def load_spread_module():
-    path = REPO_ROOT / "methods/SAR/inference_profiles/spread.py"
+    # MGN-V's scorer; SAR/LDGN carry verbatim copies, so their runs score the same.
+    path = REPO_ROOT / "methods/MeshGraphNets_Variational/inference_profiles/spread.py"
     spec = importlib.util.spec_from_file_location("sweep_spread", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -599,7 +600,7 @@ def fmt(v):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("round", help="round folder beside this script (r3, r4, ...) or its path")
+    ap.add_argument("round", help="round folder beside this script (r8 ... r13) or its path")
     ap.add_argument("jobs", nargs="*", help="only these jobs")
     ap.add_argument("--force", action="store_true", help="redraw the per-geometry histograms")
     ap.add_argument("--no-loss", action="store_true")

@@ -75,7 +75,7 @@ standalone `train_vae`/`train_lc` mode, use the **unprefixed** names directly.
 No checked-in config exercises those two modes -- every `baseline/` config uses
 the combined `mode train` pipeline with the `vae_*`/`lc_*` prefixes.
 
-Full key catalog: CONFIGURATION_REFERENCE.md §9.11 (root repo). Quick map from
+Full key catalog: `cae_suite/specs/simulgenvae.py` (root repo). Quick map from
 the original interactive `condition.txt`/`preset.txt` naming, for anyone porting
 an old config:
 

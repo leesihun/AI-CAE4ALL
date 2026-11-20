@@ -5,7 +5,7 @@ native entrypoint: ``python MLP/MLP_main.py --config <file>``. The launcher runs
 this with the working directory set to this repository (``MLP/``), so relative
 config paths resolve from here.
 
-Config keys (see configs/MLP/*.txt and CONFIGURATION_REFERENCE.md section 9.10):
+Config keys (the full set is in cae_suite/specs/mlp.py):
     model mlp                  mode train|inference
     dataset_dir <train.h5>     infer_dataset <infer.h5>   modelpath <ckpt.pth>
     input_var N                output_var M

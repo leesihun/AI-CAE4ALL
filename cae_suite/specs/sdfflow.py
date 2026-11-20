@@ -626,7 +626,7 @@ def validate_sdfflow(ctx: SpecValidationContext) -> None:
                 Severity.NOTICE,
                 f"condition_names {fea_names} are not geometric descriptors: the dataset must "
                 "carry the FEA sidecar (root 'cond_extra', written by "
-                "methods/SDFFlow/add_fea_conditions.py) and the names must be in "
+                "methods/SDFFlow/scripts/add_fea_conditions.py) and the names must be in "
                 "general_modules/condition_names.py; the native run validates both.",
                 field_name="condition_names",
             )

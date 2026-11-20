@@ -88,7 +88,7 @@ def _sdf_report(handle):
         # The condition VOCABULARY, so the spec can cross-check `condition_names`
         # before a training run starts. `cond_names` is the built-in geometric
         # list; `cond_extra_names` names the optional FEA sidecar that
-        # methods/SDFFlow/add_fea_conditions.py appends. Without these, an ex5
+        # methods/SDFFlow/scripts/add_fea_conditions.py appends. Without these, an ex5
         # config naming FEA conditions against a sidecar-free dataset preflights
         # clean and then dies after the whole VAE stage has been trained.
         metadata["cond_names"] = [_as_text(name) for name in handle.attrs.get("cond_names", [])]

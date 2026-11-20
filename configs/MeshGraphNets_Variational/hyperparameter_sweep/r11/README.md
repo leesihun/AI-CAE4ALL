@@ -144,7 +144,7 @@ the watcher too.
   `make_sweep.py --pack 1 --force`, and start the round again. Every job
   resumes.
 - **Shared tools.** Restarts, overrides, `stop_135`, `kill_all.sh`, MPS,
-  `use_compile` and the hierarchy cache work as in `../r6/README.md`.
+  `use_compile` and the hierarchy cache work as in [the sweep index](../README.md#shared-runner-tools).
 
 ## Unseen geometries inside the range, and the seeds (after the round)
 

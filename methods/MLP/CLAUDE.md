@@ -62,9 +62,9 @@ the launcher's `checkpoint_probe` can read it with `weights_only=True`), and
 Routing/optimizer/runtime keys are shared with the suite (`input_var`=N,
 `output_var`=M, `training_epochs`, `batch_size`, `learningr`, …). MLP-specific:
 `hidden_layers`, `activation`, `dropout`, `norm`, `input_normalization`,
-`output_normalization`, `output_activation`, `loss`. The full catalog lives in
-[CONFIGURATION_REFERENCE.md](../../docs/CONFIGURATION.md) section 9.10 and the
-launcher spec `cae_suite/specs/mlp.py` (the validation source of truth).
+`output_normalization`, `output_activation`, `loss`. The full catalog is the
+launcher spec `cae_suite/specs/mlp.py` (the validation source of truth); the
+grammar is in [docs/CONFIGURATION.md](../../docs/CONFIGURATION.md).
 
 ## Periodic visualization
 

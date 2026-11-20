@@ -14,17 +14,11 @@ a generated file.
 
 ## Before running: round 7 and the packing
 
-1. **Stop round 7 first** (or let it finish). Its jobs have `resume_training
-   True`, so `kill_all.sh` loses at most 15 minutes of each, and
-   `bash ../r7/run_135.sh` continues them later.
-2. **Measure, then pick `--pack`** (jobs per card). On the node:
-
-       python configs/MeshGraphNets_Variational/hyperparameter_sweep/r8/speed.py
-
-   It prints seconds per epoch and VRAM peak for round 6 and 7's runs, grouped
-   by batch size, checkpointing and jobs per card. Round 6 has batch 16 with
-   checkpointing at 2 per card; round 7 has batch 16 alone without it. Type the
-   block back. The generated default is `--pack 1`.
+Round 8 has finished. Before it ran, round 7 was stopped, and `--pack` (jobs
+per card) was set from round 6 and 7's measured epoch times by a one-off
+`speed.py`. That script, and rounds 6 and 7, are in git history at commit
+`e735316` (see [the sweep index](../README.md)). The generated default is
+`--pack 1`.
 
 ### Why not 3 or 4 jobs per card at batch 16
 
@@ -43,10 +37,10 @@ Packing pays only when MPS sharing gains more than that:
 The sharing factors (1.5 for two per card, 2.1 for three) are guesses. Batch 4
 gave up to 1.54x from three per card on a 3090, because a batch-4 step is
 launch-bound and leaves the GPU idle between kernels. A batch-16 step on 1 M
-nodes runs large kernels and should leave much less to share. If `speed.py`
-shows batch 16 alone near 100 % utilization, keep `--pack 1`. The direct test: `--pack 2`
-wins when `speed.py`'s `b16 c1 n2` seconds per epoch are under twice its
-`b16 c0 n1`. Then regenerate:
+nodes runs large kernels and should leave much less to share. If batch 16
+alone runs near 100 % utilization, keep `--pack 1`. The direct test: `--pack 2`
+wins when two checkpointed batch-16 jobs on one card take under twice the
+seconds per epoch of one alone without checkpointing. Then regenerate:
 
     python configs/MeshGraphNets_Variational/hyperparameter_sweep/r8/make_sweep.py --pack 2 [--force]
 
@@ -71,7 +65,7 @@ and type back the block between `==== TYPE THIS BACK ====` and `==== END ====`.
 - **CPU:** about 120 of the 128 CPUs, split evenly over the slots
   (`THREADS_PER_JOB` = 120 / slots - 4 DataLoader workers): 13 at `--pack 1`.
 - Restart, overrides, `stop_135`, `kill_all.sh`, MPS, `use_compile` and the
-  hierarchy cache work as in `../r6/README.md`.
+  hierarchy cache work as in [the sweep index](../README.md#shared-runner-tools).
 
 ## The design
 
@@ -109,13 +103,13 @@ and type back the block between `==== TYPE THIS BACK ====` and `==== END ====`.
   with the base would mix the two.
 - `prior_freeze_epoch` follows the epochs at 2/3 (160 at 240). KL configs drop
   `lambda_mmd` and `mmd_bandwidth` (the launcher warns that they are ignored).
-- `make_sweep.py` checks the base key by key against
-  `../r6/config_train_hybrid_e240.txt` and `config_infer_hybrid_e240.txt`. The
-  only allowed difference is the training batch size (plus paths and build-only
-  keys).
+- `make_sweep.py` checked the base key by key against r6's
+  `config_train_hybrid_e240.txt` and `config_infer_hybrid_e240.txt` (the only
+  allowed difference: the training batch size, plus paths and build-only keys).
+  With r6 gone from the tree, the self-check prints `not found, skipped`.
 - **Time:** the plan assumes 0.13 h per batch-16 epoch alone (round 7's
   `e480_bs16` finished 480 epochs inside 72 h). That is a bound, not a
-  measurement; `speed.py` replaces it.
+  measurement.
 
 ## Reading the results
 
@@ -124,7 +118,7 @@ against job 2 (`base`), and the base against r6 `hybrid_e240` 69, r7
 `e240_bs8` 74 and `e480_bs16` 68. One run per setting: three seeds of one r6
 config spread over 88-107 (sd about 11), so a difference of 10 or less is not an
 effect on its own. Trust a trend along an axis over a single job. W2 scale,
-floor (27) and caveats are as in `../r6/README.md`.
+floor (27) and caveats are as in [the sweep index](../README.md#how-big-is-a-w2-100-on-the-256-draw-held-out-file).
 
 The sampling-only jobs share the base's checkpoint, so for them the seed noise
 of training drops out: `base_steps10`/`base_steps100` against the base is a

@@ -2,7 +2,7 @@
 
     cd methods/MeshGraphNets_Variational
     python misc/posterior_vs_prior_groups.py \
-        --config ../../configs/MeshGraphNets_Variational/hyperparameter_sweep/r6/config_infer_hybrid_e240.txt \
+        --config ../../configs/MeshGraphNets_Variational/hyperparameter_sweep/r8/config_infer_hybrid_e360.txt \
         [--gpu 0] [--batch 8] [--splits 200] [--out DIR] [--tag NAME]
 
 `posterior_vs_prior.py` asks this question for one geometry (the SAOI files).

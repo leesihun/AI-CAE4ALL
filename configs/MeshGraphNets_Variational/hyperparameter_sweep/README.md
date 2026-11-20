@@ -1,132 +1,94 @@
-# MeshGraphNets-V parametric study (B300 round 2)
+# MeshGraphNets-V hyperparameter sweeps
 
-Round 2 runs on one 8-GPU B300 node, both studies at once, so every card
-holds one SAOI job and one shell-buckling job: 4 SAOI arms x 2 board halves
-and 8 ex3 arms.
+One directory per round. Each round's `README.md` has its goal, its jobs,
+how to start it and how to read its result block. Results come back as typed
+text: every runner ends in one block between `==== TYPE THIS BACK ====` and
+`==== END ====`, which the round's `brief.py` also prints at any time.
 
-| study | data |
-| --- | --- |
-| [`SAOI/`](SAOI/) | `dataset/SAOI/saoi_train_{bot,top}.h5` and the official eval parts |
-| [`probabilistic/`](probabilistic/) | `dataset/probabilistic/ex3_shell_buckling{,_infer}.h5` |
+Every round is on ex3 shell buckling (`dataset/probabilistic/ex3*.h5`).
 
-Round 2 was planned on two nodes, node 1 for HI-MGNflow. On
-2026-10-19 HI-MGNflow (`chi-mgnflow`) was merged into `meshgraphnets-v` as
-`latent_type local`; the old repo and its sweep directory are in
-`junk/legacy_HI_MGNFlow/` (git-ignored; in git, `git show 9db47d6:configs/HI_MGNFlow/hyperparameter_sweep/README.md`).
-That README has the full run instructions, the overrides and how to read the
-type-back block; they apply here unchanged, with `mgnv` in place of `chi`.
-
-The results come back as **typed text only**. The run ends with one block of
-short lines between `==== TYPE THIS BACK ====` and `==== END ====` that holds
-both studies' results.
-
-| File | Purpose |
-| --- | --- |
-| `run_sweep.sh [SAOI\|probabilistic]` | this method on one node, end to end: checks, data, preflight, the 16 jobs, the summary, the block. No argument runs both studies |
-| `brief.py [SAOI\|probabilistic]` | prints the type-back block at any time, during or after the run. No argument prints both studies |
-| `SAOI/saoi_heldout.py` | SAOI only: geometry labels, the held-out parts and their inference configs |
-| `SAOI/*.txt`, `probabilistic/*.txt` | the configs; every header names the arm's change and its question |
-
-## SAOI: does the model carry a part's scatter to a new geometry?
-
-HI-MGNflow's round 1 found that its best arm fits parts it trained on and
-misses unseen ones, even those inside the training range. Every arm then
-split **samples** 80/10/10, so the checkpoint was selected on more
-realizations of the training parts. Round 2 asks why the unseen parts miss:
-
-| arm | change | question |
+| round | where | question |
 | --- | --- | --- |
-| `v_smp` | none: [`../SAOI_run/`](../SAOI_run/), sample split | the reference |
-| `v_grp` | `split_group_attr geometry_id` on the labelled `_bygeom.h5` copy | does selecting the checkpoint on **unseen geometries** help on unseen parts? |
-| `v_grp_rep` | `v_grp` + `training_seed 20261012` | the noise floor |
-| `v_nopart` | `v_grp` + `cond_var 2` (the Part No. row is no longer read) | is the arbitrary part ID, fed in as a scalar, what lets the model memorize parts? |
+| [r8/](r8/) | B300 135 | hybrid at batch 16: epochs, MMD/KL, the flow-matching prior |
+| [r9/](r9/) | B300 135, 16 jobs | the coarse prior, two seeds |
+| [r10/](r10/) | B300 135 | the prior against over-fitting, three seeds per setting |
+| [r11/](r11/) | B300 135, 16 jobs | where the latent lives; a z_g the decoder reads; the prior diagnosis tool |
+| [r12/](r12/) | B300 135, 8 jobs | the prior trained jointly with the encoder |
+| [r13/](r13/) | B300 135, 24 jobs | a latent forced into order, and a plainer model |
 
-A geometry is the node coordinates plus the mesh. Variants that differ only in
-thickness or part number stay on one side of the split.
+The earlier rounds were removed on 2026-11-19 and are in git history: round 2
+(SAOI + ex3) at commit `2b88bdb`; rounds 3–7 and `aarl1/` at commit `e735316`.
+Read one with, e.g.,
+`git show e735316:configs/MeshGraphNets_Variational/hyperparameter_sweep/r6/README.md`.
 
-Each job is scored on the three official eval parts (**O**, unseen by every
-arm) and on up to 6 held-out test parts per half (**H**, cut by
-`saoi_heldout.py`). H is SEEN by `v_smp`, which trained on about 80% of
-their realizations, and UNSEEN by `v_grp` and `v_nopart`. The parts are the
-same for every arm, so `H(smp) - H(grp)` is the
-generalization gap at fixed parts.
-
-| result | meaning |
-| --- | --- |
-| `v_grp` beats `v_smp` on O by more than the `v_grp` vs `v_grp_rep` gap | checkpoint selection on seen parts was part of the miss |
-| H of `v_grp` close to H of `v_smp` | a new in-range geometry costs nothing; the official parts are hard for another reason |
-| H of `v_grp` far worse than H of `v_smp` | the model does not transfer scatter to a new geometry |
-| `v_nopart` beats `v_grp` | the part-ID row is a memorization channel; drop it from the recipe |
-
-Every arm differs from `SAOI_run` only by its change and the shared layout:
-`gpu_ids 0`, outputs under `output/b300_r2/saoi/<arm>/<half>/`,
-`write_preprocessing False`, and a private hierarchy cache. It runs 1000
-epochs with the encoder frozen at 700. Inference draws 2000 samples per
-official part and 500 per held-out part.
-
-## probabilistic (ex3 buckling): what limits the latent?
-
-Each arm is the ex3 baseline
-([`../probabilistic/ex3/baseline/config_train_himgn_v.txt`](../probabilistic/ex3/baseline/))
-plus one change. The deeper posterior encoder comes first: on a 20-geometry
-subset it was what let `z` rise above the z-free floor.
-
-| arm | change | question |
+| round | question | where its result went |
 | --- | --- | --- |
-| `v_base` | none, at batch 8 x 1 instead of 2 x 4 (MMD sees 8 graphs) | the reference |
-| `v_rep` | `training_seed 43` | the seed noise floor |
-| `v_mp8` | `vae_encoder_mp_layers 8` | does the subset result hold on all 150 geometries? |
-| `v_mp12` | `vae_encoder_mp_layers 12` | does depth keep paying past 8? |
-| `v_mp8_pmin01` | `v_mp8` + `posterior_min_std 0.01` | does a lower posterior floor let `z` carry more of the draw? |
-| `v_mp8_aux100` | `v_mp8` + `beta_aux 100` | does a stronger pull on the decoded peak-to-valley undo the shrunken amplitude (0.6-0.8x of FEA)? |
-| `v_mp8_mmd10` | `v_mp8` + `lambda_mmd 10` | does a stronger aggregate-posterior MMD reduce posterior drift? |
-| `v_mp8_w256` | `v_mp8` + `latent_dim 256` | is the decoder too narrow to turn `z` into amplitude? |
+| r3 | latent placements and regularizers, with SAR/LDGN | regularizer choice inside the seed range; dropped |
+| r4 | SAR, LDGN and the three placements | SAR/LDGN baselines; r5's checkpoints |
+| r5 | hybrid length, message passing, prior size | `mp_per_level 4, 6, 8, 6, 4` became the reference |
+| r6 | one knob at a time, every placement | `hybrid_e240` (69) became r7/r8's base |
+| r7 | hybrid epochs × batch, MMD/KL | batch sets the cost; r8 trains at batch 16 |
+| aarl1 | hybrid ablations on aarl (stopped at epoch 62/120) | none |
 
-Inference draws 64 samples per scene of `ex3_shell_buckling_infer.h5`. The
-ex3 jobs go lightest first, and job k of each study runs on card k.
+The SAOI studies live beside this directory, in
+[`../SAOI_run/`](../SAOI_run/) and [`../SAOI_hybrid_run/`](../SAOI_hybrid_run/).
 
-## Run
+## Shared runner tools (rounds 8–13)
 
-One command on the node, with no argument and no `nohup`:
+Every round has its own `run_135.sh`, `run_node.sh`, `kill_all.sh` and
+`brief.py`, generated by its `make_sweep.py` (edit the generator, never a
+generated file; `--plan` prints the queue and writes nothing).
 
-```bash
-cd configs/MeshGraphNets_Variational/hyperparameter_sweep && ./run_sweep.sh
-```
+- **Restart after a stop or crash:** run the same `run_135.sh` again. Finished
+  jobs are skipped; unfinished trainings continue from their resume state
+  (`resume_training True`, saved about every 15 minutes).
+- **Overrides:** `run_node.sh`'s header lists every one (`JOBS=`, `REDO=1`,
+  `TRAIN=0`, `GPUS=`, `THREADS_PER_JOB=`, ...).
+- **End a queue early:** `touch output/b300_r<N>/stop_135`. Running jobs
+  finish; no new job starts.
+- **Kill everything:** `bash <round>/kill_all.sh -n` lists every runner, its
+  jobs, any python left running from the repository and the cache build
+  `.lock`/`.tmp.*` files; without `-n` it kills by PID (SIGTERM, then SIGKILL
+  after 20 s). Killed trainings resume.
+- **MPS** (`MPS=1` default): jobs sharing a card go through one MPS daemon
+  instead of time-slicing (1.54x throughput for 3 batch-4 jobs on a 3090).
+  Every card is probed first; on a failure the run says `MPS OFF ... <why>`
+  and time-slices. `kill_all.sh` quits the daemon.
+- **`use_compile True`:** each GnBlock is one compiled function (1.36x per
+  step). A startup self-test compares it with eager, forward and backward; on
+  a failure the log says `use_compile: compiled GnBlocks OFF, training
+  continues eager (...)`. Resume ignores the key.
+- **Gradient checkpointing** costs 1.52x per step and is on only where a job
+  would not fit without it. It does not change the gradients, and resume
+  ignores the key.
+- **The hierarchy cache** (shared by every job of a round) is built once, by
+  the first job, while the others wait (`hierarchy_cache_build_workers 48` on
+  the 128-core node, gzip in the workers).
 
-(`bash run_sweep.sh` if `./run_sweep.sh` answers "Permission denied".) The
-checks of both studies run in the terminal; when they pass, the jobs go to
-the background on their own and the terminal can close. Follow them with
-`tail -f output/b300_r2/run_sweep_mgnv.out`.
+## How big is a W2? (×100, on the 256-draw held-out file)
 
-The node needs a MeshGraphNets-V interpreter with a Blackwell torch (sm_100,
-CUDA 12.8 or newer), set in `ai_cae4all.local.toml` or through
-`METHOD_PYTHON=`, a checkout with `split_group_attr`, and the data of both
-studies. Prerequisites, abort stages and overrides are in the header of
-`run_sweep.sh` and in the archived HI-MGNflow README's "Run" section
-(`git show 9db47d6:configs/HI_MGNFlow/hyperparameter_sweep/README.md`).
-To run one job again: `JOBS=v_grp.bot ./run_sweep.sh SAOI`.
+| reference | w2 |
+| --- | --- |
+| FE against FE, 128 vs 128 (the **floor**, median and 5–95 %) | 27 (19–36) |
+| FE against FE, 32 vs 224 | 38 |
+| perfect sampler, 1024 draws vs the 256 FE (estimate) | ~15 |
+| unimodal Gaussian with the right mean and sd | 49 |
+| right distribution shifted by 0.5 sd | 50 |
+| buckling probability off by 0.1 / 0.2 / 0.3 | 53 / 82 / 113 |
+| **exact FE mean, no spread** (a perfect deterministic model) | **100** |
+| right distribution shifted by 1 sd | 100 |
+| ignores the geometry (one distribution for all 8) | 1250 |
 
-The end of `run_sweep_mgnv.out` holds one block, `R2 saoi mgnv ...` and
-`R2 ex3 mgnv ...` with their arm lines, and
-`python configs/MeshGraphNets_Variational/hyperparameter_sweep/brief.py`
-prints it at any time. The columns are explained in the docstring of
-`brief.py` and in the archived HI-MGNflow README's "Reading the block"
-section (`git show 9db47d6:configs/HI_MGNFlow/hyperparameter_sweep/README.md`).
+Selection uses the held-out (test) file by choice, which biases the best
+numbers downward (winner's curse). Three seeds of one r6 setting spread over
+88–107 (sd about 11), so a single-run difference of 10 or less is not an
+effect on its own.
 
-Outputs go to `output/b300_r2/<saoi|ex3>/<arm>/[<half>/]`, with this
-method's logs and status under `output/b300_r2/<saoi|ex3>/run_logs/mgnv/`
-and its held-out inference configs under
-`output/b300_r2/saoi/heldout/configs/mgnv/`.
+## Plots for any round
 
-## Earlier sweeps
+    python configs/MeshGraphNets_Variational/hyperparameter_sweep/plots.py r13 [job ...]
 
-The latent-capacity sweep that used to live in this directory is retired.
-That was the 2026-09-28 redesign: arms `base`, `seed`, `zdim4`, `pmin30`,
-`arecon`, `aux100`, `fmmom` and `g2e`, plus the benched `zdim8`, `pmin15` and
-`mmd10`. It is in git history:
-
-```bash
-git show d4c63ba:configs/MeshGraphNets_Variational/hyperparameter_sweep/README.md
-```
-
-The production recipe these arms start from is in [`../SAOI_run/`](../SAOI_run/).
+[plots.py](plots.py) reads `<round>/jobs.txt` and writes loss curves beside
+each epoch log and per-geometry spread histograms beside each inference
+output. It scores with MGN-V's
+`methods/MeshGraphNets_Variational/inference_profiles/spread.py`.

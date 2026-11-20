@@ -34,7 +34,7 @@ export function paletteRender(query = "") {
   $("#paletteList").innerHTML = order.map(category => {
     const entries = Object.entries(BLOCK_SPECS)
       .filter(([, spec]) => {
-        if (spec.category !== category) return false;
+        if (spec.category !== category || spec.unregistered) return false;
         const haystack = `${spec.label} ${spec.description} ${spec.modelId || ""}`.toLowerCase();
         return !normalized || haystack.includes(normalized);
       })

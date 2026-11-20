@@ -153,7 +153,7 @@ def check_condition_names(fm_config):
         raise ValueError(
             f'Unknown condition_names {unknown}; {dataset_dir} carries {available}. '
             'FEA-named conditions live in the cond_extra sidecar -- run '
-            'methods/SDFFlow/add_fea_conditions.py --h5 <dataset> --csv <bracket_labels.csv> '
+            'methods/SDFFlow/scripts/add_fea_conditions.py --h5 <dataset> --csv <bracket_labels.csv> '
             'first. (Checked before the VAE stage so the mistake costs seconds, not a full '
             'VAE training run.)')
 

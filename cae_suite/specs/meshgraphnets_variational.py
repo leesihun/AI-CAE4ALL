@@ -6,7 +6,7 @@ from .meshgraphnets import check_renamed_keys, validate_meshgraphnets
 
 
 # Keys consumed by the live variational runtime (traced from config[...] /
-# config.get(...) reachable from methods/MeshGraphNets_Variational/MeshGraphNets_main.py).
+# config.get(...) reachable from methods/MeshGraphNets_Variational/MeshGraphNets_Variational_main.py).
 VAR_KEYS = frozenset(
     {
         "use_deformed_edge", "displacement_indices", "periodic_box", "write_preprocessing",
@@ -28,7 +28,7 @@ VAR_KEYS = frozenset(
         "feature_loss_weights", "edge_var", "positional_features",
         "message_passing_num", "training_epochs", "batch_size", "learningr",
         "latent_dim", "num_workers", "prefetch_factor", "std_noise", "noise_gamma",
-        # Time integration (CONFIGURATION_REFERENCE.md section 3.5): ar_ot or ar_rt.
+        # Time integration: ar_ot or ar_rt.
         "time_integration",
         "noise_std_ratio", "weight_decay", "warmup_epochs", "augment_geometry",
         "grad_accum_steps", "use_checkpointing", "use_amp", "use_ema", "ema_decay",
@@ -713,7 +713,7 @@ def build_variational_spec() -> MethodSpec:
         display_name="MeshGraphNets Variational",
         model_ids=("meshgraphnets-v",),
         repository="methods/MeshGraphNets_Variational",
-        entrypoint="MeshGraphNets_main.py",
+        entrypoint="MeshGraphNets_Variational_main.py",
         valid_modes=("train", "inference"),
         known_keys=VAR_KEYS | VAR_REMOVED_KEYS | RESUME_KEYS,
         required_by_mode={

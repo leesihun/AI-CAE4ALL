@@ -1,454 +1,374 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for Claude Code (claude.ai/code) when working in this repository.
 
 ## What this repository is
 
-AI-CAE4ALL is a **monorepo of ten independent ML-for-CAE method repositories**
-unified by one config-driven launcher. The launcher (`cae_suite/`, the
-`ai-cae4all` console script, `AI_CAE4ALL_main.py`) reads a native flat-text
-config, routes on its `model` field to the right method repo, runs a layered
-preflight validation, and then **subprocess-launches that repo's native
-entrypoint** — it never imports the ML code.
+AI-CAE4ALL is a **monorepo of independent ML-for-CAE method repositories behind
+one config-driven launcher**. The launcher (`cae_suite/`, the `ai-cae4all`
+console script, `AI_CAE4ALL_main.py`) reads a flat-text config, routes on its
+`model` field, runs a layered preflight, and then **subprocess-launches that
+method's native entrypoint**. It never imports ML code.
 
-Every method repo is self-contained (own venv, own tests) and also runnable
-directly. All ten live under [methods/](methods/); the specs that route to them
-live in [cae_suite/specs/](cae_suite/specs/):
+Every method under [methods/](methods/) is self-contained (own venv, own tests)
+and also runnable directly. Routing specs live in
+[cae_suite/specs/](cae_suite/specs/); a spec's `repository=` field is the
+model-to-directory mapping.
 
-| `model` config value(s) | Directory | Entrypoint | Own CLAUDE.md |
+| `model` value(s) | Directory | Entrypoint | Own docs |
 | --- | --- | --- | --- |
 | `meshgraphnets` | `methods/MeshGraphNets/` | `MeshGraphNets_main.py` | — |
-| `meshgraphnets-v` | `methods/MeshGraphNets_Variational/` | `MeshGraphNets_main.py` | — |
-| `point_deeponet`, `deeponet`, `fno` | `methods/Neural_Operator/` | `main.py` | [yes](methods/Neural_Operator/CLAUDE.md) |
+| `meshgraphnets-v` | `methods/MeshGraphNets_Variational/` | `MeshGraphNets_Variational_main.py` | — |
+| `point_deeponet`, `deeponet`, `fno` | `methods/Neural_Operator/` | `main.py` | [CLAUDE.md](methods/Neural_Operator/CLAUDE.md) |
 | `transolver` | `methods/Transolver/` | `Transolver_main.py` | — |
-| `sdfflow` | `methods/SDFFlow/` | `SDFFlow_main.py` | [yes](methods/SDFFlow/CLAUDE.md) |
-| `simulgenvae` | `methods/SimulGenVAE/` | `SimulGenVAE_main.py` | [yes](methods/SimulGenVAE/CLAUDE.md) |
-| `mlp` | `methods/MLP/` | `MLP_main.py` | [yes](methods/MLP/CLAUDE.md) |
-| `sar` | `methods/SAR/` | `SAR_main.py` | — (see its [README.md](methods/SAR/README.md)) |
-| `ldgn` | `methods/LDGN/` | `LDGN_main.py` | — (see its [README.md](methods/LDGN/README.md)) |
-| `geometry_ingest` | `methods/GeometryIngest/` | `main.py` | — (see its [README.md](methods/GeometryIngest/README.md)) |
+| `sdfflow` | `methods/SDFFlow/` | `SDFFlow_main.py` | [CLAUDE.md](methods/SDFFlow/CLAUDE.md) |
+| `simulgenvae` | `methods/SimulGenVAE/` | `SimulGenVAE_main.py` | [CLAUDE.md](methods/SimulGenVAE/CLAUDE.md) |
+| `mlp` | `methods/MLP/` | `MLP_main.py` | [CLAUDE.md](methods/MLP/CLAUDE.md) |
+| `geometry_ingest` | `methods/GeometryIngest/` | `main.py` | [README.md](methods/GeometryIngest/README.md) |
+| `sar` *(optional, local-only)* | `methods/SAR/` | `SAR_main.py` | its README.md |
+| `ldgn` *(optional, local-only)* | `methods/LDGN/` | `LDGN_main.py` | its README.md |
 
-**Model ID and directory name do not always match**, because model IDs are
-frozen by every checked-in config: `sdfflow` lives in `SDFFlow/` (formerly
-`Geometry_generation/`), `meshgraphnets-v` in `MeshGraphNets_Variational/`.
-The spec's `repository=` field is the mapping. Display names follow the latent
-placement, not the IDs: `meshgraphnets-v` with `use_multiscale` is
-**HI-MGN-V** (`latent_type global`, the default), **HI-MGNflow**
-(`latent_type local`, formerly "cHI-MGNflow") or **HI-MGN-hybrid**
-(`latent_type hybrid`). HI-MGNflow (`chi-mgnflow`) was merged into
-`meshgraphnets-v` as `latent_type local` on 2026-10-19; the old repo is in
-`junk/legacy_HI_MGNFlow/`, and the `chi-mgnflow` model ID no longer routes.
+**When working inside a method, its own `CLAUDE.md`/`README.md` is
+authoritative** for its data contract, architecture and validation. This file
+covers the launcher and the cross-cutting conventions.
 
-All but `geometry_ingest` are ML methods. **`simulgenvae`** is a hierarchical VAE +
-latent conditioner for parametric simulation fields; structurally it mirrors
-`sdfflow` (a VAE stage + a second stage), with modes `train` (VAE→LC pipeline),
-`train_vae`, `train_lc`, and `reconstruct`, in-process multi-GPU via `mp.spawn`,
-and stage-prefixed `vae_*`/`lc_*` config keys. It reads the **shared mesh HDF5**
-(`dataset_kind=mesh_hdf5`) but is a **fixed-geometry dense FOM** model: it flattens
-the physical field rows into a dense `[samples, channels, time]` tensor, so every
-sample must share the same node and timestep counts. See
-[methods/SimulGenVAE/CLAUDE.md](methods/SimulGenVAE/CLAUDE.md).
+### Names that do not match
 
-**`sar`** is a port of the upstream SAR code (Lino & Thuerey 2026,
-scale-autoregressive flow matching in a graph-VAE latent; Apache-2.0, vendored
-in `methods/SAR/sar/`), kept as a one-to-many baseline beside MGN-V. A system is
-one geometry (`split_group_attr`, `shape_idx` on ex3) and its states are that
-geometry's draws; modes `train`/`train_vae`/`train_sar`/`inference`, the last
-writing MGN-V's spread files and rollout layout. Its README lists every
+Model IDs are frozen by every checked-in config, so a few differ from the
+directory: `sdfflow` → `SDFFlow/` (formerly `Geometry_generation/`),
+`meshgraphnets-v` → `MeshGraphNets_Variational/`. Display names follow latent
+placement: `meshgraphnets-v` with `use_multiscale` is **HI-MGN-V**
+(`latent_type global`, default), **HI-MGNflow** (`latent_type local`) or
+**HI-MGN-hybrid** (`latent_type hybrid`). HI-MGNflow was its own route
+(`chi-mgnflow`) until 2026-10-19; that ID no longer routes and the old repo is
+in git history (commit `9db47d6`). SimulGenVAE's campaign key is `lsh_vae` (its
+paper name); it is baked into `output/dataset_matrix/` run paths, so leave it.
+The MGN-V entrypoint was `MeshGraphNets_main.py` (the same name as MGN's) until
+2026-11-19; the sweeps' `gpu_idle.py` still matches both names, for runs
+started before the rename.
+
+### The methods in one line each
+
+- **MeshGraphNets** — MGN, HI-MGN (`use_multiscale`), BSMS-GNN (`coarsening_type bfs`).
+- **MeshGraphNets-V** — conditional graph VAE with a flow-matching prior; the
+  one-to-many (probabilistic) model. Ensemble scoring (CRPS, W2, spread
+  histograms) lives in `inference_profiles/spread.py`; `rollout.py` re-exports
+  it, and the sweep plotter loads it directly.
+- **Neural_Operator** — DeepONet, Point-DeepONet, FNO.
+- **Transolver** — physics-attention transformer (`transolver3` configs).
+- **SDFFlow** — SDF VAE + flow matching for geometry. Also the suite's only
+  closed-loop mode: `mode optimize` chains generation → gmsh tet meshing →
+  linear-static solve → CMA-ES over the trained generator (needs `gmsh`,
+  `pyamg`, `cma`; trains nothing). Dataset building and condition sidecars are
+  standalone tools in `methods/SDFFlow/scripts/`, run from `methods/SDFFlow`
+  as `python scripts/<name>.py`.
+- **SimulGenVAE** — hierarchical VAE + latent conditioner. Reads the shared mesh
+  HDF5 but is a **fixed-geometry dense** model: every sample must share node and
+  timestep counts. Modes `train`/`train_vae`/`train_lc`/`reconstruct`, in-process
+  multi-GPU via `mp.spawn`, `vae_*`/`lc_*` keys.
+- **MLP** — tabular parametric surrogate, `X[S,N]`→`Y[S,M]`
+  (`dataset_kind=table_hdf5`, `native_probe=False`), no GPU, not the mesh contract.
+- **GeometryIngest** — non-ML data prep: CAD (STEP/IGES/STL) → shared mesh HDF5.
+  `native_probe=False`, `dataset_kind=None`, modes `ingest`/`inspect`.
+
+### Optional routes: SAR and LDGN
+
+`sar` (Lino & Thuerey 2026, scale-autoregressive flow matching) and `ldgn`
+(Lino, Pfaff & Thuerey, ICLR 2025, latent diffusion graph net) are upstream
+ports kept as one-to-many baselines beside MGN-V. They are **git-ignored**
+(`methods/{SAR,LDGN}/`, `configs/{SAR,LDGN}/`) and live only on machines that
+already have them. Nothing tracked depends on them:
+
+- `cae_suite/registry.py::OPTIONAL_SPEC_BUILDERS` registers each only when its
+  `methods/` directory exists; without it the model ID simply does not route.
+- The Studio hides palette blocks and templates for any route the launcher does
+  not report (`markUnregisteredModels` in `studio/src/constants.js`).
+- Their specs (`cae_suite/specs/{sar,ldgn}.py`) stay tracked so the routes come
+  back as soon as the directories do.
+
+If you touch them: keep `ldgn_diffusion_steps` at 1000 (the linear schedule
+clips its betas; below ~50 steps sampling returns NaN). Each README lists every
 deviation from upstream.
 
-**`ldgn`** is the same kind of baseline from the other published line: LDGN
-(Lino, Pfaff & Thuerey, ICLR 2025; a multi-scale graph VAE plus a DDPM denoiser
-in its latent), ported from tum-pbs/dgn4cfd (Apache-2.0, vendored in
-`methods/LDGN/dgn4cfd/`). It shares SAR's system/state split, its output files
-and its `vae_*` stage keys; the second stage is `ldgn_*`, modes
-`train`/`train_vae`/`train_ldgn`/`inference`. Keep `ldgn_diffusion_steps` at
-1000: the linear schedule clips its betas, and below about 50 steps sampling
-returns NaN. Its README lists every deviation from upstream.
-
-**`mlp` is the odd one out among them**: a parametric surrogate (N scalar inputs →
-M scalar outputs) that is **tabular, not mesh** — it reads an `X[S,N]`/`Y[S,M]`
-HDF5 (`dataset_kind=table_hdf5`, `native_probe=False`), not the shared mesh
-contract, and needs no GPU. See [methods/MLP/CLAUDE.md](methods/MLP/CLAUDE.md).
-
-**SDFFlow additionally carries the suite's only closed-loop mode.** Alongside
-its train/sample/reconstruct/interpolate modes, `mode optimize` chains
-generation, gmsh tetrahedral meshing, a linear-static structural solve, and a
-CMA-ES search into one config-driven run over the trained DeepJEB generator --
-the one place where a method repo *evaluates* geometry rather than only
-producing or predicting it. It trains nothing and needs `gmsh`, `pyamg`, and
-`cma`. See [methods/SDFFlow/CLAUDE.md](methods/SDFFlow/CLAUDE.md).
-
-**`geometry_ingest` is a non-ML data-prep utility** routed through the same
-launcher: it meshes CAD/geometry (STEP/IGES/STL) into the shared mesh HDF5
-contract (graph for MeshGraphNets, point cloud for the operators/Transolver). Its
-spec sets `native_probe=False` and `dataset_kind=None`, and its modes are
-`ingest`/`inspect`.
-
-**When working inside a method repo, its own `CLAUDE.md` is authoritative** for
-that method's data contract, architecture facts, and validation steps. This file
-covers only the root-level launcher and the cross-cutting conventions.
-
-## Layout invariants
-
-Two rules hold across the whole tree; breaking either is a bug, not a style
-choice:
-
-1. **`configs/<Name>/` mirrors `methods/<Name>/`.** Adding a method means adding
-   both directories under the same name. `configs/campaigns/` is the one
-   exception: it holds the cross-method campaign (`dataset_matrix/`, whose
-   `manifest.json` lists every train/infer config pair), not per-method configs.
-2. **`output/` at the repo root is the only artifact destination.** Nothing is
-   written inside a method directory. Because the native process runs with its
-   cwd set to `methods/<Name>/`, every artifact path in a config is spelled
-   `../../output/...` and every dataset path `../../dataset/...`.
+## Layout
 
 ```text
 AI-CAE4ALL/
-├── AI_CAE4ALL_main.py   cae_suite/      # launcher (no ML imports)
-├── methods/             configs/        # ten runtimes, mirrored config dirs
-├── dataset/             output/         # inputs (git-ignored), single artifact root
-├── studio/              inference/      # browser Studio, portable CPU bundle
-├── docs/                               # all documentation
+├── AI_CAE4ALL_main.py  cae_suite/   launcher (no ML imports) + specs
+├── methods/            configs/     method runtimes, mirrored config dirs
+├── studio/             inference/   browser Studio, portable CPU inference bundle
+├── docs/                            all documentation (index: docs/README.md)
+├── dataset/            output/      inputs and artifacts — local-only, git-ignored
+└── paper/, "Claude outputs"/        local-only, git-ignored
 ```
 
-> The `output/` **subdirectory** names are historical and deliberately left
-> alone: `output/geometry_generation/` (SDFFlow), `output/chi-mgnflow/`
-> (runs of the retired HI-MGNflow route, kept as history),
-> `output/meshgraphnets-v/`. They name runs, not directories in the tree.
+Two invariants; breaking either is a bug:
+
+1. **`configs/<Name>/` mirrors `methods/<Name>/`.** A new method adds both.
+   The one exception is `configs/campaigns/`, which holds the cross-method
+   campaign (`dataset_matrix/`: `manifest.json` lists every train/infer pair,
+   `run_135.sh`/`run_136.sh` drive the two B300 nodes).
+2. **`output/` at the repo root is the only artifact destination.** The native
+   process runs with cwd `methods/<Name>/`, so every artifact path in a config
+   is `../../output/...` and every dataset path `../../dataset/...`. Nothing is
+   written inside `methods/`.
+
+`output/` subdirectory names are historical and deliberately kept
+(`output/geometry_generation/` = SDFFlow, `output/chi-mgnflow/` = retired route
+runs). They name runs, not tree directories.
 
 ## Commands
 
-Everything routes through the launcher; `--config` selects the file, and `mode`
-(train / inference / sample / …) lives *inside* the config, not on the CLI.
+Everything goes through the launcher. `--config` picks the file; `mode` lives
+**inside** the config, not on the CLI.
 
 ```bash
-# Validate only (all applicable checks, reports every problem together):
-python AI_CAE4ALL_main.py --config configs/Transolver/deterministic/ex2/baseline/config_train_transolver3.txt --check
-
-# Show the exact native command without launching:
-python AI_CAE4ALL_main.py --config configs/Neural_Operator/deterministic/ex1/baseline/config_train_fno.txt --dry-run
-
-# A clean preflight auto-launches the native process:
-python AI_CAE4ALL_main.py --config configs/MeshGraphNets/deterministic/ex1/baseline/config_train_himgn.txt
-
-# Introspection (no config needed):
-python AI_CAE4ALL_main.py --list-models        # registered models + install health
-python AI_CAE4ALL_main.py --describe transolver # routing + required fields per mode
-python AI_CAE4ALL_main.py --audit-configs      # structural lint of every checked-in config*.txt
+python AI_CAE4ALL_main.py --config <cfg> --check     # validate only; every problem at once
+python AI_CAE4ALL_main.py --config <cfg> --dry-run   # print the native command
+python AI_CAE4ALL_main.py --config <cfg>             # clean preflight → launch
+python AI_CAE4ALL_main.py --list-models              # routes + install health
+python AI_CAE4ALL_main.py --describe transolver      # routing + required fields per mode
+python AI_CAE4ALL_main.py --audit-configs            # structural lint of every config*.txt
 ```
 
-Useful flags: `--strict` (promote flagged warnings to errors),
-`--explain-config` (configured/defaulted/inactive/checkpoint-owned key
-breakdown), `--json-report PATH`, and `--skip-{native,filesystem,environment}-check`
-to bypass a probe layer. Installing the root package (`python -m pip install -e .`)
-also provides the `ai-cae4all` command.
+Flags: `--strict` (promote flagged warnings), `--explain-config`
+(configured/defaulted/inactive/checkpoint-owned keys), `--json-report PATH`,
+`--skip-{native,filesystem,environment}-check`. `python -m pip install -e .`
+also installs the `ai-cae4all` command.
 
 ### Tests
 
-There is no root `tests/` directory any more (deleted in `9884fb1`); the
-launcher layer is covered by `--audit-configs` plus per-config `--check`, and
-the Studio backend suite runs in the launcher's own interpreter:
+There is no root `tests/`. The launcher layer is covered by `--audit-configs`
+plus per-config `--check`; the Studio backend runs in the launcher interpreter
+(`pytest` with no path runs it too, via `pyproject.toml`):
 
 ```bash
 python AI_CAE4ALL_main.py --audit-configs
 python -m pytest -q studio/studio_backend
 ```
 
-Method tests run in that method's venv, from that method's directory:
-
-```bash
-cd methods/Neural_Operator && python -m pytest -q tests/
-cd methods/SDFFlow         && python -m pytest -q tests/
-```
-
-Every method except `GeometryIngest` ships a `tests/` package. See
-[docs/guides/testing.md](docs/guides/testing.md) for the full per-layer map.
+Method tests run in that method's venv, from its directory
+(`cd methods/SDFFlow && python -m pytest -q tests/`). Every method except
+GeometryIngest has `tests/`. See [docs/guides/testing.md](docs/guides/testing.md).
 
 ## Launcher architecture (`cae_suite/`)
 
-The launch pipeline is: **parse → resolve → layered preflight → command → subprocess**.
+Pipeline: **parse → resolve → layered preflight → command → subprocess**.
 
-- [config_parser.py](cae_suite/config_parser.py) — parses the flat `key value`
-  text into a `ParsedConfig` (values + per-key source locations + duplicate
-  detection), deliberately **mirroring the native parsers' quirks** (see
-  gotchas below).
-- [registry.py](cae_suite/registry.py) — `MethodRegistry` maps `model` →
-  `MethodSpec` → repo root + entrypoint. Aliased model IDs (e.g. the three
-  neural-operator names) share one spec.
-- [specs/base.py](cae_suite/specs/base.py) + `specs/<method>.py` — each
-  `MethodSpec` declares `known_keys`, required/recommended/default fields per
-  mode/model, `PathRule`s, `import_modules`, `dataset_kind`, and custom
-  `validators`. **This is the single source of truth for config validation**:
-  adding or renaming a native config key means editing the spec's `known_keys`
-  (an unlisted key becomes a `CFG-UNKNOWN-001` warning) and, if it constrains
-  behavior, its validator.
-- [preflight.py](cae_suite/preflight.py) — `run_preflight` runs checks in
-  layers and **short-circuits: each layer runs only if no errors so far**
-  (`spec → filesystem paths → environment → dataset → checkpoint → native
-  probe`). It builds the final `command` list.
-- [path_checks.py](cae_suite/path_checks.py) — resolves native config paths
-  against the method repository and flags missing inputs, unwritable outputs,
-  and case mismatches.
-- [diagnostics.py](cae_suite/diagnostics.py) — `Severity` (ERROR/WARNING/
-  NOTICE), `Diagnostic` (with `promote_in_strict`), and the report renderer.
-- [cli.py](cae_suite/cli.py) — arg parsing, the introspection subcommands, and
-  the exit-code mapping.
-- [launcher.py](cae_suite/launcher.py) — `launch_and_wait`; the child runs in
-  its own process group so Ctrl-C is forwarded and escalated cleanly on both
-  Windows and POSIX.
-- [settings.py](cae_suite/settings.py) — loads `ai_cae4all.local.toml` to pick
-  each method's Python interpreter.
+- [config_parser.py](cae_suite/config_parser.py) — flat `key value` →
+  `ParsedConfig` (values, per-key source lines, duplicate detection),
+  **mirroring the native parsers' quirks** (below).
+- [registry.py](cae_suite/registry.py) — `MethodRegistry`: `model` →
+  `MethodSpec` → repo root + entrypoint. Aliased IDs share a spec;
+  `default_specs()` adds the optional routes only if present.
+- [specs/base.py](cae_suite/specs/base.py) + `specs/<method>.py` — each spec
+  declares `known_keys`, required/recommended/default fields per mode,
+  `PathRule`s, `import_modules`, `dataset_kind`, and validators. **The single
+  source of truth for config validation**: an unlisted key is a
+  `CFG-UNKNOWN-001` warning.
+- [preflight.py](cae_suite/preflight.py) — `run_preflight` runs layers and
+  **short-circuits on the first layer with errors**: spec → filesystem →
+  environment → dataset → checkpoint → native probe. Builds the `command`.
+- [path_checks.py](cae_suite/path_checks.py) — resolves paths against the
+  method repo; missing inputs, unwritable outputs, case mismatches.
+- [diagnostics.py](cae_suite/diagnostics.py) — `Severity`, `Diagnostic`
+  (`promote_in_strict`), report rendering.
+- [cli.py](cae_suite/cli.py) — args, introspection commands, exit codes.
+- [launcher.py](cae_suite/launcher.py) — `launch_and_wait`; child in its own
+  process group so Ctrl-C forwards and escalates on Windows and POSIX.
+- [settings.py](cae_suite/settings.py) — reads `ai_cae4all.local.toml` for
+  per-method interpreters.
 
-### Probes run in the *target method's* venv, not the launcher's
+**Probes run in the target method's venv.**
+[native_probe.py](cae_suite/native_probe.py) (imports the native config
+validator), [dataset_probe.py](cae_suite/dataset_probe.py) (HDF5 schema and
+shape/feature-count cross-checks) and
+[checkpoint_probe.py](cae_suite/checkpoint_probe.py) (`weights_only` metadata:
+model/stage/normalization consistency) are subprocesses under the resolved
+method Python, so `--check` validates against the real runtime environment.
 
-Three helper scripts are executed as **subprocesses under the resolved method
-Python**, so the launcher validates against the environment the model will
-actually run in: [native_probe.py](cae_suite/native_probe.py) (imports the
-method's native config validator), [dataset_probe.py](cae_suite/dataset_probe.py)
-(HDF5 schema + shape/feature-count cross-checks against the config), and
-[checkpoint_probe.py](cae_suite/checkpoint_probe.py) (safe `weights_only`
-metadata inspection — model/stage/normalization consistency). This is why the
-per-method venv wiring below matters even for `--check`.
-
-### Diagnostic-code prefix → exit code
-
-`_preflight_exit_code` in [cli.py](cae_suite/cli.py) maps the first matching
-error class: `ROUTE-*` → 3, `ENV-*` → 4, `NATIVE-CHECK-*` → 5, any other error
-→ 2. `0` = success/validated. Preserve these prefixes when adding checks;
-tooling keys off them.
+**Exit codes** (`_preflight_exit_code` in cli.py, first matching error class):
+`ROUTE-*` → 3, `ENV-*` → 4, `NATIVE-CHECK-*` → 5, any other error → 2,
+success → 0. Keep these prefixes when adding checks; tooling keys off them.
 
 ## Cross-cutting conventions
 
-### Per-method Python interpreters
+### Per-method interpreters
 
 Copy [ai_cae4all.local.example.toml](ai_cae4all.local.example.toml) to
-`ai_cae4all.local.toml` (git-ignored) to point each method at its own venv.
-`resolve_python` in [settings.py](cae_suite/settings.py) **intentionally never
-calls `Path.resolve()`** on the interpreter path: a venv's `python` is a symlink
-whose location CPython walks up from to find `pyvenv.cfg`; dereferencing it
-would silently drop the venv's site-packages. When launched from an already
-activated venv with no local TOML, that venv's Python is used for everything.
+`ai_cae4all.local.toml` (git-ignored). `resolve_python` **never calls
+`Path.resolve()`** on the interpreter: a venv `python` is a symlink CPython
+walks up from to find `pyvenv.cfg`, and dereferencing it drops the venv's
+site-packages. With no local TOML, an activated venv's Python is used for all.
+
+### Config value parsing (shared with every native repo)
+
+Faithful to the native format, quirks included. Do not "fix" these without
+updating every native call site:
+
+- A **single value is a bare scalar**, not a one-element list
+  (`test_batch_idx 0` → `0`); comma/space-separated values become lists.
+- **`int` vs `str` matters**: `100` → `int`, but `1e-4` stays a **string**;
+  every numeric consumer converts explicitly (`float(config.get(...))`).
+- **Path keys keep their case**; every other string value is lowercased. The set
+  is `PATH_KEYS` in `cae_suite/config_parser.py`, mirrored in each native
+  `general_modules/load_config.py`. **A new path key means editing both.**
+  (MLP and GeometryIngest store raw strings and need no exemption.)
+  `PATH-CASE-001` warns when config case differs from disk: fine on Windows,
+  broken on Linux.
+- `true`/`false` → `bool`; `%` starts a comment; a UTF-8 **BOM is an error**;
+  **duplicate keys are an error** (native would silently take the last).
 
 ### Artifact paths in native code
 
-`log_file_dir` is a **plain cwd-relative path**, like every other path key. The
-trainers used to prefix it with a literal `'outputs/'`, which configs cancelled
-with an extra `../` — that hack is gone from all five repos that had it
-(`training_profiles/setup.py::init_log_file`). If you add a new artifact path in
-native code, spell its default `../../output/<slug>/...`; do not reintroduce a
-method-local `outputs/`.
-
-`init_log_file` records `config['log_dir']`, and the periodic train/test
-prediction dumps write under it, so every artifact of one run lands together.
-
-### Mid-training resume (`resume_training`)
-
-Every training repo except MLP carries `general_modules/resume_state.py`,
-**copied byte-for-byte** into eight repos (they share no imports), so an edit to
-one copy goes to all eight. With `resume_training true` the trainer:
-
-- keeps `<checkpoint>.resume` (everything the next epoch reads, RNG included) at
-  the first epoch boundary after every `resume_interval_minutes` (15);
-- on start, continues from a state written under the same config fingerprint
-  (`gpu_ids`, `log_dir`, the resume keys and `_`-keys excluded) and refuses any
-  other;
-- removes the state once the final checkpoint is written, so a cut-off run
-  never looks finished.
-
-A resumed run appends `==== Resume [TAG] at epoch K` to its epoch log instead of
-a new header, and `configs/campaigns/dataset_matrix/score_rank.py` reads it as
-one run. Multi-process entry points reject the key. With the key off (the
-default) training is unchanged. The dataset_matrix runner appends both keys to
-every training's launch copy; the checked-in configs do not carry them.
-**Adding mutable training state** to a trainer (a tracker, a stateful
-schedule) means adding it to that trainer's `resume.save({...})` dict too, or
-resumed runs silently diverge from uninterrupted ones. Likewise, a
-**persistent-worker DataLoader** draws its worker base seed (from the global RNG,
-or from its own `generator=`) only when its iterator is first built, so a
-resuming trainer calls `iter(loader)` on each one *before* `resume.restore_rng()`
-and before restoring any loader generator; otherwise that draw consumes the
-restored stream and every later shuffle shifts. RNG used *inside* workers is not
-restored, so two cases resume statistically equivalent, not bit-identical:
-SDFFlow's VAE surface subsampling with `vae_num_workers > 0`, and the MGN-V
-`_pick_hierarchy_variant` draw (every `latent_type`) with `num_workers > 0` and
-`hierarchy_variants > 1`.
-
-### Periodic visualization (every method that trains)
-
-`test_interval` gates a periodic pass that writes a picture into the **log
-file's directory**, so every artifact of a run lands together. `display_testset`
-(default True everywhere) turns it on; `display_trainset` additionally runs the
-pass over a few training samples under a `train/` prefix, which is what
-separates underfitting from a generalization gap. What gets drawn follows what
-the method predicts:
-
-| method | picture |
-| --- | --- |
-| MeshGraphNets, MGN-V (every `latent_type`), Neural_Operator, **Transolver** | mesh HDF5 + a 2×2 PNG (predicted vs truth × normalized vs denormalized) on the reconstructed surface, coloured by `plot_feature_idx` |
-| MLP | parity plot of the held-out split, one panel per output column |
-| SimulGenVAE | truth / reconstruction / \|error\| field images (VAE) and a latent parity plot (LC) |
-| SAR | VAE parity scatter per output channel; SAR spread histogram (FEA draws vs samples) for one system |
-| LDGN | the same two pictures as SAR (`vae_parity_ep{k}.png`, `ldgn_samples_ep{k}.png`) |
-| SDFFlow | a strip of the reconstructed (VAE) or generated (FM) shapes, beside the STLs |
-| GeometryIngest | `preview` renders the first ingested samples; in `mode inspect` it is the only output |
-
-Two rules hold across all of them. **The renderer needs triangles** --
-`edges_to_triangles_*` reconstructs the surface from `edge_index` alone, and on
-a quad/hex mesh (zero 3-cycles) `quads_to_triangles` splits 4-cycles instead;
-with no surface at all the scalars are drawn per node. And **every plotting
-backend is imported lazily**: a missing matplotlib or pyvista prints a note and
-the run continues. With no DISPLAY, an EGL/OSMesa VTK (vtk>=9.4 falls back on
-its own) still writes a correct PNG after warning about the X server; an X-only
-VTK (PyPI vtk<9.4) calls `abort()` instead, so `mesh_utils_fast.
-offscreen_rendering_available()` probes one render in a child process first and
-skips the PNGs when that child dies.
-
-### Config value parsing (shared with the native repos)
-
-The parser in [config_parser.py](cae_suite/config_parser.py) is faithful to the
-native `key value` format, quirks included — do not "fix" these without updating
-every native call site:
-
-- A **single value parses to a bare scalar, not a one-element list**
-  (`test_batch_idx 0` → `0`). Comma- or space-separated values become lists.
-- **`int` vs `str` for numerics is significant**: `100` → `int`, but `1e-4` has
-  no `.` so it fails `int()`/`float()` fast-paths and stays a **string** — every
-  numeric consumer converts explicitly (`float(config.get(...))`).
-- **Path-valued keys are exempt from the value lowercasing** and keep the case
-  written in the config; every other string value is still lowercased. The set
-  lives in `cae_suite/config_parser.py::PATH_KEYS` and is mirrored per repo as
-  `PATH_KEYS` in each native `general_modules/load_config.py` — **adding a new
-  path key means editing both**, or the launcher's mirror and the native parser
-  will disagree about what the model actually opens. `methods/MLP/` and
-  `methods/GeometryIngest/` store raw value strings and need no exemption.
-  Preflight's `PATH-CASE-001` (warning) flags a config whose path case
-  differs from the on-disk name — it resolves on Windows but not on Linux.
-- `true`/`false` → `bool`; `%` starts a comment; a UTF-8 **BOM is a hard error**
-  (native parsers misread the first key); duplicate keys are an error (native
-  would silently take the last).
+`log_file_dir` is a plain cwd-relative path like every other path key
+(`training_profiles/setup.py::init_log_file` records `config['log_dir']`, and
+periodic dumps write under it). A new native artifact path defaults to
+`../../output/<slug>/...`; never reintroduce a method-local `outputs/`.
 
 ### Dataset contract
 
-The MeshGraphNets, Transolver, and Neural_Operator methods all read the **same
-mesh HDF5 layout** with no conversion step — `data/{sample_id}/{nodal_data,
-mesh_edge}` where `nodal_data` is `[num_features, num_timesteps, num_nodes]`,
-rows `0:3` are reference coordinates, and `write_preprocessing` may append
-train-derived normalizers. SDFFlow uses a different SDF layout. See
-[docs/reference/DATASET_FORMAT.md](docs/reference/DATASET_FORMAT.md) for the
-full spec.
-
-Row layout past the coordinates is:
+MeshGraphNets, MGN-V, Transolver, Neural_Operator (and SimulGenVAE, densely)
+read one **mesh HDF5** layout with no conversion: `data/{sample_id}/{nodal_data,
+mesh_edge}`, `nodal_data` = `[num_features, num_timesteps, num_nodes]`, rows
+`0:3` = reference coordinates; `write_preprocessing` may append train-derived
+normalizers. SDFFlow uses its own SDF layout. Full spec:
+[docs/reference/DATASET_FORMAT.md](docs/reference/DATASET_FORMAT.md).
 
 ```text
 rows [3 : 3+input_var]              state:      input AND output
 rows [3+input_var : ... +cond_var]  conditions: input ONLY  (cond_var, default 0)
+last row (if present)               node type / part label, copied through
 ```
 
-**`cond_var`** declares trailing **input-only** rows — known boundary/flight
-conditions the model reads but never predicts. They land in `graph.x` as
-`[state | conditions | positional | node-type one-hot]`, are read from disk even
-in the static (T=1) case where the state block is zeroed, get their own
-normalization statistics, and are carried unchanged through an autoregressive
-rollout. `cond_var 0` reproduces the pre-conditioning behavior exactly.
-`input_var == output_var` is still required for T>1 — that constraint is about
-the AR feedback loop, which conditioning rows sit outside of.
+**`cond_var`** rows are known conditions the model reads but never predicts:
+in `graph.x` as `[state | conditions | positional | node-type one-hot]`, read
+even when the T=1 state block is zeroed, normalized separately, carried
+unchanged through AR rollout. `cond_var 0` is the unconditioned behavior.
+`input_var == output_var` is still required for T>1 (the AR loop).
+SimulGenVAE reads the same rows via `lc_data_type hdf5` + `cond_var`.
 
-SimulGenVAE reads the same rows as a per-sample parameter vector via
-`lc_data_type hdf5` + `cond_var`. MLP needs nothing: its tabular `X`/`Y`
-contract already separates inputs from outputs.
+### Mid-training resume (`resume_training`)
+
+`general_modules/resume_state.py` is **copied byte-for-byte** into every
+training repo except MLP (six tracked, plus the local SAR/LDGN copies); the
+repos share no imports, so an edit to one goes to all. With `resume_training
+true` the trainer:
+
+- writes `<checkpoint>.resume` (everything the next epoch reads, RNG included)
+  at the first epoch boundary after every `resume_interval_minutes` (15);
+- resumes only from a state with the same config fingerprint (`gpu_ids`,
+  `log_dir`, resume keys and `_`-keys excluded);
+- deletes the state once the final checkpoint is written.
+
+A resumed run appends `==== Resume [TAG] at epoch K` to its epoch log, which
+`configs/campaigns/dataset_matrix/score_rank.py` reads as one run.
+Multi-process entry points reject the key; off (default) changes nothing. The
+dataset_matrix runner appends both keys to each launch copy.
+
+- **New mutable training state** (tracker, stateful schedule) must go into that
+  trainer's `resume.save({...})`, or resumed runs silently diverge.
+- **Persistent-worker DataLoaders** draw their worker seed when the iterator is
+  first built, so call `iter(loader)` on each **before**
+  `resume.restore_rng()` and before restoring any loader generator.
+- Worker-side RNG is not restored, so two cases resume statistically, not
+  bit-identically: SDFFlow VAE surface subsampling with `vae_num_workers > 0`,
+  and MGN-V `_pick_hierarchy_variant` with `num_workers > 0` and
+  `hierarchy_variants > 1`.
+
+### Periodic visualization
+
+`test_interval` gates a pass that writes a picture into the **log file's
+directory**. `display_testset` (default True) turns it on; `display_trainset`
+adds a few training samples under `train/` (underfitting vs generalization gap).
+
+| method | picture |
+| --- | --- |
+| MeshGraphNets, MGN-V, Neural_Operator, Transolver | mesh HDF5 + 2×2 PNG (pred vs truth × normalized vs denormalized), coloured by `plot_feature_idx` |
+| MLP | parity plot per output column |
+| SimulGenVAE | truth / reconstruction / \|error\| images (VAE), latent parity (LC) |
+| SDFFlow | strip of reconstructed or generated shapes beside the STLs |
+| SAR, LDGN | VAE parity per channel; spread histogram for one system |
+| GeometryIngest | `preview` of the first samples (the only output of `inspect`) |
+
+**The renderer needs triangles**: `edges_to_triangles_*` rebuilds the surface
+from `edge_index`; on quad/hex meshes `quads_to_triangles` splits 4-cycles; with
+no surface, scalars are drawn per node. **Every plotting backend is imported
+lazily**: a missing matplotlib/pyvista prints a note and the run continues.
+Headless, an EGL/OSMesa VTK (vtk>=9.4) works; an X-only VTK `abort()`s, so
+`mesh_utils_fast.offscreen_rendering_available()` probes one render in a child
+process first and skips PNGs if it dies.
 
 ## The Studio (`studio/`)
 
-A browser front end over the *same* launcher: it builds a native flat-text
-config per executable block, runs `cae_suite`'s real preflight on it, and
-subprocess-launches the same command the CLI would. It imports no ML code and
-reimplements no model. **When the GUI and the launcher disagree, the launcher is
-right and the GUI has a bug** — see [docs/GUI.md](docs/GUI.md) for the manual.
+A browser front end over the **same** launcher: it builds a native config per
+executable block, runs `cae_suite`'s real preflight, and launches the same
+command the CLI would. It imports no ML code. **When the GUI and the launcher
+disagree, the launcher is right.** Manual: [docs/GUI.md](docs/GUI.md).
 
 ```bash
 cd studio && python start_studio.py        # http://127.0.0.1:8080/index.html
-python -m pytest -q studio/studio_backend  # backend tests
+python -m pytest -q studio/studio_backend
 ```
 
-Rules that are load-bearing, not style:
+Load-bearing rules:
 
-- **The live `MethodSpec` owns the config contract.** `/api/models` already
-  publishes `known_keys`, `required`, `defaults`, `defaults_by_mode` and
-  `modes`; `constants.js` holds only presentation (labels, help, opinionated
-  defaults) plus `CHOICES`, which must mirror a spec validator exactly. Never
-  invent a dropdown value — a value the sheet offers and the launcher rejects is
-  the recurring failure mode here.
-- **One server per port.** `allow_reuse_address = False` makes a second instance
-  fail loudly instead of splitting requests. The registry is read once at
-  startup, so after touching `cae_suite/specs/` or `studio_backend/` you must
-  **restart the server** — otherwise the GUI validates against a stale spec and
-  reports failures that do not exist.
-- **Never import `studio_backend.state` from a helper script**; constructing
+- **The live `MethodSpec` owns the config contract.** `/api/models` publishes
+  `known_keys`, `required`, `defaults`, `defaults_by_mode`, `modes`.
+  `constants.js` holds presentation only, plus `CHOICES`, which must mirror a
+  spec validator exactly. Never invent a dropdown value.
+- **One server per port** (`allow_reuse_address = False`). The registry is read
+  once at startup: after touching `cae_suite/specs/` or `studio_backend/`,
+  **restart the server**, or it validates against a stale spec.
+- **Never import `studio_backend.state` from a helper script**: constructing
   `StudioState()` runs job recovery and can rewrite a live server's records.
 - **Templates are default profiles, not demos.** Every live route has one in
-  `TEMPLATES`, each mirroring a checked-in config, and each must pass Validate
-  on a fresh checkout. A new route needs a template too — a spec added after the
-  last GUI audit is invisible to it (this is exactly how the since-retired
-  `chi-mgnflow` route shipped with none).
+  `TEMPLATES`, mirroring a checked-in config and passing Validate on a fresh
+  checkout. A new route needs a template.
 - **The held-out split is its own source block.** Wiring the training dataset
-  into an Inference block makes the graph say "predict what you trained on", and
-  the graph wins over the trainer's `infer_dataset`.
-- **Coordinates are never a prediction, and neither is the node-type row.** Rows
-  0:3 of `nodal_data` are copied verbatim into every rollout, so scoring them
-  yields R² = 1 for any model, and the trailing part/`node_type` label is copied
-  through the same way. The evaluator refuses a coordinate-only mapping;
-  `nodal_field` (SimulGen-VAE reconstruct) carries physical rows only and is
-  scored in full. The five rollout writers record `output_var` beside
-  `num_features` so the scoreable rows are **read**, not inferred — keep that
-  attribute when you touch `inference_profiles/rollout.py`.
-- **A control the user cannot act on does not ship.** A port that nothing reads,
-  a field a workspace overwrites, a preset that duplicates another, a preview
-  drawn from invented numbers: each one asserts something the code does not do.
-  Prefer removing it, or rendering it read-only with the source of its value
-  named ("set in Evaluation"), over leaving it editable.
-- **Check the precondition you state.** Compare Models tells the user to pick
-  runs from one held-out set; it now cross-checks the `contract` and sample IDs
-  in each CSV and reports a mismatch. The same applies to the Optimization
-  constraint box, validated against the selected CSV before the run.
-- **`input_var`/`output_var` stay the user's to set** on mesh routes. With
-  `cond_var` rows present they are not the feature-row count, and deriving them
-  reproduces the constant-target class of bug.
+  into Inference means "predict what you trained on", and the graph wins over
+  the trainer's `infer_dataset`.
+- **Coordinates and the node-type row are never predictions.** They are copied
+  verbatim into rollouts, so scoring them gives R² = 1. The evaluator refuses a
+  coordinate-only mapping. The rollout writers record `output_var` beside
+  `num_features` so scoreable rows are read, not inferred; keep it when editing
+  `inference_profiles/rollout.py`.
+- **A control the user cannot act on does not ship.** Remove it, or render it
+  read-only naming the source of its value.
+- **Check the precondition you state** (Compare Models cross-checks `contract`
+  and sample IDs; the Optimization constraint box validates against its CSV).
+- **`input_var`/`output_var` stay the user's to set** on mesh routes: with
+  `cond_var` rows they are not the feature-row count.
 
 ## Documentation
 
-All documentation lives under [docs/](docs/) — see [docs/README.md](docs/README.md)
-for the index. Method directories keep only their own `CLAUDE.md`/`README.md`.
+Everything lives under [docs/](docs/) ([index](docs/README.md)); method
+directories keep only their own `CLAUDE.md`/`README.md`.
 
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — full architecture guide, one
-  section per method, plus the honest known-gaps list.
-- [docs/CONFIGURATION.md](docs/CONFIGURATION.md) — config grammar, routes, and
-  pointers to the executable key/default contracts.
-- [docs/GUI.md](docs/GUI.md) — the Studio manual: blocks, templates, the config
-  sheet, validation, evaluation rules, and how to extend it.
-- [docs/reference/](docs/reference/) — dataset format, public dataset
-  provenance, per-method config key references.
-- [docs/research/](docs/research/) — design notes grouped by method. These are
-  design context, not implementation truth; the code wins on current behaviour.
+- [ARCHITECTURE.md](docs/ARCHITECTURE.md) — per-method architecture and known gaps.
+- [CONFIGURATION.md](docs/CONFIGURATION.md) — config grammar, routes, contracts.
+- [GUI.md](docs/GUI.md) — Studio manual and how to extend it.
+- [methods/](docs/methods/) — one numbered doc per method (`00`–`11`).
+- [reference/](docs/reference/) — dataset format, public dataset provenance,
+  per-method config key references.
+- [research/](docs/research/) — design notes by method. Context, not truth: the
+  code wins. Dated report directories (`mgnv_*_2026-09-*`) are frozen snapshots
+  whose scripts depend on their depth; do not move them.
+
+MGN-V hyperparameter sweeps are indexed in
+[configs/MeshGraphNets_Variational/hyperparameter_sweep/README.md](configs/MeshGraphNets_Variational/hyperparameter_sweep/README.md).
 
 ## When you change something
 
-- **New/renamed native config key** → update the method's spec `known_keys`
-  (and validator/required lists) in `cae_suite/specs/`, or the launcher will
-  reject a valid config or accept an invalid one. Then re-run
-  `--audit-configs`.
-- **New method repo** → create `methods/<Name>/` and `configs/<Name>/`, add a
-  `build_*_spec()` with `repository="methods/<Name>"`, and register it in
-  [registry.py](cae_suite/registry.py)'s `MethodRegistry.__init__`.
-- **New artifact path** → point it at `../../output/...`; never inside
-  `methods/`.
-- **Changing behavior inside a method repo** → follow that repo's `CLAUDE.md`
-  and run its own tests; the launcher change (if any) is usually just the spec.
-- **New model route** → the Studio installs a block for it automatically from
-  the live spec, but add a `TEMPLATES` entry (a default profile that passes
-  Validate) and `HELP` text for its route-specific keys, or it arrives in the
-  GUI as an unwired block with undocumented fields. Restart the Studio server so
-  its registry picks the route up.
-- **New enum in a spec validator** → mirror it in `CHOICES`
-  (`studio/src/constants.js`), or the config sheet renders free text and accepts
-  values the launcher rejects.
+- **New/renamed native config key** → the spec's `known_keys` (and
+  validator/required lists), then `--audit-configs`. A new **path** key also
+  goes into both `PATH_KEYS` copies.
+- **New spec enum** → mirror it in `CHOICES` (`studio/src/constants.js`).
+- **New method** → `methods/<Name>/` + `configs/<Name>/`, a `build_*_spec()`
+  with `repository="methods/<Name>"`, registered in `default_specs()` in
+  [registry.py](cae_suite/registry.py); a Studio `TEMPLATES` entry and `HELP`
+  text; restart the Studio.
+- **New artifact path** → `../../output/...`, never inside `methods/`.
+- **Behavior inside a method** → follow its `CLAUDE.md` and run its tests; the
+  launcher change is usually just the spec.
+- **`resume_state.py`** → edit all copies identically.

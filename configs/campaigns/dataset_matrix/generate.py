@@ -19,7 +19,7 @@ REPOSITORIES = {**{m: 'Neural_Operator' for m in METHODS[:3]},
                 'lsh_vae': 'SimulGenVAE', 'sdfflow': 'SDFFlow'}
 # Lane assignment: one GPU per method group on an 8-card box, cheap routes
 # sharing a lane and the few-example generative routes bundled two per lane.
-# configs/run_all_135.sh and configs/run_all_136.sh drive these lanes. No
+# run_135.sh and run_136.sh (beside this file) drive these lanes. No
 # arm sits on lane 2 (the hand-maintained geometry ex4, Thingi10K, was
 # removed on 2026-10-07); its worker takes over other lanes' arms. Lane 7
 # lost its chi_mgnflow arms when that route was merged into meshgraphnets-v

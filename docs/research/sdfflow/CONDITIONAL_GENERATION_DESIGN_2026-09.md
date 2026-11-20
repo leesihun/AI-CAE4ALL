@@ -11,7 +11,7 @@ section 9). Section 6 lists what stays unverified until `config_train_v3_fea.txt
 has trained. This note is design context; the code and the configs win on
 current behaviour (`methods/SDFFlow/CLAUDE.md` is the contract).
 
-Files this design touches: `methods/SDFFlow/add_fea_conditions.py`,
+Files this design touches: `methods/SDFFlow/scripts/add_fea_conditions.py`,
 `general_modules/{condition_names, sdf_dataset, descriptor_proxy,
 descriptor_calibration, descriptor_refinement, descriptor_guidance}.py`,
 `model/velocity_net.py`, `inference_profiles/{sample, interpolate, evaluate}.py`,
@@ -526,9 +526,9 @@ config is `../../...` because the native process runs in `methods/SDFFlow`.
 # 0. Append the FEA labels to the dataset once (dry run first; refuses unmatched shapes
 #    and an existing sidecar; --list_names prints the registry).
 cd methods/SDFFlow
-python add_fea_conditions.py --h5 ../../dataset/geometry_generation/ex1_deepjeb.h5 \
+python scripts/add_fea_conditions.py --h5 ../../dataset/geometry_generation/ex1_deepjeb.h5 \
     --csv D:/CAE_datasets_raw/deepjeb/Scalar/bracket_labels.csv --dry_run
-python add_fea_conditions.py --h5 ../../dataset/geometry_generation/ex1_deepjeb.h5 \
+python scripts/add_fea_conditions.py --h5 ../../dataset/geometry_generation/ex1_deepjeb.h5 \
     --csv D:/CAE_datasets_raw/deepjeb/Scalar/bracket_labels.csv
 cd ../..
 

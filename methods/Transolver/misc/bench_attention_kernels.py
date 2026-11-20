@@ -15,7 +15,7 @@ forward streams, dropping each tile's [heads, tile, slice_num] weights once they
 are folded into the aggregates and rebuilding them in backward. So expect
 untiled-vs-tiled to show a large gap on its own. Use this script to pick
 `--chunk-size` for a given profile rather than to choose a kernel; `slice_space`
-is the shipped default. CONFIGURATION_REFERENCE.md 8.4 has the whole-model table.
+is the shipped default. The whole-model table is in `git show 3ae5930^:CONFIGURATION_REFERENCE.md`, section 8.4.
 """
 import argparse
 import os

@@ -27,13 +27,13 @@ TRANSOLVER_KEYS = frozenset(
         "split_seed", "input_var", "output_var", "cond_var", "feature_loss_weights",
         "positional_features", "use_node_types", "coordinate_normalization", "latent_dim",
         "num_layers", "num_heads", "slice_num", "attention_kernel", "chunk_size",
-        # Amortized (two-stream) training -- CONFIGURATION_REFERENCE.md 9.6.
+        # Amortized (two-stream) training.
         "amortized_training", "amortized_cache_nodes", "amortized_query_nodes",
         "infer_mode", "infer_chunk_size", "mlp_ratio", "dropout", "temperature_init",
         "temperature_min", "temperature_max", "small_output_init", "training_epochs",
         "batch_size", "learningr", "weight_decay", "warmup_epochs", "num_workers",
         "prefetch_factor", "grad_accum_steps", "max_grad_norm", "std_noise", "noise_gamma",
-        # Time integration (CONFIGURATION_REFERENCE.md section 3.5): ar_ot or ar_rt.
+        # Time integration: ar_ot or ar_rt.
         "time_integration",
         "augment_geometry", "use_amp", "use_checkpointing", "use_ema", "ema_decay",
         "use_compile", "val_interval", "test_interval", "test_max_batches",
@@ -149,7 +149,7 @@ def validate_transolver(ctx: SpecValidationContext) -> None:
     # cross-validated: a tiled forward streams on its own (each tile's
     # [heads, tile, slice_num] is dropped and rebuilt in backward), so
     # chunk_size > 0 with use_checkpointing False is the normal, recommended
-    # configuration. See CONFIGURATION_REFERENCE.md 8.4.
+    # configuration. (The measured table was in CONFIGURATION_REFERENCE.md 8.4, removed in 3ae5930; `git show 3ae5930^:CONFIGURATION_REFERENCE.md`.)
 
     _validate_amortized(ctx, kernel)
 

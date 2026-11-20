@@ -9,7 +9,7 @@ case-insensitively.
 Run every mode through the same launcher:
 
 ```powershell
-python MeshGraphNets_main.py --config path\to\config.txt
+python MeshGraphNets_Variational_main.py --config path\to\config.txt
 ```
 
 ## Required Execution Keys
@@ -138,7 +138,7 @@ same mesh topology. For this objective, keep `lambda_mmd` low (≈ 0.1) and
 | `vae_encoder_mp_layers` | VAE encoder | Message-passing layers inside the posterior encoder. Default `5` in model construction. |
 | `vae_graph_aware` | VAE encoder | Fuses graph input `x` with target `y` in the posterior encoder. Recommended `True` for multi-type datasets: enables type-conditional spread encoding. |
 | `z_conditioning` | model | How `z` reaches the processor. `concat` (default, legacy) applies a bare `Linear([x, z])` before every block: since `z` is broadcast, that adds ONE constant vector per graph, and the non-residual Linear compounds a ~1.33x gain per block under the repo's kaiming init. `adaln` emits `(shift, scale, gate)` from `z` and modulates the block instead — zero-initialized so it is EXACTLY the unconditioned block at init. **Renames the per-block conditioning parameters**, so it is persisted in the checkpoint's `model_config` and a checkpoint only loads under the value it trained with. See [MESHGRAPHNET_ARCHITECTURE.md](../../research/meshgraphnets_variational/MESHGRAPHNET_ARCHITECTURE.md). |
-| `latent_type` | model, training, inference | Where `z` lives on the V-cycle: `global` (default; `num_z` per-graph slots, HI-MGN-V), `local` (`latent_ch` channels per coarsest-level node with a coarse-node flow-matching prior, HI-MGNflow), or `hybrid` (both, HI-MGN-hybrid). Architecture-defining and persisted in `model_config`. `local`/`hybrid` train single-stage and jointly, and preflight requires `use_multiscale True`, `prior_family fm`, no `prior_fm_moments`, `prior_fm_velocity_arch mlp`, `prior_moment_calibration_epochs 0`, and not `parallel_mode model_split`. HI-MGNflow (`chi-mgnflow`) was merged into `meshgraphnets-v` as `latent_type local` on 2026-10-19; the old repo is in `junk/legacy_HI_MGNFlow/`. |
+| `latent_type` | model, training, inference | Where `z` lives on the V-cycle: `global` (default; `num_z` per-graph slots, HI-MGN-V), `local` (`latent_ch` channels per coarsest-level node with a coarse-node flow-matching prior, HI-MGNflow), or `hybrid` (both, HI-MGN-hybrid). Architecture-defining and persisted in `model_config`. `local`/`hybrid` train single-stage and jointly, and preflight requires `use_multiscale True`, `prior_family fm`, no `prior_fm_moments`, `prior_fm_velocity_arch mlp`, `prior_moment_calibration_epochs 0`, and not `parallel_mode model_split`. HI-MGNflow (`chi-mgnflow`) was merged into `meshgraphnets-v` as `latent_type local` on 2026-10-19; the old repo is in git history (commit `9db47d6`). |
 | `latent_ch` | model (`local`/`hybrid`) | Latent channels per coarsest-level node. Default `4`. Ignored (warned) with `latent_type global`. |
 | `vae_local_mp_layers` | VAE encoder (`local`/`hybrid`) | Depth of the coarse-node posterior head. Default `2`. Ignored (warned) with `latent_type global`. |
 | `latent_reg` | training | Regularizer pulling the posterior toward `N(0,I)`: `mmd` (default, weight `lambda_mmd`) or per-sample `kl` (weight `kl_weight`). |

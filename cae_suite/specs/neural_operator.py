@@ -30,7 +30,7 @@ COMMON_KEYS = frozenset(
         "num_workers", "prefetch_factor", "grad_accum_steps", "max_grad_norm",
         "use_parallel_stats", "train_eval_subset_size",
         "std_noise", "noise_gamma", "noise_std_ratio", "augment_geometry", "use_amp",
-        # Time integration (CONFIGURATION_REFERENCE.md section 3.5): ar_ot or ar_rt.
+        # Time integration: ar_ot or ar_rt.
         "time_integration",
         "use_checkpointing", "use_ema", "ema_decay", "use_compile", "val_interval",
         "test_interval", "test_max_batches", "test_batch_idx", "plot_feature_idx",

@@ -195,7 +195,7 @@ def validate_config(config, source='configuration'):
     # matrix is built, not whether it is kept -- so tiling without recompute is
     # a perfectly valid configuration. It just caps the transient working set
     # rather than removing retention, which is a smaller win at high
-    # num_layers. See CONFIGURATION_REFERENCE.md 8.4 for the measured table.
+    # num_layers. The measured table is in `git show 3ae5930^:CONFIGURATION_REFERENCE.md`, section 8.4.
 
     _validate_amortized(config, source, attention_kernel, parallel_mode)
 

@@ -483,7 +483,7 @@ table.h5
   the train split and saved into the checkpoint, so the source HDF5 stays
   read-only (mirroring the operators' `write_preprocessing False` stance).
 - A tiny sample generator is at `dataset/deterministic/mlp/make_sample.py` (writes `train.h5`
-  and `infer.h5`; the shipped `configs/MLP/deterministic/ex1` templates point at them).
+  and `infer.h5`; the Studio MLP template points at them).
 
 **Before training an MLP, check:** `X` has exactly `input_var` columns, `Y` has
 exactly `output_var` columns, and both share the same number of rows.

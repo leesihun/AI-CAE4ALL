@@ -552,7 +552,7 @@ Everything above is the shared mesh HDF5 contract (`data/{id}/nodal_data`).
 SDFFlow uses a **different SDF-sidecar layout** entirely
 (`shapes/{index}/{surface_points, surface_normals, sdf_points, sdf_values,
 cond}` -- see [SDFFlow/CLAUDE.md](../../methods/SDFFlow/CLAUDE.md#data-and-condition-invariants)),
-built by `methods/SDFFlow/build_dataset.py --mesh_dir`, not by anything in
+built by `methods/SDFFlow/scripts/build_dataset.py --mesh_dir`, not by anything in
 `dataset/`. These are staged raw sources for exercising SDFFlow's VAE
 reconstruction/generation on non-bracket "general mechanical CAD" geometry,
 benchmarked against the existing `deepjeb.h5`:

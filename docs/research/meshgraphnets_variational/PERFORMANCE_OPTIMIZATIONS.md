@@ -193,9 +193,9 @@ if is_best or last_epoch:
 
 ---
 
-## 8 — TF32 + expandable memory segments (`MeshGraphNets_main.py`)
+## 8 — TF32 + expandable memory segments (`MeshGraphNets_Variational_main.py`)
 
-**What:** Two global switches added at module level in `MeshGraphNets_main.py`:
+**What:** Two global switches added at module level in `MeshGraphNets_Variational_main.py`:
 
 ```python
 import os
@@ -246,5 +246,5 @@ with `spawn` multiprocessing context.
 | 5 | `training_loop.py` | Eval display throttle + GPU accum | 3× fewer syncs in validation |
 | 6 | `training_loop.py` | DDP no_sync() during accumulation | No wasted all-reduces mid-window |
 | 7 | `single_training.py`, `distributed_training.py` | Best+last checkpoint only | Eliminates per-epoch disk write |
-| 8 | `MeshGraphNets_main.py` | TF32 + expandable_segments | Free fp32 throughput + fragmentation |
+| 8 | `MeshGraphNets_Variational_main.py` | TF32 + expandable_segments | Free fp32 throughput + fragmentation |
 | 9 | `single_training.py`, `distributed_training.py` | val prefetch_factor 1→2 | Reduce loader stall |

@@ -1,7 +1,7 @@
 # 04 — MeshGraphNets-Variational (generative cVAE MGN)
 
 - **`model`**: `meshgraphnets-v`
-- **Repo / entrypoint**: `methods/MeshGraphNets_Variational/` → `MeshGraphNets_main.py`
+- **Repo / entrypoint**: `methods/MeshGraphNets_Variational/` → `MeshGraphNets_Variational_main.py`
 - **Key source**: `model/MeshGraphNets.py`, `model/vae.py`, `model/conditional_prior.py`
 - **Prereqs**: [01_MeshGraphNets_MGN.md](01_MeshGraphNets_MGN.md), [02_HI-MGN.md](02_HI-MGN.md), [00_shared_foundations.md](00_shared_foundations.md)
 - **Docs in-repo**: `docs/MESHGRAPHNET_ARCHITECTURE.md`, `docs/CONFIG_REFERENCE.md`

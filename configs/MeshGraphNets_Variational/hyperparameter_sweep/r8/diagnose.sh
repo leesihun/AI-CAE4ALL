@@ -6,8 +6,8 @@
 #   GPU=1 bash .../r8/diagnose.sh                       # another card (default 0)
 #   bash .../r8/diagnose.sh path/to/config_infer_X.txt  # other checkpoints
 #
-# Default targets: r6 hybrid_e240 (69), r7 hybrid_e480_bs16 (68) and
-# hybrid_e240_bs8 (74). Each runs methods/MeshGraphNets_Variational/misc/
+# Default targets: this round's hybrid_base, hybrid_e360 and hybrid_e720 (the
+# r6/r7 targets it used first are in git history, commit e735316). Each runs methods/MeshGraphNets_Variational/misc/
 # posterior_vs_prior_groups.py on its INFERENCE config: per geometry it decodes
 # the 256 FE draws three ways (posterior sample, posterior mean, prior sample)
 # and scores each against the held-out half like plots.py. Forward passes only,
@@ -28,9 +28,9 @@ PYTHON="${PYTHON:-python}"
 if [ $# -gt 0 ]; then
     CFGS=("$@")
 else
-    CFGS=("$SWEEP/r6/config_infer_hybrid_e240.txt"
-          "$SWEEP/r7/config_infer_hybrid_e480_bs16.txt"
-          "$SWEEP/r7/config_infer_hybrid_e240_bs8.txt")
+    CFGS=("$SWEEP/r8/config_infer_hybrid_base.txt"
+          "$SWEEP/r8/config_infer_hybrid_e360.txt"
+          "$SWEEP/r8/config_infer_hybrid_e720.txt")
 fi
 
 MGNV_PYTHON="${MGNV_PYTHON:-}"

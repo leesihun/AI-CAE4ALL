@@ -778,6 +778,25 @@ function installModelBlock(modelId, model) {
 Object.entries(MODEL_CATALOG).forEach(([modelId, model]) => installModelBlock(modelId, model));
 
 /**
+ * Hide the curated model blocks the backend does not register. SAR and LDGN
+ * are optional routes: their method directories are local-only (git-ignored),
+ * so on a fresh checkout the registry leaves them out and their blocks and
+ * templates must not be offered. The block spec stays installed, so a saved
+ * pipeline that already holds one still renders.
+ */
+export function markUnregisteredModels(liveModelIds) {
+  const live = new Set(liveModelIds);
+  Object.keys(MODEL_CATALOG).forEach(modelId => {
+    const spec = BLOCK_SPECS[`model.${modelId}`];
+    if (spec) spec.unregistered = !live.has(modelId);
+  });
+}
+
+export function templateUsesUnregisteredModel(template) {
+  return (template.nodes || []).some(node => BLOCK_SPECS[node[1]]?.unregistered);
+}
+
+/**
  * Keep a newly registered trainable route usable even before constants.js is
  * updated. Curated entries retain their richer copy/defaults; the live
  * MethodSpec always owns keys, modes, required fields, and published defaults.

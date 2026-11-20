@@ -3,7 +3,7 @@
 2026-09-22 작업본. `manifest.json`이 generate.py가 만드는 67개 train/infer 쌍(134개 config)과
 손으로 관리하는 SDFFlow geometry_generation ex2/ex3 2쌍(`"generated": false`)의 경로를 담는다.
 2026-10-19에 HI-MGNflow(`chi-mgnflow`) route가 `meshgraphnets-v`의 `latent_type local`로 합쳐져
-probabilistic ex1/ex2의 `chi_mgnflow` 2쌍(4개 config)을 matrix에서 뺐다. 옛 repo와 config는 `junk/legacy_HI_MGNFlow/`에 있다.
+probabilistic ex1/ex2의 `chi_mgnflow` 2쌍(4개 config)을 matrix에서 뺐다. 옛 repo와 config는 git history(commit `9db47d6`)에 있다.
 2026-10-07에 SDFFlow ex4(Thingi10K)를 삭제했다: 데이터와 출력은 `_set_aside_20261007/`로 옮겼고 lane 2에는 arm이 없다.
 2026-09-23에 GINO가 suite에서 삭제되어 GINO 11쌍(22개 config)을 matrix에서 뺐다. GPU lane 2는 재배정하지 않았다.
 기존 config는 교체하지 않고 각 사례의 `baseline/`에 추가했다. Shell buckling은 제외했다.
@@ -155,16 +155,16 @@ python AI_CAE4ALL_main.py --config configs/Transolver/deterministic/ex4/baseline
 전체 train→infer는 `run_matrix.py`가 돌리며, 머신마다 wrapper 하나씩이다(Linux 전용):
 
 ```bash
-bash configs/run_all_135.sh     # deterministic ex1, ex2, ex3_full, ex5, ex8 + probabilistic ex1 + geometry ex2  (33 arm / 66 stage)
-bash configs/run_all_136.sh     # deterministic ex3_mid, ex4, ex6, ex7, ex9 + probabilistic ex2 + geometry ex1, ex3  (36 arm / 72 stage)
+bash configs/campaigns/dataset_matrix/run_135.sh     # deterministic ex1, ex2, ex3_full, ex5, ex8 + probabilistic ex1 + geometry ex2  (33 arm / 66 stage)
+bash configs/campaigns/dataset_matrix/run_136.sh     # deterministic ex3_mid, ex4, ex6, ex7, ex9 + probabilistic ex2 + geometry ex1, ex3  (36 arm / 72 stage)
 
-DRY_RUN=1 bash configs/run_all_135.sh        # 계획만 출력, 아무것도 쓰지 않음 (nvidia-smi는 조회함)
-CHECK=1 bash configs/run_all_135.sh          # 남은 모든 stage에 launcher --check
-SKIP_GPU_GATE=1 bash configs/run_all_135.sh  # idle 대기 없이 바로 시작
-PYTHON=/path/to/python bash configs/run_all_135.sh   # 기본은 PATH의 python3 (launcher는 3.10+)
+DRY_RUN=1 bash configs/campaigns/dataset_matrix/run_135.sh        # 계획만 출력, 아무것도 쓰지 않음 (nvidia-smi는 조회함)
+CHECK=1 bash configs/campaigns/dataset_matrix/run_135.sh          # 남은 모든 stage에 launcher --check
+SKIP_GPU_GATE=1 bash configs/campaigns/dataset_matrix/run_135.sh  # idle 대기 없이 바로 시작
+PYTHON=/path/to/python bash configs/campaigns/dataset_matrix/run_135.sh   # 기본은 PATH의 python3 (launcher는 3.10+)
 ```
 
-Wrapper는 git mode 100644라 `bash ...`로 실행한다(`./run_all_135.sh`로 쓰려면 `chmod +x`).
+Wrapper는 git mode 100644라 `bash ...`로 실행한다(`./run_135.sh`로 쓰려면 `chmod +x`).
 Method별 interpreter는 기존대로 `ai_cae4all.local.toml`에서 고른다.
 
 - **Lane.** config의 `gpu_ids` 숫자가 home lane이다: 0 deeponet+fno, 1 point_deeponet, 2 (arm 없음),

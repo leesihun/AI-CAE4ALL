@@ -1,7 +1,7 @@
 import { $ } from "./dom.js";
 import "./capture-pointer.js";
 import { state } from "./state.js";
-import { BLOCK_SPECS, MODEL_CATALOG, TEMPLATES } from "./constants.js";
+import { BLOCK_SPECS, MODEL_CATALOG, TEMPLATES, templateUsesUnregisteredModel } from "./constants.js";
 import { connectRuntime } from "./api.js";
 import { paletteRender, loadTemplate, render, selectNode } from "./graph.js";
 import { validateGraph } from "./validate.js";
@@ -48,6 +48,7 @@ function templateOptionsRender() {
   if (saved) select.append(saved);
   const groups = new Map();
   Object.entries(TEMPLATES).forEach(([key, template]) => {
+    if (templateUsesUnregisteredModel(template)) return;
     const group = templateGroup(template);
     if (!groups.has(group)) groups.set(group, []);
     groups.get(group).push([key, template]);
@@ -107,6 +108,9 @@ function initialize() {
   }
   connectRuntime(() => {
     paletteRender();
+    const current = $("#templateSelect").value;
+    templateOptionsRender();
+    $("#templateSelect").value = current;
     render();
   });
 }

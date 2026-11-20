@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Eight-lane campaign runner for the dataset/method baseline matrix.
 
-    bash configs/run_all_135.sh        machine 135
-    bash configs/run_all_136.sh        machine 136
+    bash configs/campaigns/dataset_matrix/run_135.sh       machine 135
+    bash configs/campaigns/dataset_matrix/run_136.sh       machine 136
 
 Both wrappers exec this file with --machine. Each machine owns a disjoint half
 of the examples in manifest.json (MACHINES below) and runs every arm of that

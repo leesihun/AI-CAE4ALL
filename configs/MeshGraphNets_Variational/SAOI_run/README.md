@@ -37,7 +37,7 @@ output/meshgraphnets-v/saoi_run/
 
 Eval tags are `s26fe_main`, `s26fe_sec`, `sm_l345u_main`, matching the
 retired HI-MGNflow `SAOI_run` (merged into `meshgraphnets-v` as
-`latent_type local` on 2026-10-19; old configs in `junk/legacy_HI_MGNFlow/`)
+`latent_type local` on 2026-10-19; old configs in git history (commit `9db47d6`))
 so results stay directly comparable.
 
 These configs are written directly — there is no generator. The

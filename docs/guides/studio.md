@@ -12,7 +12,7 @@ and output artifacts. The Studio itself remains under `studio/`; one narrow
 compatibility fix outside it prevents the portable inference classifier from
 accepting unsupported checkpoint families. HI-MGNflow (`chi-mgnflow`) was
 merged into `meshgraphnets-v` as `latent_type local` on 2026-10-19; the old
-repo is in `junk/legacy_HI_MGNFlow/`.
+repo is in git history (commit `9db47d6`).
 
 ## Open the studio
 

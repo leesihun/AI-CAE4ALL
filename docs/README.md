@@ -29,7 +29,7 @@ code; their primary entry points are indexed below.
 | --- | --- |
 | [reference/DATASET_FORMAT.md](reference/DATASET_FORMAT.md) | The shared mesh HDF5 contract, plus the tabular and SDF exceptions |
 | [reference/PUBLIC_DATASETS.md](reference/PUBLIC_DATASETS.md) | Provenance of the public benchmark datasets |
-| [reference/config/](reference/config/) | Per-method config key references (MeshGraphNets variational, including `latent_type`; HI-MGNflow (`chi-mgnflow`) was merged into `meshgraphnets-v` as `latent_type local` on 2026-10-19, and its old reference is in `junk/legacy_HI_MGNFlow/`) |
+| [reference/config/](reference/config/) | Per-method config key references (MeshGraphNets variational, including `latent_type`; HI-MGNflow (`chi-mgnflow`) was merged into `meshgraphnets-v` as `latent_type local` on 2026-10-19, and its old reference is in git history (commit `9db47d6`)) |
 
 The executable source of truth for config keys is always
 [`cae_suite/specs/`](../cae_suite/specs/), not a document.
@@ -45,8 +45,8 @@ foundations and the architecture guides listed below:
 | [02_HI-MGN.md](methods/02_HI-MGN.md) | [03_BSMS-GNN.md](methods/03_BSMS-GNN.md) |
 | [04_MeshGraphNets_Variational.md](methods/04_MeshGraphNets_Variational.md) | [05_DeepONet.md](methods/05_DeepONet.md) |
 | [06_Point-DeepONet.md](methods/06_Point-DeepONet.md) | [07_FNO.md](methods/07_FNO.md) |
-| [09_Transolver.md](methods/09_Transolver.md) | [10_SDFFlow.md](methods/10_SDFFlow.md) |
-| [11_Geometry_Ingest.md](methods/11_Geometry_Ingest.md) | [12_MLP.md](methods/12_MLP.md) |
+| [08_Transolver.md](methods/08_Transolver.md) | [09_SDFFlow.md](methods/09_SDFFlow.md) |
+| [10_Geometry_Ingest.md](methods/10_Geometry_Ingest.md) | [11_MLP.md](methods/11_MLP.md) |
 
 SimulGenVAE's current user guide remains beside its implementation:
 [methods/SimulGenVAE/README.md](../methods/SimulGenVAE/README.md).
@@ -63,7 +63,7 @@ behaviour — treat the mismatch as something to reconcile, not to ignore.
 - [research/neural_operator/](research/neural_operator/) — Point-DeepONet parity, model capabilities
 - [research/transolver/](research/transolver/) — foundation-model design
 - [research/sdfflow/](research/sdfflow/) — conditional geometry survey, meshing upgrade, guidance mechanisms, [conditional generation design](research/sdfflow/CONDITIONAL_GENERATION_DESIGN_2026-09.md) (FEA-label conditions, per-dim dropout, C2/E2, the load-unit correction)
-- [research/hi_mgnflow/](research/hi_mgnflow/) — deterministic mode, sweep plan, [latent placement plan](research/hi_mgnflow/LATENT_PLACEMENT_PLAN_2026-10-13.md) (HI-MGN-V vs HI-MGNflow vs HI-MGN-hybrid: per-node injection, joint prior, token control, evaluation protocol)
+- HI-MGNflow notes (now MGN-V `latent_type local`) in research/meshgraphnets_variational/: deterministic mode, sweep plan, [latent placement plan](research/meshgraphnets_variational/LATENT_PLACEMENT_PLAN_2026-10-13.md) (HI-MGN-V vs HI-MGNflow vs HI-MGN-hybrid: per-node injection, joint prior, token control, evaluation protocol)
 - [research/SAOI_PROBABILISTIC_SWEEP_2026-09.md](research/SAOI_PROBABILISTIC_SWEEP_2026-09.md) — cross-method: MeshGraphNets-V vs HI-MGNflow on SAOI warpage (MGN-V wins 2.2x; flow's bias flips sign across part families; BOTH under-disperse ~2x; two falsified predictions)
 - [research/simulgenvae/](research/simulgenvae/) — technical documentation
 - [research/shell_buckling/](research/shell_buckling/) — design notes for the shell post-buckling benchmark: a static one-to-many dataset with an OOD geometry test set. Campaign source code, raw per-draw simulation output and local build logs live outside the repo at `D:\CAE_datasets_raw\shell_buckling\` (code, synced to the aarl compute server) and `aarl:/data/Lee/buckling_radioss/` (raw ANIM/deck/summary data); only the final packed `dataset/probabilistic/ex4_shell_buckling.h5` belongs in this repo's `dataset/`.

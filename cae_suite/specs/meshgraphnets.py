@@ -48,7 +48,7 @@ MGN_KEYS = frozenset(
         "learned_interpolation",
         # Multi-partition coarsening (ATTENTION_TRANSFER_DESIGN.md Part II).
         "voronoi_branches",
-        # Time integration (CONFIGURATION_REFERENCE.md section 3.5): ar_ot or ar_rt.
+        # Time integration: ar_ot or ar_rt.
         "time_integration",
     }
 )

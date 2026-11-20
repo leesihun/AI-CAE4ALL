@@ -15,7 +15,7 @@ coarse-level flow-matching prior) are intentionally not in this portable
 bundle. Use their native AI-CAE4ALL inference/reconstruction routes; detection
 rejects them explicitly rather than routing those weights into the global-latent
 MGN-V driver. Legacy `chi-mgnflow` checkpoints (the route was merged into
-`meshgraphnets-v` on 2026-10-19; its repo is in `junk/legacy_HI_MGNFlow/`) are
+`meshgraphnets-v` on 2026-10-19; its repo is in git history (commit `9db47d6`)) are
 rejected the same way.
 
 ## Quick start
@@ -139,7 +139,7 @@ If you have an **older** checkpoint pair (separate `sdfflow_vae.pth` +
 (not from this bundle):
 
 ```bash
-python methods/SDFFlow/merge_sdfflow_checkpoint.py \
+python methods/SDFFlow/scripts/merge_sdfflow_checkpoint.py \
     --vae output/geometry_generation/ex1/sdfflow_vae.pth \
     --fm output/geometry_generation/ex1/sdfflow_fm.pth \
     --output output/geometry_generation/ex1/sdfflow.pth

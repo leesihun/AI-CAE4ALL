@@ -1,7 +1,7 @@
 import { $ } from "./dom.js";
 import { toast } from "./dom.js";
 import { state } from "./state.js";
-import { registerLiveModel } from "./constants.js";
+import { markUnregisteredModels, registerLiveModel } from "./constants.js";
 
 export async function apiRequest(path, options = {}) {
   const response = await fetch(path, {
@@ -60,6 +60,7 @@ export async function connectRuntime(onConnected) {
     // block for a newly added trainable route, so registry growth cannot leave
     // a healthy backend route invisible until the next frontend release.
     state.api.models.forEach(registerLiveModel);
+    if (state.api.models.length) markUnregisteredModels(state.api.models.map(model => model.model));
     const healthy = state.api.models.filter(model => model.healthy).length;
     badge.classList.remove("offline");
     badge.innerHTML = `<i></i> ${healthy}/${state.api.models.length} entrypoints found`;

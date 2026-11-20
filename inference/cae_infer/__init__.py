@@ -63,7 +63,7 @@ def detect_family(checkpoint_path: str) -> str:
             raise ValueError(
                 "This is a legacy HI-MGNflow (chi-mgnflow) checkpoint. That route "
                 "was merged into meshgraphnets-v (latent_type local) and its old "
-                "repo is archived in junk/legacy_HI_MGNFlow/; the portable CPU "
+                "repo is in git history (commit 9db47d6); the portable CPU "
                 "bundle cannot run it."
             )
         latent_type = str(model_config.get("latent_type", "global")).lower().strip()

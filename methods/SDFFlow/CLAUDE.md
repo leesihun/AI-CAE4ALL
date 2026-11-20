@@ -55,7 +55,7 @@ seventeen are hand-maintained.
 From `methods/SDFFlow`:
 
 ```bash
-python build_dataset.py --output ../../dataset/synthetic256.h5 --synthetic 256
+python scripts/build_dataset.py --output ../../dataset/synthetic256.h5 --synthetic 256
 python SDFFlow_main.py --config ../../configs/SDFFlow/geometry_generation/ex1/baseline/config_train_sdfflow.txt
 python SDFFlow_main.py --config ../../configs/SDFFlow/geometry_generation/ex1/baseline/config_infer_sdfflow.txt
 ```
@@ -1043,8 +1043,9 @@ and `sdf_backend` as root attrs.
 
 **Launcher contract.** All of the above keys are in `SDFFLOW_KEYS`
 (`cae_suite/specs/sdfflow.py`) and in Studio's `sdfflow` catalog
-(`studio/src/constants.js`); `tests/test_studio_spec_key_parity.py` enforces the
-parity. Diagnostics: `SDF-QUERY-001/002` (`encoder_query_type`),
+(`studio/src/constants.js`). No test enforces that parity since the root
+`tests/` was removed (2026-09-23); the Studio reads `known_keys` from the live
+spec through `/api/models`, so the catalog is presentation only. Diagnostics: `SDF-QUERY-001/002` (`encoder_query_type`),
 `SDF-QUERY-003` (ERROR: `encoder_query_type fps` with `latent_tokens >
 num_encoder_points` -- there are not enough input points to anchor one query
 each, and the tiling fallback repeats tokens, which is a quality collapse rather

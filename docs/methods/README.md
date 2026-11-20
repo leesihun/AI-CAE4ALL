@@ -22,11 +22,11 @@ docs describe the implementation.
 | 5 | [05_DeepONet.md](05_DeepONet.md) | `deeponet` | `methods/Neural_Operator/` | Neural operator |
 | 6 | [06_Point-DeepONet.md](06_Point-DeepONet.md) | `point_deeponet` | `methods/Neural_Operator/` | Neural operator |
 | 7 | [07_FNO.md](07_FNO.md) | `fno` | `methods/Neural_Operator/` | Neural operator |
-| 9 | [09_Transolver.md](09_Transolver.md) | `transolver` | `methods/Transolver/` | Transformer operator |
-| 10 | [10_SDFFlow.md](10_SDFFlow.md) | `sdfflow` | `methods/SDFFlow/` | Generative geometry |
-| 11 | [11_Geometry_Ingest.md](11_Geometry_Ingest.md) | `geometry_ingest` | `methods/GeometryIngest/` | Data-prep utility (not an ML method) |
-| 12 | [12_MLP.md](12_MLP.md) | `mlp` | `methods/MLP/` | Parametric MLP surrogate (tabular, no mesh) |
-| 13 | [SimulGenVAE user guide](../../methods/SimulGenVAE/README.md) | `simulgenvae` | `methods/SimulGenVAE/` | Fixed-geometry hierarchical VAE |
+| 8 | [08_Transolver.md](08_Transolver.md) | `transolver` | `methods/Transolver/` | Transformer operator |
+| 9 | [09_SDFFlow.md](09_SDFFlow.md) | `sdfflow` | `methods/SDFFlow/` | Generative geometry |
+| 10 | [10_Geometry_Ingest.md](10_Geometry_Ingest.md) | `geometry_ingest` | `methods/GeometryIngest/` | Data-prep utility (not an ML method) |
+| 11 | [11_MLP.md](11_MLP.md) | `mlp` | `methods/MLP/` | Parametric MLP surrogate (tabular, no mesh) |
+| 12 | [SimulGenVAE user guide](../../methods/SimulGenVAE/README.md) | `simulgenvae` | `methods/SimulGenVAE/` | Fixed-geometry hierarchical VAE |
 
 > **`geometry_ingest` is a data-prep utility, not an ML method.** It is included
 > here because it is a launcher-routed `model`, but it trains nothing: it meshes
