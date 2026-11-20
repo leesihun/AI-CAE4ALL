@@ -1,9 +1,11 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code when working inside `SimulGenVAE/`.
+This file provides guidance to Claude Code when working inside `methods/SimulGenVAE/`.
 For the monorepo/launcher conventions (routing, preflight, per-method venvs), see
-the root [../CLAUDE.md](../../CLAUDE.md); this file is authoritative for
-SimulGenVAE's own architecture, data contract, and validation steps.
+the root [CLAUDE.md](../../CLAUDE.md); this file is authoritative for
+SimulGenVAE's own architecture, data contract, and validation steps. The
+user-facing method doc is
+[docs/methods/12_SimulGenVAE.md](../../docs/methods/12_SimulGenVAE.md).
 
 ## What this repo is
 
@@ -11,11 +13,19 @@ SimulGenVAE is a **hierarchical VAE** for parametric simulation fields plus a
 **latent conditioner (LC)** that maps physical parameters (csv) or images to the
 VAE's latent space, so a new set of conditions can be decoded into a full field
 without ever re-running the FOM solver. It is routed through the AI-CAE4ALL
-launcher as `model simulgenvae`:
+launcher as `model simulgenvae` (from the `AI-CAE4ALL` root):
 
 ```bash
-python ../AI_CAE4ALL_main.py --config ../configs/SimulGenVAE/deterministic/ex6/baseline/config_train_lsh_vae.txt
+python AI_CAE4ALL_main.py --config configs/SimulGenVAE/deterministic/ex6/baseline/config_train_lsh_vae.txt
 ```
+
+The checked-in configs are `configs/SimulGenVAE/deterministic/<slot>/baseline/`
+`config_train_lsh_vae.txt` (mode `train`) and `config_infer_lsh_vae.txt` (mode
+`reconstruct`) for the slots `ex3_full`, `ex3_mid` (both `lc_data_type hdf5`,
+`cond_var 6`), `ex6` (`csv`, `cond_var 0`) and `ex9` (`csv`, `cond_var 2`). They
+write to `output/dataset_matrix/deterministic/<slot>/lsh_vae/` (`vae.pth`,
+`lc.pth`, `pipeline.log`, `vae.log`, `lc.log`, `infer/reconstructions.h5`);
+`lsh_vae` is the campaign key, see the root CLAUDE.md.
 
 It is **structurally the same shape as `methods/SDFFlow/` (SDFFlow)** — a VAE
 stage plus a second generative stage — and mirrors that repo's layout, config
@@ -55,11 +65,15 @@ inference_profiles/
 tests/
   conftest.py                 # synthetic mesh-HDF5 fixtures
   test_fom_dataset.py          # loader shape/error tests + checkpoint round-trip
+  test_hdf5_conditions.py      # lc_data_type hdf5: sorted-ID order, row offsets, constancy check
+  test_split_provenance.py     # scaler fit on train only; small splits disjoint and complete
+  test_reconstruct_normalization.py  # reconstruct uses the checkpoint's normalization
+  test_config_contract.py      # retired no-op keys (load_all, plot_mode, recon_iter) are rejected
 ```
 
 ## Config conventions (mirrors SDFFlow's stage-prefix scheme)
 
-Same flat `key value` format as every other method (`#` inline comment, `%`/`'`
+Same flat `key value` format as every other method (`#` inline comment, `%`
 line comments, comma/space → list, `true`/`false` → bool). **Values are
 lowercased** by the shared parser, **except path-valued keys** (`dataset_dir`,
 `param_dir`, `output_dir`, `*_modelpath`, the log dirs — see
@@ -75,7 +89,7 @@ standalone `train_vae`/`train_lc` mode, use the **unprefixed** names directly.
 No checked-in config exercises those two modes -- every `baseline/` config uses
 the combined `mode train` pipeline with the `vae_*`/`lc_*` prefixes.
 
-Full key catalog: `cae_suite/specs/simulgenvae.py` (root repo). Quick map from
+Full key catalog: `ai_cae4all/specs/simulgenvae.py` (root repo). Quick map from
 the original interactive `condition.txt`/`preset.txt` naming, for anyone porting
 an old config:
 
@@ -107,7 +121,7 @@ Retired entirely: `input_data/condition.txt`, `preset.txt`, `launch_ddp.py`
 SimulGenVAE reads the **same mesh HDF5 contract** as the rest of the suite
 (`data/{sample_id}/nodal_data[num_features, num_timesteps, num_nodes]`, rows
 `0:3` reference coordinates, `3:` physical fields — see
-`../dataset/DATASET_FORMAT.md`). Because the VAE is a dense 1D-conv network, it
+[docs/reference/DATASET_FORMAT.md](../../docs/reference/DATASET_FORMAT.md)). Because the VAE is a dense 1D-conv network, it
 needs a dense `[num_samples, num_channels, num_time]` tensor, built by
 `general_modules/fom_dataset.py::load_fom_from_hdf5`:
 
@@ -147,7 +161,8 @@ integer sample IDs**.
 `lc_data_type hdf5` (`read_conditions_from_hdf5`) takes rows
 `[field_start_row + num_var : ... + cond_var]` of `nodal_data` straight out of
 `dataset_dir` — the same input-only conditioning rows the mesh methods consume
-via `cond_var` (see `../dataset/DATASET_FORMAT.md`). It needs `cond_var >= 1`,
+via `cond_var` (see
+[docs/reference/DATASET_FORMAT.md](../../docs/reference/DATASET_FORMAT.md)). It needs `cond_var >= 1`,
 returns `[num_samples, cond_var]` in sorted-sample-ID order, and uses the MLP
 conditioner like `csv` does. Because those rows are per-sample constants
 broadcast to every node, node 0 recovers them exactly; the loader **verifies
@@ -180,7 +195,7 @@ recovery higher, the original SimulGenVAE convention).
 ## Checkpoint format
 
 Both stages save a dict payload via `training_profiles/setup.py::save_checkpoint`
-(mirrors SDFFlow, and is what `cae_suite/checkpoint_probe.py` expects):
+(mirrors SDFFlow, and is what `ai_cae4all/checkpoint_probe.py` expects):
 
 ```text
 vae: {stage: 'vae', epoch, model_state, ema_state, config, normalization,
@@ -240,14 +255,14 @@ python AI_CAE4ALL_main.py --describe simulgenvae
 python AI_CAE4ALL_main.py --config configs/SimulGenVAE/deterministic/ex6/baseline/config_train_lsh_vae.txt --check
 python AI_CAE4ALL_main.py --config configs/SimulGenVAE/deterministic/ex6/baseline/config_train_lsh_vae.txt --dry-run
 
-# From this repo (method venv):
-python -m pytest -q tests/test_fom_dataset.py
+# From methods/SimulGenVAE (method venv):
+python -m pytest -q tests/
 ```
 
 `--check`/`--dry-run` runs the full layered preflight: spec validation → path
 checks → environment probe (imports `torch, numpy, h5py, sklearn` in the method's
 Python) → dataset schema probe (`dataset_kind mesh_hdf5`, reuses
-`cae_suite/dataset_probe.py::_mesh_report`) → native probe (imports
+`ai_cae4all/dataset_probe.py::_mesh_report`) → native probe (imports
 `general_modules.load_config`). A clean `--check` does not confirm fixed-geometry
 uniformity across *all* samples (the schema probe only inspects the first); rely
 on the loader's own `ValueError` (surfaced when the native process actually

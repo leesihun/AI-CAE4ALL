@@ -50,6 +50,9 @@ MGN_KEYS = frozenset(
         "voronoi_branches",
         # Time integration: ar_ot or ar_rt.
         "time_integration",
+        # Multiscale hierarchy cache (general_modules/multiscale_cache.py).
+        "hierarchy_cache_dir", "hierarchy_cache_build_workers",
+        "hierarchy_cache_wait_timeout", "hierarchy_cache_keep",
     }
 )
 
@@ -78,8 +81,6 @@ MGN_VARIATIONAL_IGNORED_KEYS = frozenset(
         "prior_nll_weight", "prior_fm_steps", "prior_kl_reg_weight",
         "prior_cov_rank", "inference_batch_size", "inference_batch_size_max",
         "inference_batch_size_min", "inference_batch_vram_fraction", "eval_dataset",
-        "hierarchy_cache_dir", "hierarchy_cache_build_workers",
-        "hierarchy_cache_wait_timeout", "hierarchy_cache_keep",
         "static_cache_per_worker",
         "make_histogram", "show_histogram", "histogram_bins",
         "histogram_clip_quantile",

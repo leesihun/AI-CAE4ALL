@@ -105,7 +105,7 @@ const STANDALONE_INFERENCE_MODELS = new Set(STANDALONE_INFERENCE_MODEL_IDS);
 
 // SDFFlow sampling keys `mode optimize` never reads: the search draws its own
 // FM noise and sets its own conditions (opt_condition_dims). Mirrors
-// OPTIMIZE_INERT_KEYS in cae_suite/specs/sdfflow.py, which reports each one
+// OPTIMIZE_INERT_KEYS in ai_cae4all/specs/sdfflow.py, which reports each one
 // present as SDF-OPT-INERT-001.
 export const SDFFLOW_OPTIMIZE_INERT_KEYS = new Set([
   "num_samples", "cfg_scale", "cond_values", "candidate_multiplier",
@@ -140,7 +140,7 @@ const CAD_OPT_KEYS = new Set([...SDFFLOW_OPTIMIZE_KEYS, ...SDFFLOW_STRUCTURAL_KE
 // DeepJEB's own frame (184.181 mm longest side), Ti-6Al-4V at 4470 kg/m^3.
 // `mode optimize` refuses any other load case and opt_fea_verify on this layout
 // (fea.py does not model its bolt-bore/lug-bore BCs). Mirrors
-// SURROGATE_LABEL_CONSTANTS_VER in cae_suite/specs/sdfflow.py.
+// SURROGATE_LABEL_CONSTANTS_VER in ai_cae4all/specs/sdfflow.py.
 export const VER_SURROGATE_SETTINGS = {
   opt_load_cases: "vertical",
   opt_length_scale: "0.102323",

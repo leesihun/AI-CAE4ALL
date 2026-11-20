@@ -1,265 +1,125 @@
 # 01 — MeshGraphNets (MGN), the flat baseline
 
-- **`model`**: `meshgraphnets`
-- **Repo / entrypoint**: `MeshGraphNets/` → `MeshGraphNets_main.py`
-- **Key source**: `model/MeshGraphNets.py`, `model/encoder_decoder.py`, `model/blocks.py`, `model/mlp.py`
-- **Prereqs**: [00_shared_foundations.md](00_shared_foundations.md) (data contract, GnBlock, training)
+| | |
+| --- | --- |
+| Route | `model meshgraphnets` |
+| Directory | [methods/MeshGraphNets/](../../methods/MeshGraphNets/) |
+| Entrypoint | [MeshGraphNets_main.py](../../methods/MeshGraphNets/MeshGraphNets_main.py) |
+| Spec | [ai_cae4all/specs/meshgraphnets.py](../../ai_cae4all/specs/meshgraphnets.py) |
+| Paper | Pfaff et al., *Learning Mesh-Based Simulation with Graph Networks*, ICLR 2021 |
 
----
+MGN is a deterministic, node-resolved surrogate for unstructured meshes. It
+runs message passing on the mesh graph, plus optional world edges for contact.
+Temporal data is rolled out autoregressively, and static data (`T = 1`) is
+predicted in one shot.
 
-## What it does
+This doc covers the **flat** processor (`use_multiscale false`). The same route
+and directory also run the hierarchical variants [HI-MGN](02_HI-MGN.md) and
+[BSMS-GNN](03_BSMS-GNN.md). For spread or one-to-many targets, use
+[MGN-V](04_MeshGraphNets_Variational.md).
 
-MeshGraphNets is a **learned mesh-based physics simulator**. Given a mesh (nodes +
-element edges) and the current physical state at each node, it predicts the change
-in state — displacement, stress, etc. — by running **message passing on the mesh
-graph**. It is an implementation of DeepMind's *Learning Mesh-Based Simulation with
-Graph Networks* (Pfaff et al., 2021), adapted to a structural-mechanics / FEA data
-contract (deformation + stress on ANSYS-style meshes).
+Read [00_shared_foundations.md](00_shared_foundations.md) first. It covers
+graph encoding, normalization, the blocks, training and resume.
 
-At inference it is applied **autoregressively**: predict a delta, add it to the
-state, recompute deformed edge features, repeat, producing a full rollout
-trajectory written to HDF5.
+## Architecture
 
-The "MGN" doc here is the **flat** (single-scale) configuration:
-`use_multiscale False`. The hierarchical variants are
-[HI-MGN](02_HI-MGN.md) and [BSMS-GNN](03_BSMS-GNN.md).
+[`MeshGraphNets`](../../methods/MeshGraphNets/model/MeshGraphNets.py) wraps an
+`EncoderProcessorDecoder`
+([encoder_decoder.py](../../methods/MeshGraphNets/model/encoder_decoder.py)),
+which runs these stages in order:
 
----
+1. **Encode:** a node MLP and a mesh-edge MLP (`8 → latent_dim`), plus a
+   world-edge MLP when `use_world_edges` is on. The MLPs are built by
+   [mlp.py](../../methods/MeshGraphNets/model/mlp.py).
+2. **Process:** `message_passing_num` `GnBlock`s
+   ([blocks.py](../../methods/MeshGraphNets/model/blocks.py)). Each one does an
+   edge update, then a sum-aggregated node update with residuals. When world
+   edges are on, the node update is a `HybridNodeBlock`. The blocks run on raw
+   tensors, which keeps them compatible with `torch.compile` and activation
+   checkpointing.
+3. **Decode:** an MLP without LayerNorm produces `[N, output_var]` in
+   normalized units. This is the delta when `T > 1` and the absolute field
+   when `T = 1`.
 
-## Capabilities
+Training-time input noise and the target correction are described in
+[00 §5](00_shared_foundations.md#5-training-and-rollout).
 
-- **Node-resolved fields on arbitrary unstructured meshes** (tri/tet/hex,
-  multi-part assemblies) — no grid projection, no resampling.
-- **Transient rollout** (`num_timesteps > 1`) via delta prediction, or **single-shot
-  static** prediction (`num_timesteps == 1`, zero input → final field).
-- **Contact / collision** handling via optional **world edges** (radius edges on
-  deformed positions).
-- **Multi-part / disconnected meshes** (separate plates, PCB, chips) — the graph
-  simply has multiple components.
-- **Rotation/translation robustness** via rotation-invariant positional features and
-  train-time geometry augmentation.
-- **DDP data-parallel** training, plus an experimental **pipeline model-split** path.
-- **AR-OT or AR-RT** time integration (teacher forcing vs full-trajectory rollout).
+## Data contract
 
-## Strengths
+The dataset is the shared mesh HDF5
+([DATASET_FORMAT.md](../reference/DATASET_FORMAT.md)). `cond_var` rows,
+`use_node_types` (last row) and `use_world_edges` behave as described in
+[00](00_shared_foundations.md).
 
-- **Locality & mesh fidelity**: message passing respects the true mesh topology, so
-  sharp local features (stress concentrations, contact fronts) are captured well.
-- **Resolution-agnostic within a topology**: the same weights run on any node count.
-- **Strong inductive bias** for PDE-like local interactions; data-efficient relative
-  to global models on the same mesh.
-- **Simple, robust training** (MSE on normalized deltas, noise injection for rollout
-  stability).
+## Modes and keys
 
-## Weaknesses
+The modes are `train` and `inference`. To see the required fields for each
+mode, run `python AI_CAE4ALL_main.py --describe meshgraphnets`. The spec is
+the authority on keys and defaults. [CONFIGURATION.md](../CONFIGURATION.md)
+explains the grammar.
 
-- **Long-range information travels one hop per block.** With `message_passing_num`
-  layers, influence spans ~that many hops — on a 200k-node mesh, global coupling
-  (e.g. a boundary condition felt everywhere) needs many layers or the multiscale
-  variants. This is the central motivation for [HI-MGN](02_HI-MGN.md).
-- **Input-bound at batch_size=1**: large-graph batches serialize under `pin_memory`;
-  dataloader/edge-feature construction can dominate GPU time.
-- **Autoregressive error accumulation**: mitigated by `std_noise` (AR-OT) or `ar_rt`,
-  but still the classic failure mode for long rollouts.
-- **Does not generalize the *operator*** across radically different geometries the way
-  a neural operator aims to — it is a simulator of the meshes it was trained on.
-- **No uncertainty / spread** — one deterministic output per input (see the
-  [Variational](04_MeshGraphNets_Variational.md) variant for that).
+| Group | Keys |
+| --- | --- |
+| Routing | `model`, `mode`, `gpu_ids` (`-1` = CPU), `parallel_mode` (`ddp` default, or `model_split` with `pipeline_microbatches`) |
+| Data | `dataset_dir`, `infer_dataset`, `infer_timesteps`, `split_seed`, `split_group_attr`, `write_preprocessing` |
+| Shape | `input_var`, `output_var`, `cond_var`, `edge_var` (= 8), `positional_features`, `use_node_types`, `latent_dim`, `message_passing_num` (required when flat) |
+| Edges | `use_deformed_edge`, `displacement_indices`, `use_world_edges`, `world_radius_multiplier`, `world_max_num_neighbors`, `world_edge_backend` |
+| Training | `training_epochs`, `batch_size`, `learningr`, `weight_decay`, `warmup_epochs`, `std_noise`, `noise_gamma`, `feature_loss_weights`, `time_integration`, `augment_geometry`, `grad_accum_steps`, `use_amp`, `use_checkpointing`, `use_compile`, `use_ema`, `ema_decay`, `init_modelpath` (initial weights), `resume_training`, `resume_interval_minutes` |
+| Loader | `num_workers`, `prefetch_factor`, `pin_memory` |
+| Monitoring | `val_interval`, `test_interval`, `test_batch_idx`, `test_max_batches`, `train_eval_subset_size`, `plot_feature_idx`, `display_testset`, `display_trainset`, `log_file_dir` |
 
----
+Spec checks that apply to the flat model:
 
-## Network structure
+- `MGN-EDGE-001`: `edge_var` must be 8.
+- `MGN-MP-REQ`: `message_passing_num` is required when multiscale is off.
+- `MGN-PARALLEL`: `model_split` needs at least two GPUs.
 
-The top-level `MeshGraphNets` wraps an `EncoderProcessorDecoder`. The flat path is
-the canonical **Encode → Process → Decode** design:
+Shipped configs follow the pattern
+`configs/MeshGraphNets/deterministic/<slot>/baseline/config_{train,infer}_meshgraphnets.txt`,
+for example
+[ex1 train](../../configs/MeshGraphNets/deterministic/ex1/baseline/config_train_meshgraphnets.txt)
+and [ex1 infer](../../configs/MeshGraphNets/deterministic/ex1/baseline/config_infer_meshgraphnets.txt).
+The slots are ex1, ex2, ex3_full, ex3_mid, ex4–ex9 and ex13.
 
-```mermaid
-flowchart TD
-    subgraph IN["Inputs (pre-normalized by dataloader)"]
-        X["x  [N, input_var + pos_feats + node_types]"]
-        EA["edge_attr  [E, 8]"]
-        EI["edge_index  [2, E]"]
-        WE["(optional) world_edge_attr/index"]
-    end
+## Outputs
 
-    X --> NE["Node Encoder MLP\n→ [N, latent_dim]"]
-    EA --> EE["Edge Encoder MLP\n→ [E, latent_dim]"]
-    WE --> WEE["World-Edge Encoder MLP\n(optional)"]
+All paths are written by the config and resolved from `methods/MeshGraphNets/`.
 
-    NE --> P
-    EE --> P
-    WEE --> P
-    EI --> P
+- **Checkpoint:** written to `modelpath` once training ends. It holds the
+  model and EMA weights, the normalization statistics, the node-type mapping,
+  the world-edge radius and `model_config`. With `resume_training`, a
+  `<modelpath>.resume` file sits beside it while the run is in progress.
+- **Epoch log and periodic PNG/HDF5 snapshots:** written to `log_file_dir`.
+- **Rollouts:** `rollout_sample{id}_steps{N}.h5` in `inference_output_dir`
+  (default `../../output/meshgraphnets/rollout`). Each file stores
+  `num_features = 3 + output_var + 1` and `output_var` as attributes. The
+  layout is coordinates, then predicted channels, then node type.
 
-    subgraph P["Processor: message_passing_num × GnBlock"]
-        direction TB
-        B1["GnBlock 1"] --> B2["GnBlock 2"] --> Bd["…"] --> Bn["GnBlock M"]
-    end
+## Tests and validation
 
-    Bn --> DEC["Decoder MLP\nlatent → latent → output_var\n(no LayerNorm; last layer ×0.01)"]
-    DEC --> OUT["predicted Δstate  [N, output_var]"]
+```bash
+python AI_CAE4ALL_main.py --config configs/MeshGraphNets/deterministic/ex1/baseline/config_train_meshgraphnets.txt --check
+cd methods/MeshGraphNets && python -m pytest -q tests/
 ```
 
-### Encoder
+The tests cover these areas:
 
-- Node encoder `build_mlp(node_input_size → latent_dim → latent_dim)`.
-- Mesh-edge encoder `build_mlp(8 → latent_dim → latent_dim)`.
-- Optional world-edge encoder (same shape) when `use_world_edges True`.
+- AR rollout and input noise
+- `cond_var` conditioning and grouped splits
+- edge geometry (`test_state_geometry`)
+- multiscale statistics, the hierarchy cache, attention transfer, learned
+  interpolation and multi-partition
+- surface reconstruction and the offscreen-render guard
 
-Encoding is wrapped by optional gradient checkpointing on a **tensor-in/tensor-out**
-path (a PyG `Data` object cannot cross a `torch.utils.checkpoint` boundary without
-breaking Dynamo).
+## Known limitations
 
-### Processor
-
-A `ModuleList` of `message_passing_num` **`GnBlock`s** (see
-[shared foundations §3](00_shared_foundations.md#3-the-meshgraphnets-building-blocks)).
-Each block does an edge update, a sum-aggregated node update (Hybrid when world
-edges are on), and residual adds. The blocks run on **raw tensors** in the hot loop
-(no per-block `Data` construction) for speed and `torch.compile` compatibility.
-
-### Decoder
-
-`build_mlp(latent_dim → latent_dim → output_var, layer_norm=False)`. Produces the
-normalized per-node delta. The last layer starts scaled by `0.01` for temporal runs.
-
-### Noise injection (training only)
-
-When training, Gaussian noise of std `std_noise` is added to the leading
-`output_var` node channels **and** to edge features; the target is corrected by
-`noise_gamma · noise · noise_std_ratio`. This is the AR-OT rollout-stability trick.
-
----
-
-## Data & I/O
-
-- **Inputs**: `graph.x`, `graph.edge_attr`, `graph.edge_index`, optional world edges,
-  `graph.pos` (reference coords). See [shared foundations §1–2](00_shared_foundations.md).
-- **Output**: normalized delta `[N, output_var]`; denormalized with train-split
-  `delta_mean/std` for visualization and rollout.
-- **Rollout output**: `rollout_sample{id}_steps{T}.h5` with nodal layout
-  `x, y, z, <output channels…>, Part No.`.
-
----
-
-## Configuration reference
-
-Canonical example: [`configs/MeshGraphNets/deterministic/ex1/baseline/config_train_meshgraphnets.txt`](../../configs/MeshGraphNets/deterministic/ex1/baseline/config_train_meshgraphnets.txt).
-The exhaustive, live-code-backed catalog is
-[`CONFIGURATION.md`](../CONFIGURATION.md).
-
-### Execution & routing
-
-| Key | Meaning |
-| --- | --- |
-| `model` | `MeshGraphNets` (case-insensitive; routes to this backend) |
-| `mode` | `train` or `inference` |
-| `gpu_ids` | `-1` = CPU; one id = single-GPU; comma list = multi-GPU |
-| `parallel_mode` | `ddp` (default) or `model_split` (experimental pipeline split) |
-| `modelpath` | Checkpoint path to save (train) / load (inference) |
-| `log_file_dir` | Epoch-log path under the output dir |
-
-### Datasets
-
-| Key | Meaning |
-| --- | --- |
-| `dataset_dir` | Training mesh HDF5 |
-| `infer_dataset` | Rollout initial-condition HDF5 |
-| `infer_timesteps` | Autoregressive rollout steps at inference |
-| `inference_output_dir` | Rollout output directory |
-| `split_seed` | Seed for the deterministic 80/10/10 split (default 42) |
-
-### Input & model shape
-
-| Key | Meaning |
-| --- | --- |
-| `input_var` | Physical input channel count (e.g. 4 = x/y/z disp + stress) |
-| `output_var` | Predicted delta channel count |
-| `edge_var` | **Must be 8** (validated against `EDGE_FEATURE_DIM`) |
-| `positional_features` | # rotation-invariant node features (centroid dist, mean edge len, RWPE) |
-| `use_node_types` | Append one-hot node types (feature row 7) |
-| `num_node_types` | **Derived, not settable.** Counted from the dataset at load time (`general_modules/mesh_dataset.py:861`); it is not in the spec's `known_keys`, so writing it into a config raises `CFG-UNKNOWN-001` |
-| `latent_dim` | Processor hidden width (e.g. 128). Config keys are case-folded, so `Latent_dim` also parses, but every checked-in config spells it lowercase |
-| `message_passing_num` | **# flat GnBlocks** (flat model only; e.g. 15–20) |
-
-### World edges
-
-| Key | Meaning |
-| --- | --- |
-| `use_world_edges` | Enable radius contact edges |
-| `world_radius_multiplier` | Radius = this × min mesh-edge length (default 1.5) |
-| `world_max_num_neighbors` | Cap for `torch_cluster` radius graph (default 64) |
-| `world_edge_backend` | `torch_cluster`, `scipy_kdtree`, or `auto` |
-
-### Training & performance
-
-| Key | Meaning |
-| --- | --- |
-| `training_epochs` (`Training_epochs`) | Epoch count |
-| `batch_size` (`Batch_size`) | DataLoader batch size |
-| `learningr` (`LearningR`) | Learning rate |
-| `weight_decay` | AdamW decoupled weight decay (decimal form) |
-| `warmup_epochs` | Linear warmup before cosine restarts (default 3) |
-| `num_workers` | DataLoader workers |
-| `std_noise` | Training input-noise std (rollout stability) |
-| `noise_gamma` / `noise_std_ratio` | Target-correction factors for injected noise |
-| `grad_accum_steps` | 1 = per-batch; N = accumulate N; 0 = whole epoch |
-| `augment_geometry` | Train-only random Z-rotation + reflection |
-| `use_checkpointing` | Activation checkpointing |
-| `use_amp` | bfloat16 autocast |
-| `use_compile` | `torch.compile(dynamic=True)` |
-| `use_ema` / `ema_decay` | EMA shadow model + decay |
-| `feature_loss_weights` | Per-channel loss weights (normalized to sum 1) |
-| `time_integration` | `ar_ot` (default) or `ar_rt` |
-
-### Multiscale (leave OFF for flat MGN)
-
-| Key | Meaning |
-| --- | --- |
-| `use_multiscale` | **`False`** for the flat baseline |
-
-### Evaluation / visualization
-
-| Key | Meaning |
-| --- | --- |
-| `test_interval` / `val_interval` | Test/visualization and validation cadence |
-| `test_batch_idx` | Batch indices to visualize |
-| `test_max_batches` | Cap on test batches per pass (default 200) |
-| `plot_feature_idx` | Feature to plot (`-1` = last, e.g. stress) |
-| `display_testset` / `display_trainset` | Render test/train PNGs at test cadence |
-
-### Minimal flat-MGN config sketch
-
-```text
-model               meshgraphnets
-mode                train
-gpu_ids             0
-dataset_dir         ../../dataset/deterministic/ex1_static_thermoelastic.h5
-modelpath           ../../output/dataset_matrix/deterministic/ex1/meshgraphnets/model.pth
-input_var           4
-output_var          4
-cond_var            0
-edge_var            8
-positional_features 4
-use_node_types      True
-message_passing_num 15        # flat processor depth (the ex1 baseline value)
-latent_dim          128
-use_multiscale      False     # <-- flat baseline
-time_integration    ar_ot
-```
-
-> Native paths are **cwd-relative to the method repository**, because the launcher
-> runs the native entrypoint with its cwd set to `methods/<Name>/`. That is why
-> every checked-in config spells datasets `../../dataset/...` and artifacts
-> `../../output/...`.
-
----
-
-## Relationship to the other MGN docs
-
-| | Flat MGN (this doc) | [HI-MGN](02_HI-MGN.md) | [BSMS-GNN](03_BSMS-GNN.md) | [Variational](04_MeshGraphNets_Variational.md) |
-| --- | --- | --- | --- | --- |
-| Processor | flat `message_passing_num` blocks | V-cycle | V-cycle | flat or V-cycle |
-| Coarsening | none | FPS-Voronoi | BFS bi-stride | either |
-| Latent `z` / spread | no | no | no | **yes (cVAE)** |
-| `model` value | `meshgraphnets` | `meshgraphnets` | `meshgraphnets` | `meshgraphnets-v` |
+- **Receptive field:** information moves one hop per block, so global coupling
+  on large meshes needs many blocks or [HI-MGN](02_HI-MGN.md).
+- **No intermediate checkpoints:** the checkpoint is written only at the end.
+  An interrupted run keeps nothing unless `resume_training` is on.
+- **Loader bound:** large graphs at small batch sizes tend to be limited by the
+  data loader.
+- **Deterministic:** the model gives one output per input and cannot represent
+  spread.
+- **Error accumulation:** errors build up over long rollouts. `std_noise` or
+  `ar_rt` reduce this but do not remove it.

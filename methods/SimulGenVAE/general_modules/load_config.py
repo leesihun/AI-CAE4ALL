@@ -3,7 +3,7 @@
 
 # Values for these keys are filesystem paths and keep their original case;
 # every other string value is still lowercased (see parse_value). Mirrored in
-# cae_suite/config_parser.py::PATH_KEYS -- keep the two in sync. The vae_/lc_
+# ai_cae4all/config_parser.py::PATH_KEYS -- keep the two in sync. The vae_/lc_
 # log prefixes are stripped by train_pipeline.build_stage_config *after*
 # parsing, so both the prefixed and bare spellings are listed.
 PATH_KEYS = frozenset({

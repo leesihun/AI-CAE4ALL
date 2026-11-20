@@ -50,7 +50,7 @@ def _int(config, key, default):
 
 
 def _flag(config, key, default=False):
-    # The launcher's `_flag` reads the same spellings (cae_suite/specs/sdfflow.py).
+    # The launcher's `_flag` reads the same spellings (ai_cae4all/specs/sdfflow.py).
     value = config.get(key, default)
     if isinstance(value, str):
         return value.strip().lower() not in {'', 'false', '0', 'no', 'off'}
@@ -84,7 +84,7 @@ def _clear_owned_outputs(out_dir):
 # The constants the DeepJEB surrogate labels were solved with
 # (build_deepjeb_fea.py builds `Bracket()` with every default).
 # The launcher's SDF-OPT-SURROGATE-002 mirrors this table and tolerance
-# (cae_suite/specs/sdfflow.py::SURROGATE_LABEL_CONSTANTS).
+# (ai_cae4all/specs/sdfflow.py::SURROGATE_LABEL_CONSTANTS).
 _SURROGATE_LABEL_CONSTANTS = {'E': 113.8e9, 'nu': 0.342, 'length_scale': 0.19 / 1.8}
 # The ex13 ('ver') labels were solved in DeepJEB's own frame (longest side
 # 184.181 mm), with the paper's Ti-6Al-4V (D:/CAE_datasets_raw/deepjeb_ver_fea).

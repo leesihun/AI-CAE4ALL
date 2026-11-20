@@ -228,7 +228,7 @@ Declared sample IDs are checked before scoring; supported unlabeled tables can
 use positional matching. Relative L2 and R² use per-field macro-averages; pooled
 values remain available. Select the same held-out cases, physical quantities, units,
 and preprocessing when comparing methods. Training losses alone do not establish
-a held-out accuracy ranking. See [evaluation and comparison](docs/GUI.md#evaluation).
+a held-out accuracy ranking. See [evaluation and comparison](docs/GUI.md#evaluation-and-comparison).
 
 ### Geometry generation and design search
 
@@ -420,7 +420,7 @@ is the multiscale configuration of the `meshgraphnets` route.
 | Family | Supported choices |
 | --- | --- |
 | MeshGraphNets / HI-MGN / BSMS | Flat or multilevel graph processing; FPS/Voronoi or BFS bi-stride coarsening; per-level depths and cluster budgets; mean/attention pooling, sum/attention lifting, broadcast ablations, world edges, and hierarchy caches. Static fields and compatible temporal rollouts. |
-| MeshGraphNets-V | Graph-aware posterior encoding, latent conditioning, multiscale backbones, conditional flow-matching or supported legacy priors, and multiple predicted field samples. `latent_type` places the latent: one global vector (HI-MGN-V), `latent_ch` channels per coarsest node with a coarse-node flow prior (HI-MGNflow), or both (HI-MGN-hybrid); `latent_reg` is `mmd` or `kl`. HI-MGNflow (`chi-mgnflow`) was merged into `meshgraphnets-v` as `latent_type local` on 2026-10-19; the old repo is in git history (commit `9db47d6`). |
+| MeshGraphNets-V | Graph-aware posterior encoding, latent conditioning, multiscale backbones, conditional flow-matching or supported legacy priors, and multiple predicted field samples. `latent_type` places the latent: one global vector (HI-MGN-V), `latent_ch` channels per coarsest node with a coarse-node flow prior (HI-MGNflow), or both (HI-MGN-hybrid); `latent_reg` is `mmd` or `kl`. |
 | DeepONet | Fixed-sensor branch and coordinate trunk for field prediction, with supported branch/condition choices. |
 | Point-DeepONet | PointNet branch, SIREN coordinate trunk, and point/query decoding with supported sampling/refinement choices. |
 | FNO | Fourier field operators with mesh/grid adapters and configurable grid, modes, width, and depth. |
@@ -534,5 +534,5 @@ inference has its own [CLI and Python API](docs/guides/inference-bundle.md).
 | [Development](docs/guides/testing.md) | Checks and tests |
 | [Video notes](docs/videos/README.md) | Recording provenance, subtitles, and next demos |
 
-Core code lives in `cae_suite/` (launcher), `methods/` (native methods), and
+Core code lives in `ai_cae4all/` (launcher), `methods/` (native methods), and
 `studio/` (browser UI and local server).

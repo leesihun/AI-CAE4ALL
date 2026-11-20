@@ -1,7 +1,7 @@
 """Durable Studio state: suite registry/settings, preflight, and the job engine.
 
 A StudioState is a process-lifetime singleton (STATE, below). It owns the one
-registry/settings pair loaded from cae_suite, runs preflight through the real
+registry/settings pair loaded from ai_cae4all, runs preflight through the real
 launcher pipeline, and supervises subprocess jobs (pipeline runs and one-off
 command jobs such as portable inference or a PyInstaller build). Job records
 are persisted as JSON next to their log file so a Studio restart can recover
@@ -59,7 +59,7 @@ from studio_backend.suite_bridge import (
 )
 
 
-# Mirrors _LC_MODES in cae_suite/specs/simulgenvae.py: the modes that run the
+# Mirrors _LC_MODES in ai_cae4all/specs/simulgenvae.py: the modes that run the
 # latent conditioner and therefore read its condition source.
 SGV_LC_MODES = frozenset({"train", "train_lc", "reconstruct"})
 
@@ -89,7 +89,7 @@ def studio_preflight_diagnostics(result: Any) -> list[dict[str, Any]]:
 
     # param_dir is read only by the file-backed conditioner sources (csv/image)
     # in the modes that run the LC, exactly as SGV-LC-002 in
-    # cae_suite/specs/simulgenvae.py scopes it. `lc_data_type hdf5` takes the
+    # ai_cae4all/specs/simulgenvae.py scopes it. `lc_data_type hdf5` takes the
     # conditions from dataset_dir, so a stale param_dir left in such a config
     # is dead and must not block the launch.
     mode = str(values.get("mode", "")).lower()

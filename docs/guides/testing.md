@@ -1,86 +1,72 @@
 # What to run after a change
 
-Tests live in the layer they cover. There is no single root command that runs
-everything, because each method repository is validated inside **its own venv**
-with its own dependencies.
+Each layer has its own tests, and no single command runs them all. Each method
+is tested in **its own venv**, with its own dependencies. There is no root
+`tests/` directory.
 
-## 1. Launcher and MethodSpec contracts
+| Layer | Command | Interpreter / cwd |
+| --- | --- | --- |
+| Launcher and specs, all configs | `python AI_CAE4ALL_main.py --audit-configs` | launcher, repo root |
+| One config, full preflight | `python AI_CAE4ALL_main.py --config <path> --check` | launcher, repo root |
+| Studio backend | `python -m pytest -q studio/studio_backend` | launcher, repo root |
+| A method | `python -m pytest -q tests/` | that method's venv, from `methods/<Name>/` |
 
-**There is no root `tests/` directory any more.** The thirteen modules that used
-to live there — config discovery, key contracts, documentation links, native
-config-consumption parity, native runtime defaults, the SDFFlow spec, Studio/spec
-key parity, the buckling dataset contract, the reflow schedule, and
-`tests/campaign/`'s scheduler and layout anchors — were deleted wholesale in
-commit `9884fb1` (2026-09-21). They were not moved anywhere; nothing replaced
-them. Any instruction to run `python -m pytest -q tests/` from the repo root is
-stale, and the command fails with `file or directory not found`.
-
-Until they are restored, the launcher layer is covered by §2 (`--audit-configs`
-plus per-config `--check`) and, indirectly, by the Studio backend suite in §3.
-The old modules are still recoverable from git:
+## Launcher and configs
 
 ```bash
-git show 9884fb1^:tests/test_config_key_contracts.py   # and the other twelve
+python AI_CAE4ALL_main.py --audit-configs          # parse + spec + route lint of every checked-in config*.txt
+python AI_CAE4ALL_main.py --config <path> --check  # every preflight layer for one config
 ```
 
-## 2. Config validation across the whole tree
+`--audit-configs` is structural only and is fast. `--check` goes further: after
+the spec, it also runs the filesystem, environment, dataset, checkpoint and
+native-probe layers. The probes run inside the target method's interpreter
+(resolved through `ai_cae4all.local.toml`). Add `--strict` to promote flagged
+warnings to errors.
 
-The fastest way to prove a spec or config change did not break anything:
-
-```bash
-python AI_CAE4ALL_main.py --audit-configs        # structural lint of every checked-in config
-python AI_CAE4ALL_main.py --config <path> --check # full layered preflight for one config
-```
-
-`--audit-configs` parses and route-checks all 233 checked-in configs (measured
-2026-10-19: `errors=0, warnings=0`; the 30 `FLOW-COST` advisories of 2026-09-23
-belonged to the HI-MGNflow `chi-mgnflow` configs, which were merged into
-`meshgraphnets-v` as `latent_type local` on 2026-10-19; the old repo is in
-git history (commit `9db47d6`)). A single
-`--check` goes further: it also runs the filesystem, environment, dataset, and
-native-probe layers, the last three inside the *target method's* interpreter.
-
-## 3. Studio backend
+## Studio backend
 
 ```bash
 python -m pytest -q studio/studio_backend
 ```
 
-Ten modules / 43 tests covering the analysis backends, evaluation contract,
-training metrics, checkpoint support, the benchmark roster, HDF5 summaries,
-geometry preview, LLM configure, the static allowlist, and the pipeline launch
-gate.
+`pyproject.toml` sets `testpaths = ["studio/studio_backend"]`, so a bare
+`pytest` from the repo root runs the same suite. `studio_backend/conftest.py`
+points the Studio runtime root at a temporary directory for the run.
 
-## 4. Method repositories
+## Method repositories
 
-Each runs in that method's environment, from that method's directory:
+Run each from the method's directory, in that method's environment:
 
 ```bash
-cd methods/Neural_Operator          && python -m pytest -q tests/
-cd methods/MeshGraphNets            && python -m pytest -q tests/
+cd methods/MeshGraphNets             && python -m pytest -q tests/
 cd methods/MeshGraphNets_Variational && python -m pytest -q tests/
-cd methods/SDFFlow                  && python -m pytest -q tests/
-cd methods/SimulGenVAE              && python -m pytest -q tests/
-cd methods/MLP                      && python -m pytest -q tests/
-cd methods/Transolver               && python -m pytest -q tests/
+cd methods/Neural_Operator           && python -m pytest -q tests/
+cd methods/Transolver                && python -m pytest -q tests/
+cd methods/SDFFlow                   && python -m pytest -q tests/
+cd methods/SimulGenVAE               && python -m pytest -q tests/
+cd methods/MLP                       && python -m pytest -q tests/
 ```
 
-These run on tiny synthetic HDF5 fixtures, not on `dataset/*.h5`, and finish in
-well under a minute each. `methods/GeometryIngest/` ships no test package; it is
-covered by its two `--check` configs.
+These tests use small synthetic fixtures, not `dataset/*.h5`.
+`methods/GeometryIngest/` has no `tests/`; use `--check` on its configs instead.
+The method repos are never collected from the root.
 
-## 5. Compile check
+## Compile check
 
-After editing Python across several repositories:
+After editing Python across several packages:
 
 ```bash
-python -m compileall -q methods cae_suite studio/studio_backend tests
+python -B -m compileall -q methods ai_cae4all studio/studio_backend
 ```
+
+This writes `__pycache__/` directories. To check without writing into the tree,
+run the relevant tests with `python -B`.
 
 ## Notes
 
-- `pyproject.toml`'s `[tool.pytest.ini_options] testpaths = ["tests"]` refers to
-  the root suite only. Method repositories are never collected from the root.
-- A passing structural test is **not** evidence that a published benchmark result
-  was reproduced. Report a benchmark number only with the exact dataset,
-  checkpoint or log, metric implementation, and run provenance attached.
+- `resume_state.py` is copied byte-for-byte into every training repo except MLP.
+  After editing it, run the tests of every repo that has a copy.
+- A passing structural test does not show that a published benchmark result was
+  reproduced. Report a benchmark number only together with its dataset,
+  checkpoint or log, metric implementation and run provenance.

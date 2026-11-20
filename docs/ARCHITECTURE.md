@@ -1,916 +1,453 @@
-# AI-CAE4ALL — Repository Overview & Architecture Guide
+# Architecture
 
-> A comprehensive, code-grounded tour of the whole repository: what it is, how
-> it is laid out, how the unified launcher works, and what each ML method
-> repository does. This document is the **map**; its companions are the
-> **territory**:
->
-> - [../README.md](../README.md) — the 60-second quick start.
-> - [CONFIGURATION.md](CONFIGURATION.md) — the live configuration grammar,
->   route map, validation workflow, and source pointers.
-> - [reference/DATASET_FORMAT.md](reference/DATASET_FORMAT.md) — the shared mesh
->   HDF5 data contract.
-> - [guides/testing.md](guides/testing.md) — what to run after a change.
-> - [../CLAUDE.md](../CLAUDE.md) — condensed agent-facing conventions for the
->   root launcher.
->
-> Each method repo additionally has its own authoritative docs; those are
-> canonical for that method's data contract and architecture.
+How AI-CAE4ALL is put together: the repository layout, the launcher that routes
+every config, the config grammar every method shares, and the conventions that
+cut across methods. What each method does inside is in
+[methods/](methods/README.md), one document per method.
+
+Related documents:
+
+- [../README.md](../README.md): quick start.
+- [CONFIGURATION.md](CONFIGURATION.md): config workflow, the route map, where
+  each key is defined.
+- [reference/DATASET_FORMAT.md](reference/DATASET_FORMAT.md): the shared mesh
+  HDF5 contract.
+- [guides/testing.md](guides/testing.md): what to run after a change.
+- [GUI.md](GUI.md): the Studio, a browser front end over the same launcher.
 
 ---
 
-## 1. What this repository is
+## 1. What the repository is
 
-**AI-CAE4ALL is a monorepo of eight independent machine-learning-for-CAE
-(Computer-Aided Engineering) method repositories, unified by a single
-config-driven launcher.** The intent is that an engineer picks a method by
-writing one word in a text config, and one command validates and runs it — no
-matter which of seven very different ML codebases actually executes.
+AI-CAE4ALL is a monorepo of independent ML-for-CAE method repositories behind
+one config-driven launcher. You name a method in one line of a text config
+(`model transolver`). One command then validates the config against that
+method's real environment and runs the method's own entrypoint.
 
-The seven methods span the major families of ML surrogate modeling for
-simulation:
-
-| Family | Method | What it predicts |
+| Family | Route(s) | Predicts |
 | --- | --- | --- |
-| Graph neural network simulator | MeshGraphNets (deterministic) | Time evolution of physical fields on a mesh |
-| Probabilistic GNN simulator | MeshGraphNets (variational) | A *distribution* of plausible mesh trajectories (VAE + learned prior); `latent_type` global / local / hybrid = HI-MGN-V / HI-MGNflow / HI-MGN-hybrid |
-| Neural operators | Neural_Operator (4 architectures) | Field-to-field mappings that generalize across discretizations |
-| Transformer surrogate | Transolver | Mesh fields via learned "physics slices" + attention |
-| Generative geometry | SDFFlow | *New 3D shapes* via an SDF-VAE and flow matching |
-| Fixed-geometry latent model | SimulGenVAE | Parametric static/transient fields plus a latent conditioner |
-| Parametric regression | MLP | **N scalar inputs → M scalar outputs** (tabular DOE surrogate, no mesh) |
+| Graph network simulator | `meshgraphnets` | Fields on a mesh, static or rolled out in time. MGN, HI-MGN (`use_multiscale`), BSMS-GNN (`coarsening_type bfs`) |
+| Probabilistic graph simulator | `meshgraphnets-v` | A distribution of fields: a conditional graph VAE with a flow-matching prior. `latent_type` global / local / hybrid = HI-MGN-V / HI-MGNflow / HI-MGN-hybrid |
+| Neural operators | `deeponet`, `point_deeponet`, `fno` | Field-to-field maps on point clouds or grids |
+| Transformer surrogate | `transolver` | Mesh fields via physics-attention slices |
+| Generative geometry | `sdfflow` | New 3D shapes (SDF VAE + flow matching), plus the closed-loop `optimize` mode |
+| Fixed-geometry latent model | `simulgenvae` | Dense fields on one shared mesh, from a hierarchical VAE and a latent conditioner |
+| Tabular regression | `mlp` | `X[S,N]` → `Y[S,M]`, no mesh, no GPU |
+| Data prep (non-ML) | `geometry_ingest` | CAD (STEP/IGES/STL) → shared mesh HDF5 |
 
-Five of the seven predict **fields on a mesh** and share related HDF5 contracts.
-The exceptions are geometry-generating SDFFlow and **MLP**, a tabular
-parameters→outputs regressor
-(`MLP/`, modes `train`/`inference`) that reads a separate `X[S,N]`/`Y[S,M]` HDF5,
-stores normalization in its checkpoint, and needs no GPU. See
-[MLP/CLAUDE.md](../methods/MLP/CLAUDE.md),
-[docs/methods/11_MLP.md](methods/11_MLP.md), and
-[CONFIGURATION.md](CONFIGURATION.md).
+`sar` and `ldgn` are optional, local-only baselines (git-ignored). They route
+only on machines where `methods/SAR/` or `methods/LDGN/` exists.
 
-Alongside the ML methods, the same launcher routes one **non-ML data-prep
-utility**, `geometry_ingest` (`methods/GeometryIngest/`, modes `ingest`/`inspect`):
-it meshes CAD/geometry (STEP/IGES/STL) into the shared mesh HDF5 contract — a graph
-for MeshGraphNets and a point cloud for the operators/Transolver — so a raw part can
-feed any method with no conversion step. It trains nothing and needs no GPU. See
-[methods/GeometryIngest/README.md](../methods/GeometryIngest/README.md),
-[docs/methods/10_Geometry_Ingest.md](methods/10_Geometry_Ingest.md), and
-[CONFIGURATION.md](CONFIGURATION.md).
+`--list-models` prints the live route table and the install health of each
+route. HI-MGNflow had its own route (`chi-mgnflow`) until 2026-10-19. It is now
+`meshgraphnets-v` with `latent_type local`. The old repository is in git
+history at commit `9db47d6`.
 
-### 1.1 The core idea: one launcher, eight native runtimes
+### The core idea
 
-The launcher (`cae_suite/`, invoked via `AI_CAE4ALL_main.py` or the `ai-cae4all`
-console script) does **not** import any ML code. Its job is:
+The launcher (`ai_cae4all/`, run as `AI_CAE4ALL_main.py` or as the
+`ai-cae4all` console script) never imports ML code. Its job is:
 
-```
-parse config → route on the `model` field → layered preflight validation → build native command → subprocess-launch the chosen repo's own entrypoint
+```text
+parse config → route on `model` → layered preflight → build native command → subprocess
 ```
 
-Each method repo is fully self-contained: its own (optional) virtual
-environment, its own tests, its own `main`-style entrypoint, and — for the two
-most complex ones — its own `CLAUDE.md`. Every method is also runnable directly
-without the launcher. The launcher's value is **uniform validation and routing**:
-it reports every problem with a config *before* a single GPU-second is spent, and
-it always launches the native process in *that method's* working directory and
-Python interpreter.
+Each method is self-contained: its own venv, its own tests, its own entrypoint.
+Each one also runs directly without the launcher. The launcher adds two things:
 
-### 1.2 Scale
-
-File and line totals drift with every implementation pass, so this guide does
-not preserve an old snapshot. Use `git ls-files '*.py'` for tracked Python
-files, `git ls-files 'configs/**/config*.txt'` for checked-in templates, and
-`python AI_CAE4ALL_main.py --audit-configs --no-color` for the authoritative
-live config audit. The route registry currently exposes 10 model IDs across
-seven ML repositories plus `geometry_ingest`. HI-MGNflow (`chi-mgnflow`) was merged into `meshgraphnets-v` as `latent_type local` on 2026-10-19; the old repo is in git history (commit `9db47d6`).
+- It reports every problem in a config before any GPU time is spent.
+- It always launches the native process in that method's directory, under that
+  method's Python interpreter.
 
 ---
 
-## 2. Top-level repository map
+## 2. Repository map
 
 ```text
 AI-CAE4ALL/
-├── AI_CAE4ALL_main.py            # 8-line shim → cae_suite.cli.main
-├── pyproject.toml                # installs the `ai-cae4all` console script
-├── ai_cae4all.local.example.toml # template for per-method interpreter paths
-├── README.md                     # quick start and model zoo
-├── CLAUDE.md                     # agent-facing root conventions
-│
-├── cae_suite/                    # THE LAUNCHER (parse→route→preflight→subprocess)
-│   ├── cli.py                    #   arg parsing, subcommands, exit-code mapping
-│   ├── config_parser.py          #   flat `key value` parser (mirrors native quirks)
-│   ├── config_discovery.py       #   locates checked-in configs for the audit
-│   ├── registry.py               #   model → MethodSpec → repo/entrypoint
-│   ├── preflight.py              #   layered, short-circuiting validation pipeline
-│   ├── diagnostics.py            #   Severity / Diagnostic / report renderer
-│   ├── path_checks.py            #   filesystem path existence/writability rules
-│   ├── settings.py               #   local TOML → per-method Python interpreter
-│   ├── launcher.py               #   launch_and_wait (process-group Ctrl-C forwarding)
-│   ├── native_probe.py           #   runs the method's OWN validator (in its venv)
-│   ├── dataset_probe.py          #   HDF5 schema/shape cross-check (in its venv)
-│   ├── checkpoint_probe.py       #   safe weights_only checkpoint metadata read
-│   └── specs/                    #   one MethodSpec per method — validation truth
-│       ├── base.py               #     MethodSpec, PathRule, shared validators
-│       ├── meshgraphnets.py            meshgraphnets_variational.py
-│       ├── neural_operator.py          transolver.py
-│       ├── sdfflow.py                  simulgenvae.py
-│       └── geometry_ingest.py          mlp.py
-│
-├── methods/                      # THE EIGHT NATIVE RUNTIMES (each standalone)
-│   ├── MeshGraphNets/            #   model = meshgraphnets
-│   ├── MeshGraphNets_Variational/#   model = meshgraphnets-v
-│   ├── Neural_Operator/          #   model = point_deeponet | deeponet | fno
-│   ├── Transolver/               #   model = transolver
-│   ├── SDFFlow/                  #   model = sdfflow          (generative + `optimize` loop)
-│   ├── SimulGenVAE/              #   model = simulgenvae
-│   ├── MLP/                      #   model = mlp              (tabular, not mesh)
-│   └── GeometryIngest/           #   model = geometry_ingest  (non-ML data prep)
-│
-├── configs/                      # one directory per method, mirroring methods/
-│   ├── MeshGraphNets/{ex1..ex9}/       MeshGraphNets_Variational/
-│   ├── Neural_Operator/{ex1..ex9}/     Transolver/{ex1..ex9}/
-│   ├── SDFFlow/                        SimulGenVAE/
-│   ├── MLP/                            GeometryIngest/
-│   └── campaigns/                #   cross-method campaign: dataset_matrix (manifest.json)
-│
-├── dataset/                      # shared HDF5 data (payloads are git-ignored)
-│   ├── ex1_static_thermoelastic.h5 … ex9_plasticity.h5           #   training datasets, one per experiment slot
-│   ├── ex1_static_thermoelastic_infer.h5 … ex9_plasticity_infer.h5  # the matching held-out inference inputs
-│   └── deepjeb.h5, deepjeb_mgn.h5   # SDFFlow geometry + its MGN surrogate bridge
-│
-├── output/                       # THE ONLY artifact root: checkpoints, logs, rollouts, samples
-├── studio/                       # the Studio: browser UI + local Python API bridge
-├── inference/                    # stand-alone CPU inference bundle + PyInstaller spec
-└── docs/                         # all documentation (this file included)
-    ├── ARCHITECTURE.md CONFIGURATION.md README.md
-    └── guides/ reference/ methods/ research/ videos/
+├── AI_CAE4ALL_main.py            # shim → ai_cae4all.cli.main
+├── pyproject.toml                # `pip install -e .` adds the `ai-cae4all` command
+├── ai_cae4all.local.example.toml # template for per-method interpreters
+├── ai_cae4all/                   # the launcher (§3)
+│   ├── cli.py  config_parser.py  config_discovery.py  registry.py
+│   ├── preflight.py  path_checks.py  diagnostics.py  settings.py  launcher.py
+│   ├── native_probe.py  dataset_probe.py  checkpoint_probe.py
+│   └── specs/                    # one MethodSpec per method: validation truth
+├── methods/                      # the native runtimes, each standalone
+│   ├── MeshGraphNets/  MeshGraphNets_Variational/  Neural_Operator/  Transolver/
+│   ├── SDFFlow/  SimulGenVAE/  MLP/  GeometryIngest/
+│   └── SAR/  LDGN/               # optional, git-ignored
+├── configs/                      # mirrors methods/, plus campaigns/
+│   ├── <Method>/deterministic|probabilistic|geometry_generation/exN/...
+│   ├── MeshGraphNets_Variational/hyperparameter_sweep/   # r8–r13 B300 rounds
+│   └── campaigns/dataset_matrix/ # cross-method campaign (manifest.json)
+├── dataset/                      # local-only HDF5 inputs (§6)
+├── output/                       # the only artifact root
+├── studio/                       # browser Studio over the same launcher
+├── inference/                    # portable CPU inference bundle
+└── docs/                         # this documentation
 ```
 
-`methods/SAR/`, `methods/LDGN/` and their `configs/` directories are optional,
-git-ignored routes: `default_specs()` registers them only where the directory
-exists. There is no root `tests/`; the launcher is covered by
-`--audit-configs` and the Studio backend tests.
+There are two layout rules. Breaking either is a bug:
 
-Two layout invariants are worth stating explicitly:
+- **`configs/<Name>/` mirrors `methods/<Name>/`.** A new method adds both
+  directories under the same name. The only exception is `configs/campaigns/`.
+- **Nothing writes inside `methods/`.** The native process runs with cwd
+  `methods/<Name>/`, so every artifact path in a config is `../../output/...`
+  and every dataset path is `../../dataset/...`.
 
-- **`configs/<Name>/` mirrors `methods/<Name>/`.** Adding a method means adding
-  both, under the same name.
-- **Nothing writes inside a method directory.** Native config paths resolve from
-  the method repository, so every artifact path is spelled `../../output/...`
-  and lands in the single root `output/`.
+The names of the `output/` subdirectories are historical and kept on purpose.
+For example, `output/geometry_generation/` holds SDFFlow runs and
+`output/chi-mgnflow/` holds runs from the retired route. These names identify
+runs; they are not directory names in the tree.
 
 ---
 
-## 3. The unified launcher (`cae_suite/`)
+## 3. The launcher (`ai_cae4all/`)
 
-The launcher is the piece that makes one command route all supported methods. It is
-pure orchestration and validation — it never imports torch or any ML module in
-its own process.
+### 3.1 The preflight pipeline
 
-### 3.1 The launch pipeline
+`run_preflight()` in [preflight.py](../ai_cae4all/preflight.py) runs checks in
+layers. A layer runs only if no earlier layer recorded an error. A broken config
+therefore gives one ordered set of problems, not a cascade.
 
-`run_preflight()` in [preflight.py](../cae_suite/preflight.py) drives the entire
-flow. The defining property is that it runs checks **in layers and
-short-circuits: each layer runs only if no blocking error has been recorded so
-far.** This is why a broken config produces a clean, ordered set of problems
-instead of a confusing cascade.
-
-```
-parse            config_parser.parse_config → ParsedConfig
-  │              (values + per-key source location + duplicate detection)
-  ▼
-route            registry.resolve(model) → ResolvedMethod (spec + repo + entrypoint)
-  │              + mode presence/validity check
-  ▼
-spec layer       _validate_spec: required fields, unknown keys, recommended keys,
-  │              defaults notices, then the spec's custom validators
-  ▼  (only if no errors)
-filesystem       path_checks.validate_paths: input files/dirs exist,
-  │              output dirs writable — per the spec's PathRules
-  ▼  (only if no errors)
-environment      _probe_environment: import the spec's modules IN THE METHOD'S
-  │              PYTHON, report missing deps + CUDA device visibility vs gpu_ids
-  ▼  (only if no errors)
-dataset          _probe_dataset: HDF5 schema probe + feature-count / node-type /
-  │              temporal (input_var==output_var) cross-checks against the config
-  ▼  (only if no errors)
-checkpoint       _probe_checkpoints: safe weights_only metadata read; model/stage/
-  │              normalization consistency vs the config
-  ▼  (only if no errors)
-native probe     _probe_native: run the METHOD'S OWN config validator as a subprocess
+```text
+parse        config_parser.parse_config → ParsedConfig
+  │          (values, per-key source line, duplicate detection)
+route        registry.resolve(model) → spec + repo + entrypoint; mode check
   │
+spec         required/unknown/recommended keys, defaults, spec validators
+  ▼ (no errors so far)
+filesystem   path_checks: inputs exist, outputs writable, case mismatches
   ▼
-command          [python, entrypoint, --config, <original config path>]
+environment  import the spec's modules in the METHOD's Python; CUDA vs gpu_ids
+  ▼
+dataset      HDF5 schema probe; feature-count / node-type / temporal checks
+  ▼
+checkpoint   weights_only metadata: model, stage, normalization consistency
+  ▼
+native       the method's OWN config validator, as a subprocess
+  │
+command      [python, entrypoint, --config, <config path>]
 ```
 
-If every layer passes, `cli.main` calls `launch_and_wait` and the native process
-starts. `--check` stops after validation; `--dry-run` additionally prints the
-exact native command; `--explain-config` prints a configured/defaulted/inactive
-breakdown.
+If every layer passes, `cli.main` calls `launch_and_wait`. `--check` stops after
+validation, and `--dry-run` also prints the native command.
 
-### 3.2 Module-by-module
+### 3.2 Modules
 
 | Module | Responsibility |
 | --- | --- |
-| [cli.py](../cae_suite/cli.py) | Arg parsing; the standalone subcommands (`--list-models`, `--describe`, `--audit-configs`); rendering the route + report; and the diagnostic-prefix → exit-code mapping. |
-| [config_parser.py](../cae_suite/config_parser.py) | Parses flat `key value` text into a `ParsedConfig` (values, raw values, per-key `SourceLocation`, duplicate list). **Deliberately mirrors the native parsers' quirks** (§4) while adding stricter diagnostics (duplicate keys, BOM, malformed lines). |
-| [registry.py](../cae_suite/registry.py) | `MethodRegistry` builds a `model_id → MethodSpec` map from the registered `build_*_spec()` functions. Aliased IDs (the three neural-operator names) share one spec. `resolve()` emits `ROUTE-*` errors for missing/unknown models and missing repos/entrypoints, with `difflib` "did you mean" hints. |
-| [specs/base.py](../cae_suite/specs/base.py) | Defines `MethodSpec` (the per-method validation contract), `PathRule`/`PathKind`, `SpecValidationContext`, and shared value validators (`validate_common_values` — gpu_ids rules, positive-int/number checks, `feature_loss_weights` length). |
-| [specs/*.py](../cae_suite/specs) | One spec per method: `known_keys`, required/recommended/default fields (per mode and per model), `PathRule`s, `import_modules`, `dataset_kind`, and custom `validators`. **This is the single source of truth for config validation.** |
-| [preflight.py](../cae_suite/preflight.py) | `run_preflight` — the layered pipeline above — plus the four probe helpers and the dataset/config cross-checks. Builds the final `command`. |
-| [path_checks.py](../cae_suite/path_checks.py) | Resolves and checks every `PathRule` (input file/dir must exist; output dir must be creatable/writable), returning the resolved path map used by the dataset/checkpoint probes. |
-| [diagnostics.py](../cae_suite/diagnostics.py) | `Severity` (ERROR/WARNING/NOTICE), `Diagnostic` (with `promote_in_strict` and `effective_severity`), `DiagnosticReport`, JSON export, and the colored terminal renderer. |
-| [settings.py](../cae_suite/settings.py) | Loads `ai_cae4all.local.toml` and resolves the Python interpreter per method (§3.5). |
-| [launcher.py](../cae_suite/launcher.py) | `launch_and_wait`: runs the child in its own process group so Ctrl-C is forwarded and escalated cleanly on both Windows and POSIX. |
-| native/dataset/checkpoint `*_probe.py` | Standalone scripts executed **under the method's own Python** (§3.4). |
+| [cli.py](../ai_cae4all/cli.py) | Arguments, introspection commands (`--list-models`, `--describe`, `--audit-configs`), report rendering, exit codes |
+| [config_parser.py](../ai_cae4all/config_parser.py) | Flat `key value` → `ParsedConfig`. Mirrors the native parsers' quirks (§4) and adds stricter diagnostics |
+| [config_discovery.py](../ai_cae4all/config_discovery.py) | Finds checked-in `configs/**/config*.txt` for the audit and the Studio |
+| [registry.py](../ai_cae4all/registry.py) | `MethodRegistry`: `model` → `MethodSpec`. Aliased IDs share a spec. `default_specs()` adds SAR/LDGN only if their directories exist. Bad IDs get `ROUTE-*` errors with "did you mean" hints |
+| [specs/base.py](../ai_cae4all/specs/base.py) | `MethodSpec`, `PathRule`, shared validators (gpu_ids, positive numbers, `feature_loss_weights` length) |
+| [specs/*.py](../ai_cae4all/specs) | Per method: `known_keys`, required/recommended/default fields per mode, `PathRule`s, `import_modules`, `dataset_kind`, validators |
+| [preflight.py](../ai_cae4all/preflight.py) | The pipeline above; probe helpers; builds the command |
+| [path_checks.py](../ai_cae4all/path_checks.py) | Resolves each `PathRule` against the method repo |
+| [diagnostics.py](../ai_cae4all/diagnostics.py) | `Severity`, `Diagnostic` (`promote_in_strict`), report, JSON export |
+| [settings.py](../ai_cae4all/settings.py) | Reads `ai_cae4all.local.toml`; picks each method's interpreter |
+| [launcher.py](../ai_cae4all/launcher.py) | Runs the child in its own process group, so Ctrl-C is forwarded and escalated on Windows and POSIX |
 
-### 3.3 CLI reference
+The spec is the single source of truth for validation. A key that is not in
+`known_keys` gets a `CFG-UNKNOWN-001` warning.
 
-Everything routes through the launcher. `--config` selects the file; `mode`
-(train/inference/sample/…) lives **inside the config**, never on the CLI.
+### 3.3 CLI
+
+`--config` selects the file. `mode` lives inside the config, never on the CLI.
 
 ```bash
-# Validate all applicable checks and report every problem together (no launch):
-python AI_CAE4ALL_main.py --config configs/Transolver/deterministic/ex2/baseline/config_train_transolver3.txt --check
+python AI_CAE4ALL_main.py --config <cfg> --check     # validate; every problem at once
+python AI_CAE4ALL_main.py --config <cfg> --dry-run   # also print the native command
+python AI_CAE4ALL_main.py --config <cfg>             # clean preflight → launch
 
-# Print the exact native command without launching:
-python AI_CAE4ALL_main.py --config configs/Neural_Operator/deterministic/ex1/baseline/config_train_fno.txt --dry-run
-
-# A clean preflight auto-launches the native process:
-python AI_CAE4ALL_main.py --config configs/MeshGraphNets/deterministic/ex1/baseline/config_train_himgn.txt
-
-# Introspection (no config needed):
-python AI_CAE4ALL_main.py --list-models        # registered models + install health
-python AI_CAE4ALL_main.py --describe transolver # routing + required fields per mode
-python AI_CAE4ALL_main.py --audit-configs       # structural lint of checked-in configs
+python AI_CAE4ALL_main.py --list-models              # routes + install health
+python AI_CAE4ALL_main.py --describe transolver      # routing + required fields per mode
+python AI_CAE4ALL_main.py --audit-configs            # structural lint of every config*.txt
 ```
 
-Other flags: `--strict` (promote flagged warnings to errors), `--explain-config`
-(key-by-key breakdown), `--show-defaults`, `--json-report PATH`, `--python PATH`
-(interpreter override), `--no-color`, and `--skip-{native,filesystem,environment}-check`
-to bypass a probe layer.
+Other flags:
 
-**A note on `--audit-configs`:** config discovery is shared by the CLI and
-Studio and walks the root `configs/**/config*.txt` tree. Use `--check` for one
-file and `--audit-configs` for the full checked-in set.
+| Flag | Effect |
+| --- | --- |
+| `--strict` | Promote flagged warnings to errors |
+| `--explain-config` | Key-by-key breakdown: configured / defaulted / inactive / checkpoint-owned |
+| `--show-defaults` | Expand default and notice diagnostics |
+| `--json-report PATH` | Write the report as JSON |
+| `--python PATH` | Override the method's interpreter |
+| `--no-color` | Plain report |
+| `--skip-native-check`, `--skip-filesystem-check`, `--skip-environment-check` | Skip that layer |
 
-### 3.4 Probes run in the *target method's* venv — not the launcher's
+### 3.4 Probes run in the method's venv
 
-Three helper scripts are executed as **subprocesses under the resolved method
-Python**, so the launcher validates against the exact environment the model will
-run in:
+Three helper scripts run as subprocesses under the resolved method Python. This
+way `--check` validates against the environment the model will actually run in.
 
-- [native_probe.py](../cae_suite/native_probe.py) — imports and runs the method's
-  own native config validator, emitting a `__CAE_SUITE_NATIVE_RESULT__` JSON
-  line. This is why a config can pass the suite's spec checks yet still be caught
-  by the method's stricter native rules (and vice-versa — the two are kept
-  deliberately close but not identical).
-- [dataset_probe.py](../cae_suite/dataset_probe.py) — opens the HDF5 dataset and
-  returns its schema + `nodal_shape`, which preflight cross-checks against
-  `input_var`/`output_var`/`use_node_types` and static-vs-temporal intent.
-- [checkpoint_probe.py](../cae_suite/checkpoint_probe.py) — a **safe
-  `weights_only` metadata read** (never `weights_only=False`): it surfaces the
-  checkpoint's model name, `stage` (vae/fm), normalization presence, and EMA
-  presence, so a config pointed at the wrong checkpoint fails preflight instead
-  of deep in native inference. The native runtime remains the authoritative
-  checkpoint loader.
+- [native_probe.py](../ai_cae4all/native_probe.py) imports the method's own
+  config validator and prints one result line. A config can pass the spec and
+  still fail the native rules, and the reverse can also happen. The two are kept
+  close, but they are not identical.
+- [dataset_probe.py](../ai_cae4all/dataset_probe.py) opens the HDF5 and returns
+  its schema and `nodal_shape`. Preflight checks these against
+  `input_var`/`output_var`/`cond_var`/`use_node_types` and against whether the
+  config is static or temporal.
+- [checkpoint_probe.py](../ai_cae4all/checkpoint_probe.py) reads metadata with
+  `weights_only=True`: model name, `stage`, normalization, EMA. A config
+  pointing at the wrong checkpoint then fails preflight, not deep inside
+  inference. The native runtime remains the authoritative loader.
 
-### 3.5 Per-method Python interpreters
+### 3.5 Per-method interpreters
 
 Copy [ai_cae4all.local.example.toml](../ai_cae4all.local.example.toml) to
-`ai_cae4all.local.toml` (git-ignored) to point each method at its own venv:
+`ai_cae4all.local.toml` (git-ignored):
 
 ```toml
 [python]
 default = ".venv/bin/python"
 
 [python.models]
-meshgraphnets   = "MeshGraphNets/.venv/bin/python"
 meshgraphnets-v = "methods/MeshGraphNets_Variational/.venv/bin/python"
-neural_operator = "Neural_Operator/.venv/bin/python"
-transolver      = "Transolver/.venv/bin/python"
 sdfflow         = "methods/SDFFlow/.venv/bin/python"
 ```
 
-Interpreter precedence: `--python` → exact model ID → method/spec ID →
-`python.default` → the suite process's own `sys.executable`. When you launch from
-an already-activated venv with no local TOML, that venv's Python is used for
-everything.
+The interpreter is chosen in this order: `--python`, then the exact model ID,
+then the spec ID, then `python.default`, then the launcher's own
+`sys.executable`. So with no TOML and an activated venv, that venv's Python
+runs everything. The legacy filename `cae_suite.local.toml` is still read.
 
-**Critical subtlety** (documented at length in
-[settings.py](../cae_suite/settings.py)): `resolve_python` **intentionally never
-calls `Path.resolve()`** on the interpreter path. A venv's `bin/python` is a
-symlink; CPython discovers `pyvenv.cfg` by walking up from the *invoked*
-executable path, so dereferencing the symlink would silently drop the venv's
-site-packages. The launcher keeps the symlink intact. The legacy filename
-`cae_suite.local.toml` is still accepted.
+`resolve_python` never calls `Path.resolve()` on the interpreter. A venv's
+`python` is a symlink, and CPython finds `pyvenv.cfg` by walking up from the
+path it was invoked as. Dereferencing the symlink would silently drop the venv's
+site-packages.
 
-### 3.6 Diagnostic codes → exit codes
+### 3.6 Exit codes
 
-`_preflight_exit_code` in [cli.py](../cae_suite/cli.py) maps the first matching
-error class:
+`_preflight_exit_code` in [cli.py](../ai_cae4all/cli.py) returns the code for the
+first error class that matches:
 
-| First matching error prefix | Exit code | Meaning |
+| First matching error prefix | Exit | Meaning |
 | --- | --- | --- |
-| `ROUTE-*` | 3 | Bad/unknown `model`, missing repo or entrypoint |
-| `ENV-*` | 4 | Interpreter/dependency/CUDA problem |
+| `ROUTE-*` | 3 | Unknown `model`, missing repo or entrypoint |
+| `ENV-*` | 4 | Interpreter, dependency or CUDA problem |
 | `NATIVE-CHECK-*` | 5 | The method's own validator rejected the config |
-| any other error | 2 | Spec/filesystem/dataset/checkpoint error |
-| (no errors) | 0 | Validated / launched successfully |
+| any other error | 2 | Spec, filesystem, dataset or checkpoint error |
+| none | 0 | Validated or launched |
 
-**Preserve these prefixes when adding checks** — tooling and CI key off them.
+Keep these prefixes when you add checks; tooling keys off them.
 
 ---
 
 ## 4. The config system
 
-All six native loaders read the same flat `key value` text format, and the
-suite parser mirrors that format's quirks exactly (with stricter diagnostics on
-top). Getting these quirks right matters because the same file is passed
-unchanged to the native process.
+Every native loader reads the same flat `key value` text. The launcher parser
+mirrors its quirks exactly and adds stricter diagnostics on top. This matters
+because the same file is passed unchanged to the native process.
 
 ### 4.1 Grammar and quirks
 
 | Rule | Behavior |
 | --- | --- |
-| Keys | Lowercased. `Training_epochs` == `training_epochs`. |
-| String values | Also lowercased — **except path-valued keys**, which keep the case you wrote (`dataset_dir`, `infer_dataset`, `modelpath`, the `*_modelpath` variants, `input_mesh`, `sdf_sidecar`, `param_dir`, and the output/log dirs). The exempt set is `cae_suite/config_parser.py::PATH_KEYS`, mirrored per repo in each `load_config.py`. |
-| Comments | A line starting with `%` is ignored; text after `#` is stripped; blank lines ignored. |
-| Separator | First whitespace splits key from value (tabs or spaces). |
-| Lists | Commas **or** multiple space-separated tokens → a list (`gpu_ids 0,1`). |
-| Booleans | Only case-insensitive `true`/`false` become `bool`. |
-| **Single value → scalar** | A single value parses to a **bare scalar, not a one-element list** (`test_batch_idx 0` → `0`). Consumers that expect a list must normalize. |
-| **int vs str for numerics** | `100` → `int`; `1e-4` has no `.`, fails the int/float fast paths, and **stays a `str`** — every numeric consumer converts explicitly (`float(config.get(...))`). Prefer decimal notation like `0.0001`. |
-| Quoting | Not syntax; quotes become literal characters. Do not quote paths (even paths with spaces). |
-| Duplicate keys | Native loaders silently keep the last; the **suite treats it as a blocking error**. |
-| BOM | A UTF-8 BOM is a **hard error** (native parsers misread the first key). |
-| `reserved` | A key literally named `reserved` is ignored. |
+| Keys | Lowercased |
+| String values | Lowercased, except path keys, which keep their case. The set is `PATH_KEYS` in `ai_cae4all/config_parser.py`, mirrored in each native `general_modules/load_config.py`. A new path key means editing both |
+| Comments | A line starting with `%` is ignored; text after `#` is stripped |
+| Separator | The first whitespace splits the key from the value |
+| Lists | Commas or several space-separated tokens make a list (`gpu_ids 0,1`) |
+| Single value | A bare scalar, not a one-element list (`test_batch_idx 0` → `0`) |
+| Numbers | `100` → `int`. `1e-4` stays a **string**, so every numeric consumer converts explicitly (`float(config.get(...))`) |
+| Booleans | Only `true`/`false` (any case) become `bool` |
+| Quotes | Not syntax: quotes become literal characters. Do not quote paths |
+| Duplicate keys | Native loaders keep the last one; the launcher reports an **error** |
+| BOM | A UTF-8 BOM is an **error** (native parsers misread the first key) |
 
-### 4.2 Path resolution & checkpoint-led architecture
+MLP and GeometryIngest store raw strings and need no path exemption.
+`PATH-CASE-001` warns when the case in a config differs from the disk. That is
+fine on Windows and broken on Linux.
 
-- The suite launches the native process **with the method repo as the working
-  directory**, and passes the config file unchanged. Relative paths inside a
-  config are therefore relative to the *method repo*, not the config file and not
-  the suite root. This is why centralized templates use paths like
-  `../output/meshgraphnets/ex1/model1.pth`.
-- **For inference, architecture and normalization metadata are
-  checkpoint-led.** Deterministic MGN, variational MGN, and Transolver overlay
-  `checkpoint['model_config']`; Neural Operator rebuilds from versioned
-  `data_config`/`adapter_config`/`model_config`; SDFFlow rebuilds from the
-  checkpoint's stored config and prefers `ema_state`. Config-file architecture
-  values may be *replaced* after the checkpoint loads. Runtime-only choices
-  (inference dataset, output dir, rollout length, sample count, temperature)
-  stay config-controlled.
+### 4.2 Paths and checkpoint-owned settings
 
-### 4.3 Live key status
+- Relative paths resolve from the **method repository** (the native cwd), not
+  from the config file. That is why configs say `../../dataset/...` and
+  `../../output/...`.
+- At inference, architecture and normalization come from the checkpoint. The
+  mesh methods overlay `checkpoint['model_config']`, and SDFFlow rebuilds from
+  its stored config, preferring the EMA weights. Architecture values in the
+  config file may be replaced once the checkpoint loads. Runtime choices stay
+  with the config: inference dataset, output directory, rollout length, sample
+  count. `--explain-config` marks which keys are checkpoint-owned.
 
-`MethodSpec.known_keys` is a diagnostic catalog, not a promise that every key
-is active for every model or mode. Some shared-family keys are retained so the
-validator can report “inactive” or “removed” precisely instead of calling them
-unknown. Required fields, published defaults, conditional checks, and path
-roles live in `cae_suite/specs/`; Studio reads the same contracts and keeps
-variant-inactive keys visible but disabled. Use `--check`, `--explain-config`,
-or Studio's full configuration sheet for the current status of an authored
-key. [CONFIGURATION.md](CONFIGURATION.md) links those live
-sources without copying a drift-prone per-key snapshot.
+### 4.3 Key status
+
+`known_keys` is a catalog, not a promise that every key is active for every
+model and mode. Some keys are kept so the validator can say "inactive" or
+"removed" instead of "unknown". For the status of a key, use `--check`,
+`--explain-config`, `--describe <model>` or the Studio's configuration sheet.
+Per-method key references are in [reference/config/](reference/config/).
 
 ---
 
-## 5. Conventions shared across the method repos
+## 5. Conventions shared across methods
 
-Four method repos — deterministic and variational MeshGraphNets,
-Neural Operator, and Transolver — share the same broad *structural skeleton*
-and **mesh HDF5 data contract**. SimulGenVAE consumes a related fixed-geometry
-field contract through a different loader; SDFFlow is generative and MLP is
-tabular.
+### 5.1 Repository skeleton
 
-### 5.1 The common repo skeleton
+The mesh methods (MGN, MGN-V, Neural_Operator, Transolver) share one skeleton:
 
 ```text
 <Method>/
-├── <Method>_main.py  or  main.py   # config load → mode dispatch → (DDP spawn)
-├── general_modules/                # data loading, config parsing/validation, stats
-│   ├── load_config.py              #   native flat-text parser
-│   ├── mesh_dataset.py             #   HDF5 → graph/tensor samples, split, normalize
-│   ├── dataset_stats.py            #   train-split moments / normalizers
-│   ├── time_integration.py         #   AR-OT vs AR-RT selection (§9.1)
-│   └── positional_features.py      #   rotation-invariant node features
-├── model/                          # the architecture(s)
-├── training_profiles/             # single-GPU + DDP + AR-rollout training loops
-├── inference_profiles/            # rollout / decode / sampling
-├── parallelism/                    # DDP launch, model-split pipeline, checkpoint I/O
-├── tests/                          # per-repo pytest suite (synthetic fixtures)
-└── misc/                           # analysis, benchmarking, comparison scripts
+├── <Method>_main.py | main.py   # load config → dispatch mode → (DDP spawn)
+├── general_modules/              # load_config, mesh_dataset, dataset_stats,
+│                                 # time_integration, resume_state, ...
+├── model/                        # architectures
+├── training_profiles/            # single-GPU, DDP, rollout training loops
+├── inference_profiles/           # rollout / decode / sampling
+├── parallelism/                  # DDP launch, model split, checkpoint I/O
+└── tests/                        # pytest on synthetic fixtures
 ```
 
-`Neural_Operator/`, `MeshGraphNets/`, and `methods/MeshGraphNets_Variational/` ship
-`tests/`; consult each repo's own docs for its exact validation command set.
+SDFFlow, SimulGenVAE and MLP follow the same naming loosely. Each method's own
+`CLAUDE.md`/`README.md` describes its tree.
 
-### 5.2 The shared mesh HDF5 contract
+### 5.2 The shared mesh HDF5
 
-MeshGraphNets, MeshGraphNets-variational, Transolver, and Neural_Operator all
-read the **same** layout with **no conversion step** (full spec in
-[dataset/DATASET_FORMAT.md](reference/DATASET_FORMAT.md)):
+MGN, MGN-V, Transolver and Neural_Operator read the same layout with no
+conversion step. SimulGenVAE also reads it, but densely. The full specification
+is in [reference/DATASET_FORMAT.md](reference/DATASET_FORMAT.md).
 
 ```text
-dataset.h5
-  attrs: num_samples, num_features, num_timesteps
-  data/{sample_id}/
-    nodal_data   # shape [num_features, num_timesteps, num_nodes]
-    mesh_edge    # shape [2, E]  (unique undirected edges)
-    metadata/…   # per-sample source + size + summary stats
-  metadata/
-    feature_names
-    normalization_params/{min,max,mean,std, + train-derived node/edge/delta stats}
-    splits/{train,val,test}   # present but NOT consumed by current loaders
+data/{sample_id}/nodal_data   [num_features, num_timesteps, num_nodes]
+data/{sample_id}/mesh_edge    [2, E]   unique undirected edges
+metadata/...                  feature names, normalization params
+
+rows 0:3                          reference coordinates (never predicted)
+rows [3 : 3+input_var]            state: input AND output
+rows [3+input_var : +cond_var]    conditions: input only (cond_var, default 0)
+last row (if present)             node type / part label, copied through
 ```
 
-Key facts:
+- **Static (`T == 1`)** targets are the stored field. **Temporal (`T > 1`)**
+  targets are the delta `state[t+1] − state[t]`. `input_var == output_var` is
+  required for T > 1 (the autoregressive loop).
+- `mesh_edge` stores topology only. Edge attributes (deformed and reference
+  displacement and length) are recomputed on the fly.
+- The loaders ignore any stored `metadata/splits` and recompute a seeded
+  80/10/10 split from sorted sample IDs (`split_seed`, default 42).
+- Train-derived normalizers live in `checkpoint['normalization']`.
+  `write_preprocessing` may also append them to the HDF5.
+- The MGN multiscale hierarchy cache (`<stem>.mscache.<digest>.h5`, written
+  beside the dataset or in `hierarchy_cache_dir`) is per-run and deleted when
+  training ends. A leftover file means a run was killed. It is pruned on the
+  next start.
 
-- `nodal_data` rows: `0:3` are **reference coordinates** (`pos`, not part of
-  `input_var`); the standard builder writes 8 rows — `x,y,z, dx,dy,dz, scalar,
-  part_no`.
-- **Static (`T==1`)** targets are the stored field from a zero physical input.
-  **Temporal (`T>1`)** targets are the delta `state[t+1] - state[t]`.
-- `mesh_edge` stores topology only; the 8-D edge *attributes*
-  (`deformed_{dx,dy,dz,dist}, ref_{dx,dy,dz,dist}`) are recomputed on the fly and
-  never stored. The same edge-feature function serves mesh, world, and coarse
-  multiscale edges.
-- The current loaders **ignore the stored `metadata/splits`** and always
-  recompute a deterministic seeded 80/10/10 split (`split_seed`, default 42) from
-  sorted sample IDs.
-- Training-derived normalizers (node/edge/delta z-scores) are what live in
-  `checkpoint['normalization']`; MGN also writes them back into the source HDF5,
-  Neural_Operator and Transolver never modify the source file.
+### 5.3 Mid-training resume
 
----
+`general_modules/resume_state.py` is copied byte for byte into every training
+repo except MLP. The repos share no imports, so an edit to one copy must go to
+all of them. With `resume_training true`:
 
-## 6. Method 1 — MeshGraphNets (deterministic)
+- The trainer writes `<checkpoint>.resume` at the first epoch boundary after
+  every `resume_interval_minutes` (default 15).
+- It resumes only from a state with the same config fingerprint.
+- It deletes the state once the final checkpoint is written.
 
-`model meshgraphnets` → `MeshGraphNets/MeshGraphNets_main.py`. Modes: `train`,
-`inference`.
+New mutable training state must go into that trainer's `resume.save({...})`.
+[../CLAUDE.md](../CLAUDE.md) has the RNG-ordering rules.
 
-An encode-process-decode GNN simulator in the classic MeshGraphNets style,
-substantially extended.
+### 5.4 Periodic visualization
 
-- **Architecture** ([model/MeshGraphNets.py](../methods/MeshGraphNets/model/MeshGraphNets.py),
-  `encoder_decoder.py`, `blocks.py`, `mlp.py`): node/edge encoders → a stack of
-  message-passing `GnBlock`s → a decoder producing a normalized **delta**. For
-  temporal delta prediction the final decode layer is initialized near zero
-  (weights ×0.01) to start from "no change".
-- **Multiscale V-cycle processor** ([model/coarsening.py](../methods/MeshGraphNets/model/coarsening.py),
-  `multiscale_helpers.py`, `multiscale_cache.py`): optional hierarchical
-  coarsening (`use_multiscale`) with `bfs` or three `voronoi_*` strategies, a
-  down-arm/coarsest/up-arm block layout (`mp_per_level` must equal
-  `2*multiscale_levels+1`), and per-worker + on-disk hierarchy caching.
-- **Learned inter-level transfer operators** (`pool_type`, `unpool_type`,
-  `pool_heads`): the restriction was a fixed mean-pool and the prolongation
-  aggregation a fixed sum, while everything around them was learned. Both can
-  now be multi-head attention over the cluster / over each fine node's coarse
-  sources. Zero-initialized score heads make either reduce to the fixed
-  operator *exactly* at step 0, so enabling one starts training from the
-  previous model rather than from a different basin.
-- **Multi-partition coarse representation** (`voronoi_branches`): a level can
-  hold `K` parallel Voronoi partitions of the same node set instead of one,
-  merged by a widened `skip_projs`. The motivation is that a single `k`
-  controls two things at once — how much field information the coarse level
-  retains and how short its graph diameter is — and `K` partitions of `k`
-  clusters improve both together relative to one partition of `K*k`. Only the
-  deepest configured level may branch; branching an earlier level would fork
-  every level beneath it, so it is rejected in the hierarchy builder, the model
-  constructor, and the dataset.
-  See [ATTENTION_TRANSFER_DESIGN.md](research/meshgraphnets/ATTENTION_TRANSFER_DESIGN.md)
-  for the design, the measurements behind the defaults, and the as-built notes.
-- **World edges** ([general_modules/world_edges.py](../methods/MeshGraphNets/general_modules/world_edges.py)):
-  optional non-mesh radius edges from deformed positions (`use_world_edges`,
-  backends `scipy_kdtree`/`torch_cluster`), for contact-like interactions.
-- **Training** ([training_profiles/](../methods/MeshGraphNets/training_profiles)):
-  single-GPU and DDP loops, AMP (bf16), `torch.compile`, EMA, gradient
-  accumulation, input-noise regularization (`std_noise`/`noise_gamma`),
-  geometry augmentation, and AR-OT/AR-RT time integration (§9.1).
-- **Parallelism** ([parallelism/](../methods/MeshGraphNets/parallelism)): `ddp` or
-  `model_split` (a 1F1B pipeline across ≥2 GPUs); merged checkpoints load like
-  single-GPU ones.
-- **Removed-feature guard**
-  ([general_modules/removed_feature_guard.py](../methods/MeshGraphNets/general_modules/removed_feature_guard.py)):
-  hard-rejects VAE/prior keys, so a variational config accidentally routed here
-  fails loudly rather than silently ignoring settings.
-- **Concurrent-job safety.** Training writes normalization statistics back into
-  the *source* HDF5 (`write_preprocessing_to_hdf5`). DDP restricts that to rank
-  0, but independent jobs on the same dataset — which the ablation sweep runs
-  eight of at once — had no guard, and HDF5's own file locking does not block a
-  second `'r+'` open here (verified on HDF5 1.14.6). The write is now serialized
-  by an exclusive lock file, the same pattern `multiscale_cache.ensure_cache`
-  already used for the shared hierarchy cache.
+`test_interval` gates a pass that writes a picture into the log file's
+directory. `display_testset` (default on) enables it, and `display_trainset`
+adds training samples under `train/`. Every plotting backend is imported
+lazily: a missing matplotlib or pyvista prints a note and the run continues.
+Headless, `offscreen_rendering_available()` probes one render in a child process
+and skips the PNGs if that process dies.
 
----
+### 5.5 Time integration: AR-OT vs AR-RT
 
-## 7. Method 2 — MeshGraphNets (variational)
+This applies to MGN, MGN-V, Transolver and the three Neural_Operator models, and
+only to temporal datasets. The key is `time_integration ar_ot` (default) or
+`ar_rt`.
 
-`model meshgraphnets-v` → `methods/MeshGraphNets_Variational/MeshGraphNets_Variational_main.py`.
-Modes: `train`, `inference`.
+- **AR-OT** (one-step teacher forcing) trains on ground-truth `(t, t+1)` pairs,
+  so each pair is a dataset item. At inference the model consumes its own
+  predictions; `std_noise` narrows that gap.
+- **AR-RT** (rollout training, arXiv:2510.15201) unrolls the whole trajectory in
+  training on the model's own predictions. It backpropagates through all steps,
+  with per-step gradient checkpointing. One trajectory is one item, so an epoch
+  makes about `T`× fewer optimizer steps; raise `training_epochs` to match.
+  Validation loss becomes the rollout loss.
+- Under `ar_rt`:
+  - `std_noise` and `noise_gamma` are inert.
+  - MGN rebuilds edge, world-edge and coarse features from each predicted state.
+  - DDP uses `static_graph=True`.
+  - MGN-V resamples the posterior latent every training step and draws it once
+    per trajectory at inference.
 
-A probabilistic variant of the deterministic simulator. It keeps the graph,
-world-edge, and runtime machinery and the bi-stride/Voronoi V-cycle from
-Method 1, and adds a **variational latent path** so it can model a
-*distribution* of plausible trajectories, not a single deterministic one. It is
-not a strict superset: the hierarchy has no attention pool/unpool
-(`pool_type`, `unpool_type`, `pool_heads`), no `voronoi_branches`, no
-`learned_interpolation`, and no broadcast unpool -- every level unpools through
-the bipartite `UnpoolBlock`.
+### 5.6 Parallelism
 
-- **VAE path** ([model/vae.py](../methods/MeshGraphNets_Variational/model/vae.py)):
-  `use_vae True` activates a posterior graph-encoder, a stochastic latent `z`,
-  and variational losses — reconstruction (`huber`/`mse`), aggregate-posterior
-  **MMD** to N(0, I) (`lambda_mmd`, `mmd_bandwidth`), and a peak-to-valley MSE
-  on the *decoded* `pv_channel` field (`beta_aux`, `MeshGraphNets._pv_loss`).
-  With the default `latent_reg mmd` there is no per-sample KL term: MMD is
-  the only latent regularizer (the `gmm` prior family adds its own KL anchor,
-  `prior_kl_reg_weight`); `latent_reg kl` swaps in a per-sample KL
-  (`kl_weight`, default `1e-3`). Latent width/depth via
-  `vae_latent_dim`/`vae_encoder_mp_layers`.
-- **Latent placement** (`latent_type`, persisted in `model_config`): `global`
-  (default, `num_z` per-graph slots; HI-MGN-V with `use_multiscale`), `local`
-  (`latent_ch` channels per coarsest-level node, a `vae_local_mp_layers`-deep
-  coarse-node posterior head, and a coarse-node flow-matching prior; HI-MGNflow),
-  or `hybrid` (both; HI-MGN-hybrid). `local`/`hybrid` train single-stage and
-  jointly, need `use_multiscale True` and `prior_family fm`, and are rejected
-  with `parallel_mode model_split`. HI-MGNflow (`chi-mgnflow`) was merged into `meshgraphnets-v` as `latent_type local` on 2026-10-19; the old repo is in git history (commit `9db47d6`).
-- **Learned conditional prior**
-  ([model/conditional_prior.py](../methods/MeshGraphNets_Variational/model/conditional_prior.py)):
-  instead of sampling `z ~ N(0,I)`, a graph-conditional prior can be jointly
-  trained (`prior_type gnn_e2e`) in two families — a **flow-matching** prior
-  (`prior_family fm`) or a **GMM** prior (`prior_family gmm`) — each with its own
-  set of `prior_*` controls.
-- **Stochastic inference**: `inference_samples` trajectories per scene, with an
-  auto-batching path (`inference_batch_size auto` + `inference_batch_vram_fraction`) and an
-  optional inline generated-vs-ground-truth displacement-spread histogram
-  (`eval_dataset`, `make_histogram`).
-- **Time integration under the VAE** (§9.1): in `ar_rt` *training* the
-  posterior latent is **resampled at every unrolled step**; per-step gradient
-  checkpointing preserves RNG so the backward draw matches the forward. Inference
-  is different: each trajectory draws its `z` once, at step 0 (from the
-  conditional prior, or N(0, I) without one), and keeps it for the whole
-  rollout. Loss composition is unchanged and averaged over the
-  trajectory. The posterior encoder conditions on `graph.y`, which the rollout
-  writes per step so the encoder sees the correction the model is actually being
-  asked to make.
-- **Docs**: this repo ships an unusually rich `docs/` folder (architecture,
-  distribution-modeling research, VRAM/perf optimization, world edges,
-  multiscale coarsening, adaptive-remeshing plan, config reference).
-
-> **Perf parity with Method 1.** Most of the hot-path gap has been closed:
-> loss accumulators stay on the GPU with one `.item()` sync per epoch (the
-> progress bar reads a few every 10 batches), `pin_memory` is a config key, and
-> `EdgeBlock` uses the split-linear first layer. What remains is the
-> `UnpoolBlock`, which still materializes the `[E_up, 2D+3]` concat that the
-> deterministic tree's split form avoids. It uses `torch.optim.Adam`; configured
-> `weight_decay` is coupled L2 decay and defaults to zero when omitted.
-
----
-
-## 8. Method 3 — Neural Operator (three architectures)
-
-`model point_deeponet | deeponet | fno` → `Neural_Operator/main.py`.
-Modes: `train`, `inference`. This is the most self-documented method (it has its
-own [CLAUDE.md](../methods/Neural_Operator/CLAUDE.md), `docs/`, and the largest test suite).
-
-**One repo, three selectable operator architectures**, all reading the shared
-mesh HDF5 with no conversion and sharing one
-split/target/normalization/noise/optimizer/scheduler/checkpoint/rollout
-convention. Switching `model` must never require touching dataset, training-loop,
-loss, checkpoint, or inference code. The repo is fully self-contained: **FNO is
-implemented natively** (`model/spectral.py`) — no
-`neuraloperator` dependency, no network access.
-
-| Architecture | File(s) | Idea |
+| `parallel_mode` | Methods | Meaning |
 | --- | --- | --- |
-| **Point-DeepONet** (primary) | `model/point_deeponet.py`, `pointnet.py`, `siren.py` | PointNet branch (encodes the geometry as sensor points) + SIREN trunk (query coordinates) with early fusion. |
-| **DeepONet** (canonical) | `model/deeponet.py` | Fixed regular sensor grid → branch MLP; trunk MLP over query coords; modal dot-product. |
-| **FNO** | `model/fno.py` + `model/spectral.py` | Mesh splatted onto a regular grid; native spectral (Fourier) convolutions; sampled back to query points. |
+| `ddp` (default) | all | One full model per GPU |
+| `model_split` | MGN, MGN-V (global latent only), Neural_Operator (FNO only) | 1F1B pipeline across ≥ 2 GPUs. Merged checkpoints load like single-GPU ones. Effective batch = `batch_size × pipeline_microbatches` |
+| `node_shard` (alias `model_split`) | Transolver | One mesh's nodes sharded across ≥ 2 GPUs. Needs `attention_kernel slice_space` |
 
-Design pillars from the repo's own notes:
-
-- **`model/factory.py` is the only place models are constructed**
-  (`MODEL_REGISTRY` + per-model `VALIDATORS`).
-- **`model/operator_wrapper.py`** owns the noise contract and batch/ptr
-  synthesis — the only thing training/inference calls; every core's
-  `forward(graph) -> [sum_N, output_var]` is noise-free.
-- **`DataSpec`** (`general_modules/data_spec.py`, immutable) is the single source
-  of truth for channel widths / active axes; adapters slice `x` via
-  `physical_slice`/`context_slice`/`onehot_slice`, never magic offsets.
-- **`config_validation.py`** is a strict key registry: unknown or removed-MGN/VAE
-  keys raise *before* any HDF5 is opened.
-- The **grid axis-order convention** (adapters) is the single most bug-prone
-  spot; its docstring must be read before touching splat/sample code.
-- EMA copies BatchNorm running stats after every update (PointNet needs this);
-  spectral weights are stored real (fused AdamW rejects complex params).
-- **`parallel_mode model_split`** (FNO only) partitions the sequential
-  latent stack into a 1F1B pipeline; DeepONets and `augment_geometry True` are
-  rejected there.
-- `ex1_static_thermoelastic.h5` is planar (`operator_dim` resolves to 2); `ex2_dynamic_contact.h5` is genuinely 3D —
-  both discovered from geometry, neither hardcoded.
+SDFFlow and SimulGenVAE fall back to one GPU when `gpu_ids` lists fewer than
+two. SimulGenVAE runs multi-GPU in-process via `mp.spawn`.
 
 ---
 
-## 9. Method 4 — Transolver
+## 6. Datasets
 
-`model transolver` → `Transolver/Transolver_main.py`. Modes: `train`,
-`inference`.
+`dataset/` is local-only and git-ignored. A dataset is one cleaned training
+`.h5` plus a matching held-out `_infer.h5`. Raw data stays outside the repo.
 
-A transformer surrogate built around **Physics-Attention**
-([model/physics_attention.py](../methods/Transolver/model/physics_attention.py)): each layer
-softly assigns mesh nodes to a small learned set of "physics slices"
-(`slice_num`), attends over those slices, and scatters back — turning
-`O(N²)` node attention into `O(N·slice_num)`.
-
-- **Two numerically-exact attention kernels** sharing one v1-layout state dict:
-  `slice_space` (Transolver-3's aggregate-then-project; **the default**, and the
-  only kernel that can tile, shard, or amortize) and `naive` (v1's
-  project-then-aggregate). Both operate **per graph, segmented by `ptr`**, so
-  nodes never mix across graphs in a batch, and they agree to fp64 round-off
-  (`misc/verify_v3.py` L1), so the choice is memory/speed, never results.
-- **Node-shard parallelism** (`parallel_mode node_shard`, alias `model_split`):
-  one mesh's nodes are split across ≥2 GPUs and the slice aggregates are
-  autograd-aware SUM all-reduced, reproducing single-process results bit-for-bit.
-  Requires `attention_kernel slice_space`.
-- **Memory characteristic**: the dominant term is the `[H, N, slice_num]` fp32
-  slice-weight matrix per layer, so VRAM scales with `B·L·H·N·slice_num` —
-  `slice_num`/`num_layers` (not `latent_dim`) drive memory. `chunk_size` tiles
-  that matrix and **streams** it: each tile is dropped once folded into the
-  aggregates and rebuilt in backward, so the N-scaled attention term leaves
-  retained memory (measured 1049 MB → 64 MB) and peak becomes near-independent
-  of `slice_num`. Tiling covers the attention only; the FFN's activations are
-  brought under a checkpoint by `use_checkpointing` (block-level,
-  `model/checkpointing.py`), which is why every shipped config sets both. The
-  official Transolver-3 implementation wraps the two in one per-chunk
-  checkpoint (its `chunk_compute` contains the deslice *and* the FFN), so
-  `chunk_size` + `use_checkpointing True` is what reproduces its default;
-  `chunk_size` alone recomputes strictly less. Measured in
-  `methods/Transolver/misc/verify_v3.py` L5 and CONFIGURATION.md 8.4.
-- **Amortized training** (`amortized_training`): builds each layer's physics
-  tokens from a subsampled *cache* node stream and computes the loss on a
-  smaller decoded *query* stream, cutting activations to
-  `O(L·(cache+query)·C)`. Training-only — eval and inference always run the full
-  mesh. See CONFIGURATION.md 8.4.
-- Uses AdamW; slice-assignment temperature is annealed
-  (`temperature_init/min/max`); inference supports `direct` and `decoupled`
-  modes.
-
----
-
-## 10. Method 5 — SDFFlow (generative geometry)
-
-`model sdfflow` → `methods/SDFFlow/SDFFlow_main.py`. Modes: `train`,
-`train_vae`, `train_fm`, `sample`, `reconstruct`, `interpolate`, `optimize`,
-`evaluate`. Own docs:
-[methods/SDFFlow/CLAUDE.md](../methods/SDFFlow/CLAUDE.md).
-
-Unlike the other four (which predict *fields on a given mesh*), SDFFlow
-**generates new 3D shapes**. It is a two-stage generative model over signed
-distance functions (SDFs), plus a different data contract.
-
-**Stage 1 — SDF-VAE** ([model/sdf_vae.py](../methods/SDFFlow/model/sdf_vae.py)):
-a transformer encoder consumes surface points and produces a compact latent
-(`latent_tokens × latent_dim`; the ex1 model uses one global token, the v3
-recipe 32 farthest-point-anchored VecSet tokens via `encoder_query_type fps`).
-MLP or attention SDF decoders reconstruct the signed distance field. Training
-supports deterministic / posterior-noise / KL warmups and an optional relative
-posterior-std floor (`posterior_min_std_rel`).
-
-**Stage 2 — Flow Matching** ([model/velocity_net.py](../methods/SDFFlow/model/velocity_net.py)):
-a **rectified-flow** velocity network with AdaLN-Zero blocks learns to transport
-noise → the VAE latent distribution, optionally conditioned on geometric
-descriptors. FM consumes *normalized encoder means* (not posterior samples).
-
-**Data & conditioning**
-([general_modules/sdf_sampling.py](../methods/SDFFlow/general_modules/sdf_sampling.py),
-`sdf_dataset.py`): HDF5 layout is
-`shapes/{index:05d}/{surface_points,surface_normals,sdf_points,sdf_values,cond}`;
-`cond` holds five raw descriptors `bbox_x, bbox_y, bbox_z, volume, area`. FM may
-select a subset via `condition_names` (the ex1/ex2 DeepJEB configs use
-`bbox_x,bbox_z,volume,area`; the v3 recipe uses `volume,area`, the two
-descriptors that actually vary). An optional root `cond_extra` sidecar, appended
-by `add_fea_conditions.py` from DeepJEB's FEA labels and named by
-`general_modules/condition_names.py`, is read as further `cond` columns (the ex5
-recipe conditions on `volume,area` plus the log peak stresses of the vertical,
-diagonal and torsion load cases and the log first mode, with
-`cond_dropout_mode per_dim` so a request may leave entries unspecified).
-`split_by_parent` groups DeepJEB's 2138 variants by their 263 parent geometries
-before splitting. SDF sign is **negative inside**,
-positive outside;
-shapes occupy ≈`[-0.9,0.9]³`, queries cover `[-1,1]³`.
-
-**The merged training pipeline** — this is the production path and the
-distinctive bit
-([training_profiles/train_pipeline.py](../methods/SDFFlow/training_profiles/train_pipeline.py)):
-`mode train` builds two derived stage configs (every `vae_<x>`/`fm_<x>` key loses
-its prefix for the matching stage), then:
-
-1. Inspects `vae_modelpath` for expected stage/epochs/compat fields.
-2. Trains or **reuses** the VAE per `skip_completed_stages`.
-3. **Refuses to start FM unless the VAE checkpoint verifies complete.**
-4. Frees stage memory before FM.
-5. Reuses FM only if the VAE was reused *and* the FM checkpoint is complete and
-   compatible — a newly trained VAE always invalidates old FM reuse.
-
-This keeps the GPU busy end-to-end and prevents stale VAE/FM pairings.
-
-**Inference modes**: `sample` (with OOD guarding via `max_condition_z` +
-`condition_ood_policy`, candidate ranking, marching-cubes meshing, and the
-opt-in descriptor-accuracy tools: C2 calibrated endpoint-prediction guidance
-inside the ODE (`guidance_enabled`), E2 proxy-Jacobian Newton correction of the
-retained latents (`newton_rounds`), both in the calibrated proxy units of
-`descriptor_calibration_path`, and a geometric / FEA / surrogate
-`condition_audit` of the decoded meshes), `reconstruct` (mesh → VAE → mesh, no
-FM needed; optional decoder-frozen latent refinement via `latent_refine_steps`),
-`interpolate` (reproducible: by default `interpolation_space slerp_noise`
-spherically interpolates the two endpoints' FM source noise and integrates all
-three through the ODE, so the endpoints reproduce the original samples and the
-midpoint is on-manifold; `lerp_latent` keeps the legacy `torch.lerp` in
-normalized latent space → three STLs + a triptych PNG; `cond_sweep` decodes one
-noise row under a straight-line sweep of conditions → a strip of STLs),
-`optimize` (closed-loop generate → mesh → FEA/surrogate → CMA-ES search; its
-load cases are the GE challenge's in SI since 2026-09 -- earlier runs keep
-their ranking but their absolute stresses were understated ~4.4x), and
-`evaluate` (`eval_task reconstruction`: held-out VAE reconstruction metrics,
-surface distance, sign accuracy, body count, per shape and aggregate, for the
-encoder mean and the refined latent; `descriptor_calibration`: fits the soft
-proxy's affine calibration; `conditional`: paired-noise condition-accuracy
-benchmark of plain / rejection / c2 / e2 sampling). Marching cubes via
-[general_modules/mesh_extraction.py](../methods/SDFFlow/general_modules/mesh_extraction.py).
-
----
-
-## 11. Configs & benchmarks
-
-Config templates live under [configs/](../configs), organized by method and
-dataset/campaign. Counts drift; use
-`python AI_CAE4ALL_main.py --audit-configs --no-color` for the live inventory.
-
-| Location | Coverage |
+| Directory | Contents |
 | --- | --- |
-| `configs/MeshGraphNets/deterministic/ex1` … `ex9` | Deterministic and Hi-MGN train/inference profiles, including the ex1 ablation (§11.1) |
-| `configs/MeshGraphNets_Variational/` | B8 and SAOI variational training/inference campaigns |
-| `configs/Neural_Operator/deterministic/ex1` … `ex9` | Point-DeepONet, DeepONet, and FNO profiles |
-| `configs/Transolver/deterministic/ex1` … `ex9` | Transolver training/inference profiles |
-| `configs/SDFFlow/` | SDFFlow train (ex1 / v2 / v3 / 8-GPU b300 / FEA-conditioned ex5), evaluate (reconstruction, descriptor calibration, conditional benchmark), sample (unconditional, extrapolation, partial conditional), interpolate (slerp, condition sweep), and optimize profiles, plus the `arms/` VAE ablation sweep (`A0`..`A9`, mostly single-axis) |
-| `configs/SimulGenVAE/`, `configs/MLP/`, `configs/GeometryIngest/` | Fixed-geometry latent, tabular, and ingestion workflows |
-| `configs/campaigns/dataset_matrix/` | Cross-method campaign: `manifest.json` (every train/infer config pair per example × method), the config generator, audit, runner, and spread scorer; no bundled reproduced-result report |
+| `dataset/deterministic/` | ex1 static thermoelastic, ex2 dynamic contact, ex3 NASA CRM (full/mid, plus the MLP tables), ex4 cylinder flow, ex5 deforming plate, ex6 flag, ex7 AirfRANS, ex8 elasticity, ex9 plasticity, ex13 DeepJEB vertical FEA |
+| `dataset/probabilistic/` | ex1 turbulent radiative layer, ex2 crack path, ex3 shell buckling (one-to-many targets for MGN-V) |
+| `dataset/geometry_generation/` | SDFFlow SDF datasets: ex1 DeepJEB, ex2 DrivAerML, ex3 MCB |
+| `dataset/validation/` | `ellipse*.h5`, the upstream SAR/LDGN validation case |
+| `dataset/derived/config_matrix/` | Inputs generated for the dataset_matrix campaign: a canonical CRM copy and ex6/ex9 condition sidecars |
 
-Paper-profile modules and optional tests exist, but the previously described
-`dataset/benchmarks/` evidence bundle is not present in this checkout. Do not
-infer a reproduced paper metric from those structural tests or campaign tools.
-
-### 11.1 The Hi-MGN ex1 ablation (removed from the checkout)
-
-`configs/` was reduced to one `baseline/` train+infer pair per method per
-dataset slot, so the ex1-only ablation campaign -- its `ABLATION.md` runbook,
-the `ablation.py` driver, `run_ablation.sh`, and the 22 generated arm configs --
-**is no longer in the tree**. It compared five axes: hierarchy depth,
-message-passing placement, coarsening operator, total message-passing budget,
-and learned versus broadcast interpolation, over 11 run entries (nine distinct
-configurations, the baseline repeated three times to expose unseeded training
-scatter).
-
-Recover any of it from git history if the study is picked up again:
-
-```bash
-git show HEAD:configs/MeshGraphNets/ex1/ABLATION.md
-git show HEAD:configs/MeshGraphNets/ex1/ablation.py
-git show HEAD:configs/MeshGraphNets/ex1/run_ablation.sh
-```
-
-Its design notes survive in
-[docs/research/meshgraphnets/](research/meshgraphnets/). No completed ablation
-scores were ever claimed here.
+[reference/PUBLIC_DATASETS.md](reference/PUBLIC_DATASETS.md) records where the
+public datasets came from. The builders live with their method, for example
+`methods/SDFFlow/scripts/build_dataset.py` for SDF data and `geometry_ingest`
+for CAD.
 
 ---
 
-## 12. Datasets present
+## 7. Methods
 
-| File | Used by | Notes |
-| --- | --- | --- |
-| `dataset/deterministic/ex1_static_thermoelastic.h5` | mesh methods | **Planar** geometry (z≡0 → operator_dim 2) |
-| `dataset/deterministic/ex2_dynamic_contact.h5` | mesh methods | Genuinely **3D** geometry |
-| `dataset/ex*.mscache.*.h5` | MGN | Transient per-run hierarchy cache — deleted at end of training; leftovers mean a killed run and are pruned on next start |
-| `dataset/geometry_generation/ex1_deepjeb.h5` | SDFFlow | Geometry-generation shapes + descriptors |
-| `dataset/deterministic/ex1_static_thermoelastic_infer.h5` | mesh methods | ex1 single-sample hex-mesh inference input; state rows carry the ground-truth field (was `hex_GT.h5`) |
-| `dataset/deterministic/ex2_dynamic_contact_infer.h5` | mesh methods | ex2 held-out inference set: 5 unseen scenes × 50 timesteps; rollout is seeded from t=0 and scored against t=1..49 |
-| `dataset/hex_dataset.h5` | mesh methods | Same mesh with the state rows zeroed — legacy, superseded by `ex1_static_thermoelastic_infer.h5` |
+Each method's own `CLAUDE.md`/`README.md` is authoritative for its data
+contract, architecture and validation. The documents below explain each one.
 
-Dataset builders live in the method repos (`methods/SDFFlow/scripts/build_dataset.py`
-for SDFFlow) and under `dataset/` for the mesh methods.
+| Route | Directory | Entrypoint | Modes | Document |
+| --- | --- | --- | --- | --- |
+| `meshgraphnets` | `methods/MeshGraphNets/` | `MeshGraphNets_main.py` | train, inference | [01](methods/01_MeshGraphNets_MGN.md), [02](methods/02_HI-MGN.md), [03](methods/03_BSMS-GNN.md) |
+| `meshgraphnets-v` | `methods/MeshGraphNets_Variational/` | `MeshGraphNets_Variational_main.py` | train, inference | [04](methods/04_MeshGraphNets_Variational.md) |
+| `deeponet`, `point_deeponet`, `fno` | `methods/Neural_Operator/` | `main.py` | train, inference | [05](methods/05_DeepONet.md), [06](methods/06_Point-DeepONet.md), [07](methods/07_FNO.md) |
+| `transolver` | `methods/Transolver/` | `Transolver_main.py` | train, inference | [08](methods/08_Transolver.md) |
+| `sdfflow` | `methods/SDFFlow/` | `SDFFlow_main.py` | train, train_vae, train_fm, sample, reconstruct, interpolate, optimize, evaluate | [09](methods/09_SDFFlow.md) |
+| `geometry_ingest` | `methods/GeometryIngest/` | `main.py` | ingest, inspect | [10](methods/10_Geometry_Ingest.md) |
+| `mlp` | `methods/MLP/` | `MLP_main.py` | train, inference | [11](methods/11_MLP.md) |
+| `simulgenvae` | `methods/SimulGenVAE/` | `SimulGenVAE_main.py` | train, train_vae, train_lc, reconstruct | [12](methods/12_SimulGenVAE.md) |
 
----
-
-## 13. Testing
-
-The root `tests/` suite that covered launcher and `MethodSpec` contracts was
-**deleted in commit `9884fb1` (2026-09-21)** and not replaced; the launcher layer
-is now checked with `--audit-configs`/`--check`. Each method still has native
-tests, run from that method's directory in that method's venv:
-
-```bash
-python AI_CAE4ALL_main.py --audit-configs          # launcher/spec layer
-python -m pytest -q studio/studio_backend          # 10 modules, 43 tests
-cd methods/Neural_Operator && python -m pytest -q tests/
-cd methods/SDFFlow        && python -m pytest -q tests/
-```
-
-`Neural_Operator/` has by far the deepest coverage (config validation, coordinate
-domain, grid adapter, spectral/FNO, DeepONet, point sampling, ragged
-batching, radius neighbors, checkpoint roundtrip, EMA buffers, model split,
-AR-rollout, and paper-profile contract tests). MeshGraphNets and its variational sibling
-ship AR-rollout and multiscale-stats tests.
+[methods/00_shared_foundations.md](methods/00_shared_foundations.md) covers the
+ideas the mesh methods share.
 
 ---
 
-## 14. Known gaps & mismatches (the honest list)
+## 8. When you change something
 
-These are documented here so they are not rediscovered the hard way;
-[CONFIGURATION.md](CONFIGURATION.md) points to the live
-validators and native contracts.
-
-- **Benchmark-intent keys** (`split_strategy`, `loss_type`,
-  `relative_l2_epsilon`) are not implemented in the stable runtime.
-- A set of legacy variational-GNN keys are inactive and warned (or rejected
-  under `--strict`) by the suite rather than silently changing training.
-
----
-
-## 15. Development workflow — when you change something
-
-From [CLAUDE.md](../CLAUDE.md), the rules that keep the launcher and the native code
-in sync:
-
-- **New/renamed native config key** → update that method's spec `known_keys` (and
-  required/validator lists) in [cae_suite/specs/](../cae_suite/specs), or the
-  launcher will reject a valid config or accept an invalid one. Then re-run the
-  relevant `--check`/audit.
-- **New method repo** → add a `build_*_spec()` and register it in
-  [registry.py](../cae_suite/registry.py)'s `MethodRegistry.__init__`.
-- **Changing behavior inside a method repo** → follow that repo's own `CLAUDE.md`
-  and run its own tests; the launcher change (if any) is usually just the spec.
-- **Preserve diagnostic-code prefixes** (`ROUTE-`, `ENV-`, `NATIVE-CHECK-`, …) —
-  the exit-code mapping and any tooling depend on them.
-- When a method repo's `CLAUDE.md` and its code disagree, the **code is
-  authoritative for current behavior**, but treat the mismatch as something to
-  reconcile, not ignore.
-
-### Routing quick reference
-
-| `model` value | Repo | Entrypoint | Modes |
-| --- | --- | --- | --- |
-| `meshgraphnets` | `MeshGraphNets/` | `MeshGraphNets_main.py` | train, inference |
-| `meshgraphnets-v` | `methods/MeshGraphNets_Variational/` | `MeshGraphNets_Variational_main.py` | train, inference |
-| `point_deeponet`, `deeponet`, `fno` | `Neural_Operator/` | `main.py` | train, inference |
-| `transolver` | `Transolver/` | `Transolver_main.py` | train, inference |
-| `sdfflow` | `methods/SDFFlow/` | `SDFFlow_main.py` | train, train_vae, train_fm, sample, reconstruct, interpolate, optimize, evaluate |
-| `mlp` | `MLP/` | `MLP_main.py` | train, inference |
-| `geometry_ingest` | `methods/GeometryIngest/` | `main.py` | ingest, inspect (non-ML data-prep) |
-
----
-
-## Appendix A — Cross-cutting feature: AR-OT vs AR-RT time integration
-
-Active in both MeshGraphNets variants, Transolver, and all three Neural Operator
-models; meaningful only for temporal datasets (`num_timesteps > 1`). Selected by
-a single config key: `time_integration ar_ot` (default) or `ar_rt`.
-
-- **AR-OT** (Auto-Regressive One-step Teacher-forcing) trains on ground-truth
-  consecutive pairs; each `(t, t+1)` pair is its own dataset item, so a `T`-step
-  trajectory yields `T-1` optimizer steps. Inference first feeds the model its
-  own predictions, and `std_noise` exists to paper over that train/test mismatch.
-- **AR-RT** (Auto-Regressive Rollout Training, following NVIDIA/GM
-  arXiv:2510.15201) unrolls the model over the whole trajectory during training,
-  consuming its own predictions exactly as inference does, and backpropagates
-  through all steps (gradient-checkpointed per step; no noise injected). The
-  whole trajectory is **one dataset item** → one forward, one averaged loss, one
-  backward. Per-epoch node evaluations are unchanged, but an epoch performs ≈`T`×
-  fewer optimizer steps — raise `training_epochs` accordingly. Validation loss
-  becomes the rollout loss, so best-checkpoint selection optimizes rollout
-  accuracy.
-- Under `ar_rt`: `std_noise`/`noise_gamma` are inert; MeshGraphNets rebuilds mesh
-  edge features, world edges, and coarse features per step from each predicted
-  state (`coarse_world_edges True` is rejected); DDP forces `static_graph=True`;
-  and variational MGN resamples the posterior latent every step during
-  training (inference draws it once per trajectory; §7).
-
-## Appendix B — Cross-cutting feature: parallelism modes
-
-| Mode | Methods | Meaning |
-| --- | --- | --- |
-| `ddp` (default) | all | Data-parallel; one full model per GPU. |
-| `model_split` | MGN, MGN-v, Neural_Operator (FNO only) | 1F1B pipeline across ≥2 GPUs; the model is cut into pipeline blocks; merged checkpoints load like single-GPU ones. Rejected for DeepONets and with `augment_geometry True`. |
-| `node_shard` (Transolver; `model_split` is an alias) | Transolver | One mesh's nodes are sharded across ≥2 GPUs; slice aggregates are autograd-aware all-reduced. Requires `attention_kernel slice_space`. |
-
-Model-split effective batch size is `batch_size × pipeline_microbatches`
-(default microbatches `2 × num_stages`).
-
----
-
-*Generated from a live read of the repository. For any specific config key,
-`CONFIGURATION.md` points to the executable contracts; for any
-method's internals, that method's own `CLAUDE.md` / `docs/` and code are
-authoritative.*
+- **A new or renamed native key** goes into the spec's `known_keys` (and its
+  validator and required lists). Then run `--audit-configs`. A new **path** key
+  also goes into both `PATH_KEYS` copies.
+- **A new spec enum** is mirrored in `CHOICES` in `studio/src/constants.js`.
+- **A new method** needs `methods/<Name>/` and `configs/<Name>/`, plus a
+  `build_*_spec()` with `repository="methods/<Name>"`, registered in
+  `default_specs()`. It also needs a Studio `TEMPLATES` entry and `HELP` text.
+  Restart the Studio afterwards.
+- **A behavior change inside a method** follows that method's `CLAUDE.md` and
+  runs its tests. The launcher change, if any, is usually just the spec.
+- **Keep the diagnostic prefixes** (`ROUTE-`, `ENV-`, `NATIVE-CHECK-`).
+- When a method's docs and its code disagree, the code decides current behavior.
+  Fix the docs.

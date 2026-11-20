@@ -1,73 +1,57 @@
-# AI-CAE4ALL — Method Documentation
+# Method documentation
 
-This folder indexes **every ML-for-CAE method** shipped in the AI-CAE4ALL
-monorepo and contains the shared foundations plus architecture-specific guides.
-The live `MethodSpec` and native validators remain authoritative for exhaustive
-config-key contracts.
+One doc per launcher route, plus shared foundations. Each doc describes the
+implementation, not the paper. The live `MethodSpec` (`ai_cae4all/specs/`) and
+each method's own `CLAUDE.md`/`README.md` are authoritative for the full key
+contract. When a doc and the code disagree, the code is right.
 
-Everything here is derived directly from the live code (`model/*.py`,
-`general_modules/*.py`, `training_profiles/*.py`) and the checked-in configs, not
-from the original papers — where the implementation deviates from a paper, the
-docs describe the implementation.
+## The docs
 
-## The methods
-
-| # | Doc | `model` config value | Runtime directory | Family |
+| # | Doc | `model` | Directory | Family |
 | --- | --- | --- | --- | --- |
-| 0 | [00_shared_foundations.md](00_shared_foundations.md) | — | shared conventions | data + training contract |
-| 1 | [01_MeshGraphNets_MGN.md](01_MeshGraphNets_MGN.md) | `meshgraphnets` | `methods/MeshGraphNets/` | GNN simulator |
-| 2 | [02_HI-MGN.md](02_HI-MGN.md) | `meshgraphnets` (+`use_multiscale`) | `methods/MeshGraphNets/` | Hierarchical GNN |
-| 3 | [03_BSMS-GNN.md](03_BSMS-GNN.md) | `meshgraphnets` (+`coarsening_type bfs`) | `methods/MeshGraphNets/` | Hierarchical GNN |
-| 4 | [04_MeshGraphNets_Variational.md](04_MeshGraphNets_Variational.md) | `meshgraphnets-v` | `methods/MeshGraphNets_Variational/` | Generative GNN (cVAE) |
-| 5 | [05_DeepONet.md](05_DeepONet.md) | `deeponet` | `methods/Neural_Operator/` | Neural operator |
-| 6 | [06_Point-DeepONet.md](06_Point-DeepONet.md) | `point_deeponet` | `methods/Neural_Operator/` | Neural operator |
-| 7 | [07_FNO.md](07_FNO.md) | `fno` | `methods/Neural_Operator/` | Neural operator |
-| 8 | [08_Transolver.md](08_Transolver.md) | `transolver` | `methods/Transolver/` | Transformer operator |
-| 9 | [09_SDFFlow.md](09_SDFFlow.md) | `sdfflow` | `methods/SDFFlow/` | Generative geometry |
-| 10 | [10_Geometry_Ingest.md](10_Geometry_Ingest.md) | `geometry_ingest` | `methods/GeometryIngest/` | Data-prep utility (not an ML method) |
-| 11 | [11_MLP.md](11_MLP.md) | `mlp` | `methods/MLP/` | Parametric MLP surrogate (tabular, no mesh) |
-| 12 | [SimulGenVAE user guide](../../methods/SimulGenVAE/README.md) | `simulgenvae` | `methods/SimulGenVAE/` | Fixed-geometry hierarchical VAE |
+| 00 | [00_shared_foundations.md](00_shared_foundations.md) | — | — | shared data and training contract |
+| 01 | [01_MeshGraphNets_MGN.md](01_MeshGraphNets_MGN.md) | `meshgraphnets` | `methods/MeshGraphNets/` | GNN simulator |
+| 02 | [02_HI-MGN.md](02_HI-MGN.md) | `meshgraphnets` + `use_multiscale` | `methods/MeshGraphNets/` | hierarchical GNN |
+| 03 | [03_BSMS-GNN.md](03_BSMS-GNN.md) | `meshgraphnets` + `coarsening_type bfs` | `methods/MeshGraphNets/` | hierarchical GNN |
+| 04 | [04_MeshGraphNets_Variational.md](04_MeshGraphNets_Variational.md) | `meshgraphnets-v` | `methods/MeshGraphNets_Variational/` | generative GNN, one-to-many |
+| 05 | [05_DeepONet.md](05_DeepONet.md) | `deeponet` | `methods/Neural_Operator/` | neural operator |
+| 06 | [06_Point-DeepONet.md](06_Point-DeepONet.md) | `point_deeponet` | `methods/Neural_Operator/` | neural operator |
+| 07 | [07_FNO.md](07_FNO.md) | `fno` | `methods/Neural_Operator/` | neural operator |
+| 08 | [08_Transolver.md](08_Transolver.md) | `transolver` | `methods/Transolver/` | transformer operator |
+| 09 | [09_SDFFlow.md](09_SDFFlow.md) | `sdfflow` | `methods/SDFFlow/` | generative geometry, design loop |
+| 10 | [10_Geometry_Ingest.md](10_Geometry_Ingest.md) | `geometry_ingest` | `methods/GeometryIngest/` | data prep (not ML) |
+| 11 | [11_MLP.md](11_MLP.md) | `mlp` | `methods/MLP/` | tabular surrogate |
+| 12 | [12_SimulGenVAE.md](12_SimulGenVAE.md) | `simulgenvae` | `methods/SimulGenVAE/` | fixed-geometry hierarchical VAE |
 
-> **`geometry_ingest` is a data-prep utility, not an ML method.** It is included
-> here because it is a launcher-routed `model`, but it trains nothing: it meshes
-> CAD/geometry (STEP/IGES/STL) into the shared HDF5 contract that the ML methods
-> above consume. See its doc for details.
+MGN, HI-MGN and BSMS-GNN are one codebase with different configuration. They
+share the building blocks described in
+[00_shared_foundations.md](00_shared_foundations.md).
 
-> **MGN / HI-MGN / BSMS-GNN share one codebase.** They are not three separate
-> repos: MGN is the flat baseline, HI-MGN is the multiscale V-cycle
-> (`use_multiscale True` + Voronoi coarsening), and BSMS-GNN is the same V-cycle
-> driven by the BFS bi-stride coarsener (`coarsening_type bfs`). Each has its own
-> doc because they behave and are configured differently, but they reuse the same
-> encoder/processor/decoder building blocks documented in
-> [00_shared_foundations.md](00_shared_foundations.md).
+The optional local-only routes `sar` and `ldgn` have no doc here. They are
+documented in their own READMEs, when present.
 
-## How to run any method
-
-Everything is launched through the root suite launcher; the `model` field inside
-the config selects the backend:
+## Running any method
 
 ```bash
-python AI_CAE4ALL_main.py --config <path/to/config.txt> --check     # validate only
-python AI_CAE4ALL_main.py --config <path/to/config.txt> --dry-run   # print native command
-python AI_CAE4ALL_main.py --config <path/to/config.txt>             # validate + launch
-python AI_CAE4ALL_main.py --describe <model>                        # per-mode required keys
+python AI_CAE4ALL_main.py --config <config.txt> --check     # validate only
+python AI_CAE4ALL_main.py --config <config.txt> --dry-run   # print the native command
+python AI_CAE4ALL_main.py --config <config.txt>             # validate + launch
+python AI_CAE4ALL_main.py --describe <model>                # required keys per mode
 ```
 
-`mode` (`train` / `inference` / `sample` / …) also lives *inside* the config.
+`model` and `mode` both live inside the config.
 
-## At-a-glance selection guide
+## Selection guide
 
-| If you need to… | Use | Why |
-| --- | --- | --- |
-| Simulate transient physics on a fixed mesh (deformation, stress, crash) | **MGN** | Native mesh message passing; best for local, mesh-resolved fields |
-| Same, but on very large meshes with long-range coupling | **HI-MGN / BSMS-GNN** | Multiscale V-cycle propagates information across the mesh in fewer layers |
-| Model *manufacturing spread* — many plausible outputs per identical mesh | **MGN-Variational** | cVAE latent + learned conditional prior generate distinct valid variants |
-| Learn a solution operator that generalizes across geometries/parameters | **DeepONet / Point-DeepONet / FNO** | Operator learning; query the field at arbitrary points |
-| Best mesh-native operator baseline in this suite | **Point-DeepONet** | PointNet branch + SIREN trunk, no grid projection loss |
-| Structured/near-grid domains, spectral efficiency | **FNO** | Global Fourier layers; cheap once splatted to a grid |
-| Attention-based operator, one architecture, huge meshes | **Transolver** | Physics-Attention with linear-in-N slice tokens |
-| *Generate new 3D shapes* (not simulate a field) | **SDFFlow** | SDF-VAE + latent flow matching, conditioned on shape descriptors |
-| Predict a few **scalar** quantities from **scalar** design parameters (no mesh/field) | **MLP** | Plain N→M fully-connected regressor over a tabular DOE / parameter sweep |
-
-See each method's own doc for the detailed strengths/weaknesses and the full
-config catalog.
+| If you need to… | Use |
+| --- | --- |
+| Predict mesh-resolved transient or static fields | MGN |
+| The same on large meshes with long-range coupling | HI-MGN, BSMS-GNN |
+| Several plausible responses for one input (one-to-many) | MGN-V |
+| Learn an operator across geometries or parameters, queryable at any point | DeepONet, Point-DeepONet |
+| Structured or near-grid domains | FNO |
+| An attention operator on large meshes | Transolver |
+| Generate or optimize 3D shapes | SDFFlow |
+| Mesh CAD into the shared HDF5 | GeometryIngest |
+| Scalar outputs from scalar design parameters | MLP |
+| Full-field responses on one fixed mesh, from a few conditions | SimulGenVAE |

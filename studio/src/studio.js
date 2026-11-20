@@ -951,7 +951,7 @@ export async function renderDocsWorkspace(container) {
     // Grouped by top-level area and alphabetical within a group. The flat
     // modification-time order put docs/, methods/ and configs/ READMEs in
     // whatever sequence they were last touched.
-    const AREA_ORDER = ["docs", "methods", "configs", "cae_suite", "studio", "inference", "tests"];
+    const AREA_ORDER = ["docs", "methods", "configs", "ai_cae4all", "studio", "inference", "tests"];
     const areaOf = path => {
       const head = String(path).split("/")[0];
       return String(path).includes("/") ? head : "repository root";

@@ -1,6 +1,6 @@
 # CLAUDE.md — MLP Surrogate
 
-Guidance for Claude Code when working inside the `MLP/` method repo. This file is
+Guidance for Claude Code when working inside the `methods/MLP/` method repo. This file is
 **authoritative** for the MLP method's data contract and architecture; the
 root [CLAUDE.md](../../CLAUDE.md) covers the launcher and cross-cutting conventions.
 
@@ -12,17 +12,22 @@ interest** (e.g. `[E, thickness, load] → [max_stress, max_disp]`). It is the
 tabular regression method in the suite — it has **no meshes, edges, or
 timesteps**, so it does *not* use the mesh HDF5 contract the other methods share.
 
-Registered as launcher model `mlp` (repository `MLP/`, entrypoint `MLP_main.py`).
-Runs through the suite launcher or standalone:
+Registered as launcher model `mlp` (repository `methods/MLP`, entrypoint
+`MLP_main.py`). Runs through the suite launcher (from the `AI-CAE4ALL` root) or
+standalone (from `methods/MLP/`):
 
 ```bash
 python AI_CAE4ALL_main.py --config <your-mlp-config>.txt --check
 python AI_CAE4ALL_main.py --config <your-mlp-config>.txt
-python MLP/MLP_main.py --config <abs-or-repo-relative config>   # standalone
+cd methods/MLP && python MLP_main.py --config <abs or cwd-relative config>   # standalone
 ```
 
-`mode` lives inside the config: **`train`** or **`inference`**. Config paths
-resolve from this repo root (`MLP/`).
+No MLP config is checked in (`configs/MLP/deterministic/` is empty), so write
+your own. `mode` lives inside the config: **`train`** or **`inference`**.
+Relative paths in a config resolve from the working directory, which the
+launcher sets to `methods/MLP/`; artifact paths therefore read
+`../../output/...` (the default `inference_output_dir` is
+`../../output/mlp/predictions`) and dataset paths `../../dataset/...`.
 
 ## Dataset contract (tabular X/Y HDF5)
 
@@ -38,7 +43,7 @@ The **only** dataset format. A single HDF5 file per split:
 `Y` is optional for inference (present → per-output MAE/RMSE are reported). The
 launcher preflight (`dataset_kind="table_hdf5"`) cross-checks `X`/`Y` widths
 against `input_var`/`output_var` before launch. See
-[dataset/DATASET_FORMAT.md](../../docs/reference/DATASET_FORMAT.md).
+[docs/reference/DATASET_FORMAT.md](../../docs/reference/DATASET_FORMAT.md).
 
 ## Architecture facts
 
@@ -63,7 +68,7 @@ Routing/optimizer/runtime keys are shared with the suite (`input_var`=N,
 `output_var`=M, `training_epochs`, `batch_size`, `learningr`, …). MLP-specific:
 `hidden_layers`, `activation`, `dropout`, `norm`, `input_normalization`,
 `output_normalization`, `output_activation`, `loss`. The full catalog is the
-launcher spec `cae_suite/specs/mlp.py` (the validation source of truth); the
+launcher spec `ai_cae4all/specs/mlp.py` (the validation source of truth); the
 grammar is in [docs/CONFIGURATION.md](../../docs/CONFIGURATION.md).
 
 ## Periodic visualization
@@ -83,16 +88,19 @@ so a missing install prints a note and training continues.
 ## Tests
 
 ```bash
-cd MLP && python -m pytest -q tests/test_mlp_pipeline.py
+cd methods/MLP && python -m pytest -q tests/
 ```
 
-Builds a tiny synthetic X/Y HDF5, trains a few CPU epochs, and asserts a
-checkpoint is written and inference produces a `[S, M]` prediction array.
+`tests/test_mlp_pipeline.py` builds a tiny synthetic X/Y HDF5, trains a few CPU
+epochs, and asserts a checkpoint is written and inference produces a `[S, M]`
+prediction array. `tests/test_config_validation.py` checks that the native
+`mlp/config.py::validate` rejects unknown closed-choice values and accepts every
+published default.
 
 ## When you change something
 
 - **New/renamed config key** → update `mlp/config.py` **and** the launcher spec
-  `known_keys` in `cae_suite/specs/mlp.py`, or the launcher will reject a valid
+  `known_keys` in `ai_cae4all/specs/mlp.py`, or the launcher will reject a valid
   config or accept an invalid one.
 - **New architecture option** → thread it through `mlp/config.py` (`Params` +
   `params_from_config`), `mlp/model.py`, and the checkpoint `config` block so

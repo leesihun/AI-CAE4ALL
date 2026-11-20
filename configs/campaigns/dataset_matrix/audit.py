@@ -13,7 +13,7 @@ sys.path.insert(0, str(ROOT))
 def audit_native(repository):
     """One fresh interpreter per independent method namespace."""
     from generate import build
-    from cae_suite.config_parser import parse_config
+    from ai_cae4all.config_parser import parse_config
     method_root = ROOT / 'methods' / repository
     os.chdir(method_root)
     sys.path.insert(0, str(method_root))
@@ -65,10 +65,10 @@ def audit_data():
 
 
 def audit_specs():
-    from cae_suite.preflight import run_preflight, PreflightOptions
-    from cae_suite.registry import MethodRegistry
-    from cae_suite.settings import LocalSettings
-    from cae_suite.diagnostics import Severity
+    from ai_cae4all.preflight import run_preflight, PreflightOptions
+    from ai_cae4all.registry import MethodRegistry
+    from ai_cae4all.settings import LocalSettings
+    from ai_cae4all.diagnostics import Severity
     from generate import build
     registry = MethodRegistry(ROOT)
     problems = {}

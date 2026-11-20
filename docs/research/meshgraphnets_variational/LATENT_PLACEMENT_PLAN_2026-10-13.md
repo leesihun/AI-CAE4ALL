@@ -2,7 +2,8 @@
 
 - 작성일: 2026-10-13
 - 대상 문제: ex3 원통 쉘 좌굴 (`dataset/probabilistic/ex3_shell_buckling*.h5`)
-- 상태: **계획 문서. 학습 결과는 아직 없음.** 이 문서의 숫자는 모두 체크인된 설정 파일, 코드, 데이터셋 속성에서 직접 읽은 값이다.
+- 상태: **계획 문서(2026-10-13 기준).** 이 문서의 숫자는 당시 체크인된 설정 파일, 코드, 데이터셋 속성에서 직접 읽은 값이다.
+- 2026-11 갱신: `chi-mgnflow` 라우트는 2026-10-19에 `meshgraphnets-v`의 `latent_type local`/`hybrid`로 합쳐졌다. 아래의 `CHiMGNFlow.py`·`configs/HI_MGNFlow/` 등 코드·설정 위치는 git `9db47d6` 기준이다. 현재 구현은 [docs/methods/04](../../methods/04_MeshGraphNets_Variational.md), 실험 결과는 [스윕 인덱스](../../../configs/MeshGraphNets_Variational/hyperparameter_sweep/README.md)(r8–r13)에 있다.
 - 근거 자료: 외부 검토서 `output/research/2026-10-13_one_to_many/LATENT_PLACEMENT_ARTIFACT_REVIEW_KR.md` (이하 "검토"; 절 번호는 검토서의 번호), 코드 위치는 [부록 A](#부록-a-코드-위치)
 
 이 문서의 목적은 세 가지다.

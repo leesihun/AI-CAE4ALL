@@ -36,9 +36,9 @@ export const KEY_CATALOGS = {
   transolver: keys(`amortized_cache_nodes amortized_query_nodes amortized_training attention_kernel augment_geometry batch_size chunk_size coarse_world_edges coarsening_type cond_var coordinate_normalization dataset_dir display_trainset dropout edge_var ema_decay feature_loss_weights gpu_ids grad_accum_steps infer_chunk_size infer_dataset infer_mode infer_timesteps inference_output_dir input_var latent_dim learningr log_file_dir max_grad_norm max_train_batches max_val_batches message_passing_num mlp_ratio mode model modelpath mp_per_level multiscale_levels noise_gamma num_heads num_layers num_workers output_var parallel_mode positional_features prefetch_factor slice_num small_output_init split_seed std_noise temperature_init temperature_max temperature_min test_batch_idx test_interval test_max_batches time_integration training_epochs use_amp use_checkpointing use_compile use_ema use_multiscale use_node_types use_parallel_stats use_world_edges val_interval voronoi_clusters warmup_epochs weight_decay world_edge_backend world_max_num_neighbors world_radius_multiplier write_preprocessing write_test_predictions`),
   sdfflow: keys(`alpha batch_size candidate_multiplier cfg_scale clamp_dist cond_dropout cond_values condition_clip condition_names condition_ood_policy dataset_dir decoder_heads decoder_hidden decoder_layers decoder_type deterministic_warmup_epochs eikonal_weight ema_decay encode_batch_size encoder_blocks encoder_dim encoder_heads encoder_self_attention fm_arch fm_batch_size fm_blocks fm_cond_hidden fm_ema_decay fm_heads fm_hidden fm_latent_draws fm_learningr fm_log_file_dir fm_mc_resolution_test fm_modelpath fm_num_test_shapes fm_num_workers fm_test_interval fm_time_logit_mean fm_time_logit_std fm_time_sampling fm_training_epochs fm_use_amp fm_use_ema fm_val_interval fm_warmup_epochs fm_weight_decay fourier_bands fsdp_min_params gpu_ids hybrid_grad_points init_vae_modelpath input_mesh kl_warmup_epochs kl_weight latent_clip latent_dim latent_tokens learningr log_file_dir max_condition_z mc_resolution mc_resolution_test min_condition_std mode model normal_weight num_encoder_points num_query_points num_samples num_test_shapes num_workers ode_steps output_dir overfit_all_shapes overfit_num_shapes parallel_mode pipeline_log_file plot_dpi plot_max_faces posterior_noise_max_scale posterior_noise_warmup_epochs sample_index_a sample_index_b seed skip_completed_stages source_num_samples split_seed surface_weight test_interval training_epochs use_amp use_conditions use_ema vae_batch_size vae_ema_decay vae_learningr vae_log_file_dir vae_mc_resolution_test vae_modelpath vae_num_test_shapes vae_num_workers vae_test_interval vae_training_epochs vae_use_amp vae_use_ema vae_val_interval vae_warmup_epochs vae_weight_decay val_interval warmup_epochs weight_decay opt_subspace_dim opt_subspace_seed opt_condition_dims opt_latent_range opt_shell_scale opt_budget opt_popsize opt_sigma0 opt_baseline_size opt_screen_batch opt_load_cases opt_length_scale opt_stress_percentile opt_mesh_size_max opt_target_faces opt_material_e opt_material_nu opt_material_rho opt_yield_stress opt_stress_margin opt_disp_margin opt_stress_weight opt_disp_weight opt_vertical_disp_max opt_verify_resolution opt_verify_target_faces opt_verify_mesh_size_max opt_analysis opt_surrogate_checkpoint opt_surrogate_config opt_surrogate_python opt_surrogate_target_nodes opt_fea_verify`),
   simulgenvae: keys(`alpha batch_size beta_target cond_var dataset_dir ema_decay field_start_row gpu_ids init_beta_divisor init_vae_modelpath kl_warmup_epochs kl_warmup_start_frac latent_dim latent_dim_end lc_batch_size lc_data_type lc_dropout lc_ema_decay lc_filter lc_learningr lc_log_file_dir lc_modelpath lc_num_workers lc_training_epochs lc_use_amp lc_use_ema lc_warmup_epochs lc_weight_decay learningr load_all log_file_dir loss_type mode model network_size node_end node_start num_filter_enc num_var num_workers output_dir parallel_mode param_data_type param_dir pipeline_log_file plot_mode recon_iter skip_completed_stages split_seed timesteps_reduced training_epochs use_amp use_ema use_spatial_attention vae_batch_size vae_ema_decay vae_learningr vae_log_file_dir vae_modelpath vae_num_workers vae_training_epochs vae_use_amp vae_use_ema vae_warmup_epochs vae_weight_decay val_interval warmup_epochs weight_decay`),
-  // cae_suite/specs/sar.py SAR_KEYS + RESUME_KEYS.
+  // ai_cae4all/specs/sar.py SAR_KEYS + RESUME_KEYS.
   sar: keys(`cond_var dataset_dir dense_attention display_testset display_trainset draws_per_epoch edge_attr_r eval_dataset gpu_ids grad_clip histogram_bins histogram_clip_quantile infer_dataset inference_output_dir log_file_dir make_histogram mode model modelpath num_samples num_workers output_var resume_interval_minutes resume_training sample_batch_size sample_scope sample_seed sample_steps sar_batch_size sar_d_model sar_dropout sar_grad_accum sar_learningr sar_log_file_dir sar_lr_factor sar_lr_patience sar_lr_threshold sar_noise_std sar_num_ar_layers sar_num_cond_layers sar_num_heads sar_num_iters sar_num_sampler_layers sar_num_slices sar_sampler_batch_size sar_training_epochs save_rollouts show_histogram split_group_attr split_seed spread_channel spread_label spread_stat target_scaling test_interval training_seed use_checkpointing use_node_types vae_batch_size vae_d_model vae_dropout vae_grad_accum vae_kl_weight vae_latent_features vae_learningr vae_log_file_dir vae_lr_factor vae_lr_patience vae_lr_threshold vae_modelpath vae_noise_std vae_num_layers vae_training_epochs val_draws_per_geometry val_interval viz_num_samples`),
-  // cae_suite/specs/ldgn.py LDGN_KEYS + RESUME_KEYS.
+  // ai_cae4all/specs/ldgn.py LDGN_KEYS + RESUME_KEYS.
   ldgn: keys(`cond_var dataset_dir display_testset display_trainset draws_per_epoch edge_attr_r eval_dataset gpu_ids grad_clip histogram_bins histogram_clip_quantile infer_dataset inference_output_dir ldgn_aggr ldgn_batch_size ldgn_depths ldgn_diffusion_steps ldgn_dropout ldgn_fnns_depth ldgn_fnns_width ldgn_grad_accum ldgn_lambda_vlb ldgn_learnable_variance ldgn_learningr ldgn_log_file_dir ldgn_lr_factor ldgn_lr_patience ldgn_lr_threshold ldgn_schedule ldgn_step_sampler ldgn_training_epochs log_file_dir make_histogram mode model modelpath num_samples num_workers output_var rel_pos_ratios resume_interval_minutes resume_training sample_batch_size sample_scope sample_seed sample_step_schedule sample_steps save_rollouts show_histogram split_group_attr split_seed spread_channel spread_label spread_stat target_scaling test_interval training_seed use_node_types vae_aggr vae_batch_size vae_depths vae_dropout vae_fnns_depth vae_fnns_width vae_grad_accum vae_kl_reg vae_latent_features vae_learningr vae_log_file_dir vae_lr_factor vae_lr_patience vae_lr_threshold vae_modelpath vae_norm_latents vae_training_epochs val_draws_per_geometry val_interval viz_num_samples`)
 };
 
@@ -59,11 +59,11 @@ KEY_CATALOGS.simulgenvae = [...new Set([...KEY_CATALOGS.simulgenvae, "fsdp_min_p
 KEY_CATALOGS.meshgraphnetsV = [...new Set([
   ...KEY_CATALOGS.meshgraphnetsV,
   ...keys(`gamma_es es_samples es_steps es_noise_source es_start_epoch`),
-  // Conditional FM prior architecture (cae_suite/specs/meshgraphnets_variational.py
+  // Conditional FM prior architecture (ai_cae4all/specs/meshgraphnets_variational.py
   // VAR_KEYS, persisted by training_profiles/setup.py::build_model_config).
   ...keys(`prior_velocity_hidden_dim prior_fm_moments prior_condition_hidden_dim prior_fm_velocity_arch prior_fm_blocks prior_fm_moment_hidden_dim prior_fm_moment_weight prior_fm_moment_min_scale prior_fm_moment_max_scale prior_moment_calibration_epochs training_seed`)
 ])].sort();
-// SDFFlow v3 recipe + `evaluate` mode (cae_suite/specs/sdfflow.py SDFFLOW_KEYS):
+// SDFFlow v3 recipe + `evaluate` mode (ai_cae4all/specs/sdfflow.py SDFFLOW_KEYS):
 // FPS encoder queries, relative posterior-std floor, parent-grouped split,
 // best-val VAE checkpoint, decoder-frozen latent refinement, held-out
 // evaluation controls, and the interpolation-space switch.
@@ -78,7 +78,7 @@ KEY_CATALOGS.sdfflow = [...new Set([
   ...keys(`cond_dropout_mode guidance_enabled guidance_t_start guidance_eta guidance_step_mode guidance_targets soft_descriptor_resolution soft_descriptor_tau descriptor_calibration_path newton_rounds newton_step_cap_rms newton_line_search_tries newton_measure_resolution condition_audit cond_values_a cond_values_b sweep_steps interpolation_steps eval_task eval_methods calibration_num_shapes calibration_samples_per_shape cond_dropout_all_prob calibration_min_r2 eval_exclude_shapes`)
 ])].sort();
 
-// Latent placement and regularizer (cae_suite/specs/meshgraphnets_variational.py
+// Latent placement and regularizer (ai_cae4all/specs/meshgraphnets_variational.py
 // VAR_KEYS, validate_latent_placement): latent_type global | local | hybrid
 // (local is what the retired HI-MGNflow route trained, hybrid is HI-MGN-hybrid),
 // the local latent's width and posterior depth, and mmd | kl regularization;
@@ -335,7 +335,7 @@ export const MODEL_CATALOG = {
  *  - transolver: ex3_full, 24 layers in full precision, against ex9, 8 under AMP.
  *  - fno / deeponet: ex9 against ex13 (batch 1; FNO width 20 instead of 32).
  *  - point_deeponet: ex9 reads every node (point_sensor_count 0); ex1 5000 at batch 1.
- *  - sdfflow: ex1's 512 latent tokens against ex2's 32.
+ *  - sdfflow: ex3's 512 latent tokens against ex2's 128.
  *  - simulgenvae: ex9 against ex3_full, the same network at vae_batch_size 2.
  * MLP has no checked-in config, so its menu keeps "Studio defaults".
  */
@@ -377,7 +377,7 @@ export const PRESET_SOURCES = {
 // Offline fallback only: with the backend up, registerLiveModel replaces each
 // route's table with the spec's published `required`. This is a verbatim copy of
 // spec.required_fields(model, mode) for every route (regenerate it from
-// cae_suite, do not hand-edit); conditional requirements such as NOVAR-REQ or
+// ai_cae4all, do not hand-edit); conditional requirements such as NOVAR-REQ or
 // MGN-MULTI-REQ stay with preflight, exactly as they do when the backend is up.
 export const REQUIRED = {
   deeponet: {
@@ -495,9 +495,9 @@ export const CHOICES = {
   prior_arch: ["gnn", "transformer"],
   prior_param: ["velocity", "x"],
   spread_stat: ["range", "mean", "std", "mag_max"],
-  // SAR-SCOPE-001 (cae_suite/specs/sar.py SAMPLE_SCOPES) and LDGN-SCOPE-001.
+  // SAR-SCOPE-001 (ai_cae4all/specs/sar.py SAMPLE_SCOPES) and LDGN-SCOPE-001.
   sample_scope: ["geometry", "scene"],
-  // cae_suite/specs/ldgn.py: LDGN-AGGR-001, LDGN-SCHEDULE-001, LDGN-SAMPLER-001/002.
+  // ai_cae4all/specs/ldgn.py: LDGN-AGGR-001, LDGN-SCHEDULE-001, LDGN-SAMPLER-001/002.
   vae_aggr: ["sum", "mean"],
   ldgn_aggr: ["sum", "mean"],
   ldgn_schedule: ["linear", "cosine"],
@@ -523,14 +523,14 @@ export const BOOLEAN_KEYS = new Set(keys(`use_deformed_edge augment_geometry bip
 BOOLEAN_KEYS.delete("load_all");
 export const OPERATOR_REMOVED = new Set(keys(`message_passing_num latent_dim edge_var world_radius_multiplier world_max_num_neighbors world_edge_backend coarse_world_edges multiscale_levels mp_per_level coarsening_type voronoi_clusters coarse_cache_per_worker use_vae vae_latent_dim vae_mp_layers vae_encoder_mp_layers vae_graph_aware free_bits posterior_min_std lambda_mmd lambda_kl lambda_det`));
 export const TRANSOLVER_REJECTED = new Set(keys(`edge_var message_passing_num mp_per_level coarsening_type voronoi_clusters multiscale_levels world_radius_multiplier world_max_num_neighbors world_edge_backend coarse_world_edges`));
-// Exact mirrors of cae_suite/specs/meshgraphnets.py. The deterministic runtime
+// Exact mirrors of ai_cae4all/specs/meshgraphnets.py. The deterministic runtime
 // RAISES on the first set (removed_feature_guard) and silently ignores the
 // second, but the spec still lists both in known_keys so preflight can explain
 // them -- which meant the config sheet showed all 56 as ordinary editable
 // fields with generic help, and only a preflight round-trip revealed that
 // setting one is an error.
 export const MGN_NATIVE_REMOVED = new Set(keys(`alpha_recon beta_aux fit_latent_gmm free_bits gmm_components gmm_covariance_type gmm_reg_covar lambda_det lambda_kl lambda_mmd num_vae_samples inference_samples num_z posterior_min_std prior_batch_size prior_diagnose_interval prior_epochs prior_hidden_dim prior_learningr prior_loss_type prior_mc_samples prior_min_std prior_mixture_components prior_mp_layers prior_num_workers prior_temperature prior_val_interval resume_prior train_conditional_prior use_conditional_prior use_vae vae_graph_aware vae_latent_dim vae_mp_layers vae_encoder_mp_layers vae_valid_prior_samples`));
-export const MGN_VARIATIONAL_IGNORED = new Set(keys(`eval_dataset hierarchy_cache_build_workers hierarchy_cache_dir hierarchy_cache_keep hierarchy_cache_wait_timeout histogram_bins histogram_clip_quantile make_histogram mmd_bandwidth prior_cov_rank prior_family prior_fm_steps prior_kl_reg_weight prior_nll_weight prior_type recon_loss show_histogram static_cache_per_worker inference_batch_size inference_batch_size_max inference_batch_size_min inference_batch_vram_fraction`));
+export const MGN_VARIATIONAL_IGNORED = new Set(keys(`eval_dataset histogram_bins histogram_clip_quantile make_histogram mmd_bandwidth prior_cov_rank prior_family prior_fm_steps prior_kl_reg_weight prior_nll_weight prior_type recon_loss show_histogram static_cache_per_worker inference_batch_size inference_batch_size_max inference_batch_size_min inference_batch_vram_fraction`));
 
 export const VARIATIONAL_REMOVED = new Set(keys(`alpha_prior_max bipartite_unpool fit_latent_gmm free_bits gmm_components gmm_covariance_type gmm_reg_covar lambda_det lambda_kl positional_encoding residual_scale gamma_es es_samples es_steps es_noise_source es_start_epoch`));
 
@@ -1350,7 +1350,7 @@ export const STUDIO_SECTIONS = {
     title: "Documentation workspace", description: "Open contextual method, configuration, dataset, inference, benchmark, and implementation documentation without leaving Studio.",
     cards: [
       ["SimulGen-VAE README", "docs", "native", "Overview, architecture, training concepts, data conditioning, performance, and troubleshooting.", ["methods/SimulGenVAE/README.md", "method"], "model.simulgenvae"],
-      ["SimulGen technical documentation", "docs", "native", "Hierarchical latent design, VAE/LC components, training pipeline, losses, and implementation notes.", ["docs/research/simulgenvae/TECHNICAL_DOCUMENTATION.md", "architecture"], "model.simulgenvae"],
+      ["SimulGen method doc", "docs", "native", "Hierarchical latent design, VAE/LC components, data contract, training pipeline, losses, and limitations.", ["docs/methods/12_SimulGenVAE.md", "architecture"], "model.simulgenvae"],
       ["SimulGen checked configs", "docs", "native", "Merged train, VAE-only, LC-only, and reconstruction examples matching the live route.", ["4 modes", "flat config", "examples"], "model.simulgenvae"],
       ["Configuration reference", "docs", "native", "Suite-wide keys, modes, validation semantics, path resolution, and examples.", ["docs/CONFIGURATION.md", "spec"]],
       ["Dataset format", "docs", "native", "Shared mesh HDF5 groups, shapes, field conventions, splits, and metadata.", ["docs/reference/DATASET_FORMAT.md", "HDF5"]],
@@ -1362,7 +1362,7 @@ export const STUDIO_SECTIONS = {
 export const CONFIG_SECTIONS = ["Required", "Data & output", "Architecture", "Training", "Resources & runtime", "Inference & evaluation", "Optimization", "Advanced", "Inactive / rejected"];
 
 export const HELP = {
-  // SAR (cae_suite/specs/sar.py; methods/SAR/README.md has the upstream mapping).
+  // SAR (ai_cae4all/specs/sar.py; methods/SAR/README.md has the upstream mapping).
   split_group_attr: "SAR / LDGN: per-sample metadata attribute that names the system (geometry). Samples sharing its value are one system's states; the train/val/test split is made over these groups, so no geometry sits on both sides. ex3 uses shape_idx.",
   draws_per_epoch: "SAR / LDGN: how many states (draws) of each training system one epoch visits. Upstream draws one random state per system per epoch (1).",
   val_draws_per_geometry: "SAR / LDGN: states per validation system used for the logged validation loss. Validation is reported only; it does not drive the LR schedule (upstream schedules on the training loss).",
@@ -1401,7 +1401,7 @@ export const HELP = {
   sar_lr_threshold: "SAR: the SAR stage ends once its learning rate falls below this value (upstream stopping rule).",
   vae_log_file_dir: "SAR / LDGN: VAE-stage log. Blank = train_vae.log beside log_file_dir.",
   sar_log_file_dir: "SAR: SAR-stage log. Blank = train_sar.log beside log_file_dir.",
-  // LDGN (cae_suite/specs/ldgn.py; methods/LDGN/README.md has the upstream mapping).
+  // LDGN (ai_cae4all/specs/ldgn.py; methods/LDGN/README.md has the upstream mapping).
   vae_depths: "LDGN VAE: message-passing blocks per scale of the multi-scale graph VAE, fine to coarse (upstream Wing 2, 2, 1). Its length is the number of VAE scales; the latent lives on the coarsest.",
   vae_fnns_depth: "LDGN VAE: layers of every MLP inside the graph VAE.",
   vae_fnns_width: "LDGN VAE: hidden width of the graph VAE (upstream Wing 126).",

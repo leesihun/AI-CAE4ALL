@@ -1,16 +1,16 @@
 # Dataset Format
 
 The training and inference code expects HDF5 files with a `data/{sample_id}`
-group per sample. The current loader is `general_modules/mesh_dataset.py`; the
-dataset builders are `build_dataset.py`, `dataset/generate_inference_dataset.py`,
-and `dataset/reduce_dataset.py`.
+group per sample. The loader in each mesh method is
+`general_modules/mesh_dataset.py`. Where each dataset in `dataset/` came from,
+and its converter, is in [PUBLIC_DATASETS.md](PUBLIC_DATASETS.md).
 
 This same `data/{id}/{nodal_data, mesh_edge}` layout can also be **authored from
 CAD/geometry** (STEP/IGES/STL/PLY/OBJ) by the `geometry_ingest` tool
 (`methods/GeometryIngest/`, `model geometry_ingest`): it meshes a part (surface
 triangles or volume tets) and writes this contract with solution-field rows
 zero-filled — i.e. an inference initial condition, not a training pair. See
-[geometry_ingest/README.md](../../methods/GeometryIngest/README.md).
+[methods/GeometryIngest/README.md](../../methods/GeometryIngest/README.md).
 
 **SimulGenVAE** (`model simulgenvae`) also reads this `data/{id}/nodal_data`
 layout, but as a **fixed-geometry dense FOM**: it selects the physical field rows
@@ -19,12 +19,17 @@ flattens them into a dense `[num_samples, num_var*num_nodes, num_timesteps]` ten
 for its hierarchical VAE. Because that tensor is dense, **every sample must share
 the same node count and timestep count** (mismatches are a hard error). `mesh_edge`
 is required by the shared contract but ignored by SimulGenVAE. See
-[../SimulGenVAE/CLAUDE.md](../../methods/SimulGenVAE/CLAUDE.md).
+[methods/SimulGenVAE/CLAUDE.md](../../methods/SimulGenVAE/CLAUDE.md).
 
 > The **MLP surrogate** (`model mlp`) is the exception: it is a tabular
 > parameters→outputs regressor with no mesh, so it uses a separate **tabular
 > `X`/`Y` HDF5** contract, documented in *Tabular Parametric Dataset* at the end
 > of this file — not the `data/{id}` layout below.
+>
+> **SDFFlow** (`model sdfflow`) does not read meshes either. Its SDF HDF5 is
+> `shapes/{index:05d}/{surface_points, surface_normals, sdf_points, sdf_values,
+> cond}`, built by `methods/SDFFlow/scripts/build_dataset.py`; see
+> [methods/SDFFlow/CLAUDE.md](../../methods/SDFFlow/CLAUDE.md).
 
 ## File Layout
 
@@ -279,8 +284,8 @@ Shape:
 [2, E]
 ```
 
-`build_dataset.py` extracts unique undirected edges from triangular elements and
-writes them once. `MeshGraphDataset` converts loaded mesh edges to the
+A builder writes each unique undirected edge once (from element faces; for a
+quad, its 4 ring edges, not its diagonals). `MeshGraphDataset` converts loaded mesh edges to the
 bidirectional graph representation used by PyG.
 
 Runtime edge attributes are not stored in the dataset. They are recomputed from
@@ -344,8 +349,8 @@ input_var + positional_features + optional num_node_types
 
 ## Node Types
 
-If `use_node_types True`, the loader reads feature index 7 as a raw node type or
-part id, maps observed values to contiguous indices, and appends one-hot node
+If `use_node_types True`, the loader reads the **last** row (`nodal_data[-1, 0, :]`)
+as a raw node type or part id, maps observed values to contiguous indices, and appends one-hot node
 type vectors to `x`.
 
 The node-type mapping and count are saved in checkpoint normalization:
@@ -399,24 +404,19 @@ coarse_edge_stds
 
 ## Inference Dataset
 
-`dataset/generate_inference_dataset.py` copies selected samples from a source
-dataset and keeps only the first timestep:
-
-```text
-nodal_data[:, 0:1, :]
-mesh_edge
-metadata attrs when present
-```
-
-Rollout uses this file for initial conditions, then writes one deterministic
-output HDF5 per sample.
+Every training file `X.h5` has a held-out companion `X_infer.h5` with the same
+layout. Point `infer_dataset` at it. Rollout reads the first timestep of each
+sample as the initial condition, and the remaining timesteps (if present) as the
+ground truth to score against. A geometry-only inference input (state rows
+zero-filled) can be authored from CAD by `geometry_ingest`.
 
 ## Rollout Output Format
 
-`inference_profiles/rollout.py` writes:
+`inference_profiles/rollout.py` writes one file per sample into
+`inference_output_dir` (default `../../output/<method>/rollout`):
 
 ```text
-outputs/rollout/rollout_sample{sample_id}_steps{steps}.h5
+rollout_sample{sample_id}_steps{steps}.h5
 ```
 
 Each output file has one sample and this `nodal_data` layout:
@@ -430,23 +430,16 @@ Root attributes:
 ```text
 num_samples = 1
 num_features = 3 + output_var + 1
+output_var = output_var      # so scoreable rows are read, not inferred
 num_timesteps = rollout_steps + 1
 ```
+
+Coordinates and the node-type row are copied verbatim, so scoring them gives
+R² = 1. Score only the `output_var` rows.
 
 Per-sample metadata stores sample id, node and edge counts, rollout time, model
 path, and config file. Global metadata stores feature names and the normalization
 arrays used for inference.
-
-## Builder Notes
-
-`build_dataset.py` assumes the local ANSYS/CSV source layout configured at the
-top of that file. It writes:
-
-- a last-step static dataset through `build_dataset_last_timestep()`
-- a full temporal dataset through `build_dataset()`
-
-`dataset/reduce_dataset.py` can copy a subset of samples, optionally create new
-split metadata, and preserve global/per-sample metadata.
 
 ## Validation Checklist
 
@@ -454,14 +447,14 @@ Before training, check:
 
 - each sample has `nodal_data` and `mesh_edge`
 - `nodal_data` has at least `3 + max(input_var, output_var) + cond_var` feature rows
-- feature index 7 exists if `use_node_types True`
+- with `use_node_types True`, one row exists past the state and condition rows (node type is the **last** row)
 - `mesh_edge` uses valid node indices for each sample
 - `edge_var` is `8`
 - `num_timesteps` is consistent with static vs temporal training intent
 
 ## Tabular Parametric Dataset (MLP surrogate)
 
-The `mlp` method (`MLP/`, `model mlp`) is a parametric surrogate — **N scalar
+The `mlp` method (`methods/MLP/`, `model mlp`) is a parametric surrogate — **N scalar
 inputs → M scalar outputs**, no mesh. It uses its own tabular HDF5, unrelated to
 the `data/{id}` mesh layout above:
 
@@ -477,13 +470,13 @@ table.h5
   **optional for inference** — when present, `infer.py` reports per-output
   MAE/RMSE. There are no edges, timesteps, node types, or positional features.
 - The launcher validates this with `dataset_kind="table_hdf5"`
-  (`cae_suite/dataset_probe.py`) and cross-checks `X`/`Y` widths against
+  (`ai_cae4all/dataset_probe.py`) and cross-checks `X`/`Y` widths against
   `input_var`/`output_var` before launch (`DATASET-FEATURES-001/002`).
 - **Normalization is not stored in the dataset.** Input/output scaling is fit on
   the train split and saved into the checkpoint, so the source HDF5 stays
   read-only (mirroring the operators' `write_preprocessing False` stance).
-- A tiny sample generator is at `dataset/deterministic/mlp/make_sample.py` (writes `train.h5`
-  and `infer.h5`; the Studio MLP template points at them).
+- The checked-in tables are `dataset/deterministic/ex3_NASA_CRM_mlp_{train,test}.h5`;
+  the Studio MLP template points at them.
 
 **Before training an MLP, check:** `X` has exactly `input_var` columns, `Y` has
 exactly `output_var` columns, and both share the same number of rows.

@@ -68,8 +68,8 @@ if [ "${EXTEND_PHASE:-}" != "run" ]; then
         exit 0
     fi
     [ -f "$BASE_INFER" ] || { echo "no $BASE_INFER: git pull first"; exit 2; }
-    "$PYTHON" -c "import cae_suite" 2>/dev/null \
-        || { echo "launcher python '$PYTHON' cannot import cae_suite. Set PYTHON=/path/to/python."; exit 2; }
+    "$PYTHON" -c "import ai_cae4all" 2>/dev/null \
+        || { echo "launcher python '$PYTHON' cannot import ai_cae4all. Set PYTHON=/path/to/python."; exit 2; }
     for arms in "$ENCDEC" "$PRIOR" "$BOTH"; do   # every arm known to make_sweep.py (writes nothing)
         "$PYTHON" -B "$SWEEP_DIR/make_sweep.py" --plan --extra "$arms" > /dev/null \
             || { echo "make_sweep.py does not take --extra $arms"; exit 2; }

@@ -1,10 +1,10 @@
 """Flat ``key value`` config parsing for the launcher entrypoint.
 
 Faithful to the repository's native config style (shared by the ML methods and
-mirrored in ``cae_suite/config_parser.py``): ``%`` starts a full-line comment,
+mirrored in ``ai_cae4all/config_parser.py``): ``%`` starts a full-line comment,
 ``#`` starts an inline comment, keys are lowercased, and a value is the rest of
 the line. This is a small self-contained reader so the entrypoint has no
-dependency on ``cae_suite`` (it runs in the method environment).
+dependency on ``ai_cae4all`` (it runs in the method environment).
 """
 
 from __future__ import annotations

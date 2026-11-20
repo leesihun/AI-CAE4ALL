@@ -74,7 +74,7 @@ Claude outputs/
 
 # Optional baseline routes kept on disk but not pushed: SAR and LDGN (the
 # upstream ports). The registry registers each only when its methods/ directory
-# exists (cae_suite/registry.py::OPTIONAL_SPEC_BUILDERS), and the Studio hides
+# exists (ai_cae4all/registry.py::OPTIONAL_SPEC_BUILDERS), and the Studio hides
 # a route the launcher does not report, so a checkout without them works as is.
 /methods/SAR/
 /methods/LDGN/

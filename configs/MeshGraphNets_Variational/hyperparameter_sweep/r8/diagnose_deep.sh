@@ -59,13 +59,13 @@ if [ "${DEEP_PHASE:-}" != "run" ]; then
         echo "If it is not, delete $PID_FILE and start again."
         exit 0
     fi
-    "$PYTHON" -c "import cae_suite" 2>/dev/null \
-        || { echo "launcher python '$PYTHON' cannot import cae_suite. Set PYTHON=/path/to/python."; exit 2; }
+    "$PYTHON" -c "import ai_cae4all" 2>/dev/null \
+        || { echo "launcher python '$PYTHON' cannot import ai_cae4all. Set PYTHON=/path/to/python."; exit 2; }
     MGNV_PYTHON="${MGNV_PYTHON:-}"
     if [ -z "$MGNV_PYTHON" ]; then
         MGNV_PYTHON="$("$PYTHON" -c "
 from pathlib import Path
-from cae_suite.settings import LocalSettings
+from ai_cae4all.settings import LocalSettings
 print(LocalSettings.load(Path('.')).resolve_python('meshgraphnets-v', 'meshgraphnets_variational'))
 ")" || { echo "could not resolve the MGN-V interpreter (ai_cae4all.local.toml); set MGNV_PYTHON."; exit 2; }
     fi

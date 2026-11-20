@@ -163,7 +163,7 @@ def parse_config(root: Path, rel: str) -> dict:
     # The launcher's parser, so a value means here what it meant to the run.
     if str(DEFAULT_ROOT) not in sys.path:
         sys.path.insert(0, str(DEFAULT_ROOT))
-    from cae_suite.config_parser import parse_config as _parse
+    from ai_cae4all.config_parser import parse_config as _parse
     parsed = _parse(str(root / rel))
     if not parsed.values:
         raise ValueError(f'cannot read {rel}')

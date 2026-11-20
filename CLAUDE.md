@@ -5,14 +5,18 @@ Guidance for Claude Code (claude.ai/code) when working in this repository.
 ## What this repository is
 
 AI-CAE4ALL is a **monorepo of independent ML-for-CAE method repositories behind
-one config-driven launcher**. The launcher (`cae_suite/`, the `ai-cae4all`
+one config-driven launcher**. The launcher (`ai_cae4all/`, the `ai-cae4all`
 console script, `AI_CAE4ALL_main.py`) reads a flat-text config, routes on its
 `model` field, runs a layered preflight, and then **subprocess-launches that
-method's native entrypoint**. It never imports ML code.
+method's native entrypoint**. It never imports ML code. The package was
+`cae_suite/` until 2026-11-20; a machine with an older editable install needs
+`python -m pip install -e .` again for the `ai-cae4all` command (running
+`AI_CAE4ALL_main.py` or `python -c "from ai_cae4all ..."` from the repo root
+needs nothing).
 
 Every method under [methods/](methods/) is self-contained (own venv, own tests)
 and also runnable directly. Routing specs live in
-[cae_suite/specs/](cae_suite/specs/); a spec's `repository=` field is the
+[ai_cae4all/specs/](ai_cae4all/specs/); a spec's `repository=` field is the
 model-to-directory mapping.
 
 | `model` value(s) | Directory | Entrypoint | Own docs |
@@ -79,11 +83,11 @@ ports kept as one-to-many baselines beside MGN-V. They are **git-ignored**
 (`methods/{SAR,LDGN}/`, `configs/{SAR,LDGN}/`) and live only on machines that
 already have them. Nothing tracked depends on them:
 
-- `cae_suite/registry.py::OPTIONAL_SPEC_BUILDERS` registers each only when its
+- `ai_cae4all/registry.py::OPTIONAL_SPEC_BUILDERS` registers each only when its
   `methods/` directory exists; without it the model ID simply does not route.
 - The Studio hides palette blocks and templates for any route the launcher does
   not report (`markUnregisteredModels` in `studio/src/constants.js`).
-- Their specs (`cae_suite/specs/{sar,ldgn}.py`) stay tracked so the routes come
+- Their specs (`ai_cae4all/specs/{sar,ldgn}.py`) stay tracked so the routes come
   back as soon as the directories do.
 
 If you touch them: keep `ldgn_diffusion_steps` at 1000 (the linear schedule
@@ -94,7 +98,7 @@ deviation from upstream.
 
 ```text
 AI-CAE4ALL/
-├── AI_CAE4ALL_main.py  cae_suite/   launcher (no ML imports) + specs
+├── AI_CAE4ALL_main.py  ai_cae4all/   launcher (no ML imports) + specs
 ├── methods/            configs/     method runtimes, mirrored config dirs
 ├── studio/             inference/   browser Studio, portable CPU inference bundle
 ├── docs/                            all documentation (index: docs/README.md)
@@ -151,39 +155,39 @@ Method tests run in that method's venv, from its directory
 (`cd methods/SDFFlow && python -m pytest -q tests/`). Every method except
 GeometryIngest has `tests/`. See [docs/guides/testing.md](docs/guides/testing.md).
 
-## Launcher architecture (`cae_suite/`)
+## Launcher architecture (`ai_cae4all/`)
 
 Pipeline: **parse → resolve → layered preflight → command → subprocess**.
 
-- [config_parser.py](cae_suite/config_parser.py) — flat `key value` →
+- [config_parser.py](ai_cae4all/config_parser.py) — flat `key value` →
   `ParsedConfig` (values, per-key source lines, duplicate detection),
   **mirroring the native parsers' quirks** (below).
-- [registry.py](cae_suite/registry.py) — `MethodRegistry`: `model` →
+- [registry.py](ai_cae4all/registry.py) — `MethodRegistry`: `model` →
   `MethodSpec` → repo root + entrypoint. Aliased IDs share a spec;
   `default_specs()` adds the optional routes only if present.
-- [specs/base.py](cae_suite/specs/base.py) + `specs/<method>.py` — each spec
+- [specs/base.py](ai_cae4all/specs/base.py) + `specs/<method>.py` — each spec
   declares `known_keys`, required/recommended/default fields per mode,
   `PathRule`s, `import_modules`, `dataset_kind`, and validators. **The single
   source of truth for config validation**: an unlisted key is a
   `CFG-UNKNOWN-001` warning.
-- [preflight.py](cae_suite/preflight.py) — `run_preflight` runs layers and
+- [preflight.py](ai_cae4all/preflight.py) — `run_preflight` runs layers and
   **short-circuits on the first layer with errors**: spec → filesystem →
   environment → dataset → checkpoint → native probe. Builds the `command`.
-- [path_checks.py](cae_suite/path_checks.py) — resolves paths against the
+- [path_checks.py](ai_cae4all/path_checks.py) — resolves paths against the
   method repo; missing inputs, unwritable outputs, case mismatches.
-- [diagnostics.py](cae_suite/diagnostics.py) — `Severity`, `Diagnostic`
+- [diagnostics.py](ai_cae4all/diagnostics.py) — `Severity`, `Diagnostic`
   (`promote_in_strict`), report rendering.
-- [cli.py](cae_suite/cli.py) — args, introspection commands, exit codes.
-- [launcher.py](cae_suite/launcher.py) — `launch_and_wait`; child in its own
+- [cli.py](ai_cae4all/cli.py) — args, introspection commands, exit codes.
+- [launcher.py](ai_cae4all/launcher.py) — `launch_and_wait`; child in its own
   process group so Ctrl-C forwards and escalates on Windows and POSIX.
-- [settings.py](cae_suite/settings.py) — reads `ai_cae4all.local.toml` for
+- [settings.py](ai_cae4all/settings.py) — reads `ai_cae4all.local.toml` for
   per-method interpreters.
 
 **Probes run in the target method's venv.**
-[native_probe.py](cae_suite/native_probe.py) (imports the native config
-validator), [dataset_probe.py](cae_suite/dataset_probe.py) (HDF5 schema and
+[native_probe.py](ai_cae4all/native_probe.py) (imports the native config
+validator), [dataset_probe.py](ai_cae4all/dataset_probe.py) (HDF5 schema and
 shape/feature-count cross-checks) and
-[checkpoint_probe.py](cae_suite/checkpoint_probe.py) (`weights_only` metadata:
+[checkpoint_probe.py](ai_cae4all/checkpoint_probe.py) (`weights_only` metadata:
 model/stage/normalization consistency) are subprocesses under the resolved
 method Python, so `--check` validates against the real runtime environment.
 
@@ -211,12 +215,12 @@ updating every native call site:
 - **`int` vs `str` matters**: `100` → `int`, but `1e-4` stays a **string**;
   every numeric consumer converts explicitly (`float(config.get(...))`).
 - **Path keys keep their case**; every other string value is lowercased. The set
-  is `PATH_KEYS` in `cae_suite/config_parser.py`, mirrored in each native
+  is `PATH_KEYS` in `ai_cae4all/config_parser.py`, mirrored in each native
   `general_modules/load_config.py`. **A new path key means editing both.**
   (MLP and GeometryIngest store raw strings and need no exemption.)
   `PATH-CASE-001` warns when config case differs from disk: fine on Windows,
   broken on Linux.
-- `true`/`false` → `bool`; `%` starts a comment; a UTF-8 **BOM is an error**;
+- `true`/`false` → `bool`; a line starting with `%` is a comment and `#` starts an inline one; a UTF-8 **BOM is an error**;
   **duplicate keys are an error** (native would silently take the last).
 
 ### Artifact paths in native code
@@ -302,7 +306,7 @@ process first and skips PNGs if it dies.
 ## The Studio (`studio/`)
 
 A browser front end over the **same** launcher: it builds a native config per
-executable block, runs `cae_suite`'s real preflight, and launches the same
+executable block, runs `ai_cae4all`'s real preflight, and launches the same
 command the CLI would. It imports no ML code. **When the GUI and the launcher
 disagree, the launcher is right.** Manual: [docs/GUI.md](docs/GUI.md).
 
@@ -318,7 +322,7 @@ Load-bearing rules:
   `constants.js` holds presentation only, plus `CHOICES`, which must mirror a
   spec validator exactly. Never invent a dropdown value.
 - **One server per port** (`allow_reuse_address = False`). The registry is read
-  once at startup: after touching `cae_suite/specs/` or `studio_backend/`,
+  once at startup: after touching `ai_cae4all/specs/` or `studio_backend/`,
   **restart the server**, or it validates against a stale spec.
 - **Never import `studio_backend.state` from a helper script**: constructing
   `StudioState()` runs job recovery and can rewrite a live server's records.
@@ -345,12 +349,16 @@ Load-bearing rules:
 Everything lives under [docs/](docs/) ([index](docs/README.md)); method
 directories keep only their own `CLAUDE.md`/`README.md`.
 
-- [ARCHITECTURE.md](docs/ARCHITECTURE.md) — per-method architecture and known gaps.
-- [CONFIGURATION.md](docs/CONFIGURATION.md) — config grammar, routes, contracts.
+- [ARCHITECTURE.md](docs/ARCHITECTURE.md) — layout, launcher internals, config
+  grammar, cross-cutting conventions, the dataset tree.
+- [CONFIGURATION.md](docs/CONFIGURATION.md) — config workflow, routes, where each
+  contract lives.
 - [GUI.md](docs/GUI.md) — Studio manual and how to extend it.
-- [methods/](docs/methods/) — one numbered doc per method (`00`–`11`).
-- [reference/](docs/reference/) — dataset format, public dataset provenance,
-  per-method config key references.
+- [methods/](docs/methods/) — one numbered doc per method (`00`–`12`; `12` is
+  SimulGenVAE).
+- [reference/](docs/reference/) — dataset format, dataset provenance (with the
+  commit holding the removed public-dataset converters), per-method config key
+  references.
 - [research/](docs/research/) — design notes by method. Context, not truth: the
   code wins. Dated report directories (`mgnv_*_2026-09-*`) are frozen snapshots
   whose scripts depend on their depth; do not move them.
@@ -366,7 +374,7 @@ MGN-V hyperparameter sweeps are indexed in
 - **New spec enum** → mirror it in `CHOICES` (`studio/src/constants.js`).
 - **New method** → `methods/<Name>/` + `configs/<Name>/`, a `build_*_spec()`
   with `repository="methods/<Name>"`, registered in `default_specs()` in
-  [registry.py](cae_suite/registry.py); a Studio `TEMPLATES` entry and `HELP`
+  [registry.py](ai_cae4all/registry.py); a Studio `TEMPLATES` entry and `HELP`
   text; restart the Studio.
 - **New artifact path** → `../../output/...`, never inside `methods/`.
 - **Behavior inside a method** → follow its `CLAUDE.md` and run its tests; the

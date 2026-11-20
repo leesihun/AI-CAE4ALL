@@ -29,7 +29,7 @@ modelpath	../../output/meshgraphnets-v/saoi_run/top.pth
 %   NOTE: the directory is dataset/SAOI/ (UPPERCASE). Path-valued keys keep the
 %   case written here -- they are exempt from the value lowercasing via
 %   PATH_KEYS (general_modules/load_config.py, mirrored in
-%   cae_suite/config_parser.py). A path key MISSING from that set is lowercased,
+%   ai_cae4all/config_parser.py). A path key MISSING from that set is lowercased,
 %   which silently retargets it to the stale lowercase twin that also exists on
 %   disk -- it opens without error and yields wrong numbers.
 dataset_dir	../../dataset/SAOI/saoi_train_top.h5

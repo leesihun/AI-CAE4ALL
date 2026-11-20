@@ -77,16 +77,23 @@ the complete layout.
 
 ## Artifacts and checkpoints
 
-Checked-in configs write only to the root artifact tree. The ex1 pipeline uses:
+Checked-in configs write only to the root artifact tree. They live under
+`configs/SimulGenVAE/deterministic/<slot>/baseline/` for the slots `ex3_full`,
+`ex3_mid`, `ex6` and `ex9`, and each slot's train/infer pair uses
+`output/dataset_matrix/deterministic/<slot>/lsh_vae/` (`lsh_vae` is
+SimulGenVAE's campaign key). For `ex6`:
 
 ```text
-output/simulgenvae/ex1/train.log
-output/simulgenvae/ex1/vae.log
-output/simulgenvae/ex1/lc.log
-output/simulgenvae/ex1/simulgenvae_vae.pth
-output/simulgenvae/ex1/simulgenvae_lc.pth
-output/simulgenvae/ex1/reconstruct/
+output/dataset_matrix/deterministic/ex6/lsh_vae/pipeline.log
+output/dataset_matrix/deterministic/ex6/lsh_vae/vae.log
+output/dataset_matrix/deterministic/ex6/lsh_vae/lc.log
+output/dataset_matrix/deterministic/ex6/lsh_vae/vae.pth
+output/dataset_matrix/deterministic/ex6/lsh_vae/lc.pth
+output/dataset_matrix/deterministic/ex6/lsh_vae/infer/reconstructions.h5
 ```
+
+Periodic pictures (`vae_recon_epoch#####.png`, `lc_parity_epoch#####.png`) land
+beside the stage logs.
 
 Both stage checkpoints are dictionaries containing the stage, epoch, model
 state, saved config, and normalization metadata. The LC checkpoint additionally
@@ -111,7 +118,12 @@ training_profiles/
 inference_profiles/
   reconstruct.py             # conditions -> field HDF5
 tests/
+  conftest.py
   test_fom_dataset.py
+  test_hdf5_conditions.py
+  test_split_provenance.py
+  test_reconstruct_normalization.py
+  test_config_contract.py
 ```
 
 Multi-GPU training uses in-process `torch.multiprocessing.spawn` when
@@ -134,5 +146,7 @@ python -m pytest -q tests/
 ```
 
 For architecture details, config-key migration, checkpoint internals, and known
-limitations, see [CLAUDE.md](CLAUDE.md). The suite-level config behavior is
-documented in [docs/CONFIGURATION.md](../../docs/CONFIGURATION.md).
+limitations, see [CLAUDE.md](CLAUDE.md). The method overview is
+[docs/methods/12_SimulGenVAE.md](../../docs/methods/12_SimulGenVAE.md), and the
+suite-level config behavior is documented in
+[docs/CONFIGURATION.md](../../docs/CONFIGURATION.md).

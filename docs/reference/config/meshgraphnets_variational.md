@@ -1,307 +1,270 @@
-# Configuration Reference
+# MeshGraphNets-V configuration reference
 
-This file documents the configuration keys that are used by the current Python
-runtime. Config files are loaded by `general_modules/load_config.py`; keys are
-lowercased, comments start at `#`, blank lines and `%` section headers are
-ignored, comma-separated values become lists, and `true` / `false` are parsed
-case-insensitively.
+This page covers the keys that `model meshgraphnets-v` reads. The authority is
+[ai_cae4all/specs/meshgraphnets_variational.py](../../../ai_cae4all/specs/meshgraphnets_variational.py):
 
-Run every mode through the same launcher:
+- A key not listed there is a `CFG-UNKNOWN-001` warning.
+- A key in `VAR_REMOVED_KEYS` is an error (`MGNV-REMOVED`).
 
-```powershell
-python MeshGraphNets_Variational_main.py --config path\to\config.txt
+The method overview is in
+[04_MeshGraphNets_Variational.md](../../methods/04_MeshGraphNets_Variational.md).
+The config grammar is in [CONFIGURATION.md](../../CONFIGURATION.md): lines of
+`key value`, `%` comment lines and `#` inline comments, lowercased keys, and
+comma lists.
+
+Run every config through the launcher:
+
+```bash
+python AI_CAE4ALL_main.py --config <cfg> --check
+python AI_CAE4ALL_main.py --config <cfg>
+python AI_CAE4ALL_main.py --describe meshgraphnets-v   # required fields per mode
 ```
 
-## Required Execution Keys
+The native process runs with cwd `methods/MeshGraphNets_Variational/`, so path
+keys are written `../../dataset/...` and `../../output/...`.
 
-| Key | Used by | Meaning |
-| --- | --- | --- |
-| `model` | launcher | Informational model name printed at startup. |
-| `mode` | launcher | `train` or `inference`. |
-| `gpu_ids` | launcher | `-1` for CPU, one GPU id for single process, or comma list for multi-GPU. |
-| `parallel_mode` | launcher | Optional. `ddp` by default; `model_split` enables the experimental pipeline split path. |
-| `pipeline_microbatches` | model_split | Optional. Batches pipelined per optimizer step under the 1F1B schedule (default `2 * num_stages`; `1` = legacy sequential). Effective batch = `batch_size * pipeline_microbatches`; VRAM does not grow with it. |
-| `modelpath` | training, inference, prior | Checkpoint path to save to or load from. |
-| `log_file_dir` | training | Epoch-log path, cwd-relative like every other path key (`../../output/...`). |
+## Execution
 
-Mode behavior:
+| Key | Meaning |
+| --- | --- |
+| `model` | `meshgraphnets-v` |
+| `mode` | `train` or `inference` |
+| `gpu_ids` | `-1` = CPU, one id = single process, a list = multi-GPU |
+| `parallel_mode` | `ddp` (default) or `model_split` (pipeline split, `latent_type global` only) |
+| `pipeline_microbatches` | `model_split`: batches pipelined per optimizer step (1F1B; default `2 × stages`). Effective batch = `batch_size × pipeline_microbatches` |
+| `modelpath` | Checkpoint to save to (train) or load from (inference) |
+| `log_file_dir` | Epoch-log path; periodic PNG/HDF5 snapshots are written beside it |
+| `resume_training`, `resume_interval_minutes` | Mid-training resume (default off, 15 min); single-process only. See [00 §7](../../methods/00_shared_foundations.md#7-mid-training-resume) |
 
-- `train`: trains the simulator. With `use_vae True`, the mesh-conditioned prior (`prior_type gnn_e2e`) trains jointly inside the same loop.
-- `inference`: runs autoregressive rollout using the checkpoint and writes rollout HDF5 files. Whether z comes from the conditional prior or N(0,I) is decided by the checkpoint's `use_conditional_prior` (see below). Each trajectory draws its z once, at step 0, and keeps it for the whole rollout.
+Required fields:
 
-Important caveat: inference loads `checkpoint['model_config']` and overwrites
-the config-file values of every key in it -- `use_conditional_prior` included --
-before it reads `use_conditional_prior`. Training saves that key with its
-training default `False`, so a checkpoint trained without
-`use_conditional_prior True` samples N(0,I) at inference whatever the inference
-config says. Set it in the **training** config, or patch that model_config field
-deliberately. The inference-side default `True` only applies to a checkpoint
-that has no `model_config`.
+- **`train`:** `modelpath`, `dataset_dir`, `input_var`, `output_var`,
+  `edge_var`, `latent_dim`, `batch_size`, `learningr`, `training_epochs`.
+- **`inference`:** `modelpath`, `infer_dataset`, `input_var`, `output_var`,
+  `edge_var`.
 
-## Dataset Keys
+## Dataset
 
-| Key | Used by | Meaning |
-| --- | --- | --- |
-| `dataset_dir` | training, prior | Training HDF5 dataset. |
-| `infer_dataset` | inference | HDF5 dataset used for rollout initial conditions. |
-| `infer_timesteps` | inference | Number of autoregressive rollout steps. |
-| `split_seed` | training, prior | Optional seeded 80/10/10 split. Defaults to `42` where used. |
-| `use_parallel_stats` | data loader | Optional. Enables parallel normalization-stat computation. |
+| Key | Meaning |
+| --- | --- |
+| `dataset_dir` | Training mesh HDF5 ([DATASET_FORMAT.md](../DATASET_FORMAT.md)) |
+| `infer_dataset`, `infer_timesteps` | Rollout initial conditions and step count |
+| `split_seed` | Seed of the 80/10/10 split that training builds from sorted sample IDs (default 42). Stored `metadata/splits` is ignored |
+| `split_group_attr` | Keeps every sample sharing `data/{sid}/metadata.attrs[<attr>]` in one split; at inference it also adds per-group spread figures |
+| `write_preprocessing` | Write the train-derived normalizers back into the HDF5 (default true) |
+| `use_parallel_stats` | Parallel normalization-stat computation (default true) |
+| `static_cache_per_worker` | Per-worker LRU cap for positional features, non-multiscale runs (default 64) |
+| `num_workers`, `prefetch_factor`, `pin_memory` | DataLoader settings. `pin_memory` defaults to CUDA availability |
 
-Training always creates its own deterministic 80/10/10 split from sorted
-`data/{sample_id}` keys. The loader does not consume `metadata/splits/*` from the
-HDF5 file for training.
+## Input and model shape
 
-## Input And Model Shape
+| Key | Meaning |
+| --- | --- |
+| `input_var` / `output_var` | State channels read / predicted. `T > 1` needs them equal |
+| `cond_var` | Input-only condition rows after the state block (default 0). See [00 §4](../../methods/00_shared_foundations.md#4-input-only-conditions-cond_var) |
+| `edge_var` | Must be `8` |
+| `positional_features` | Extra rotation-invariant node features (centroid distance, mean edge length, RWPE) |
+| `use_node_types` | One-hot node type from the **last** `nodal_data` row; `num_node_types` is derived from the data |
+| `use_deformed_edge` | Default true: the deformed half of the edge features follows reference + displacement. Replaces `geometry_state_mode` |
+| `displacement_indices` | Three state columns holding the displacement; `-1` pads an axis. Replaces `displacement_state_indices` |
+| `periodic_box` | Three box lengths for the minimum-image convention on relative vectors; `0` = not periodic on that axis |
+| `latent_dim` | Processor width |
+| `message_passing_num` | Flat processor depth (`use_multiscale false`) |
 
-| Key | Used by | Meaning |
-| --- | --- | --- |
-| `input_var` | model, data | Number of physical input channels after xyz coordinates. Current configs use `3` for displacement. |
-| `output_var` | model, data | Number of predicted delta channels. Current configs use `3`. |
-| `cond_var` | model, data | Trailing **input-only** rows after the state block: known boundary/flight/process conditions the model reads every step but never predicts. Dataset row layout is `[3 : 3+input_var]` state, then `[3+input_var : +cond_var]` conditions. They land in `graph.x` as `[state \| conditions \| positional \| node-type one-hot]`, get their own normalization stats, are read even in the static (T=1) case where the state block is zeroed, and are carried unchanged through an autoregressive rollout. Default `0`, which reproduces the pre-conditioning behaviour exactly. |
-| `edge_var` | model, data | Must be `8`. The code validates this against `EDGE_FEATURE_DIM`. |
-| `positional_features` | data, model | Number of extra node features appended to physical channels (centroid distance, mean edge length, then RWPE). |
-| `use_node_types` | data, model | Adds one-hot node type features from feature index 7 when available. |
-| `use_deformed_edge` | data, model | Default `True`. Edge features follow the displaced geometry (reference coordinates plus the displacement columns); `False` keeps them on the reference geometry. Replaces `geometry_state_mode displacement/fixed`. |
-| `displacement_indices` | data, model | Three state-column indices holding the displacement; `-1` pads a missing axis with zero. Replaces `displacement_state_indices`. Used when `use_deformed_edge` is `True`. |
-| `num_node_types` | model | Filled from the dataset when node types are enabled. |
-| `latent_dim` | model | Processor hidden width. Config files may write `Latent_dim`; the loader lowercases it. |
-| `message_passing_num` | flat model | Number of flat processor blocks when `use_multiscale False`. |
+The node input width is
+`input_var + cond_var + positional_features + num_node_types`.
 
-Node input size is:
+## Multiscale
+
+The V-cycle and coarsening are described in
+[02_HI-MGN.md](../../methods/02_HI-MGN.md). Unpooling is always the learned
+`UnpoolBlock`.
+
+| Key | Meaning |
+| --- | --- |
+| `use_multiscale` | Enable the V-cycle |
+| `multiscale_levels` | Levels `L` |
+| `mp_per_level` | `2L + 1` block counts: down arm, coarsest, up arm |
+| `coarsening_type` | `bfs`, `voronoi_centroid`, `voronoi_inherit`, `voronoi_seedmean`, or one per level |
+| `voronoi_clusters` | Cluster count, scalar or per level |
+| `hierarchy_cache_dir`, `hierarchy_cache_build_workers`, `hierarchy_cache_wait_timeout` (36000 s), `hierarchy_cache_keep` (false) | Shared per-run `*.mscache.<digest>.h5` cache, deleted after training unless kept |
+| `hierarchy_variants` | K independently seeded partitions per sample, rotated across epochs. Validation stays on variant 0. Costs K× cache build time and disk. `1` = one fixed partition |
+| `hierarchy_seed` | Seeds the FPS draw at inference; a list rotates seeds across draw batches |
+
+## World edges
+
+| Key | Meaning |
+| --- | --- |
+| `use_world_edges` | Radius edges on deformed positions, disjoint from mesh edges, using the mesh-edge normalization |
+| `world_radius_multiplier` | Radius = this × minimum mesh-edge length (default 1.5) |
+| `world_max_num_neighbors` | `torch_cluster` neighbor cap (default 64; truncates silently) |
+| `world_edge_backend` | `scipy_kdtree` (default), `torch_cluster`, or `auto` |
+| `coarse_world_edges` | World edges on every coarse level, normalized with that level's coarse-edge statistics. Needs `use_world_edges` and `use_multiscale` |
+
+## Latent and posterior
+
+| Key | Meaning |
+| --- | --- |
+| `use_vae` | Enable the latent path (default false) |
+| `latent_type` | `global` (default, HI-MGN-V), `local` (HI-MGNflow), or `hybrid` (HI-MGN-hybrid). See [04](../../methods/04_MeshGraphNets_Variational.md). Stored in `model_config`. `local`/`hybrid` need `use_multiscale`, `prior_family fm`, no `prior_fm_moments`, `prior_fm_velocity_arch mlp`, `prior_moment_calibration_epochs 0`, and no `model_split` |
+| `vae_latent_dim` | Width of each `z_g` slot |
+| `num_z` | `z_g` slots (default `multiscale_levels + 1`, otherwise 1) |
+| `latent_ch` | `z_l` channels per coarsest node (default 4; `local`/`hybrid`) |
+| `vae_encoder_mp_layers` | Posterior encoder depth (default 5) |
+| `vae_local_mp_layers` | Coarse-node posterior head depth (default 2; `local`/`hybrid`) |
+| `vae_graph_aware` | Fuse the input `x` into the posterior |
+| `posterior_min_std` | Posterior std floor (about 0.05). It is also the noise level the decoder learns to tolerate |
+| `posterior_max_std_g` | Cap on the `z_g` std (default 0 = none; must be ≥ `posterior_min_std`) |
+| `z_conditioning` | `concat` (default, `Linear([x, z])`) or `adaln` (AdaLN-Zero, identity at init). Renames parameters, so a checkpoint loads only under its trained value |
+| `local_inject` | `all` (default) or `coarsest`: which levels read `z_l`. Changes behaviour only |
+| `local_dropout` | `hybrid`, training only: the share of graphs whose `z_l` is withheld from the processor, in `[0, 1)` |
+| `local_warmup_epochs` | `hybrid`: withhold every `z_l` for the first N epochs; checkpoint selection restarts at epoch N. Single GPU |
+| `zg_anchor_weight` | `hybrid`, needs `local_warmup_epochs`: KL that keeps `z_g` near its end-of-warmup posterior |
+
+## Objective
+
+The full objective is written out in
+[04](../../methods/04_MeshGraphNets_Variational.md#training-objective). Every
+weight acts relative to `alpha_recon`.
+
+| Key | Meaning |
+| --- | --- |
+| `recon_loss` | `huber` (default, δ = 1) or `mse` (keeps extreme amplitudes better) |
+| `alpha_recon` | Reconstruction weight |
+| `latent_reg` | `mmd` (default) or `kl` |
+| `lambda_mmd` | Aggregate-posterior MMD weight (spread modelling: about 0.1). Ignored with `kl` |
+| `lambda_mmd_g` | `hybrid` + `mmd`: `z_g` MMD weight, relative to `lambda_mmd` (default `lambda_mmd`; 0 drops it) |
+| `kl_weight` | Per-sample KL weight with `latent_reg kl` (default 1e-3) |
+| `mmd_bandwidth` | `fixed` (saturates at high `vae_latent_dim`) or `median` (scales with the batch) |
+| `mmd_cond_width` | `0` = plain MMD. `> 0` compares (input summary, z) with (input summary, N(0, I)) through a product kernel, so it is zero only when q(z \| geometry) = N(0, I) for every geometry. Needs `mmd` |
+| `mmd_gather_ranks` | All-gather `z` across DDP ranks before the MMD (default true) |
+| `beta_aux` | Peak-to-valley MSE on the decoded field (spread modelling: about 1.0). Rejected with `model_split` |
+| `pv_channel` | Output channel that term reads (default 2) |
+| `feature_loss_weights` | Per-channel reconstruction weights, normalized to sum to 1 |
+
+## Conditional prior
+
+| Key | Meaning |
+| --- | --- |
+| `prior_type` | `gnn_e2e` (the runtime default): prior trained jointly, saved as `prior.*` |
+| `use_conditional_prior` | Sample `z` from the prior at inference (otherwise N(0, I)). The training default is false and it is stored in `model_config`, which overrides the inference config, so set it at **training** time |
+| `prior_family` | `fm` (default) or `gmm` (legacy). Pre-FM checkpoints load as `gmm` |
+| `prior_nll_weight` | Prior loss weight (default 1.0) |
+| `prior_grad_to_encoder` | Share of the prior gradient that reaches the encoder: 0 (default) = detached, 1 = full CVAE rate term. Needs `beta_aux > 0` (`MGNV-PRIOR-GRAD-AUX`) |
+| `prior_mp_layers` | Prior trunk depth (default 10) |
+| `prior_hidden_dim`, `prior_condition_hidden_dim`, `prior_velocity_hidden_dim` | Widths (default `latent_dim`, then `prior_hidden_dim`) |
+| `prior_fm_steps` | ODE steps at sampling time (default 20); sampling only |
+| `prior_fm_solver` | `heun` (default) or `euler` |
+| `prior_fm_time_power` | `1` (default) = uniform time. `p > 1` draws `t = u^p` in training and uses `t_k = (k/steps)^p` in the sampler, which is dense near the noise end |
+| `prior_fm_velocity_arch`, `prior_fm_blocks` | `mlp` (default) or `residual_film` with N blocks (default 4). With `local`/`hybrid`, `prior_fm_blocks` is the depth of the coarse prior |
+| `prior_fm_moments` + `prior_fm_moment_hidden_dim`, `prior_fm_moment_weight` (1.0), `prior_fm_moment_min_scale` / `prior_fm_moment_max_scale` (0.03 / 20) | Condition-dependent Gaussian base for the global FM prior |
+| `prior_arch` | `local`/`hybrid` coarse prior (`CoarseFMPrior`): `gnn` (default) or `transformer` |
+| `prior_param` | Head target: `velocity` (default) or `x` |
+| `prior_tf_heads`, `prior_tf_dropout` | Transformer heads (default 4; must divide the width) and training dropout (default 0) |
+| `prior_fm_draws` | `(z0, t)` draws per posterior sample in the coarse prior loss (default 1) |
+| `prior_cond_noise` | Relative noise on the coarse prior's context in training (default 0) |
+| `prior_freeze_epoch` | From this epoch, freeze the simulator and train only the prior with a fresh cosine. The joint best is kept as `<stem>.joint.pth`. 0 = never; single GPU |
+| `prior_moment_calibration_epochs` | With `prior_fm_moments`: the first N prior-only epochs fit only the moment head |
+| `prior_mixture_components` (50), `prior_min_std` (0.1), `prior_cov_rank` (0), `prior_kl_reg_weight` (0.02) | `gmm` only |
+
+## Training and performance
+
+| Key | Meaning |
+| --- | --- |
+| `training_epochs`, `batch_size`, `learningr` | Epochs, batch size, Adam learning rate |
+| `val_batch_size` | Validation batch size (default `batch_size`) |
+| `weight_decay` | Coupled L2 in Adam (default 0) |
+| `warmup_epochs` | `LinearLR` warmup before cosine restarts (default 3) |
+| `training_seed` | Seeds single-process training (default 42); DDP ignores it |
+| `std_noise`, `noise_gamma` (0.1) | Input noise and target correction; `noise_std_ratio` is computed by setup |
+| `time_integration` | `ar_ot` (default) or `ar_rt` (needs `T > 1`) |
+| `grad_accum_steps` | `1` = per batch, `N` = accumulate N, `0` = the whole epoch |
+| `augment_geometry` | Training only: random z rotation and x/y reflection |
+| `use_checkpointing`, `use_amp`, `use_ema`, `ema_decay` | Activation checkpointing, bf16 autocast, EMA model |
+| `use_compile` | Compile each plain `GnBlock` (`model/compiled_block.py`); falls back to eager if the self-test fails |
+| `amp_layernorm` | Retired; accepted and ignored. Under AMP, LayerNorm always runs in bf16 |
+| `best_by` | Checkpoint selection: `recon` (default) or `crps` (learned-prior CRPS, which mirrors inference) |
+| `val_interval`, `test_interval`, `test_batch_idx`, `test_max_batches` (200) | Validation and visualization cadence |
+| `vae_valid_prior_samples` | Prior draws per graph for validation CRPS (default 8) |
+| `plot_feature_idx`, `display_testset`, `display_trainset` | Periodic visualization |
+
+To fit a run into VRAM, try these in order:
+
+1. lower `batch_size`;
+2. `use_checkpointing`;
+3. `use_amp`;
+4. drop `use_ema`;
+5. lighten the loader (`num_workers`, `prefetch_factor`, `pin_memory false`);
+6. `grad_accum_steps` (effective batch = `batch_size × steps`);
+7. `model_split`.
+
+## Inference
+
+| Key | Meaning |
+| --- | --- |
+| `inference_output_dir` | Rollout directory (default `../../output/meshgraphnets-v/rollout`) |
+| `inference_samples` | Draws per scene (default 1); `z` is drawn once per trajectory |
+| `inference_batch_size`, `inference_batch_size_min` (1), `inference_batch_size_max` (0 = none), `inference_batch_vram_fraction` (0.70) | Trajectories per batched forward; if unset, it is sized automatically |
+| `prior_temperature` | `fm`: scales the initial noise std by √T. `gmm`: divides the logits and scales the std by √T |
+| `latent_inflation` | `fm`: widens `z` around the ODE image of the origin after sampling; a list is cycled per batch (each draw is tagged `gen_lam`) |
+| `save_rollouts` | Write one HDF5 per (scene, draw) (default true). With `false`, only the spread outputs remain |
+| `eval_dataset` | Ground-truth HDF5 for spread scoring |
+| `spread_channel` | Output channel to score (default 2). Only `mag_max` accepts a list |
+| `spread_stat` | `range` (max − min, default), `mean`, `std`, or `mag_max` (max \|u\| over the channel list) at the final step |
+| `spread_label` | Axis label |
+| `make_histogram`, `show_histogram`, `histogram_bins` (60), `histogram_clip_quantile` (0) | Histogram controls. `make_histogram` defaults to on when `use_vae` and `eval_dataset` are set |
+
+The spread keys are checked by `MGNV-SPREAD-STAT`, `MGNV-SPREAD-CHANNEL` and
+`MGNV-SPREAD-EVAL`.
+
+These files are written to `inference_output_dir`:
 
 ```text
-input_var + positional_features + optional num_node_types
+rollout_sample{sid}_steps{N}.h5
+rollout_sample{sid}_vaesample{k}_steps{N}.h5
+spread_values.npz  spread_metrics.json  histogram_compare.png    # with eval_dataset
 ```
 
-Edge features are always:
+The spread scoring is in `inference_profiles/spread.py`, and the run also
+prints `[SPREAD]` and `[SCORE]` lines.
 
-```text
-deformed_dx, deformed_dy, deformed_dz, deformed_dist,
-ref_dx, ref_dy, ref_dz, ref_dist
-```
+## Checkpoint contents
 
-## Multiscale Keys
+- `model_state_dict` and, optionally, `ema_state_dict`. The prior is the
+  `prior.*` submodule. Legacy checkpoints with a separate
+  `conditional_prior_state_dict` still load.
+- The optimizer and scheduler state, `train_loss` and `valid_loss`.
+- `normalization`: node, edge and delta statistics, plus the world-edge
+  radius, the node-type mapping and the coarse-edge statistics when they
+  apply.
+- `model_config`: the architecture keys. At inference these override the
+  config file, including `use_conditional_prior`.
 
-| Key | Used by | Meaning |
-| --- | --- | --- |
-| `use_multiscale` | data, model | Enables V-cycle processor and per-level graph data. |
-| `multiscale_levels` | data, model | Number of coarsening levels. |
-| `mp_per_level` | model | Required for multiscale. Must contain `2 * multiscale_levels + 1` integers: descending arm, coarsest, ascending arm. |
-| `coarsening_type` | data | `bfs`, `voronoi_centroid`, `voronoi_inherit`, `voronoi_seedmean`, or a comma list per level. |
-| `voronoi_clusters` | data | Required for Voronoi levels; scalar or comma list. |
-| `hierarchy_cache_dir` | data | Optional directory for the shared on-disk hierarchy cache (defaults next to the dataset). |
-| `hierarchy_cache_build_workers` | data | Optional worker count for the one-time cache build. |
-| `hierarchy_cache_wait_timeout` | data | Seconds to wait for another job's cache build before failing. Default `36000`. |
-| `hierarchy_cache_keep` | data | Keep the hierarchy cache after training instead of deleting it. Default `false`. |
-| `static_cache_per_worker` | data | Per-worker LRU cap for positional features (non-multiscale runs only). Default `64`. |
-| `hierarchy_variants` | data | Independently-seeded coarsening partitions cached per sample, rotated across epochs. Without this, training sees ONE fixed partition for every epoch while inference builds a fresh one it has never seen. Validation stays pinned to variant 0 so its loss stays comparable. Costs K x cache build time and K x cache disk; `1` reproduces the old behaviour bit-for-bit. |
-| `hierarchy_seed` | inference | Seeds the otherwise-unseeded FPS draw at inference so a rollout is reproducible, and so it can be made to match the partitions training was fit to. A list rotates seeds across z-sample batches. |
+## Removed and renamed keys
 
-When `use_multiscale True`, `message_passing_num` is not used by the processor;
-the block counts come from `mp_per_level`. Unpooling always uses the learned
-bipartite `UnpoolBlock`. Hierarchies are precomputed once per run into a shared
-on-disk cache (`*.mscache.*.h5`) that all workers and jobs stream from, and the
-file is deleted once training finishes — its signature pins the source HDF5's
-size+mtime, which training changes when it writes the normalization stats back,
-so it could not be reused by a later run in any case. Set
-`hierarchy_cache_keep true` to keep it. The delete is skipped while another job
-still has the file open; leftovers from a killed run are pruned on next start.
+**Removed** (`MGNV-REMOVED`, error):
 
-## World Edge Keys
+- `alpha_prior_max`, `bipartite_unpool`, `fit_latent_gmm`, `free_bits`
+- `gmm_components`, `gmm_covariance_type`, `gmm_reg_covar`
+- `lambda_det`, `lambda_kl`, `positional_encoding`, `residual_scale`
+- `gamma_es`, `es_samples`, `es_steps`, `es_noise_source`, `es_start_epoch`
 
-| Key | Used by | Meaning |
-| --- | --- | --- |
-| `use_world_edges` | data, model | Enables radius edges in addition to mesh edges. |
-| `world_radius_multiplier` | data | Multiplies the minimum sampled mesh-edge length to get the radius. Default `1.5`. |
-| `world_max_num_neighbors` | data, inference | Cap for `torch_cluster` radius graph. Default `64`. |
-| `world_edge_backend` | data, inference | `torch_cluster`, `scipy_kdtree`, or `auto`. |
-| `coarse_world_edges` | data, model | Lift world edges to all coarse V-cycle levels (default `False`). Requires `use_world_edges True` and `use_multiscale True`. See [WORLD_EDGES_DOCUMENTATION.md](../../research/meshgraphnets_variational/WORLD_EDGES_DOCUMENTATION.md). |
+**Renamed** (`CFG-RENAMED-001`, error; the native loader refuses them too):
 
-World edges reuse the same 8-D edge feature layout and the mesh-edge
-normalization statistics. Mesh edges are filtered out so the world-edge set stays
-disjoint from the mesh topology. When `coarse_world_edges True`, coarse-level
-world edges are normalized with the per-level coarse mesh-edge statistics.
+| Old | New |
+| --- | --- |
+| `vae_mp_layers` | `vae_encoder_mp_layers` |
+| `num_vae_samples` | `inference_samples` |
+| `vae_batch_size` | `inference_batch_size` |
+| `vae_batch_size_min` | `inference_batch_size_min` |
+| `vae_batch_size_max` | `inference_batch_size_max` |
+| `vae_batch_vram_fraction` | `inference_batch_vram_fraction` |
+| `geometry_state_mode` | `use_deformed_edge` |
+| `displacement_state_indices` | `displacement_indices` |
 
-## VAE And Prior Keys
+Any other retired key is simply unknown (`CFG-UNKNOWN-001`).
 
-The VAE branch exists to model manufacturing spread: `z` captures the
-sample-to-sample variation in physical outputs for objects that share the
-same mesh topology. For this objective, keep `lambda_mmd` low (≈ 0.1) and
-`beta_aux` high (≈ 1.0). See
-[MESHGRAPHNET_ARCHITECTURE.md](../../research/meshgraphnets_variational/MESHGRAPHNET_ARCHITECTURE.md) for guidance.
-
-| Key | Used by | Meaning |
-| --- | --- | --- |
-| `use_vae` | model, training, inference | Enables the graph VAE latent path. |
-| `vae_latent_dim` | model | Global latent `z` dimension. 32 recommended for spread modeling. |
-| `vae_encoder_mp_layers` | VAE encoder | Message-passing layers inside the posterior encoder. Default `5` in model construction. |
-| `vae_graph_aware` | VAE encoder | Fuses graph input `x` with target `y` in the posterior encoder. Recommended `True` for multi-type datasets: enables type-conditional spread encoding. |
-| `z_conditioning` | model | How `z` reaches the processor. `concat` (default, legacy) applies a bare `Linear([x, z])` before every block: since `z` is broadcast, that adds ONE constant vector per graph, and the non-residual Linear compounds a ~1.33x gain per block under the repo's kaiming init. `adaln` emits `(shift, scale, gate)` from `z` and modulates the block instead — zero-initialized so it is EXACTLY the unconditioned block at init. **Renames the per-block conditioning parameters**, so it is persisted in the checkpoint's `model_config` and a checkpoint only loads under the value it trained with. See [MESHGRAPHNET_ARCHITECTURE.md](../../research/meshgraphnets_variational/MESHGRAPHNET_ARCHITECTURE.md). |
-| `latent_type` | model, training, inference | Where `z` lives on the V-cycle: `global` (default; `num_z` per-graph slots, HI-MGN-V), `local` (`latent_ch` channels per coarsest-level node with a coarse-node flow-matching prior, HI-MGNflow), or `hybrid` (both, HI-MGN-hybrid). Architecture-defining and persisted in `model_config`. `local`/`hybrid` train single-stage and jointly, and preflight requires `use_multiscale True`, `prior_family fm`, no `prior_fm_moments`, `prior_fm_velocity_arch mlp`, `prior_moment_calibration_epochs 0`, and not `parallel_mode model_split`. HI-MGNflow (`chi-mgnflow`) was merged into `meshgraphnets-v` as `latent_type local` on 2026-10-19; the old repo is in git history (commit `9db47d6`). |
-| `latent_ch` | model (`local`/`hybrid`) | Latent channels per coarsest-level node. Default `4`. Ignored (warned) with `latent_type global`. |
-| `vae_local_mp_layers` | VAE encoder (`local`/`hybrid`) | Depth of the coarse-node posterior head. Default `2`. Ignored (warned) with `latent_type global`. |
-| `latent_reg` | training | Regularizer pulling the posterior toward `N(0,I)`: `mmd` (default, weight `lambda_mmd`) or per-sample `kl` (weight `kl_weight`). |
-| `kl_weight` | training (`kl`) | Weight of the per-sample KL when `latent_reg kl`. Default `1e-3`; warned and ignored otherwise. |
-| `local_inject` | model (`local`/`hybrid`) | Which V-cycle levels read `z_l`. `all` (default): every level, a finer node reading its coarsest ancestor's `z_l`. `coarsest`: only the coarsest level; the `z_l` columns of every finer level are zero, so with `hybrid` they are conditioned on `z_g` alone. Same parameter shapes, so it changes behaviour, not the checkpoint layout (persisted in `model_config` all the same). Ignored (warned) with `latent_type global`. |
-| `lambda_mmd_g` | training (`hybrid`, `mmd`) | MMD weight of `z_g`. Defaults to `lambda_mmd` (the old summed objective); `0` drops the `z_g` MMD entirely, leaving `z_g` shaped by reconstruction and the prior. The trainer still multiplies the logged `mmd` term by `lambda_mmd`, so the model scales its `z_g` part by `lambda_mmd_g / lambda_mmd`, and the logged `mmd` value includes that scaled part; hence a value other than `lambda_mmd` needs `lambda_mmd > 0`. Ignored (warned) for any other `latent_type`/`latent_reg`. |
-| `local_dropout` | training (`hybrid`) | Share of training graphs whose `z_l` the processor does not see. Default `0` (off, the behaviour before the key existed). With `p > 0`, each graph of a training batch has its whole `z_l` replaced by zeros at every V-cycle level with probability `p`, so that graph is reconstructed from `z_g` alone; otherwise nothing asks `z_g` to carry anything, because `z_l` already holds the whole draw. Only the processor's input changes: the MMD/KL term and the posterior the prior is fitted to keep the full `z_l`. Training only: validation, sampling and inference never withhold, and it adds no parameters, so a checkpoint loads with any value. Must be in `[0, 1)` (`MGNV-LATENT-RANGE`). Ignored (warned) for `latent_type` `global`/`local`. |
-| `local_warmup_epochs` | training (`hybrid`) | Default `0` (off). For the first `N` epochs every training graph's `z_l` is withheld (as `local_dropout 1`), so the processor learns to read `z_g` before `z_l` can compete with it. At epoch `N` checkpoint selection restarts, so the kept checkpoint has seen `z_l`. Must be below `prior_freeze_epoch` (or `training_epochs`). Single GPU only (`MGNV-LATENT-WARMUP-GPU`). Ignored (warned) for `global`/`local`. |
-| `zg_anchor_weight` | training (`hybrid`) | Default `0` (off). Needs `local_warmup_epochs > 0`. At the end of the warmup the eval-mode `z_g` posterior of every training sample is stored (`[zg-anchor]` line), and from then on the loss adds `w × KL(q(z_g|y) ‖ q_snapshot(z_g|y))`, a per-coordinate mean per sample, so `z_l` cannot take over what `z_g` learned during the warmup (TS-DSAE's second stage). Logged as `zg_anchor=` on the train line. The snapshot is kept in the resume state. Adds no parameters. |
-| `posterior_max_std_g` | model (`global`/`hybrid`) | Default `0` (no cap). Upper clamp on the `z_g` posterior std, the counterpart of `posterior_min_std`. Equal to `posterior_min_std` pins it. It applies to every posterior pass, so it is persisted in `model_config`. Below `posterior_min_std` is an error. Ignored (warned) with `latent_type local`. |
-| `prior_arch` | prior (`local`/`hybrid`) | Velocity network of the coarse-level FM prior (`CoarseFMPrior`). `gnn` (default): `prior_fm_blocks` message-passing blocks over the coarsest graph plus a pooled `z_g` token. `transformer`: DiT-style AdaLN-Zero blocks with full attention over every coarsest node (token = `[z_l,t \| context \| position code]`), plus, for `hybrid`, one token per `z_g` slot; conditioned on `t` and the pooled context. Depth `prior_fm_blocks`, width `prior_velocity_hidden_dim`, heads `prior_tf_heads`, training dropout `prior_tf_dropout`. Architecture-defining, persisted in `model_config`. |
-| `prior_param` | prior (`local`/`hybrid`) | What the coarse prior's head predicts: `velocity` (default) or `x`, the clean `z1`, converted to a velocity `(x - s z_t) / max(1 - s t, 0.05)` for both the loss and the ODE. Persisted in `model_config`. |
-| `prior_tf_heads` | prior (`transformer`) | Attention heads. Default `4`; must divide the velocity width (`MGNV-LATENT-HEADS`). Ignored (warned) with `prior_arch gnn`. |
-| `prior_tf_dropout` | training (`transformer`) | Dropout of the transformer prior, on the attention weights and on both residual branches (attention output, MLP) of every block. Default `0` (off, the behaviour before the key existed). Training only: validation, sampling and inference never drop, and it adds no parameters, so a checkpoint loads with any value. Must be in `[0, 1)` (`MGNV-LATENT-RANGE`). Ignored (warned) with `prior_arch gnn`. |
-| `prior_fm_draws` | training (`local`/`hybrid`) | `(z0, t)` draws per posterior sample in the coarse prior's FM loss. Default `1`; `K` runs the prior on `K` replicas of the batch's coarse graphs, so it costs `K` prior passes per step. |
-| `prior_cond_noise` | training (`local`/`hybrid`) | Noise on the coarse prior's condition in its FM loss, against memorizing the training geometries. Default `0` (off). `s > 0` adds Gaussian noise of `s` times each row's RMS to the trunk context (the pooled coarsest-node features and the attention-pooled vector), drawn separately for each of the `prior_fm_draws` replicas. Relative to the row, so the network cannot escape it by scaling its features up. Training only: validation, sampling and inference read the clean context. Must be `>= 0` (`MGNV-LATENT-POSITIVE`). Ignored (warned) with `latent_type global`. |
-| `mmd_gather_ranks` | training | All-gather `z` across DDP ranks before the MMD (default `True`). MMD is a two-SAMPLE statistic evaluated inside the model forward, so without this it only ever sees the PER-RANK batch — on 4 GPUs at `Batch_size 16` the global batch is 64 but the estimator used 16. `z` is tiny, so the collective is free. No-op at `world_size 1`. |
-| `alpha_recon` | training | Reconstruction-loss weight. |
-| `lambda_mmd` | training | MMD regularizer weight matching aggregate posterior to `N(0,I)`. Keep low (≈ 0.1) for spread modeling; residual MMD > 0 is acceptable and expected. |
-| `beta_aux` | training | Weight of the peak-to-valley MSE on the DECODED field (`MeshGraphNets._pv_loss`): per graph, predicted vs true `max - min` of channel `pv_channel`. Keep high (≈ 1.0) to prevent mode collapse. It is the scored statistic on SAOI only; on ex3 (scored by `max\|u\|`) it is an auxiliary on one component, and for `T > 1` it fits the per-step increment's peak-to-valley (warned, not refused). Rejected with `parallel_mode model_split` (`MGNV-AUX-PIPELINE`). With the default `latent_reg mmd` there is no per-sample KL term: MMD is the only latent regularizer. |
-| `pv_channel` | training | Output channel the peak-to-valley term reads. Default `2` (`z_disp` in the displacement layout). |
-| `posterior_min_std` | VAE encoder | Floor on the posterior std. ≈ 0.05 recommended so the prior cannot memorize point masses. It also sets the noise level the DECODER is trained at, which is the level it should be able to tolerate from the prior at inference. |
-| `mmd_bandwidth` | training | RBF bandwidth mode for the MMD. `fixed` uses constant sigmas tuned for ~64-D `z` and **saturates at high `vae_latent_dim`** — pairwise squared distances grow ~2D, every kernel goes to 0, and the penalty silently disappears along with its gradient. `median` sets the base scale from the median pairwise distance each step and stays sensitive at any latent width. |
-| `best_by` | training | Checkpoint-selection metric: `recon` (posterior validation loss, default) or `crps` (the learned-prior CRPS that mirrors inference). Reconstruction measures the POSTERIOR path, which a model can keep improving while its generative path rots — select on `crps` whenever the run exists to generate. |
-| `recon_loss` | training | `huber` (default) or `mse`. MSE preserves extreme-node amplitude better. |
-| `inference_samples` | inference | Number of rollout samples per scene. Can exceed training set size to extrapolate spread. |
-| `inference_batch_size` | inference | Trajectories advanced together per batched forward pass. |
-| `vae_valid_prior_samples` | training | Prior samples per graph for the CRPS validation metric. Default `8`. |
-| `num_z` | model, prior | Per-level z slots. Defaults to `multiscale_levels + 1` for multiscale, else `1`. |
-| `use_conditional_prior` | training, inference | Sample z from the joint-trained conditional prior at inference (`False` forces N(0,I)). Training default `False`, and the value is saved in `model_config`, which overrides the inference config -- so set it when TRAINING. The inference default `True` applies only to a checkpoint with no `model_config`. |
-| `prior_type` | model, training | `gnn_e2e` (default when `use_vae True`) enables the joint graph-conditional prior submodule. |
-| `prior_family` | prior | Density family of the gnn_e2e prior: `fm` (conditional flow matching, **default**) or `gmm` (Gaussian mixture, legacy). Persisted in the checkpoint; pre-FM checkpoints load as `gmm` automatically. |
-| `prior_nll_weight` | training | Weight of the prior density-matching objective — flow-matching MSE (`fm`) or mixture NLL (`gmm`). Default `1.0`. Read it RELATIVE to `alpha_recon`: at `alpha_recon 1000` a weight of 1 makes this ~0.1% of the objective. |
-| `prior_grad_to_encoder` | training | How much of the prior's flow-matching gradient reaches the ENCODER. `0.0` (default) is the historical one-way coupling: the posterior is detached, the prior chases a `q` that never moves toward it, and the CVAE rate term `KL(q(z\|y,g) \|\| p(z\|g))` is absent from the objective entirely. `1.0` closes the loop and restores that term. Values in between scale the backward pass without changing the loss value. **Requires `beta_aux > 0`**: the pressure this adds is toward a `z` predictable from the graph alone, and MMD does not guard against that (a deterministic `z = h(g)` matches `N(0,I)` perfectly) — `beta_aux`'s I(z;y) floor is what does. Preflight warns (`MGNV-PRIOR-GRAD-AUX`) if `beta_aux` is 0 while this is on. |
-| `prior_fm_steps` | prior (fm) | ODE steps when sampling from the FM prior. Default `20`. Sampling-only — it never affects training. |
-| `prior_fm_solver` | prior (fm) | ODE integrator: `heun` (default, 2nd-order trapezoid predictor-corrector, two velocity evaluations per step) or `euler` (1st order, the old behaviour). The velocity is most curved near `t = 1`, which is exactly where Euler overshoots into the `z` tails; measured on `dz/dt = z`, Heun at 30 steps is ~27x more accurate than Euler at 100 and ~40% cheaper. |
-| `prior_hidden_dim` | prior | Prior hidden width. Defaults to `latent_dim`. |
-| `prior_mp_layers` | prior | Prior graph message-passing layers. Default `10` (`build_prior_config`; the bare class default of 3 is never reached through training). |
-| `prior_condition_hidden_dim` | prior | Width of the condition encoder. Defaults to `prior_hidden_dim`. |
-| `prior_velocity_hidden_dim` | prior (fm) | Velocity-network width. Defaults to `prior_hidden_dim`. |
-| `prior_fm_velocity_arch` | prior (fm) | `mlp` (default; the legacy module layout) or `residual_film`: `prior_fm_blocks` pre-norm residual blocks, each FiLM-modulated by an embedding of (graph condition, t). Preflight `MGNV-FM-ARCH` rejects anything else. |
-| `prior_fm_blocks` | prior (fm) | Residual blocks of the `residual_film` velocity network. Default `4`. With `latent_type local`/`hybrid` it is the depth of the coarse prior instead (GNN or transformer blocks, `prior_arch`). |
-| `prior_fm_moments` | prior (fm) | Condition-dependent Gaussian base: a moment head predicts a per-graph mean and diagonal scale, and FM transports only the remaining residual. Default `False` (base N(0,I)). |
-| `prior_fm_moment_hidden_dim` | prior (fm) | Moment-head width. Defaults to `prior_condition_hidden_dim`. |
-| `prior_fm_moment_weight` | training (fm) | Weight of the moment head's Gaussian likelihood term. Default `1.0`. |
-| `prior_fm_moment_min_scale` / `prior_fm_moment_max_scale` | prior (fm) | Clamp on the moment head's scale. Defaults `0.03` / `20.0`. |
-| `prior_freeze_epoch` | training | Epoch at which the simulator freezes and only the prior trains for the rest of the run: latent standardization (`z_shift`/`z_scale`) is fitted once, and a fresh cosine runs over the prior alone. `0` (default) = never. Single GPU only. |
-| `prior_moment_calibration_epochs` | training (fm) | With `prior_fm_moments`, the first N epochs of the prior-only tail fit only the moment head; the remaining tail epochs fit only the velocity field. `0` (default) trains both together. |
-| `prior_mixture_components` | prior (gmm) | Mixture components. Default `50`. |
-| `prior_min_std` | prior (gmm) | Minimum predicted component std. Default `0.1`. |
-| `prior_cov_rank` | prior (gmm) | Low-rank covariance rank per component. Default `0` (diagonal). |
-| `prior_kl_reg_weight` | training (gmm) | Small analytical-KL stability anchor. Default `0.02`. Ignored for `fm` (no collapse mode to anchor). |
-| `prior_temperature` | inference | `gmm`: divides mixture logits and scales sampled std by `sqrt(temperature)`. `fm`: scales the initial noise std by `sqrt(temperature)`. |
-| `latent_inflation` | inference | `fm` only. After the prior ODE, `z <- c + lam*(z-c)` with `c` the ODE image of the origin, so the latent cloud is `lam` times wider around the same center. Scalar, or a comma list cycled per draw batch so one pass yields the lam-vs-spread curve (each draw tagged in `spread_values.npz: gen_lam`). Default 1.0 = identity. Unlike `prior_temperature` this stays on the trained trajectories. |
-
-Removed legacy keys: `alpha_prior_max`, `alpha_prior_warmup_frac`,
-`prior_loss_type`, `prior_gumbel_temp` (deleted with the FM prior introduction);
-`lambda_det`, `free_bits`, `fit_latent_gmm`, `gmm_components`,
-`gmm_covariance_type`, `gmm_reg_covar`, `train_conditional_prior`,
-`bipartite_unpool`, `residual_scale`, `use_pairnorm`, `extreme_weight`,
-`positional_encoding`, `fine_mp_pre`/`coarse_mp_num`/`fine_mp_post`
-(deleted in the 2026-07 refactor — these keys are now ignored or rejected);
-`gamma_es`, `es_samples`, `es_steps`, `es_noise_source`, `es_start_epoch`
-(the energy-score generative term, deleted from the objective — the launcher
-flags them as `MGNV-REMOVED`).
-
-## Training And Performance Keys
-
-| Key | Used by | Meaning |
-| --- | --- | --- |
-| `training_epochs` | training | Epoch count. Config files may write `Training_epochs`; the loader lowercases it. |
-| `batch_size` | training | Physical DataLoader batch size. |
-| `learningr` | training | Adam learning rate. Config files may write `LearningR`. |
-| `training_seed` | training | Seeds python/numpy/torch/CUDA and the DataLoader generators in single-process training. Default `42`. Separate from `split_seed`, so two runs differing only in it share a split. The DDP path does not read it. |
-| `warmup_epochs` | training | Linear warmup epochs before cosine restarts. Default `3`. |
-| `num_workers` | DataLoader | Worker count for simulator training. |
-| `std_noise` | model forward | Adds Gaussian noise to node and edge inputs during training. |
-| `noise_gamma` | model forward | Target correction factor when input noise is applied. Default `0.1`. |
-| `noise_std_ratio` | model forward | **Computed, not configured.** `setup.py` fills it with `node_std / delta_std` per output channel so the target correction for input noise is applied in the right units. Setting it by hand overrides a value derived from the dataset. |
-| `weight_decay` | training | Coupled L2 weight decay passed to Adam. Default `0.0`, preserving the historical optimizer when omitted. |
-| `prefetch_factor` | DataLoader | Batches each worker prefetches. |
-| `time_integration` | training | `ar_ot` (default) trains one step at a time against the teacher-forced target. `ar_rt` unrolls the full trajectory and backpropagates through it, which is what a rollout actually does at inference — but it requires `num_timesteps > 1`, so static (T=1) datasets must use `ar_ot`. |
-| `grad_accum_steps` | training | `1` steps per batch, `N` accumulates N batches, `0` accumulates the whole epoch. |
-| `use_checkpointing` | model | Activation checkpointing in training. |
-| `use_amp` | training | bfloat16 autocast. |
-| `use_compile` | training | Compiles each plain GnBlock (no world edges) as one `torch.compile(dynamic=True)` tensor function (`model/compiled_block.py`). A startup self-test runs it forward and backward against eager; any failure, then or later, switches back to eager and training continues. Execution-only: resume-volatile. |
-| `amp_layernorm` | — | Retired 2026-10-30, accepted and ignored: under `use_amp` LayerNorm always runs on the bf16 activations (1.06-1.20x step, -19% activation memory on a 3090). |
-| `use_ema` | training | EMA shadow model for validation and inference. |
-| `ema_decay` | training | EMA decay. |
-| `test_interval` | training | Visualization/test output cadence. |
-| `val_interval` | training | Validation cadence. |
-| `test_batch_idx` | training | Test/visualization batch indices. |
-| `display_testset` | visualization | Render test-set PNGs during `test_model`. Default `True`. |
-| `display_trainset` | visualization | Also visualize train-set reconstructions at test cadence. Default `True`. |
-| `plot_feature_idx` | visualization | Feature index to plot; `-1` selects the last feature. |
-| `feature_loss_weights` | training | Optional per-output-channel loss weights, normalized to sum to 1. |
-| `augment_geometry` | data | Training-only random z rotation and x/y reflection. |
-| `test_max_batches` | training | Cap on test batches per visualization pass. Default `200`. |
-
-Simulator loss is Huber or MSE (`recon_loss`) on the normalized target: the
-per-step delta when `T > 1`, the absolute field in the static (`T = 1`) case.
-With `use_vae True` the full objective is
-
-```text
-L = alpha_recon      * recon(f(z_q, g), y)          reconstruction
-  + lambda_mmd       * MMD(q(z) || N(0,I))          aggregate rate: shape/scale of the latent
-  + beta_aux         * PV(f(z_q, g), y)             peak-to-valley of the decoded field; I(z;y) floor
-  + prior_nll_weight * FM(v_theta ; z_q, g)         conditional rate: where each graph lands
-  [+ prior_kl_reg_weight * KL anchor]               gmm family only
-```
-
-The three weights are only meaningful RELATIVE to `alpha_recon`; at
-`alpha_recon 1000` with the others at 1, the regularizers are ~0.1% of the
-objective and are effectively off. Check the `mmd` and `fm_p` entries of the
-training progress bar against `total` in the first epochs.
-
-`prior_grad_to_encoder` decides whether the FM term is a one-way regression
-(prior chases a detached `q`) or the actual CVAE rate term. For manufacturing
-spread modeling the historical starting point is `lambda_mmd 0.1`,
-`beta_aux 1.0`.
-
-## Inference Keys
-
-| Key | Used by | Meaning |
-| --- | --- | --- |
-| `inference_output_dir` | inference | Output directory. Defaults to `outputs/rollout`. |
-| `infer_timesteps` | inference | Rollout steps per selected scene. |
-| `inference_samples` | inference | Number of stochastic samples per scene when VAE is enabled. |
-| `prior_temperature` | inference | Conditional-prior sampling spread control. |
-| `latent_inflation` | inference | Post-ODE widening of the FM prior's `z` around its center; scalar or cycled list. |
-| `eval_dataset` | inference | Ground-truth eval HDF5 used for the inline z_disp spread-histogram comparison. When set (and VAE enabled), rollout writes `histogram_compare.png` next to the `.h5` outputs. No GT path → comparison skipped. |
-| `make_histogram` | inference | Force the spread histogram on/off. Defaults to `True` when `use_vae` and `eval_dataset` are both set. Alongside the PNG it prints machine-readable `[SPREAD] GT/GEN mean= std= min= max= n=` lines and writes `spread_values.npz` (the raw `gt`/`gen` arrays) into `inference_output_dir` — with `save_rollouts False` that npz is the only surviving record. |
-| `show_histogram` | inference | Open the saved `histogram_compare.png` in the OS default viewer after rollout. Default `True`; best-effort (silently degrades on a headless box). |
-| `histogram_bins` | inference | Histogram bin count (default `60`). |
-| `histogram_clip_quantile` | inference | Symmetric quantile clip for the binning range, e.g. `0.001` trims the 0.1% tails (default `0` = no clip). |
-| `inference_batch_size_min` | inference | Floor for the automatic VAE batch sizer. Default `1`. |
-| `inference_batch_size_max` | inference | Ceiling for the automatic sizer. Default `0` = no ceiling. |
-| `inference_batch_vram_fraction` | inference | Fraction of free VRAM the sizer aims to use when `inference_batch_size` is not set explicitly. Default `0.70`, clamped to (0, 1]. |
-| `save_rollouts` | inference | Write one trajectory HDF5 per (scene, VAE sample). Default `True`. Set `False` for a distribution study: `inference_samples` draws across many scenes is thousands of files per run, and the histogram only needs the spread scalars. Sampling, `histogram_compare.png`, the `[SPREAD]` log lines and `spread_values.npz` all still happen. |
-
-Inference output files are named like:
-
-```text
-rollout_sample{sample_id}_steps{steps}.h5
-rollout_sample{sample_id}_vaesample{idx}_steps{steps}.h5
-```
-
-When `eval_dataset` is set, rollout also writes `histogram_compare.png` in
-`inference_output_dir` — the same z_disp spread (max − min, final timestep)
-comparison produced by the standalone `_b8_all_warpage_input/compare_histograms.py`,
-now generated automatically as part of the rollout.
-
-## Checkpoint Contents
-
-Training checkpoints contain:
-
-- `model_state_dict`
-- optional `ema_state_dict`
-- optimizer and scheduler states
-- `train_loss`, `valid_loss`
-- `normalization` with node, edge, delta, optional world-edge radius, optional node-type mapping, and optional coarse-edge stats
-- `model_config` with architecture-critical config values
-
-The joint-trained conditional prior lives inside `model_state_dict` /
-`ema_state_dict` (as the `prior.*` submodule). Legacy checkpoints with a
-separately-saved `conditional_prior_state_dict` still load at inference.
+These MGN-only keys are unknown to the MGN-V spec and are not read by its
+runtime: `pool_type`, `pool_heads`, `unpool_type`, `learned_interpolation`,
+`voronoi_branches`, `init_modelpath`, `coarse_cache_per_worker` and
+`train_eval_subset_size`.

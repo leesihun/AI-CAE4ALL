@@ -1,8 +1,8 @@
-"""The one place the Studio backend imports cae_suite.
+"""The one place the Studio backend imports ai_cae4all.
 
 Every launcher-derived fact (registry, specs, preflight, diagnostics,
 interpreter settings) flows through this module so the rest of the backend
-never needs to know cae_suite's import path or handle its absence twice.
+never needs to know ai_cae4all's import path or handle its absence twice.
 """
 
 from __future__ import annotations
@@ -21,12 +21,12 @@ if str(SUITE_ROOT) not in sys.path:
     sys.path.insert(0, str(SUITE_ROOT))
 
 try:
-    from cae_suite.config_parser import parse_config
-    from cae_suite.diagnostics import Severity
-    from cae_suite.path_checks import resolve_native_path
-    from cae_suite.preflight import PreflightOptions, run_preflight
-    from cae_suite.registry import MethodRegistry
-    from cae_suite.settings import LocalSettings
+    from ai_cae4all.config_parser import parse_config
+    from ai_cae4all.diagnostics import Severity
+    from ai_cae4all.path_checks import resolve_native_path
+    from ai_cae4all.preflight import PreflightOptions, run_preflight
+    from ai_cae4all.registry import MethodRegistry
+    from ai_cae4all.settings import LocalSettings
 except Exception as import_error:  # pragma: no cover - exposed through /api/health
     SUITE_IMPORT_ERROR: Exception | None = import_error
     parse_config = None  # type: ignore[assignment]
@@ -276,7 +276,7 @@ def checkpoint_metadata(path: Path, registry: Any, settings: Any) -> dict[str, A
     import subprocess
 
     if SUITE_IMPORT_ERROR is not None:
-        return {"ok": False, "error": f"cae_suite is unavailable: {SUITE_IMPORT_ERROR}"}
+        return {"ok": False, "error": f"ai_cae4all is unavailable: {SUITE_IMPORT_ERROR}"}
     if not path.is_file():
         return {"ok": False, "error": f"No such checkpoint: {relative(path)}"}
 
@@ -292,7 +292,7 @@ def checkpoint_metadata(path: Path, registry: Any, settings: Any) -> dict[str, A
             python = settings.resolve_python(resolved.model_id, resolved.spec.spec_id)
             repository = resolved.repository_root
 
-    script = SUITE_ROOT / "cae_suite" / "checkpoint_probe.py"
+    script = SUITE_ROOT / "ai_cae4all" / "checkpoint_probe.py"
     try:
         completed = subprocess.run(
             [str(python), str(script), str(path)],

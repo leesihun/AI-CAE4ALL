@@ -440,7 +440,7 @@ E3가 가장 중요하다. E3 없이 E1/E2를 평가하면 rollout 지표가 전
 ## 7. 이 저장소에서의 함정 (전부 자체 기록에서 나온 것)
 
 1. **새 config 키는 6군데를 고쳐야 한다** — 네이티브 `general_modules/load_config.py`,
-   `cae_suite/specs/meshgraphnets.py`의 `known_keys` + validator, 캐시 시그니처(`_coarse_params`),
+   `ai_cae4all/specs/meshgraphnets.py`의 `known_keys` + validator, 캐시 시그니처(`_coarse_params`),
    config 파일들, spec의 required/default, 그리고 `--audit-configs` 재실행.
    빠뜨리면 `CFG-UNKNOWN-001` 경고로 조용히 통과한다.
 2. **DDP `find_unused_parameters=False`** — 옵션 모듈은 만들었으면 반드시 호출돼야 한다.

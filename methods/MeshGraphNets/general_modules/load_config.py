@@ -5,7 +5,7 @@ from general_modules.renamed_keys import check_config_file
 
 # Values for these keys are filesystem paths and keep their original case;
 # every other string value is still lowercased (see parse_value). Mirrored in
-# cae_suite/config_parser.py::PATH_KEYS -- keep the two in sync.
+# ai_cae4all/config_parser.py::PATH_KEYS -- keep the two in sync.
 PATH_KEYS = frozenset({
     'dataset_dir',
     'infer_dataset',

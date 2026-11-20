@@ -1,10 +1,10 @@
 """Repository-wide config audit and single-config explanation.
 
-These mirror `cae_suite/cli.py --audit-configs` and `--explain-config`
+These mirror `ai_cae4all/cli.py --audit-configs` and `--explain-config`
 exactly (same diagnostic-code buckets, same skip-layer choices for the bulk
 audit) so the Studio "Config audit" and "Explain this config" views report
 the same verdict a human would get running the CLI directly. Nothing here
-re-implements validation; both functions call `cae_suite.preflight.run_preflight`.
+re-implements validation; both functions call `ai_cae4all.preflight.run_preflight`.
 """
 
 from __future__ import annotations
@@ -12,12 +12,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from cae_suite.config_discovery import checked_in_config_paths
+from ai_cae4all.config_discovery import checked_in_config_paths
 from studio_backend.paths import SUITE_ROOT, json_safe, relative
 from studio_backend.state import STATE, studio_preflight_diagnostics
 from studio_backend.suite_bridge import PreflightOptions, Severity, run_preflight
 
-# Mirrors cae_suite/cli.py's _INACTIVE_CODES / _CHECKPOINT_CODES exactly so the
+# Mirrors ai_cae4all/cli.py's _INACTIVE_CODES / _CHECKPOINT_CODES exactly so the
 # Studio's explanation buckets never drift from the CLI's.
 _INACTIVE_CODES = {
     "NOVAR-INACTIVE", "NOVAR-REMOVED", "MGN-REMOVED-VAR",

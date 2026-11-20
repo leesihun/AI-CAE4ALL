@@ -230,7 +230,7 @@ metadata/condition_schema/
     group                         str [K]        유도 무차원수 ('alpha_dT', 'Re', 'Bi', 'Fo')
 ```
 
-`dataset/DATASET_FORMAT.md`와 `cae_suite/dataset_probe.py`의 교차검증을 같이 갱신해야 한다.
+`dataset/DATASET_FORMAT.md`와 `ai_cae4all/dataset_probe.py`의 교차검증을 같이 갱신해야 한다.
 
 ### 장벽 2 — 정규화가 외삽을 막는다 (실험이 지목한 그 지점)
 
@@ -389,7 +389,7 @@ demo 쌍이 응답의 국소 기울기를 실어 나른다. CAE에서는 대단�
 
 - `data/{id}/conditions` + `metadata/condition_schema` (§4 장벽 1의 스키마)
 - 가능한 곳에서 온도 field export, `feature_names` 갱신
-- `dataset/DATASET_FORMAT.md`, `cae_suite/dataset_probe.py` 교차검증 갱신
+- `dataset/DATASET_FORMAT.md`, `ai_cae4all/dataset_probe.py` 교차검증 갱신
 
 > 참고: 이 monorepo에는 **샘플별 파라메트릭 입력 패턴이 이미 있다** — DeepONet의
 > branch 입력(`train/branch_values` [samples, dim],
@@ -414,8 +414,8 @@ demo 쌍이 응답의 국소 기울기를 실어 나른다. CAE에서는 대단�
   **`condition_dropout`은 편의 기능이 아니다** — §3 결론 4에서 조건 토큰이 값 범위를
   벗어나면 *타깃이 그 조건에 의존하지 않을 때조차* 해를 망치는 게 측정됐다. 드롭아웃은
   그 spurious 의존성을 정규화하는 직접적인 대책이다. 조건 값 clamp도 같이 둘 것.
-- `cae_suite/specs/transolver.py`의 `known_keys`
-  ([specs/transolver.py:193](../../../cae_suite/specs/transolver.py#L193)) 갱신 — 안 하면
+- `ai_cae4all/specs/transolver.py`의 `known_keys`
+  ([specs/transolver.py:193](../../../ai_cae4all/specs/transolver.py#L193)) 갱신 — 안 하면
   `CFG-UNKNOWN-001`
 - 검증: K=0 수치 동일 / `verify_v3.py` L1 (naive == slice_space) 유지
 - 병렬성 주의: 조건 토큰은 graph-level이라 **all-reduce 불필요**하지만 rank 간 동일해야
@@ -665,7 +665,7 @@ data/{id}/conditions           float [K]   샘플별 BC 값 (schema가 해석)
 
 1. **무차원화가 자동 유도된다** — 데이터셋마다 손으로 레시피를 쓸 필요가 없다.
    (채널 차원 + `scales`) 조합으로 로더가 무차원 값을 계산한다.
-2. **단위가 안 맞는 병합을 정적으로 검출할 수 있다** — `cae_suite/dataset_probe.py`가
+2. **단위가 안 맞는 병합을 정적으로 검출할 수 있다** — `ai_cae4all/dataset_probe.py`가
    잡을 수 있는 검사가 된다. `DATA-UNIT-*` 진단 코드를 하나 늘리면 된다.
 3. 새 데이터셋 추가가 **코드 변경 없이** 된다. foundation model 파이프라인의 정의다.
 

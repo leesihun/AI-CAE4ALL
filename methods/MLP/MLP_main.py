@@ -1,11 +1,11 @@
 """Launcher entrypoint: run the MLP surrogate from a flat ``--config`` file.
 
 Invoked by ``AI_CAE4ALL_main.py`` after preflight, exactly like every method's
-native entrypoint: ``python MLP/MLP_main.py --config <file>``. The launcher runs
-this with the working directory set to this repository (``MLP/``), so relative
-config paths resolve from here.
+native entrypoint: ``python MLP_main.py --config <file>``. The launcher runs
+this with the working directory set to this repository (``methods/MLP/``), so
+relative config paths resolve from here.
 
-Config keys (the full set is in cae_suite/specs/mlp.py):
+Config keys (the full set is in ai_cae4all/specs/mlp.py):
     model mlp                  mode train|inference
     dataset_dir <train.h5>     infer_dataset <infer.h5>   modelpath <ckpt.pth>
     input_var N                output_var M

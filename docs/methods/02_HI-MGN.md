@@ -1,215 +1,191 @@
-# 02 — HI-MGN (Hierarchical / Multiscale MeshGraphNets)
+# 02 — HI-MGN (hierarchical MeshGraphNets)
 
-- **`model`**: `meshgraphnets` **with** `use_multiscale True`
-- **Repo / entrypoint**: `MeshGraphNets/` → `MeshGraphNets_main.py`
-- **Key source**: `model/MeshGraphNets.py` (`_build_multiscale_processor`, `_forward_multiscale`), `model/coarsening.py`, `model/blocks.py::UnpoolBlock`
-- **Prereqs**: [01_MeshGraphNets_MGN.md](01_MeshGraphNets_MGN.md), [00_shared_foundations.md](00_shared_foundations.md)
+| | |
+| --- | --- |
+| Route | `model meshgraphnets` with `use_multiscale true` and a `voronoi_*` `coarsening_type` |
+| Directory | [methods/MeshGraphNets/](../../methods/MeshGraphNets/) |
+| Entrypoint | [MeshGraphNets_main.py](../../methods/MeshGraphNets/MeshGraphNets_main.py) |
+| Spec | [ai_cae4all/specs/meshgraphnets.py](../../ai_cae4all/specs/meshgraphnets.py) |
 
----
+HI-MGN swaps the processor only. The encoder, decoder, `GnBlock`, features,
+training and rollout are the same as in [flat MGN](01_MeshGraphNets_MGN.md).
 
-## What it does
+The flat processor is replaced by a U-Net-style **V-cycle** over a hierarchy
+of FPS-Voronoi coarse graphs. Long-range coupling therefore crosses the mesh
+in a few blocks instead of one block per hop. Use it on large meshes with
+global coupling, such as whole-body deformation or warpage. With
+`coarsening_type bfs`, the same machinery becomes [BSMS-GNN](03_BSMS-GNN.md).
 
-HI-MGN is MeshGraphNets with a **multiscale U-Net-style "V-cycle" processor**
-instead of a flat stack of message-passing blocks. It builds a hierarchy of
-progressively **coarser graphs** from the mesh, passes messages at each scale,
-pools information *down* to the coarsest level, and unpools it back *up*, so that
-**long-range interactions cross the whole mesh in a handful of blocks** rather than
-requiring one message-passing layer per hop.
+Prerequisites: [00](00_shared_foundations.md) and [01](01_MeshGraphNets_MGN.md).
 
-Everything else — encoder, decoder, `GnBlock`, edge/world/positional features,
-training loop, rollout — is identical to [flat MGN](01_MeshGraphNets_MGN.md). HI-MGN
-is a **processor swap**, selected by `use_multiscale True`.
+## Architecture
 
-The **canonical HI-MGN** uses `coarsening_type voronoi_seedmean` (FPS-Voronoi
-clustering). The alternative BFS bi-stride coarsener is documented separately in
-[BSMS-GNN](03_BSMS-GNN.md); both drive the *same* V-cycle machinery.
-
----
-
-## Capabilities
-
-- **Multi-level graph hierarchy** (`multiscale_levels` levels) with a configurable
-  number of message-passing blocks per level (`mp_per_level`).
-- **Configurable coarsening**: FPS-Voronoi with a fixed target cluster count per
-  level (`voronoi_clusters`), so you control exactly how small each level gets
-  (e.g. `5000, 100`: 20k nodes → 5k → 100).
-- **Learned bipartite unpooling** (not naive broadcast): a real message-passing step
-  from coarse to fine nodes conditioned on relative position.
-- **World edges at coarse levels** (optional, `coarse_world_edges`) so contact
-  information also propagates hierarchically.
-- **Shared on-disk hierarchy cache**: the (expensive) coarsening is precomputed once
-  per run into a `*.mscache.*.h5` file that all workers/jobs stream from, then
-  deleted at the end of training (`hierarchy_cache_keep true` to keep it).
-- All of MGN's capabilities (AR-OT/AR-RT, DDP, augmentation, EMA, etc.).
-
-## Strengths
-
-- **Global coupling in few layers.** The coarsest level connects distant regions
-  directly, so boundary conditions and long-range stress fields are felt everywhere
-  without a very deep flat processor. This is the main reason to pick HI-MGN over
-  flat MGN on large meshes.
-- **Better scaling to large meshes**: coarse levels have far fewer nodes/edges, so
-  the extra message passing is cheap relative to adding many fine-level blocks.
-- **Controllable hierarchy**: Voronoi cluster counts give a predictable coarse size
-  regardless of mesh irregularity (unlike topology-only coarsening).
-- **Keeps mesh fidelity at the finest level** — the fine graph and its skip
-  connections preserve local detail.
-
-## Weaknesses
-
-- **Coarsening is precompute-heavy.** FPS + multi-source BFS + boundary-edge
-  construction per sample is costly; the disk cache is essentially mandatory for
-  real datasets. Cache build time and disk space are real costs.
-- **More hyperparameters to tune**: `multiscale_levels`, `mp_per_level` (must be
-  `2L+1` entries), `voronoi_clusters` per level, coarsening mode.
-- **Batching subtlety**: per-level tensors need a custom `MultiscaleData` batching
-  rule; mis-set offsets silently mix samples (handled in code, but a landmine when
-  extending).
-- **Pooling can blur** if clusters are too coarse; `voronoi_seedmean`/`inherit`
-  modes exist precisely to trade off centroid smoothing vs seed-anchoring.
-- Same autoregressive-error and input-bound caveats as flat MGN.
-
----
-
-## Network structure — the V-cycle
-
-For `L = multiscale_levels`, `mp_per_level` must contain **`2L + 1`** integers:
+The code is in
+[MeshGraphNets.py](../../methods/MeshGraphNets/model/MeshGraphNets.py)
+(`_build_multiscale_processor`, `_forward_multiscale`). With
+`L = multiscale_levels`, `mp_per_level` has `2L + 1` entries:
 
 ```text
-[ pre_0, pre_1, …, pre_(L-1),  coarsest,  post_(L-1), …, post_1, post_0 ]
-   └──── descending arm ────┘     └┘        └──────── ascending arm ────────┘
+[ pre_0 … pre_(L-1),  coarsest,  post_(L-1) … post_0 ]
 ```
 
-Example `4, 6, 8, 6, 4` with `multiscale_levels 2`: 4 pre-blocks at level 0, 6 at
-level 1, 8 at the coarsest, 6 post at level 1, 4 post at level 0.
+For example, `4, 6, 8, 6, 4` with `L = 2` gives 28 blocks.
+`message_passing_num` is not used.
 
-```mermaid
-flowchart TD
-    ENC["Encode fine graph\n(node/edge/world encoders)"] --> L0PRE
+1. **Down arm.** At each level `i`, `pre_blocks[i]` runs and the node, edge
+   and world states are saved as a skip connection. The graph is then pooled
+   to level `i+1`, and the coarse edges are re-encoded by
+   `coarse_eb_encoders[i]`. Pooling (`pool_type`) works like this:
+   - `mean` (default): scatter-mean over the cluster. `voronoi_inherit`
+     gathers the seed node instead.
+   - `attention`: `AttentionPoolBlock`
+     ([blocks.py](../../methods/MeshGraphNets/model/blocks.py)) with
+     `pool_heads` heads (default 4).
+2. **Coarsest blocks.**
+3. **Up arm.** At each level `i`, the coarse state is unpooled and merged with
+   the skip by `skip_projs[i]`, then `post_blocks[i]` runs.
+   - With `learned_interpolation true` (default), unpooling is the
+     `UnpoolBlock`, a bipartite coarse-to-fine message pass over
+     `unpool_edge_index_i`:
 
-    subgraph DOWN["Descending arm"]
-        L0PRE["Level 0: pre-blocks\n(GnBlock × mp[0])"] -->|save skip 0| POOL0["Pool → Level 1\n(seed-gather or mean)\n+ encode coarse edges"]
-        POOL0 --> L1PRE["Level 1: pre-blocks\n(GnBlock × mp[1])"] -->|save skip 1| POOL1["Pool → coarsest"]
-    end
+     ```text
+     msg  = EdgeMLP([h_coarse, h_fine_skip, fine_pos − coarse_centroid])   # 2D+3 → D
+     h_up = NodeMLP([h_fine_skip, Σ msg])                                  # 2D   → D
+     ```
 
-    POOL1 --> COARSE["Coarsest blocks\n(GnBlock × mp[L])"]
+     `unpool_type` sets how messages are aggregated: `sum` (default) or
+     `attention`.
+   - With `learned_interpolation false`, the coarse state is broadcast over
+     its cluster.
+4. **Decode** the finest level.
 
-    subgraph UP["Ascending arm"]
-        COARSE --> UNP1["UnpoolBlock 1\n(coarse→fine bipartite MP)"]
-        SKIP1["skip 1"] --> MERGE1["skip_proj: Linear(2·latent→latent)"]
-        UNP1 --> MERGE1 --> L1POST["Level 1: post-blocks\n(GnBlock × mp[2L-1])"]
-        L1POST --> UNP0["UnpoolBlock 0"]
-        SKIP0["skip 0"] --> MERGE0["skip_proj: Linear(2·latent→latent)"]
-        UNP0 --> MERGE0 --> L0POST["Level 0: post-blocks\n(GnBlock × mp[2L])"]
-    end
+**Multi-partition.** `voronoi_branches` can be greater than 1 on the last
+level only. That level then builds K independent Voronoi partitions with
+shared weights. The skip projection becomes `Linear((1+K)·D → D)`.
 
-    L0POST --> DEC["Decoder → Δstate [N, output_var]"]
-```
+## Coarsening
 
-### Step-by-step forward pass
+The coarsening code is in
+[coarsening.py](../../methods/MeshGraphNets/model/coarsening.py)
+(`fps_voronoi_coarsen`):
 
-1. **Encode** the fine graph (identical to flat MGN).
-2. For each level `i` (descending): run `pre_blocks[i]`, then **save a skip state**
-   (node/edge/world tensors).
-3. **Pool** to the next level:
-   - `voronoi_seedmean` / `voronoi_centroid`: coarse node feature = **mean** of its
-     cluster (`pool_features`, scatter-mean).
-   - `voronoi_inherit`: coarse feature = the **seed node's** feature (pure gather).
-   - Coarse **edge** features are re-encoded through a per-level MLP
-     (`coarse_eb_encoders[i]`).
-4. Run the **coarsest** blocks.
-5. For each level `i` (ascending): **learned unpool** via `UnpoolBlock` (see below),
-   then **merge** with the saved skip through `skip_projs[i]` (a `Linear(2·latent →
-   latent)`), then run `post_blocks[i]`.
-6. **Decode** the finest-level node states.
+1. Farthest-point sampling picks `voronoi_clusters[i]` seeds. It uses
+   Euclidean distance when positions exist and falls back to graph distance.
+   It starts at node 0, so it is deterministic.
+2. Every connected component gets at least one seed.
+3. A multi-source BFS from the seeds assigns each node to its nearest seed,
+   which gives a Voronoi partition in hops.
+4. Two clusters are joined by a coarse edge if any of their members share a
+   fine edge.
 
-### `UnpoolBlock` — learned coarse→fine message passing
+The three `voronoi_*` modes share this partition. They differ downstream:
 
-Unpooling is **not** a naive broadcast. It is bipartite message passing from coarse
-to fine nodes over `unpool_edge_index_i` (each fine node connects to its own cluster
-plus all coarse neighbors of that cluster):
+| Mode | Coarse position | Pooling |
+| --- | --- | --- |
+| `voronoi_centroid` | cluster centroid | mean |
+| `voronoi_seedmean` | seed node | mean |
+| `voronoi_inherit` | seed node | seed gather |
 
-```text
-EdgeMLP( [h_coarse_src, h_fine_skip_dst, rel_pos(3)] ) → message   # 2·latent + 3 → latent
-scatter-SUM messages to fine nodes
-NodeMLP( [h_fine_skip, aggregated_messages] ) → h_up               # 2·latent → latent
-```
+Changing between seed-anchored and centroid modes changes the statistics of
+the coarse edges, so the checkpoints cannot be swapped. `coarsening_type`
+may also be a comma list with one mode per level.
 
-`rel_pos = fine_pos[dst] − coarse_centroid[src]`, giving the unpool a geometric cue.
+Each level adds these attributes to the batch:
 
-### Coarsening (FPS-Voronoi) — how the hierarchy is built
+- `fine_to_coarse_i`, `coarse_edge_index_i`, `coarse_edge_attr_i`,
+  `coarse_centroid_i` and `unpool_edge_index_i`;
+- `coarse_seed_idx_i` (`voronoi_inherit` only);
+- `coarse_world_edge_*_i` (with `coarse_world_edges`).
 
-`model/coarsening.py::fps_voronoi_coarsen`:
+`MultiscaleData` offsets these per-level indices when samples are batched.
 
-1. **Farthest Point Sampling** selects `k = voronoi_clusters[i]` seed nodes maximally
-   spread across the mesh (Euclidean FPS when positions are available; geodesic BFS
-   fallback otherwise). Deterministic start (seed 0) so per-worker topology is
-   identical.
-2. **Multi-source BFS** from the seeds assigns each fine node to its nearest seed
-   (a **Voronoi partition** in graph-hop distance).
-3. Every disconnected component is guaranteed at least one seed.
-4. **Coarse edges** connect two clusters iff any of their member nodes share a fine
-   edge (boundary-edge construction).
+**Saturation.** The hierarchy stops early, without a warning, when a level
+reaches one node or has no coarse edges. The model then runs only
+`len(level_data)` levels. Blocks configured for levels past that point stay
+unused.
 
-`voronoi_seedmean` vs `voronoi_centroid` vs `voronoi_inherit` all call this same
-coarsener; they differ only in how coarse **positions** (centroid vs seed anchor)
-and **pooling** (mean vs seed-gather) are used downstream.
+**Cache.** Hierarchies are built once per run into a shared
+`*.mscache.<digest>.h5` file
+([multiscale_cache.py](../../methods/MeshGraphNets/general_modules/multiscale_cache.py)).
+The build is locked, so concurrent jobs wait for it, up to
+`hierarchy_cache_wait_timeout`. Workers then stream from the file.
 
----
+The digest includes the source HDF5's size and mtime. Training rewrites that
+file with its normalizers, so a cache cannot be reused across runs. It is
+therefore deleted after training unless `hierarchy_cache_keep true` is set,
+and the next start prunes any leftovers.
 
-## Configuration reference (multiscale keys)
+## Modes and keys
 
-Canonical example:
-[`configs/MeshGraphNets/deterministic/ex1/baseline/config_train_himgn.txt`](../../configs/MeshGraphNets/deterministic/ex1/baseline/config_train_himgn.txt).
-All the flat-MGN keys from [01](01_MeshGraphNets_MGN.md#configuration-reference) still
-apply. The multiscale-specific keys are:
+Every key from [01](01_MeshGraphNets_MGN.md#modes-and-keys) applies, plus
+these:
 
 | Key | Meaning |
 | --- | --- |
-| `use_multiscale` | **`True`** to enable the V-cycle processor |
-| `multiscale_levels` | Number of coarsening levels `L` |
-| `mp_per_level` | **`2L+1`** ints: descending arm, coarsest, ascending arm (overrides `message_passing_num`) |
-| `coarsening_type` | `voronoi_seedmean` (canonical), `voronoi_centroid`, `voronoi_inherit`, `bfs`, or a per-level comma list |
-| `voronoi_clusters` | Target coarse node count per Voronoi level (scalar or comma list) |
-| `learned_interpolation` | Prolongation operator: `True` (default) = learned bipartite `UnpoolBlock`; `False` = broadcast each coarse state over its cluster. Successor to the legacy `bipartite_unpool` key. Incompatible with `unpool_type attention` and `parallel_mode model_split` (both raise) |
-| `coarse_world_edges` | Lift world edges to all coarse levels (needs `use_world_edges` + `use_multiscale`) |
-| `hierarchy_cache_dir` | Directory for the shared `*.mscache.*.h5` hierarchy cache |
-| `hierarchy_cache_build_workers` | Workers for the one-time cache build |
-| `hierarchy_cache_wait_timeout` | Seconds to wait for another job's cache build (default 36000) |
-| `hierarchy_cache_keep` | Keep the cache after training instead of deleting it (default `false`) |
+| `use_multiscale` | `true` |
+| `multiscale_levels` | `L` (> 0) |
+| `mp_per_level` | `2L + 1` block counts |
+| `coarsening_type` | `voronoi_seedmean`, `voronoi_centroid`, `voronoi_inherit`, `bfs`, or one mode per level |
+| `voronoi_clusters` | one count, or one per level |
+| `pool_type`, `pool_heads` | `mean` / `attention`; heads for attention pooling |
+| `unpool_type`, `learned_interpolation` | `sum` / `attention`; learned unpool or broadcast |
+| `voronoi_branches` | partitions per level; > 1 on the last level only |
+| `coarse_world_edges` | world edges on coarse levels (needs `use_world_edges`) |
+| `hierarchy_cache_dir`, `hierarchy_cache_build_workers`, `hierarchy_cache_wait_timeout`, `hierarchy_cache_keep` | cache control |
+| `coarse_cache_per_worker` | in-memory hierarchy cache per loader worker |
 
-> The cache is **per-run**, not persistent: its signature pins the source HDF5's
-> size+mtime, and training rewrites that file with the train-derived
-> normalization stats — so a kept cache can never be reused anyway and would
-> just leave one multi-GB file per run behind. It is deleted after the
-> DataLoaders shut down, skipped if a concurrent job still holds the file open;
-> a run killed before that leaves a leftover the next run prunes.
+Spec checks:
 
-> When `use_multiscale True`, **`message_passing_num` is ignored** by the processor
-> — block counts come entirely from `mp_per_level`.
+- `MGN-MULTI-REQ`: `coarsening_type`, `multiscale_levels`, `voronoi_clusters`
+  and `mp_per_level` are all required.
+- `MGN-MULTI-LEVEL`: `multiscale_levels` must be greater than 0.
+- `MGN-MULTI-001`: the length of `mp_per_level`.
+- `MGN-MULTI-002`: the length of `voronoi_clusters`.
+- `MGN-COARSEN-001`: a bare `voronoi` is rejected.
+- `MGN-COARSEN-002`: unknown mode.
+- `MGN-UNPOOL-001`: `unpool_type attention` needs `learned_interpolation true`.
+- `MGN-UNPOOL-002`: `learned_interpolation false` is not supported with
+  `model_split`.
 
-### Canonical HI-MGN config sketch
+The shipped configs are
+`configs/MeshGraphNets/deterministic/<slot>/baseline/config_{train,infer}_himgn.txt`.
+The ex1 reference is
+[config_train_himgn.txt](../../configs/MeshGraphNets/deterministic/ex1/baseline/config_train_himgn.txt):
 
 ```text
-use_multiscale     True
-coarsening_type    voronoi_seedmean
-multiscale_levels  2
-voronoi_clusters   1000, 100         # level 0 → 1000 coarse, level 1 → 100 coarse
-mp_per_level       4, 6, 8, 6, 4     # pre0, pre1, coarsest, post1, post0 (28 blocks, as shipped)
-latent_dim         128
-time_integration   ar_ot
+use_multiscale         True
+coarsening_type        voronoi_seedmean
+multiscale_levels      2
+voronoi_clusters       5000, 100
+mp_per_level           4, 6, 8, 6, 4
+pool_type              mean
+unpool_type            sum
+learned_interpolation  True
+voronoi_branches       1, 1
 ```
 
-Shipped multiscale training configs include
-[`configs/MeshGraphNets/deterministic/ex1/baseline/config_train_himgn.txt`](../../configs/MeshGraphNets/deterministic/ex1/baseline/config_train_himgn.txt)
-and [`configs/MeshGraphNets/deterministic/ex2/baseline/config_train_himgn.txt`](../../configs/MeshGraphNets/deterministic/ex2/baseline/config_train_himgn.txt),
-with matching `config_infer_himgn.txt` files in each directory.
+## Outputs, tests, validation
 
----
+Outputs are the same as [01](01_MeshGraphNets_MGN.md#outputs). The hierarchy
+cache file sits in `hierarchy_cache_dir` while training runs.
 
-## When to prefer HI-MGN over flat MGN
+The tests that cover the multiscale path are in
+[methods/MeshGraphNets/tests/](../../methods/MeshGraphNets/tests/):
 
-Choose HI-MGN when **the mesh is large** and **the physics has long-range coupling**
-(global boundary conditions, whole-body deformation, warpage). Choose flat MGN when
-the mesh is small/medium and interactions are predominantly local, to avoid the
-coarsening precompute and extra hyperparameters.
+- `test_multiscale_stats`
+- `test_hierarchy_cache_lifecycle`
+- `test_attention_transfer`
+- `test_learned_interpolation`
+- `test_multi_partition`
+
+## Known limitations
+
+- **Expensive coarsening.** FPS plus BFS is costly per sample, so the cache
+  build time and its disk space are real costs.
+- **Node-order dependence.** FPS starts at node 0, so relabelling the nodes
+  changes the hierarchy and, with it, the prediction.
+- **More hyperparameters.** The level count, block counts, cluster counts
+  and mode all need tuning.
+- **Silent saturation.** A hierarchy that saturates is truncated without a
+  warning.
+- **Blurring.** Coarse clusters with mean pooling can blur sharp features.

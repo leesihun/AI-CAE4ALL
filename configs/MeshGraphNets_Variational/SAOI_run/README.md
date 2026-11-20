@@ -120,7 +120,7 @@ normalizers denormalize every spread.
 ## Dataset paths are case-sensitive
 
 `dataset_dir`, `infer_dataset` and `eval_dataset` are all in `PATH_KEYS`
-(`general_modules/load_config.py`, mirrored in `cae_suite/config_parser.py`),
+(`general_modules/load_config.py`, mirrored in `ai_cae4all/config_parser.py`),
 so the case written in the config is the case opened. A stale lowercase twin of
 `dataset/SAOI/` exists on disk holding a different vintage; it opens without
 error and yields wrong numbers. Keep `SAOI/`, `S26FE-MAIN`, `S26FE-SEC` and

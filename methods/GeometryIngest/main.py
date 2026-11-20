@@ -5,7 +5,7 @@ native entrypoint: ``python methods/GeometryIngest/main.py --config <file>``.
 The launcher runs this with the working directory set to this repository
 (``methods/GeometryIngest``), so relative config paths resolve from here.
 
-Config keys (see configs/GeometryIngest/*.txt and cae_suite/specs/geometry_ingest.py):
+Config keys (see configs/GeometryIngest/*.txt and ai_cae4all/specs/geometry_ingest.py):
     model geometry_ingest      mode ingest|inspect
     input_geometry <dir>       output_dataset <file.h5>
     reader auto|trimesh|gmsh   mesh_type surface|volume

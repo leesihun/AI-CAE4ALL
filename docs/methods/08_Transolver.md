@@ -1,189 +1,190 @@
-# 09 — Transolver (Physics-Attention transformer)
+# 08 — Transolver (Physics-Attention transformer)
 
 - **`model`**: `transolver`
-- **Repo / entrypoint**: `Transolver/` → `Transolver_main.py`
-- **Key source**: `model/Transolver.py`, `model/physics_attention.py`, `model/blocks.py`
-- **Prereqs**: [00_shared_foundations.md](00_shared_foundations.md) (§1 data)
+- **Directory / entrypoint**: [methods/Transolver/](../../methods/Transolver/) → `Transolver_main.py`
+- **Paper**: Wu, Luo, Wang, Wang, Long, *Transolver: A Fast Transformer Solver for
+  PDEs on General Geometries*, ICML 2024. The default kernel uses Transolver-3's
+  aggregate-then-project reformulation.
+- **Also read**: [00_shared_foundations.md](00_shared_foundations.md)
 
----
+Transolver is a transformer that attends over a small set of learned physics
+slices instead of over node pairs. Each node is softly assigned to `slice_num`
+slices per head. Node features are aggregated into slice tokens, self-attention
+runs among the tokens, and the result is scattered back to the nodes. Cost is
+linear in the node count and every layer has a global receptive field. It reads
+node coordinates and features only, with no mesh edges.
 
-## What it does
+## Architecture
 
-Transolver is a **transformer-based PDE solver** that makes attention scale to huge
-meshes by attending over a small set of learned **"physics slices" (tokens)** instead
-of over every pair of nodes. Each node is softly assigned to `slice_num` slices; node
-features are aggregated into slice tokens; **self-attention runs among the tokens**
-(cheap — `slice_num` is small); the attended tokens are scattered back to the nodes.
-This is **Physics-Attention** (Wu et al., ICML 2024).
-
-It is an implementation of Transolver's per-head slicing (v1 layout) with **two
-numerically exact attention kernels** sharing one state dict:
-
-- **`naive`**: project-then-aggregate (official v1 order); fewer N-scaled FLOPs;
-  default at small/medium meshes.
-- **`slice_space`**: aggregate-then-project (Transolver-3 reformulation), in a chunked
-  two-pass form that enables **tiling** and **node-sharded** multi-GPU.
-
-It reads the same mesh dataset as MGN but **consumes only node coordinates + features
-— no graph edges**, matching the MeshGraphNets public model contract
-(`forward(graph) → (pred, target)`) so the launchers are architecture-agnostic.
-
----
-
-## Capabilities
-
-- **Linear-in-N attention** via slice tokens — scales to very large meshes where dense
-  attention is impossible.
-- **Two exact kernels** (`naive`, `slice_space`) with identical weights; pick per mesh
-  size / hardware.
-- **Attention tiling** (`chunk_size`) and **node-sharded multi-GPU**
-  (`parallel_mode node_shard`, slice_space only) — differentiable all-reduce of slice
-  aggregates for bit-exact whole-graph tokens.
-- **Decoupled two-stage inference** (`infer_mode decoupled`): build a physics-token
-  cache from one mesh, decode a different query set against it.
-- **Learnable per-head slice temperature** (clamped), **activation checkpointing**,
-  static or autoregressive temporal, DDP.
-
-## Strengths
-
-- **Scales where GNNs and dense transformers don't**: cost is `O(N · slice_num)`, not
-  `O(N²)` or `O(N · layers)` for long-range coupling.
-- **Global receptive field in every layer**: token self-attention couples the whole
-  mesh, like FNO's spectral layer but data-driven and mesh-native (no grid).
-- **No mesh edges required** — works on point clouds / meshes interchangeably; robust to
-  connectivity quirks.
-- **Exact kernel equivalence** lets you train with `naive` and serve with
-  `slice_space` (or shard) without retraining.
-
-## Weaknesses
-
-- **Memory scales with `B · layers · heads · N · slice_num`** (the naive kernel holds
-  `[H, N, slice_num]` fp32 per layer). `slice_num` and `num_layers`, not `latent_dim`,
-  drive VRAM; large configs need `slice_space` + chunking/checkpointing/sharding.
-- **Slice assignment is a soft bottleneck**: too few slices under-resolve fine spatial
-  structure; too many raise memory and can dilute the physics-token benefit.
-- **No explicit local operator**: everything is mediated through the global tokens, so
-  very sharp local features rely on the slice softmax resolving them.
-- **Temperature/init sensitivity**: slice projectors use orthogonal init and a clamped
-  temperature; misconfiguration degrades slice quality.
-- Same autoregressive-error caveats as the other simulators.
-
----
-
-## Network structure
+Source: [model/Transolver.py](../../methods/Transolver/model/Transolver.py) (`Transolver`),
+[model/physics_attention.py](../../methods/Transolver/model/physics_attention.py)
+(`PhysicsAttentionIrregular`), [model/blocks.py](../../methods/Transolver/model/blocks.py)
+(`TransolverBlock`, `FFN`).
 
 ```mermaid
 flowchart TD
-    IN["nodes: pos_normalized(3) + x [N, node_input]"] --> PRE["preprocess:\nLinear→GELU→Linear → latent_dim  (+ learned placeholder)"]
-    PRE --> B1
-
-    subgraph STACK["num_layers × TransolverBlock (pre-norm)"]
-        direction TB
-        B1["h = h + PhysicsAttention(LN(h))"] --> B2["h = h + FFN(LN(h))"]
-    end
-
-    STACK --> HEAD["last block head:\nLN → Linear(latent_dim → output_var)"]
-    HEAD --> OUT["prediction Δstate [N, output_var]"]
+    IN["pos_normalized (3) + graph.x"] --> PRE["preprocess: Linear → GELU → Linear → latent_dim<br/>(+ learned placeholder)"]
+    PRE --> STACK["num_layers × TransolverBlock (pre-norm)<br/>h += PhysicsAttention(LN h); h += FFN(LN h)"]
+    STACK --> HEAD["last block: LN → Linear → output_var"]
+    HEAD --> OUT["normalized prediction [N, output_var]"]
 ```
 
-### Physics-Attention (`model/physics_attention.py`)
+- **Input**: `graph.x` = `[state | conditions (cond_var) | positional | node-type one-hot]`
+  plus 3 normalized coordinates. Noise (`std_noise`, `noise_gamma`) is added to
+  the first `output_var` channels in training.
+- **Physics-Attention**, per graph (segmented by `ptr`): slice logits divided by
+  a per-head temperature clamped to `[temperature_min, temperature_max]`, a
+  softmax over slices, aggregation into tokens as `num/den` in fp32, token
+  self-attention, then deslicing back to nodes.
+- **Kernels** (`attention_kernel`), numerically equivalent with the same weights:
+  - `slice_space` (default): aggregate-then-project, with an optional tiled
+    two-pass form (`chunk_size`). Tiling, `node_shard` and amortized training
+    require it. Decoupled inference always runs the slice-space math, whichever
+    kernel was trained.
+  - `naive`: project-then-aggregate, the original v1 order.
+- **Block**: pre-norm residual attention and `FFN` (Linear, GELU, Linear with
+  width `latent_dim × mlp_ratio`). Weights are truncated-normal initialized, and
+  slice projectors are re-initialized orthogonal afterwards. `small_output_init`
+  scales the head by 0.01. It defaults to True for temporal data or unknown T,
+  and False for static data.
+- **Checkpointing**: `use_checkpointing` recomputes blocks in backward
+  ([model/checkpointing.py](../../methods/Transolver/model/checkpointing.py)).
+  It is independent of `chunk_size`: a tiled forward already streams attention
+  memory.
 
-Per graph (segmented by `ptr`, so no computation crosses graphs in a batch):
+Attention memory scales with batch × layers × heads × N × `slice_num`, not with
+`latent_dim`.
 
-```mermaid
-flowchart LR
-    XG["node feats x_g [Ng, C]"] --> SW["slice weights W\nsoftmax over slice_num\n(learnable temperature)"]
-    XG --> AGG["aggregate → M physics tokens\n[H, M, D]  (num / den)"]
-    SW --> AGG
-    AGG --> ATT["token self-attention\n(q,k,v over M tokens)"]
-    ATT --> DES["deslice: scatter tokens\nback to nodes via W"]
-    DES --> OUTG["node output [Ng, C]"]
-```
+## Data contract
 
-1. **Slice assignment**: project node features to `slice_num` logits, divide by a
-   clamped per-head temperature, softmax → assignment weights `W [H, Ng, M]`.
-2. **Tokenize**: aggregate node features into `M` slice tokens (`num/den`, fp32-stable).
-3. **Attend**: multi-head self-attention among the `M` tokens (`to_q/to_k/to_v/to_out`).
-4. **Deslice**: scatter attended tokens back to nodes through `W`.
+Transolver reads the shared mesh HDF5 with no conversion; see
+[DATASET_FORMAT.md](../reference/DATASET_FORMAT.md). Static data (T = 1) predicts
+the stored field. Temporal data predicts normalized deltas and rolls out
+autoregressively. `cond_var` rows are input only and carried unchanged through
+rollout. Splits are seeded by `split_seed`, and `split_group_attr` groups related
+samples ([general_modules/grouped_split.py](../../methods/Transolver/general_modules/grouped_split.py)).
 
-The **`slice_space`** kernel splits steps 1–2 and 4 into chunked passes (tiling by
-`chunk_size`); with a single tile it is mathematically identical to `naive`. Under
-`node_shard`, each rank holds a disjoint node subset and the slice aggregates
-(`num`, `den`) are **SUM all-reduced** (differentiably) to reproduce whole-graph tokens
-bit-for-bit.
+## Modes and keys
 
-### Block & head (`model/blocks.py`)
+`mode train` and `mode inference`, both set inside the config.
 
-Pre-norm transformer block: `h = h + Attn(LN(h)); h = h + FFN(LN(h))`, where `FFN` is
-`Linear(C, C·mlp_ratio) → GELU → Linear(back)`. The **last block** carries the output
-head (`LN → Linear → output_var`) inline. Weights use truncated-normal init; slice
-projectors are re-orthogonalized after the general init pass. For temporal data the
-head starts scaled by `0.01` (`small_output_init`).
-
----
-
-## Configuration reference
-
-Canonical example:
-[`configs/Transolver/deterministic/ex2/baseline/config_train_transolver3.txt`](../../configs/Transolver/deterministic/ex2/baseline/config_train_transolver3.txt).
-Transolver shares the same optimization/runtime/evaluation keys as the Neural
-Operators ([07_FNO.md](07_FNO.md#shared-neural-operator-config-keys)); the model-specific
-keys are:
-
-| Key | Meaning |
+| Mode | Required keys |
 | --- | --- |
-| `latent_dim` | Hidden width (must be divisible by `num_heads`) |
-| `num_layers` | Transolver block count |
-| `num_heads` | Attention heads (must divide `latent_dim`) |
-| `slice_num` | Physics-Attention learned slice/token count |
-| `attention_kernel` | `naive` (default) or `slice_space` (required for chunking/node_shard) |
-| `chunk_size` | Attention tiling size (0 = untiled; needs `slice_space`) |
-| `mlp_ratio` | FFN expansion ratio (default 1; 4 in the ex2 baseline) |
-| `dropout` | Block dropout (default 0.0) |
-| `temperature_init` / `temperature_min` / `temperature_max` | Slice-assignment temperature (require `0 < min ≤ init ≤ max`) |
-| `small_output_init` | Shrink final head at init (default: True when temporal/unknown, False for static) |
-| `infer_mode` | `direct` (default) or `decoupled` (two-stage token cache) |
-| `infer_chunk_size` | Decoupled-inference chunk size |
-| `parallel_mode` | `ddp` or `node_shard` (≥2 GPUs, `slice_space` only; `model_split` is an alias) |
+| `train` | `dataset_dir`, `modelpath`, `input_var`, `output_var`, `training_epochs`, `batch_size`, `learningr`, `coordinate_normalization`, `latent_dim`, `num_layers`, `num_heads`, `slice_num`, `attention_kernel` |
+| `inference` | `modelpath`, `infer_dataset`, `input_var`, `output_var` |
 
-Also uses the shared `input_var`, `output_var`, `positional_features`,
-`use_node_types`, `feature_loss_weights`, `coordinate_normalization`, noise/AMP/EMA,
-and `time_integration` keys. It does **not** use `use_world_edges` / `use_multiscale`
-(kept `False`).
+Model and parallelism keys:
 
-### Transolver config sketch
+| Key | Default | Notes |
+| --- | --- | --- |
+| `latent_dim`, `num_heads` | — | `latent_dim % num_heads == 0` (`TRANS-HEADS-001`) |
+| `num_layers`, `slice_num` | — | |
+| `attention_kernel` | `slice_space` | or `naive` |
+| `chunk_size` | 0 | node tile size; > 0 requires `slice_space` (`TRANS-CHUNK-001`) |
+| `mlp_ratio` | 1 | |
+| `dropout` | 0.0 | |
+| `temperature_init` / `_min` / `_max` | 0.5 / 0.1 / 5.0 | `0 < min ≤ init ≤ max` |
+| `small_output_init` | see above | |
+| `amortized_training` | False | see below |
+| `amortized_cache_nodes` / `amortized_query_nodes` | 0 / 0 | 0 = full mesh |
+| `infer_mode` | `direct` | or `decoupled` |
+| `infer_chunk_size` | 0 | used by `infer_mode decoupled` only |
+| `parallel_mode` | `ddp` | or `node_shard` (`model_split` is an alias) |
+| `max_train_batches` / `max_val_batches` | 0 | per-epoch caps, `node_shard` only |
 
-```text
-model              transolver
-mode               train
-dataset_dir        ../../dataset/deterministic/ex2_dynamic_contact.h5
-modelpath          ../../output/dataset_matrix/deterministic/ex2/transolver3/model.pth
-input_var          4
-output_var         4
-cond_var           0
-positional_features 4
-use_node_types     True
-latent_dim         256      # divisible by num_heads
-num_layers         8
-num_heads          8
-slice_num          64
-mlp_ratio          4
-attention_kernel   slice_space
-chunk_size         4096
-use_checkpointing  True
-time_integration   ar_ot
+Shared keys: `split_seed`, `feature_loss_weights`, `positional_features`,
+`use_node_types`, `learningr`, `weight_decay`, `warmup_epochs`,
+`grad_accum_steps`, `max_grad_norm`, `num_workers`, `prefetch_factor`,
+`std_noise`, `noise_gamma`, `augment_geometry`, `use_amp`, `use_ema`,
+`ema_decay`, `use_compile`, `use_parallel_stats`, `time_integration` (`ar_ot`
+or `ar_rt`, see below), and the evaluation keys `val_interval`, `test_interval`,
+`test_max_batches`, `test_batch_idx`, `plot_feature_idx`, `display_testset`,
+`display_trainset`, `write_test_predictions`.
+
+Fixed values: `coordinate_normalization centered_isotropic`, `use_world_edges
+False`, `use_multiscale False`. `write_preprocessing True` is allowed only when
+training on a `*_transolver_runtime.h5` copy (`TRANS-WRITE-001`). MeshGraphNets
+keys (`message_passing_num`, `edge_var`, ...) are errors (`TRANS-MGN-KEY`).
+
+### Options
+
+- **`parallel_mode node_shard`**: one mesh's nodes are split across ranks
+  ([training_profiles/sharded_training.py](../../methods/Transolver/training_profiles/sharded_training.py)).
+  Slice aggregates (`num`, `den`) are SUM all-reduced differentiably, so every
+  rank sees whole-graph tokens. It needs `slice_space` and at least two `gpu_ids`.
+- **`amortized_training`**: each layer builds tokens from a subsampled cache
+  stream and decodes and scores a smaller query stream
+  ([model/amortized.py](../../methods/Transolver/model/amortized.py),
+  `Transolver.forward_amortized`). The estimate is consistent but not exact, so
+  it is used in training only. It needs `slice_space` and a nonzero stream size,
+  and is incompatible with `ar_rt` and `node_shard` (`TRANS-AMORT-001..004`).
+- **`time_integration ar_rt`**: unrolls the full trajectory with per-step
+  gradient checkpointing and no detach, following arXiv:2510.15201
+  ([training_profiles/ar_rollout.py](../../methods/Transolver/training_profiles/ar_rollout.py)).
+  Requires T > 1.
+- **`infer_mode decoupled`**: builds a per-layer token cache, then decodes
+  against it (`Transolver.forward_decoupled`,
+  [inference_profiles/decoupled.py](../../methods/Transolver/inference_profiles/decoupled.py)).
+  Static datasets only. The query set is the cache mesh itself, so the result
+  equals the direct forward.
+- **`resume_training`** / **`resume_interval_minutes`**: single-GPU training
+  only. Multi-GPU training (`ddp` or `node_shard`) is rejected by
+  `reject_multi_process`.
+
+Checked-in profiles:
+`configs/Transolver/deterministic/{ex1,ex2,ex3_full,ex3_mid,ex4,...,ex9,ex13}/baseline/config_{train,infer}_transolver3.txt`.
+Every training config uses `slice_space`, `slice_num 64`, `chunk_size 4096` and
+`ddp`. For example,
+[ex2](../../configs/Transolver/deterministic/ex2/baseline/config_train_transolver3.txt)
+uses `latent_dim 256`, `num_layers 8`, `num_heads 8`, `mlp_ratio 2`, `use_amp True`
+and `use_checkpointing True`.
+
+## Outputs
+
+Checked-in configs write under
+`output/dataset_matrix/deterministic/<slot>/transolver3/`.
+
+| Artifact | Path |
+| --- | --- |
+| checkpoint | `modelpath` (`model.pth`), written at the final epoch |
+| resume state | `<modelpath>.resume` |
+| epoch log | `log_file_dir` (`train.log`) |
+| periodic test (`display_testset`) | `<log dir>/test/<gpu_ids>/<epoch>/` mesh HDF5 + 2×2 PNG; `train/` with `display_trainset` |
+| prediction dumps (`write_test_predictions`) | `<log dir>/dumps/<prefix>/<gpu_ids>/<epoch>/` coordinates + denormalized prediction/target |
+| inference | `<inference_output_dir>/rollout_sample{id}_steps{N}.h5`; default dir `output/transolver/rollout` |
+
+Inference is checkpoint-led: architecture and normalization come from the
+checkpoint (`TRANS-CKPT-001`).
+
+## Tests and validation
+
+```bash
+python AI_CAE4ALL_main.py --config configs/Transolver/deterministic/ex2/baseline/config_train_transolver3.txt --check
+python AI_CAE4ALL_main.py --describe transolver
+cd methods/Transolver && python -m pytest -q tests/
 ```
 
-> Native paths are **cwd-relative to the method repository**, because the launcher
-> runs the native entrypoint with its cwd set to `methods/<Name>/`. That is why
-> every checked-in config spells datasets `../../dataset/...` and artifacts
-> `../../output/...`.
+Tests: `test_transolver3_paths.py` (tiled direct forward vs decoupled inference,
+amortized target/gradient alignment), `test_conditioning.py` (`cond_var`,
+including AR-RT),
+`test_node_type_layout.py`, `test_grouped_split.py`. The scripts in
+[misc/](../../methods/Transolver/misc/) (`verify_against_official.py`,
+`verify_v3.py`, `bench_attention_kernels.py`) compare against the reference
+implementation and benchmark the kernels; they are not part of the test suite.
 
-> **`slice_space` is the default, not the escape hatch.** `attention_kernel` defaults
-> to `slice_space` in the live spec (`cae_suite/specs/transolver.py:215`) and all 22
-> checked-in Transolver configs run `slice_space` with `slice_num 64` and
-> `chunk_size 4096`. `naive` is the accepted alternative, not the baseline.
->
-> **VRAM**: attention memory scales with `slice_num` × `num_layers`, not `latent_dim`.
-> `chunk_size > 0` is what actually streams it, and it requires `slice_space`
-> (`TRANS-CHUNK-001`). `amortized_training` also requires `slice_space`.
+## Limitations
+
+- No explicit local operator: everything passes through the global slice tokens,
+  so sharp local features depend on the slice softmax resolving them. Too few
+  slices under-resolve; too many cost memory.
+- `infer_mode decoupled` is static-only and embeds the mesh twice, so it saves
+  nothing yet over `direct`.
+- `infer_chunk_size` does nothing under `infer_mode direct`, even though the
+  checked-in configs set it.
+- [model/paper_elasticity.py](../../methods/Transolver/model/paper_elasticity.py)
+  (`PaperElasticityTransolver`, the paper's Elasticity benchmark profile) is not
+  reachable from the entrypoint or any config.
+- Autoregressive error accumulates as in every one-step simulator; `ar_rt`
+  trains against it at the cost of a full-trajectory unroll.
+
+Design notes (Korean): [FOUNDATION_MODEL_DESIGN.md](../research/transolver/FOUNDATION_MODEL_DESIGN.md).

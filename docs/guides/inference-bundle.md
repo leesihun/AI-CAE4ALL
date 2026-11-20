@@ -1,229 +1,146 @@
-# AI-CAE4ALL inference bundle
+# Portable CPU inference bundle
 
-Stand-alone, CPU-only inference for AI-CAE4ALL checkpoints. This folder has
-**no dependency on the rest of the AI-CAE4ALL repository** — copy it
-anywhere, install `requirements.txt`, and run.
+[`inference/`](../../inference/) is stand-alone, CPU-only inference for
+AI-CAE4ALL checkpoints. It does not depend on the rest of the repository: copy
+the folder anywhere, install its `requirements.txt`, and run it. The Studio's
+Deploy workspace runs it as well (see [GUI.md](../GUI.md#workspaces)).
 
-Supported checkpoints: `point_deeponet`, `deeponet`, `fno`
-(Neural_Operator), `transolver`, `meshgraphnets`, `meshgraphnets-v`, and the
-geometry generator `sdfflow`. You don't need to say which one — the
-checkpoint file tells the tool.
+| Supported | Not supported (use the native route) |
+| --- | --- |
+| `point_deeponet`, `deeponet`, `fno`, `transolver`, `meshgraphnets`, `meshgraphnets-v` with `latent_type global`, `sdfflow` | `meshgraphnets-v` with `latent_type local`/`hybrid`, legacy `chi-mgnflow`, MLP, SimulGen-VAE |
 
-MLP, SimulGen-VAE, and `meshgraphnets-v` checkpoints with `latent_type local`
-or `hybrid` (HI-MGNflow / HI-MGN-hybrid: coarse-node latents plus a
-coarse-level flow-matching prior) are intentionally not in this portable
-bundle. Use their native AI-CAE4ALL inference/reconstruction routes; detection
-rejects them explicitly rather than routing those weights into the global-latent
-MGN-V driver. Legacy `chi-mgnflow` checkpoints (the route was merged into
-`meshgraphnets-v` on 2026-10-19; its repo is in git history (commit `9db47d6`)) are
-rejected the same way.
+The bundle reads the family from the checkpoint, so there is no `--model` flag.
+Unsupported checkpoints are rejected with an error that names the native route.
 
 ## Quick start
 
 ```bash
+cd inference
 pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
 
-python run_inference.py --checkpoint model.pth --input scene.h5 --output out/
+python run_inference.py --checkpoint model.pth --input scene.h5 --output out.h5
+python run_inference.py --checkpoint sdfflow.pth --output out/ --num-samples 4   # SDFFlow: no --input
 ```
 
-Or, once built (see "Building the .exe" below), on a machine with no Python
-installed at all:
-
-```
-run_inference.exe --checkpoint model.pth --input scene.h5 --output out/
-```
-
-For SDFFlow (generative, no `--input`):
-
-```bash
-python run_inference.py --checkpoint sdfflow.pth --output out/ --num-samples 4
-```
-
-## How family detection works
-
-`cae_infer.detect_family()` inspects the checkpoint's own top-level keys —
-the same keys each method's native `save_checkpoint` already writes — and
-picks the right forward pass. No filename convention, no `--model` flag:
-
-| Checkpoint shape | Family | Architectures |
-| --- | --- | --- |
-| `schema_version == 'deeponet_repo_v1'` | `neural_operator` | point_deeponet, deeponet, fno (`checkpoint['selected_model']` picks which) |
-| `schema_version == 'sdfflow_infer_v1'`, or an SDFFlow-identified legacy `stage in {'vae','fm'}` checkpoint | `geometry` | SDFFlow (VAE + flow-matching) |
-| `checkpoint_version` present | `transolver` | Transolver |
-| `model_config` has `use_vae` (and `latent_type` global or absent) | `meshgraphnets_v` | MeshGraphNets (variational) |
-| `model_config` has `message_passing_num`, no `use_vae` | `meshgraphnets` | MeshGraphNets |
-
-`stage='vae'` alone is not enough: SimulGen-VAE uses the same stage label and
-must not be mistaken for SDFFlow. Likewise, legacy HI-MGNflow flow keys and a
-non-global MGN-V `latent_type` are detected before the shared MeshGraphNets keys
-and produce an actionable unsupported-family error.
-
-## CLI flags
-
-```
---checkpoint PATH        Required. The .pth file.
---input PATH             Input HDF5 mesh dataset (MGN contract). Not used by sdfflow.
---output PATH            Required. Output .h5 (rollout families) or a directory (sdfflow STLs).
---device cpu             This bundle is CPU-only; kept for CLI parity.
---timesteps N            Rollout steps (default: full trajectory from the input file).
---query-chunk-size N     Neural_Operator memory control for point/query decode (0 = no chunking).
---num-samples N          sdfflow only: number of geometries to sample (default 1).
---ode-steps N            sdfflow only: flow-matching ODE steps (default 50).
---cfg-scale F            sdfflow only: classifier-free guidance scale (default 1.0).
---mc-resolution N        sdfflow only: Marching Cubes grid resolution (default 128).
---seed N                 sdfflow only: sampler seed.
---cond-values "a,b,c"    sdfflow only: comma-separated target condition values, in the
-                         checkpoint's cond_names order. Omit for unconditional generation.
---split-seed N           neural_operator (point_deeponet) only, advanced: see "Known
-                         limitations" below.
-```
-
-Each family driver ignores flags it doesn't use.
-
-## Library usage
+From Python, with one checkpoint per call:
 
 ```python
 from cae_infer import infer
-
-infer(checkpoint="model.pth", input="scene.h5", output="out/")
+infer(checkpoint="model.pth", input="scene.h5", output="out.h5")
 ```
 
-## Why CPU-only
+## Family detection
 
-The bundle never ships CUDA wheels or `torch_cluster`. Device is always
-`torch.device('cpu')`. This removes the biggest packaging risk for a
-one-folder, zero-setup deliverable; the MeshGraphNets world-edge search runs
-its scipy `cKDTree` path instead of the (CUDA-only-relevant) `torch_cluster`
-accelerator.
+`cae_infer.detect_family()` reads the checkpoint's top-level keys, which are the
+same keys each native `save_checkpoint` writes. Rows are checked in order:
 
-## Folder structure
+| Checkpoint | Family |
+| --- | --- |
+| `schema_version == 'deeponet_repo_v1'` | `neural_operator` (`selected_model` picks point_deeponet / deeponet / fno) |
+| `schema_version == 'sdfflow_infer_v1'`, or legacy `stage` `vae`/`fm` identified as SDFFlow | `geometry` |
+| `checkpoint_version` present | `transolver` |
+| `model_config` has `message_passing_num` and `chi-mgnflow`/`flow_*` keys | rejected (legacy HI-MGNflow) |
+| ... and `latent_type` other than `global` | rejected (HI-MGNflow / HI-MGN-hybrid) |
+| ... and `use_vae` | `meshgraphnets_v` |
+| ... otherwise | `meshgraphnets` |
 
+`stage='vae'` alone does not identify SDFFlow, because SimulGen-VAE uses the same
+label.
+
+## CLI
+
+```text
+--checkpoint PATH       required
+--output PATH           required: .h5 for rollout families, a directory of STLs for sdfflow
+--input PATH            input mesh HDF5 (not used by sdfflow)
+--device {cpu,auto}     always resolves to CPU; kept for CLI parity
+--timesteps N           rollout steps (default: the input's full trajectory)
+--query-chunk-size N    Neural_Operator query decode chunking (0 = off)
+--split-seed N          Neural_Operator: sensor-sampling seed (default 42; see Limitations)
+--num-samples N         sdfflow: geometries to sample (1)
+--ode-steps N           sdfflow: flow-matching ODE steps (50)
+--cfg-scale F           sdfflow: classifier-free guidance scale (1.0)
+--mc-resolution N       sdfflow: marching-cubes grid (128)
+--seed N                sdfflow: sampler seed
+--cond-values "a,b"     sdfflow: target conditions in the checkpoint's cond_names order
 ```
+
+A family driver ignores flags it does not use.
+
+## Layout
+
+```text
 inference/
-  run_inference.py          stand-alone CLI entrypoint
+  run_inference.py        CLI entrypoint
+  pyinstaller.spec        one-folder .exe build
+  requirements.txt        pinned CPU versions
   cae_infer/
-    __init__.py              public API: infer(), detect_family()
-    cli.py                   argparse -> infer()
-    registry.py               family -> driver dispatch, one-family-per-process
-    common/                   device.py, hdf5_io.py -- shared across rollout families
-    families/
-      neural_operator/        point_deeponet, deeponet, fno (one shared driver)
-      transolver/
-      meshgraphnets/
-      meshgraphnets_v/
-      geometry/                sdfflow
-  pyinstaller.spec
-  requirements.txt
+    __init__.py           infer(), detect_family()
+    cli.py                argparse -> infer()
+    registry.py           family -> driver; one family per process
+    common/               device.py, hdf5_io.py
+    families/             neural_operator/ transolver/ meshgraphnets/ meshgraphnets_v/ geometry/
 ```
 
-### One family per process
+Each family folder vendors its method's `model/` and `general_modules/` under
+their original module names, so the vendored files need no import changes.
+Those names mean different code in each family, so **only one family can be
+loaded per process**, and `registry.py` raises if a second one is requested. The
+CLI and `infer()` each handle one checkpoint per call, so neither hits this
+limit. There is no automatic re-vendoring: when a method's model code changes,
+copy its files into the family again and keep `driver.py` and `cae_infer/*` as
+they are.
 
-Each family folder is a self-contained mini-package that keeps its
-**original internal module names** (`model.*`, `general_modules.*`) so the
-vendored files needed zero import rewriting. Because `model`/`general_modules`
-mean different things per family, only **one family may be imported per
-Python process** — `registry.py` enforces this and raises if you try to load
-a second, different family in the same process. Both entrypoints already
-satisfy this naturally: the CLI and `infer()` each handle one checkpoint per
-call.
+## Why CPU only
 
-## SDFFlow checkpoints: one combined `.pth`
+The bundle never ships CUDA wheels or `torch_cluster`, and `resolve_device()`
+always returns CPU. The MeshGraphNets world-edge search uses scipy's `cKDTree`.
 
-New checkpoints written by the current `methods/SDFFlow/training_profiles/train_fm.py`
-already embed the frozen VAE they were trained against (`ckpt['vae']`), so a
-single `sdfflow_fm.pth` (or however you rename it) is a complete,
-self-contained inference artifact.
+## SDFFlow: one combined checkpoint
 
-If you have an **older** checkpoint pair (separate `sdfflow_vae.pth` +
-`sdfflow_fm.pth`), merge them once, from the `methods/SDFFlow/` repo
-(not from this bundle):
+The FM checkpoint written by `methods/SDFFlow/training_profiles/train_fm.py`
+embeds its frozen VAE (`ckpt['vae']`), so one `.pth` is a complete artifact. An
+older VAE + FM pair can be merged from the repo root:
 
 ```bash
 python methods/SDFFlow/scripts/merge_sdfflow_checkpoint.py \
-    --vae output/geometry_generation/ex1/sdfflow_vae.pth \
-    --fm output/geometry_generation/ex1/sdfflow_fm.pth \
-    --output output/geometry_generation/ex1/sdfflow.pth
+    --vae <sdfflow_vae.pth> --fm <sdfflow_fm.pth> --output <sdfflow.pth>
 ```
 
-The driver also has a fallback that reads `ckpt['vae_modelpath']` directly if
-no `'vae'` block is present, but that requires the original VAE file to still
-be reachable at that path — the merged single file is what you actually want
-to hand to someone else.
+Without an embedded `vae` block, the driver falls back to `ckpt['vae_modelpath']`.
+This works only while that file is still reachable, so hand others the merged
+file.
 
 ## Building the .exe
 
 ```bash
+cd inference
 pip install pyinstaller
 pyinstaller pyinstaller.spec
 ```
 
-Produces `dist/run_inference/run_inference.exe` (a one-folder build — faster
-startup than one-file, and easier to inspect if something's missing). Copy
-the whole `dist/run_inference/` folder to hand off; it needs no Python
-install on the target machine.
+This builds `dist/run_inference/run_inference.exe`, a one-folder build. Copy the
+whole `dist/run_inference/` folder; the target machine needs no Python. The
+Studio's Deploy workspace has a **Build .exe with PyInstaller** button that
+writes under `studio/runtime/deploy/`.
 
-## Verification
+## Limitations
 
-Every family was checked against its native repo's own inference code on a
-real trained checkpoint (or, for `meshgraphnets_v`, a synthetic checkpoint
-built with the live model classes, since no trained variational checkpoint
-exists in this repo yet), forcing both sides onto the same torch build and
-device (CPU). Results:
-
-| Family | Checkpoint used | Result |
-| --- | --- | --- |
-| neural_operator (point_deeponet, deeponet, fno) | `output/benchmarks/elasticity/smoke/smoke_20260719/<model>/model.pth` | bit-exact (incl. chunked `--query-chunk-size` decode) |
-| transolver | `output/benchmarks/elasticity/smoke/smoke_20260719/transolver/model.pth` | matches to ~5e-6 relative error (see below) |
-| meshgraphnets | `output/benchmarks/plasticity/meshgraphnets/model.pth`, 100 rollout scenes x 19 steps | bit-exact |
-| meshgraphnets_v | synthetic checkpoint (VAE enabled, N(0,I) prior), matched RNG seed | bit-exact |
-| geometry (sdfflow) | `output/geometry_generation/ex1/{sdfflow_vae,sdfflow_fm}.pth` via the merge helper | bit-exact (identical mesh vertices) |
-
-## Known limitations
-
-- **Cross-environment floating-point drift.** Comparing bundle output against
-  a reference generated on a *different* torch build or GPU vs CPU produces
-  small (~1e-6 relative) differences — this is ordinary fp32 kernel
-  non-associativity, not a bug. Pin your torch version (see
-  `requirements.txt`) if you need reproducible numbers across machines.
-- **Transolver's ~5e-6 relative residual even on a matched torch build/device**
-  (see the table above) is believed to come from a benign difference in numpy
-  array memory layout (contiguous vs transposed-view) feeding torch's
-  attention kernels, not an algorithmic difference — the graph-construction
-  code was verified line-for-line against the live `rollout.py`. Treat outputs
-  as correct to ~1e-5 relative, not bit-exact, for this family.
-- **`point_deeponet` sensor-sampling seed (`split_seed`) is not stored in the
-  checkpoint** (Neural_Operator's `data_config`/`model_config` never export
-  it). The driver defaults to `42` (the training default); pass
-  `--split-seed` if a checkpoint was trained with a non-default value, or
-  results will use different (but still deterministic) sensor subsets than
-  training did.
-- **`coarse_world_edges` (MeshGraphNets / MeshGraphNets-variational) is not
-  stored in the checkpoint either**, but it changes weight *shapes* at
-  multiscale levels > 0 (`HybridNodeBlock` vs `NodeBlock`) when
-  `use_multiscale=True` and `use_world_edges=True`. The driver defaults it to
-  `False` (matching the native default); pass
-  `infer(checkpoint, ..., coarse_world_edges=True)` if a checkpoint needs it
-  — if you get the wrong value, `load_state_dict(strict=True)` will fail
-  loudly with a shape mismatch rather than silently misloading.
-- **The MeshGraphNets world-edge search always uses the scipy `cKDTree`
-  backend** (this bundle never ships `torch_cluster`). If a checkpoint was
-  trained with `use_world_edges True` and the
-  `torch_cluster` radius backend, re-validate parity before trusting it — the
-  two backends are not guaranteed bit-identical (`INFERENCE_BUNDLE_PLAN.md`
-  section 9, landmine 1).
-- **`meshgraphnets_v` has no real trained checkpoint to validate against in
-  this repo** (verified instead with a synthetic one, see the table above).
-  The vendored model/general_modules files are byte-identical to the source
-  repo, and the driver's VAE/prior-sampling logic was checked against the
-  live `rollout.py` line-for-line (including a plan-doc correction: the prior
-  latent is sampled **once per trajectory and held fixed**, not resampled
-  every step).
-
-## Rebuilding this bundle from the main repo
-
-`inference/` is not meant to be hand-edited file-by-file when the source
-repos change underneath it — see `INFERENCE_BUNDLE_PLAN.md` (repo root)
-section 10 for the intended `rebuild_bundle.py` automation. It has not been
-written yet; today, re-vendoring is manual (re-copy the family's `model.py`/
-`general_modules.py` files, keep `driver.py` and `cae_infer/*` as hand-written
-glue).
+- **Parity.** Each family was checked against its native inference code on CPU
+  with the pinned torch. All families matched bit-for-bit except Transolver,
+  which differs by about 5e-6 relative error. Treat Transolver as correct to
+  about 1e-5. A different torch build, or GPU against CPU, adds normal fp32
+  drift of about 1e-6. Re-run parity checks before moving off the pinned
+  versions in `requirements.txt`.
+- **`split_seed` is not stored** in Neural_Operator checkpoints. The driver
+  assumes 42, the training default. Pass `--split-seed` for a point_deeponet
+  trained with another value; otherwise the sensor subsets differ from training.
+- **`coarse_world_edges` is not stored** in MeshGraphNets checkpoints, but with
+  `use_multiscale` and `use_world_edges` it changes weight shapes. The driver
+  defaults it to `False`. If that is wrong, `load_state_dict(strict=True)` fails
+  with a shape mismatch. Pass `infer(..., coarse_world_edges=True)` to override.
+- **World edges always use `cKDTree`.** For a checkpoint trained with the
+  `torch_cluster` radius backend, check parity before trusting the results; the
+  two backends are not guaranteed to be bit-identical.
+- **MeshGraphNets-V** samples the prior latent once per trajectory and holds it
+  fixed, as the native `rollout.py` does.

@@ -1,9 +1,13 @@
 # Shell post-buckling one-to-many benchmark — OpenRadioss build plan
 
-Status: **design draft, not yet implemented.** This restarts the benchmark
-described in the (now-deleted) `buckling/` project on a different solver. It
-is written to be read before any code is written, and it is not a finished
-decision — see §8 for what still needs to be chosen with the user before or
+Status: **built.** This plan produced `dataset/probabilistic/ex3_shell_buckling.h5`
+and `ex3_shell_buckling_infer.h5` (the held-out geometries). It is kept as the
+in-repo record of *why* the benchmark is shaped this way. The campaign code,
+raw per-draw output and build logs live outside the repo
+(`D:\CAE_datasets_raw\shell_buckling\`, synced to aarl, raw data at
+`aarl:/data/Lee/buckling_radioss/`); where the as-built campaign differs from
+this draft — e.g. loading at a fixed speed rather than a fixed end time, and a
+thicker rigid rim — the campaign code wins. Open questions in §8 were settled
 during the pilot.
 
 ## 0. What this is, one paragraph

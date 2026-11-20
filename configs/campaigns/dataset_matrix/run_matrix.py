@@ -170,7 +170,7 @@ STOPPED = "stopped"
 SKIPPED = "skipped"
 
 GPU_IDS_LINE = re.compile(rb"gpu_ids([ \t]+)([0-7])([ \t]*)")
-# cae_suite/cli.py prints "Starting <display name>..." immediately before it
+# ai_cae4all/cli.py prints "Starting <display name>..." immediately before it
 # spawns the model process, and "No model process was started" whenever
 # preflight or routing stopped it.
 STARTED_LINE = re.compile(rb"(?m)^Starting .+\.\.\.\r?$")
@@ -369,7 +369,7 @@ def launcher_problem():
         return (f"the launcher needs Python >= 3.10 (pyproject.toml) but this is "
                 f"{sys.executable} (Python {platform.python_version()}); set PYTHON=...")
     try:
-        cp = subprocess.run([sys.executable, "-B", "-c", "import cae_suite.cli"],
+        cp = subprocess.run([sys.executable, "-B", "-c", "import ai_cae4all.cli"],
                             cwd=str(ROOT), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT, timeout=120)
     except (OSError, subprocess.TimeoutExpired) as exc:
@@ -543,10 +543,10 @@ PREDICTION_KEYS = ("inference_output_dir", "output_dir")  # score_rank.py reads 
 LSH_CHECKPOINT_KEYS = ("vae_modelpath", "lc_modelpath")
 
 def config_parser():
-    """cae_suite.config_parser: the configs as the launcher itself reads them."""
+    """ai_cae4all.config_parser: the configs as the launcher itself reads them."""
     if str(ROOT) not in sys.path:
         sys.path.insert(0, str(ROOT))
-    from cae_suite import config_parser as parser
+    from ai_cae4all import config_parser as parser
     return parser
 
 def config_values(path: Path) -> dict:
@@ -1447,7 +1447,7 @@ def ranking_python():
     try:
         if str(ROOT) not in sys.path:
             sys.path.insert(0, str(ROOT))
-        from cae_suite.settings import LocalSettings
+        from ai_cae4all.settings import LocalSettings
         settings = LocalSettings.load(ROOT)
         python = settings.resolve_python("meshgraphnets", "meshgraphnets")
         if "meshgraphnets" in settings.model_pythons:

@@ -17,19 +17,24 @@ python AI_CAE4ALL_main.py --config configs/SDFFlow/geometry_generation/ex1/basel
 python AI_CAE4ALL_main.py --config configs/SDFFlow/geometry_generation/ex1/baseline/config_optimize_sdfflow.txt
 ```
 
-The checked-in config roster lives under `configs/SDFFlow/geometry_generation/<ex>/baseline/`.
-All 19 files pass `--audit-configs` with errors=0, warnings=0; on a fresh checkout the
+The checked-in config roster lives under `configs/SDFFlow/geometry_generation/<ex>/baseline/`
+plus one variant directory, `ex3/tokens512/`.
+All 17 files pass `--audit-configs` with errors=0, warnings=0; on a fresh checkout the
 non-`train` ones additionally report `PATH-INPUT-001` on the checkpoints their paired
 training config has not produced yet.
 
 | Route | Data | Configs | Output root |
 | --- | --- | --- | --- |
-| `ex1` | DeepJEB brackets (`ex1_deepjeb.h5`, 2138 shapes / 263 parents), conditioned on `volume, area`, `split_by_parent True` | `config_train_sdfflow.txt`, `config_infer_sdfflow.txt`, `config_evaluate_sdfflow.txt`, `config_interpolate_sdfflow.txt`, `config_optimize_sdfflow.txt` | `../../output/dataset_matrix/geometry_generation/ex1/sdfflow/` |
+| `ex1` | DeepJEB brackets (`ex1_deepjeb.h5`, 1713 shapes / 209 parents -- the train side of a parent-grouped split of the original 2138 shapes / 263 parents; the held-out `ex1_deepjeb_infer.h5`, 425 / 54, is read by no config), conditioned on `volume, area`, `split_by_parent True` | `config_train_sdfflow.txt`, `config_infer_sdfflow.txt`, `config_evaluate_sdfflow.txt`, `config_interpolate_sdfflow.txt`, `config_optimize_sdfflow.txt` | `../../output/dataset_matrix/geometry_generation/ex1/sdfflow/` |
 | `ex2` | DrivAerML (`ex2_drivaerml.h5` 387 / `ex2_drivaerml_infer.h5` 97), 21 conditions | `config_train_sdfflow.txt`, `config_infer_sdfflow.txt`, `config_evaluate_sdfflow.txt`, `config_interpolate_sdfflow.txt` | `../../output/geometry_generation/ex2_drivaerml/sdfflow/` |
-| `ex3` | MCB nut subset (`ex3_mcb.h5` 1305 / `ex3_mcb_infer.h5` 329), five geometric descriptors | `config_train_sdfflow.txt`, `config_infer_sdfflow.txt`, `config_evaluate_sdfflow.txt`, `config_interpolate_sdfflow.txt`, `config_calibrate_sdfflow.txt` (`eval_task descriptor_calibration`), `config_evaluate_conditional_sdfflow.txt` (`eval_task conditional`) | `../../output/geometry_generation/ex3_mcb/sdfflow/` |
-| `ex4` | Thingi10K (`ex4_thingi10k.h5` 7234 / `ex4_thingi10k_infer.h5` 1807), **unconditional** (`use_conditions False`) | `config_train_sdfflow.txt`, `config_infer_sdfflow.txt`, `config_evaluate_sdfflow.txt`, `config_interpolate_sdfflow.txt` | `../../output/geometry_generation/ex4_thingi10k/sdfflow/` |
+| `ex3` | MCB nut subset (`ex3_mcb.h5` 1320 / `ex3_mcb_infer.h5` 330), 11 conditions (`bbox_x, bbox_y, bbox_z, volume, area`, five `class_*` one-hots, `hole_count`) | `config_train_sdfflow.txt`, `config_infer_sdfflow.txt`, `config_evaluate_sdfflow.txt`, `config_interpolate_sdfflow.txt`, `config_calibrate_sdfflow.txt` (`eval_task descriptor_calibration`), `config_evaluate_conditional_sdfflow.txt` (`eval_task conditional`) | `../../output/geometry_generation/ex3_mcb/sdfflow/` |
+| `ex3/tokens512` | as `ex3`, with `latent_tokens 512` | `config_train_sdfflow.txt`, `config_infer_sdfflow.txt` | `../../output/geometry_generation/ex3_mcb/sdfflow_t512/` |
 
-By mode: `train`, `sample`, `evaluate` and `interpolate` on all four routes; the
+The Thingi10K route (`ex4`, baseline and tokens512) was removed on 2026-10-07
+(commit `d9a8343`).
+
+By mode: `train`, `sample`, `evaluate` and `interpolate` on the three routes
+(`ex3/tokens512` has only `train` and `sample`); the
 two conditional `evaluate` tasks on `ex3`; `optimize` on `ex1` only (its load cases, length scale and Ti-6Al-4V
 constants describe the DeepJEB brackets specifically). Three valid modes
 deliberately ship **no** config:
@@ -43,11 +48,13 @@ deliberately ship **no** config:
 **`ex1`'s `config_train_sdfflow.txt` and `config_infer_sdfflow.txt` are generated**
 by `configs/campaigns/dataset_matrix/generate.py`, whose `--check` asserts they are
 byte-identical to what it renders. Edit the generator, not those two files. The other
-seventeen are hand-maintained.
+fifteen are hand-maintained.
 
 > Historical note: this file was written against an older flat roster
-> (`config_train_v3.txt`, `config_evaluate.txt`, `config_sample.txt`, `arms/A0.txt` ...)
-> that no longer exists on disk. Where the prose below names one of those files it is
+> (`config_train_v3.txt`, `config_train_v3_fea.txt`, `config_train_b300.txt`,
+> `config_evaluate.txt`, `config_sample.txt`, `arms/A0.txt` ...) that no longer exists
+> on disk (the `arms/`, `b300` and `v3*` configs were deleted in commit `0026b11`,
+> 2026-09-21). Where the prose below names one of those files it is
 > naming a *recipe* - the keys and the reasoning still apply - not a path you can run.
 > The FEA-conditioned "ex5" track and the `arms/` VAE sweep have no checked-in configs
 > at all; their mechanisms survive only in the code and in `tests/`.
@@ -69,8 +76,8 @@ the `methods/SDFFlow` repository even when the suite launcher is used.
 
 Valid modes are `train`, `train_vae`, `train_fm`, `sample`, `reconstruct`,
 `interpolate`, `optimize`, and `evaluate`. Production training uses `train`.
-`train_vae` is what the `configs/SDFFlow/arms/` VAE sweep runs (the FM is then
-trained once, for the winning arm, through `train` with `skip_completed_stages`
+`train_vae` is what the (since removed) `configs/SDFFlow/arms/` VAE sweep ran (the FM
+was then trained once, for the winning arm, through `train` with `skip_completed_stages`
 reusing that VAE); `train_fm` is retained for targeted debugging. `evaluate`
 scores a trained VAE on a held-out split (below).
 
@@ -83,8 +90,8 @@ The training modes (`train`, `train_vae`, `train_fm`) support `parallel_mode`:
   per GPU in `gpu_ids` (a self-picked free TCP port; no `torchrun`). The batch
   is sharded, gradients all-reduced. Rank 0 owns validation, the periodic test,
   logging, and checkpoint writes. Use when the model fits on one GPU (on a
-  288 GB B300, almost everything). The checked-in `config_train_b300.txt` is an
-  8-GPU DDP example.
+  288 GB B300, almost everything). Every checked-in config uses `parallel_mode
+  single`; the former 8-GPU DDP example `config_train_b300.txt` was removed.
 - `fsdp` — Fully Sharded Data Parallel; SDFFlow's "model split". Shards
   params/grads/optimizer for a velocity DiT too large for one GPU. Requires
   CUDA/NCCL; disables EMA and performs its own bf16. `fsdp_min_params` sets the
@@ -119,18 +126,24 @@ The pipeline contract is:
 Do not restore separate production configs or launch stages independently from
 automation. That reintroduces idle-GPU gaps and permits stale VAE/FM pairings.
 
-Canonical artifacts are:
+Canonical artifacts (the `ex1` configs) are:
 
 ```text
-output/geometry_generation/ex1/train.log
-output/geometry_generation/ex1/train_vae.log
-output/geometry_generation/ex1/train_fm.log
-output/geometry_generation/ex1/sdfflow_vae.pth
-output/geometry_generation/ex1/sdfflow_fm.pth
-output/geometry_generation/ex1/samples/
-output/geometry_generation/ex1/samples_extrapolation/
-output/geometry_generation/ex1/interpolation/
+output/dataset_matrix/geometry_generation/ex1/sdfflow/pipeline.log
+output/dataset_matrix/geometry_generation/ex1/sdfflow/vae.log
+output/dataset_matrix/geometry_generation/ex1/sdfflow/fm.log
+output/dataset_matrix/geometry_generation/ex1/sdfflow/vae.pth
+output/dataset_matrix/geometry_generation/ex1/sdfflow/fm.pth
+output/dataset_matrix/geometry_generation/ex1/sdfflow/fm_best.pth    read by sample/interpolate/optimize
+output/dataset_matrix/geometry_generation/ex1/sdfflow/samples/
+output/dataset_matrix/geometry_generation/ex1/sdfflow/interpolation/
+output/dataset_matrix/geometry_generation/ex1/sdfflow/eval/eval_test.json   (+ .csv; eval_split test)
+output/dataset_matrix/geometry_generation/ex1/sdfflow/optimize/
 ```
+
+`ex2` and `ex3` write the same layout under
+`output/geometry_generation/ex2_drivaerml/sdfflow/` and
+`output/geometry_generation/ex3_mcb/sdfflow/`.
 
 (Paths are shown from the suite root. The configs spell them `../../output/...`
 because the native process runs with its cwd set to `methods/SDFFlow`. Nothing
@@ -138,13 +151,15 @@ is ever written inside the method directory -- `output/` at the repo root is the
 only artifact destination, and `geometry_generation` is SDFFlow's historical
 slug there.)
 
-and, for the v3 recipe (`config_train_v3.txt`):
+and, for the v3 recipe (`config_train_v3.txt`, no longer checked in; it trained on
+DeepJEB and wrote to an output directory named `ex4`, unrelated to the later
+Thingi10K route of that name):
 
 ```text
 output/geometry_generation/ex4/sdfflow_vae.pth        final-epoch VAE (the pipeline's completeness check reads this)
 output/geometry_generation/ex4/sdfflow_vae_best.pth   best-validation VAE (vae_best_modelpath; same payload format)
 output/geometry_generation/ex4/sdfflow_fm.pth
-output/geometry_generation/ex4/eval/eval_val.json     config_evaluate.txt
+output/geometry_generation/ex4/eval/eval_val.json     config_evaluate.txt (also removed)
 output/geometry_generation/ex4/eval/eval_val.csv
 ```
 
@@ -154,7 +169,8 @@ untouched). When present, `train_vae.py` saves the EMA (or raw) model with the
 best validation SDF loss so far after every validation, with `epoch` set to
 that epoch. The final save to `vae_modelpath` is unchanged, and it is the
 final checkpoint -- not the best one -- that the pipeline's completeness check
-and the FM stage read. Point `config_evaluate.txt` at whichever you want scored.
+and the FM stage read. Point the evaluate config (`config_evaluate_sdfflow.txt`)
+at whichever you want scored. No checked-in train config sets `vae_best_modelpath`.
 
 `fm_best_modelpath` is its FM-stage twin, and follows the same rules: optional,
 unprefixed (`best_modelpath` is not in `_STAGE_SETTING_SUFFIXES`, so
@@ -174,7 +190,7 @@ The FM also needs no warmup guard: it has no KL or beta ramp (`fm_warmup_epochs`
 is learning-rate only), so ValidFM is the same quantity at every epoch and its
 minimum is a real minimum, where ValidSDF is not comparable across the VAE's KL
 warmup (which is why `vae_best_modelpath` refuses pre-warmup epochs). Control the
-VAE with its epoch budget instead. Measured on ex4, this matters: the FM
+VAE with its epoch budget instead. Measured on the v3 DeepJEB run (output dir `ex4`), this matters: the FM
 validation bottomed at 0.660 (epoch 200) and climbed to 2.127 by epoch 999 while
 train fell to 0.194, so the 1000-epoch run shipped its worst model.
 
@@ -188,7 +204,7 @@ coordinate/value pair, not two parallel per-axis arrays: row `i` of
 meshes in 3D), not a batch or channel count -- `Q` (the number of sampled
 query points, `num_near + num_uniform`) is the shared leading axis.
 
-`build_dataset.py --repair` actively **tries** to make a mesh watertight
+`scripts/build_dataset.py --repair` actively **tries** to make a mesh watertight
 before giving up, it does not just detect and skip: first the cheap
 trimesh-native tier (`remove_unreferenced_vertices`, `merge_vertices`,
 dedupe/drop degenerate faces, `fix_normals(multibody=True)`,
@@ -209,20 +225,21 @@ Root `cond_names` and every `cond` row contain the raw five descriptors:
 bbox_x, bbox_y, bbox_z, volume, area
 ```
 
-FM training may select a subset through `condition_names`. `config_train.txt`
-(ex1) and `config_train_v2.txt` (ex2) use `bbox_x,bbox_z,volume,area`; the v3
-recipe (`config_train_v3.txt`, `config_train_b300.txt`) uses only `volume,area`,
-because `bbox_y` has exactly zero train-split standard deviation and `bbox_x` a
-0.45% coefficient of variation in DeepJEB -- conditioning on near-constants only
-adds noise to the CFG branch. Do not add `bbox_y` without first showing that its
-train-split standard deviation exceeds `min_condition_std`.
+FM training may select a subset through `condition_names`. The checked-in train
+configs select: `ex1` only `volume,area`; `ex2` its 21 `cond_extra` sidecar names
+(not the five geometric descriptors); `ex3` the 11 names `bbox_x,bbox_y,bbox_z,
+volume,area`, five `class_*` one-hots and `hole_count`. `ex1` drops the bounding
+box because, in DeepJEB, `bbox_y` has exactly zero train-split standard deviation
+and `bbox_x` a 0.45% coefficient of variation -- conditioning on near-constants
+only adds noise to the CFG branch. On DeepJEB, do not add `bbox_y` without first
+showing that its train-split standard deviation exceeds `min_condition_std`.
 The selected names, statistics, extrema, and clipping limit are stored in the
 FM checkpoint and define `cond_values` order at inference.
 
 **FEA-label conditions live in a sidecar, not in the `cond` rows.** DeepJEB's
 per-design FEA labels (`bracket_labels.csv`: mass, per-load-case max von Mises
 stress and max displacement, the first two eigenfrequencies, ...) are appended to
-an existing HDF5 by `add_fea_conditions.py` as the root dataset `cond_extra`
+an existing HDF5 by `scripts/add_fea_conditions.py` as the root dataset `cond_extra`
 (float32 `[num_shapes, k]`, row i = shape i) with root attrs `cond_extra_names`,
 `cond_extra_source`, `cond_extra_transforms` (JSON name -> `identity|log`) and
 `cond_extra_created`. `general_modules/sdf_dataset.py` merges them:
@@ -251,7 +268,7 @@ families apart, and `describe(...)['load_case']` is the key into
 mesh. All names are lowercase.
 
 **The FEA condition set is decorrelated, not exhaustive.** `config_train_v3_fea.txt`
-(ex5) conditions on `volume,area,log_max_ver_stress_mpa,log_max_dia_stress_mpa,
+(ex5; no longer checked in) conditioned on `volume,area,log_max_ver_stress_mpa,log_max_dia_stress_mpa,
 log_max_tor_stress_mpa,log_first_mode_freq_hz` -- participation ratio 2.53
 against 1.43 for v3's `volume,area`. The rest of the registry is deliberately
 left out as duplicates: `mass_kg` and `volume_mm3` are `4.793 x volume`
@@ -336,10 +353,11 @@ Per-dataset plan for the three raw sources staged at
   coefficients plus `geo_parameters_all.csv`'s parametric design variables --
   the same shape of signal as DeepJEB's FEA CSV, just a different join key
   (case id, not a filename stem) and a different label set. This is a
-  straight `cond_extra` sidecar: a new `add_drivaerml_conditions.py` with its
-  own small name registry, one entry per CFD/geometry column, picking
-  `identity` vs `log` the way the FEA registry's comment does (check the raw
-  skew first).
+  straight `cond_extra` sidecar, now implemented as
+  `scripts/add_drivaerml_conditions.py` with its own name registry
+  (`general_modules/drivaerml_conditions.py`), one entry per CFD/geometry
+  column, picking `identity` vs `log` the way the FEA registry's comment does
+  (check the raw skew first). `ex2` conditions on 21 of its names.
 - **MCB** is fundamentally a shape-*classification* benchmark -- its label is
   categorical (mechanical part class), not a continuous scalar. A raw class
   id has no metric structure and is not a usable flow-matching condition by
@@ -353,13 +371,17 @@ Per-dataset plan for the three raw sources staged at
      `cond_extra` for **stratified splitting and per-class evaluation only**,
      and leave it out of `condition_names` for FM training.
   Do not feed the raw class id straight into FM conditioning without first
-  checking the class count.
+  checking the class count. What shipped: the build was scoped to a 5-class
+  nut subset, so `scripts/add_mcb_class_conditions.py` writes five `class_*`
+  one-hots (plus, with `--hole_count`, the surface genus as `hole_count`), and
+  `ex3` conditions on them together with the five geometric descriptors.
 - **Thingi10K** metadata (`category`/`subcategory`/`tags`/`author`/`license`)
   is uploader-supplied, sparse, and inconsistent -- most shapes lack a clean
   category. Do not force a `cond_extra` out of it. Treat Thingi10K as an
   **unconditional** VAE reconstruction/generation benchmark first; if a
   coarse category grouping later proves useful, add it the same way as MCB
-  option 2 (stratification only, not an FM input).
+  option 2 (stratification only, not an FM input). The Thingi10K route (`ex4`)
+  was removed on 2026-10-07.
 
 The common thread: a dataset's `cond_extra` should describe what that
 dataset's own labels actually are, not be forced into the five-descriptor or
@@ -542,8 +564,9 @@ nothing; it searches the geometry the generator already knows.
 
 **The design vector is FM noise, not a latent and not a condition.** Its first
 `opt_subspace_dim` coordinates chart the flow-matching noise space --
-`latent_tokens x latent_dim` wide, 512 x 32 = 16,384-d on the ex1 DeepJEB
-checkpoint -- optionally extended by `opt_condition_dims` descriptor conditions.
+`latent_tokens x latent_dim` wide, 128 x 32 = 4,096-d for the current ex1
+config (512 x 32 = 16,384-d on the earlier ex1 checkpoint the analysis below
+was written against) -- optionally extended by `opt_condition_dims` descriptor conditions.
 Every point therefore integrates through the ODE to an on-manifold shape, which
 is what makes a derivative-free search viable. Do not substitute a raw latent
 parameterization: latents off the FM prior decode to shapes the VAE never
@@ -562,7 +585,8 @@ chart started from.
 The old chart, **`subspace_v1`**, replaced the in-subspace component of `eps_0`
 with `x` through an orthonormal `K x D` basis and clipped `x` to a shell of
 radius `opt_shell_scale * sqrt(K)`. That reads as a search over the Gaussian
-shell only when `K` is a sizeable fraction of `D`. At `D = 16384` the
+shell only when `K` is a sizeable fraction of `D`. At `D = 16384` (that
+earlier 512-token ex1 checkpoint) the
 out-of-subspace remainder has norm about `sqrt(D) = 128` against a design part
 capped at 4.33, so the search moved about 3% of the noise norm (0.1% of its
 variance): almost every design decoded to nearly the same shape, and the
@@ -789,6 +813,10 @@ bracket with max |u_z| <= `opt_vertical_disp_max`".
 
 ## v3 recipe (`config_train_v3.txt`) and the keys it introduced
 
+`config_train_v3.txt` is no longer checked in; the keys below are live and the
+current train configs use them (`split_by_parent True` on ex1,
+`num_encoder_points 6144` and `seed 42` everywhere).
+
 Every new key defaults to the pre-v3 behaviour when absent; old configs and
 checkpoints are untouched. The reasons behind each setting are in the config's
 own header; this section records the contracts.
@@ -816,7 +844,8 @@ shape's encoder input is then bit-identical for every epoch of the run. That
 subsample is the only surface augmentation this 1713-shape train set has (v2 drew
 4096 of 8192). v3 briefly shipped 8192 and silently lost it; the recipe now draws
 6144 (75%), which keeps more supervision per step than v2 while the draw stays
-stochastic. `config_train_b300.txt` matches. Arm `A8` (4096) is the density axis.
+stochastic. Every current train config draws 6144 (the removed `config_train_b300.txt`
+did too, and the removed arm `A8` drew 4096 as the density axis).
 Val/test and the FM latent-cache encode pass subsample deterministically, so they
 are unaffected. `num_encoder_points` is a VAE *and* FM compatibility key, and
 `evaluate` reads it from the checkpoint, not the run config.
@@ -833,9 +862,10 @@ initial weights must be bit-identical. `seed` does NOT seed
 `SDFShapeDataset`'s per-item train subsample -- that fresh draw is the surface
 augmentation and stays stochastic (val/test and the latent-cache pass are seeded
 through `deterministic=True` instead). The key is unprefixed, so
-`build_stage_config` passes it to both stage workers untouched. `config_train_v3.txt`, `config_train_b300.txt`, and every arm ship
-`seed 0`; `arms/A9.txt` is A0 at `seed 1`, and `|A9 - A0|` is the sweep's
-run-to-run noise floor. Without a seed a sweep has no such floor and any arm gap
+`build_stage_config` passes it to both stage workers untouched. The current train
+configs ship `seed 42`. The removed `config_train_v3.txt`, `config_train_b300.txt`
+and every arm shipped `seed 0`; `arms/A9.txt` was A0 at `seed 1`, and `|A9 - A0|`
+was the sweep's run-to-run noise floor. Without a seed a sweep has no such floor and any arm gap
 is unfalsifiable, which is why the launcher lists `seed` as recommended for
 `train`, `train_vae`, and `train_fm`.
 
@@ -914,7 +944,8 @@ refined `z_flat`. The prior term is `(z - z0).pow(2).sum(dim=-1).mean()`:
 over D, which divided it by 1024 and put it about five orders of magnitude below
 the SDF term's gradient (measured 3.0e-6 against 3.7e-1) -- inert at every weight
 a user would plausibly write, and silently more inert the larger the latent got.
-`config_evaluate.txt` ships `latent_refine_prior_weight 0.0`, i.e. unconstrained,
+The evaluate recipe uses `latent_refine_prior_weight 0.0` (the default; the checked-in
+`config_evaluate_sdfflow.txt` files set no `latent_refine_*` key, so refinement is off), i.e. unconstrained,
 because that is what this mode is for: refinement measures how much better the
 frozen decoder can do than the encoder found, so pulling `z` back toward the
 encoder's answer destroys the measurement. A sweep on a smoke checkpoint is
@@ -1042,7 +1073,7 @@ to `sample_mesh_sdf(near_sigmas=...)`, and the builder records `num_surface`,
 and `sdf_backend` as root attrs.
 
 **Launcher contract.** All of the above keys are in `SDFFLOW_KEYS`
-(`cae_suite/specs/sdfflow.py`) and in Studio's `sdfflow` catalog
+(`ai_cae4all/specs/sdfflow.py`) and in Studio's `sdfflow` catalog
 (`studio/src/constants.js`). No test enforces that parity since the root
 `tests/` was removed (2026-09-23); the Studio reads `known_keys` from the live
 spec through `/api/models`, so the catalog is presentation only. Diagnostics: `SDF-QUERY-001/002` (`encoder_query_type`),
@@ -1057,7 +1088,7 @@ than a degradation), `SDF-NOISE-002` (`posterior_min_std_rel >= 0`),
 `evaluate`. `reconstruct` and `evaluate` both default `latent_refine_lr` to 0.01
 and `latent_refine_prior_weight` to 0.0, so Studio's required rows for those
 modes have values `SDF-REFINE-002` accepts (an lr of 0 is rejected).
-`cae_suite/preflight.py::_probe_dataset` counts `evaluate` among the modes whose
+`ai_cae4all/preflight.py::_probe_dataset` counts `evaluate` among the modes whose
 dataset comes from `dataset_dir`; without that the `sdf_hdf5` schema probe never
 ran for it and a wrong-contract dataset preflighted clean, then died on a
 `KeyError: 'shapes'` inside the native run. `vae_best_modelpath`,
@@ -1138,6 +1169,9 @@ pre-conditional parameter set exactly.
 
 ## The arms sweep (`configs/SDFFlow/arms/`)
 
+Removed, with `arms/roster.tsv` and `arms/README.md`, in commit `0026b11`
+(2026-09-21); the record below is kept as history.
+
 Ten `mode train_vae` configs around the v3 recipe, on the same data settings,
 split, `seed`, and 500-epoch budget. Most move one axis off A0; **two do not**:
 
@@ -1156,11 +1190,11 @@ split, `seed`, and 500-epoch budget. Most move one axis off A0; **two do not**:
 
 `arms/roster.tsv` fed the (since removed) `configs/campaigns/benchmarks_all/campaign_runner.py`
 (`ex_slot` is `deepjeb`, a label only -- the runner never resolves it for
-`--mode train`). `arms/README.md` has the launch and scoring recipe: each arm
-is scored with a copy of `config_evaluate.txt` pointed at its checkpoint, the
-arms train only the VAE, and the FM is trained once for the winner. The arm
-files are named `A<n>.txt`, so `--audit-configs` (which globs `config*.txt`)
-does not see them; validate them with per-file `--check`.
+`--mode train`). `arms/README.md` had the launch and scoring recipe: each arm
+was scored with a copy of `config_evaluate.txt` pointed at its checkpoint, the
+arms trained only the VAE, and the FM was trained once for the winner. The arm
+files were named `A<n>.txt`, so `--audit-configs` (which globs `config*.txt`)
+did not see them; they had to be validated with per-file `--check`.
 
 ## Architecture and checkpoint facts
 
@@ -1169,10 +1203,10 @@ does not see them; validate them with per-file `--check`.
 - VAE training supports deterministic, posterior-noise, and KL warmups, plus
   the optional relative posterior-std floor. FM consumes normalized encoder
   means rather than posterior samples.
-- The latent is `latent_tokens x latent_dim`. The ex1 DeepJEB config uses
-  512 x 32 FPS-anchored VecSet tokens (16,384-d, the FM noise dimension the
-  `optimize` chart works in); ex2-ex4 use 32 x 32. All of them use the attention
-  decoder. The MLP decoder with one global token is the pre-v3 layout, and old
+- The latent is `latent_tokens x latent_dim`. Every checked-in train config
+  uses 128 x 32 FPS-anchored VecSet tokens (4,096-d, the FM noise dimension the
+  ex1 `optimize` chart works in), except `ex3/tokens512` at 512 x 32. All of
+  them use the attention decoder. The MLP decoder with one global token is the pre-v3 layout, and old
   checkpoints still rebuild it from their stored config.
 - FM uses rectified flow with AdaLN-Zero blocks. Latent and selected-condition
   statistics come from the train split and are stored in its checkpoint.
@@ -1187,8 +1221,11 @@ does not see them; validate them with per-file `--check`.
 | --- | --- |
 | `SDFFlow_main.py` | Config load, mode dispatch, distributed spawn dispatch |
 | `general_modules/distributed.py` | DDP/FSDP setup, spawn, rank gating, sharded state-dict gather |
-| `build_dataset.py` | Real meshes or synthetic primitives to HDF5 |
-| `add_fea_conditions.py` | Appends DeepJEB's FEA labels to an HDF5 as the `cond_extra` sidecar (join on `source` basename == `item_name`) |
+| `scripts/build_dataset.py` | Real meshes or synthetic primitives to HDF5 |
+| `scripts/add_fea_conditions.py` | Appends DeepJEB's FEA labels to an HDF5 as the `cond_extra` sidecar (join on `source` basename == `item_name`) |
+| `scripts/add_drivaerml_conditions.py` | Appends DrivAerML geometry + aerodynamic labels as the `cond_extra` sidecar (join on run id; registry in `general_modules/drivaerml_conditions.py`) |
+| `scripts/add_mcb_class_conditions.py` | Appends one-hot MCB nut-family classes (and, with `--hole_count`, the surface genus) as the `cond_extra` sidecar |
+| `scripts/merge_sdfflow_checkpoint.py` | One-shot merge of a legacy two-file VAE + FM checkpoint pair into the single combined FM checkpoint |
 | `general_modules/condition_names.py` | Registry of geometric and FEA condition names, stored-space transforms (`to_stored` / `from_stored`), units, load cases |
 | `general_modules/sdf_sampling.py` | Normalization, SDF samples, descriptors, repair path |
 | `general_modules/sdf_dataset.py` | Lazy-open HDF5 dataset, seeded split, condition statistics; merges the `cond_extra` sidecar into `cond` |
@@ -1236,8 +1273,8 @@ At minimum, run from the suite root:
 
 ```bash
 python AI_CAE4ALL_main.py --audit-configs          # every checked-in config, errors=0
-# every SDFFlow config: ex1 DeepJEB, ex2 DrivAerML, ex3 MCB, ex4 Thingi10K
-for f in configs/SDFFlow/geometry_generation/ex*/baseline/config_*_sdfflow.txt; do
+# every SDFFlow config: ex1 DeepJEB, ex2 DrivAerML, ex3 MCB (baseline + tokens512)
+for f in configs/SDFFlow/geometry_generation/ex*/*/config_*_sdfflow.txt; do
   python AI_CAE4ALL_main.py --config "$f" --check
 done
 cd methods/SDFFlow && python -m pytest -q tests/   # conditional tools / design loop / surrogate reporting, no checkpoint
@@ -1249,7 +1286,7 @@ spells the read `bool(config.get(key, False))`. A validator that tested
 `values.get(key) is True` therefore let `guidance_enabled 1` (guidance really
 on) skip `SDF-CALIB-001`, and `use_conditions 1` (a genuinely conditional run)
 skip `SDF-COND-001` and the dataset-layer `SDF-COND-FEA-003`. Both now go
-through `cae_suite/specs/sdfflow.py::_flag` (and `preflight.py::_truthy` for
+through `ai_cae4all/specs/sdfflow.py::_flag` (and `preflight.py::_truthy` for
 the dataset layer), which reads `1`/`yes`/`on` as true and `''`/`0`/`false`/
 `no`/`off` as false. Use them for any new boolean key here.
 
@@ -1259,9 +1296,9 @@ no `CFG-UNKNOWN-001`: a native `config.get('<key>')` whose key is missing from
 set `gpu_ids` for an 8-GPU box, so on a smaller machine `ENV-CUDA-002` is
 expected too.) A config with `use_conditions` and FEA `condition_names`
 fails preflight against a `deepjeb.h5` without the sidecar with
-`SDF-COND-FEA-003` naming the `add_fea_conditions.py` command: the dataset
+`SDF-COND-FEA-003` naming the `scripts/add_fea_conditions.py` command: the dataset
 probe now returns the merged condition vocabulary (`cond_names` +
-`cond_extra_names`) and `cae_suite/preflight.py::_validate_sdf_against_config`
+`cond_extra_names`) and `ai_cae4all/preflight.py::_validate_sdf_against_config`
 cross-checks `condition_names` against it. `train_pipeline.py` repeats the
 check natively BEFORE stage 1, so even a direct native run fails in seconds
 rather than after the whole VAE stage.
@@ -1274,19 +1311,21 @@ rather than after the whole VAE stage.
 
 The `optimize` mode adds `gmsh`, `pyamg`, and `cma` to the requirement set.
 
-Also run `python -m py_compile` on modified Python files. Documentation changes
-must keep the config roster in "Commands and working directories" (the five
-training configs, the three `config_evaluate*.txt` / `config_calibrate_descriptors.txt`
-evaluate configs, the three sampling configs, the two interpolation configs, the
-two `config_optimize*.txt`, and `arms/A0..A9`), the per-config DeepJEB condition
-selections (four names for ex1/ex2, `volume,area` for v3, the six-name FEA set
-for ex5), and the canonical `output/geometry_generation/ex1` /
-`output/geometry_generation/ex4` / `output/geometry_generation/ex5` paths
+Also syntax-check modified Python files without writing `__pycache__` (for example `python -B -c "import ast,sys; [ast.parse(open(f, encoding='utf-8').read(), f) for f in sys.argv[1:]]" <files>`). Documentation changes
+must keep the config roster in "Commands and working directories" (17 configs:
+`ex1/baseline` train/infer/evaluate/interpolate/optimize, `ex2/baseline`
+train/infer/evaluate/interpolate, `ex3/baseline` train/infer/evaluate/interpolate/
+calibrate/evaluate_conditional, `ex3/tokens512` train/infer), the per-config
+condition selections (`volume,area` for ex1, the 21 DrivAerML names for ex2, the
+11 MCB names for ex3), and the canonical
+`output/dataset_matrix/geometry_generation/ex1/sdfflow` /
+`output/geometry_generation/ex2_drivaerml/sdfflow` /
+`output/geometry_generation/ex3_mcb/sdfflow` (and `sdfflow_t512`) paths
 synchronized (spelled `../../output/...` inside the configs, because the native
 process runs in `methods/SDFFlow`; there is no `outputs/` directory anywhere in
 this tree).
 
-`GEOMETRY_GENERATION_RESEARCH.md` is design context, not implementation truth;
+`docs/research/sdfflow/GEOMETRY_GENERATION_RESEARCH.md` is design context, not implementation truth;
 so is `docs/research/sdfflow/CONDITIONAL_GENERATION_DESIGN_2026-09.md`, which
 records the label analysis and method decisions behind the ex5 track and what
 remains unverified until it trains.

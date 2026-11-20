@@ -3,8 +3,8 @@
 Source: Park, J. and Kang, N., *Point-DeepONet: Predicting Nonlinear Fields on
 Non-Parametric Geometries under Variable Load Conditions*, Neural Networks 198,
 108560 (2026). https://arxiv.org/abs/2412.18362 (verified against the full
-HTML text, 2026-07-17). See IMPLEMENTATION_PLAN.md section 2.4 for the
-research-conclusions summary this document expands.
+HTML text, 2026-07-17). User-facing doc:
+[06_Point-DeepONet.md](../../methods/06_Point-DeepONet.md).
 
 ## Published architecture (verified facts)
 
@@ -41,16 +41,18 @@ paper's 128-wide latent index, `m`/`o` is the output channel).
 
 | Paper | This repo (`mesh_state`, default) | Why |
 | --- | --- | --- |
-| Branch condition input: force/direction/mass | Branch geometry input additionally includes current physical state + node context (positional features, node-type one-hot) | No global load conditions exist in the current MGN HDF5 files (section 2.2); the model must still see the current physical state for temporal delta prediction. |
+| Branch condition input: force/direction/mass | Branch geometry input additionally includes current physical state + node context (positional features, node-type one-hot) | No global load conditions exist in the current mesh HDF5 files; the model must still see the current physical state for temporal delta prediction. |
 | Trunk input: `(x,y,z,SDF)` | Trunk input: active-axis `pos_normalized` + non-physical context (positional features, node-type one-hot) [+ SDF when available] | No dataset provides SDF; node-type/positional context replace it as the model's only non-coordinate geometric signal. |
 | Output activation: tanh | Output activation: **identity** (default) | Normalized MGN deltas are not guaranteed to lie in `[-1, 1]`; `tanh` would clip valid targets. `point_output_activation tanh` remains available as a named ablation. |
-| N=5000 fixed resample, geometry-only PointNet input | `point_sensor_count` (default 5000) resample of **[coordinates + state + context]**, `point_variant paper` restores geometry-only sampling | Matches the paper's fixed-size resampling rationale while carrying the state the temporal delta task needs. |
+| N=5000 fixed resample, geometry-only PointNet input | `point_sensor_count` (default 5000) resample of **[coordinates + state + context]** | Matches the paper's fixed-size resampling rationale while carrying the state the temporal delta task needs. |
 
 Results produced under `point_variant mesh_state` must be labeled
 **"MGN-adapted Point-DeepONet"**, never a reproduction of the published
-paper's numbers. `point_variant paper` enforces the published input contract
-(validated SDF, declared global conditions, tanh output) and fails
-construction when the active dataset does not satisfy it.
+paper's numbers. `point_variant paper` (geometry-only sensors, SDF, global
+conditions, tanh output) is not executable: both the launcher spec and
+`general_modules/config_validation.py` accept only `mesh_state`, because the
+dataset loader attaches no global conditions. The paper-variant checks in
+`model/point_deeponet.py::validate_config` are unreachable until that changes.
 
 ## Reference-shape test
 
@@ -65,5 +67,4 @@ constructs a `PointDeepONet` on a synthetic fixture and asserts:
   `H`, not a separate `basis_dim`.
 
 If a future correction to this document changes the fusion/refiner placement,
-update this file and the reference-shape test together (IMPLEMENTATION_PLAN.md
-section 8.1).
+update this file and the reference-shape test together.

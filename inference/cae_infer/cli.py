@@ -1,5 +1,5 @@
 """argparse surface -> cae_infer.infer(...). Superset of flags; each family
-driver ignores what it doesn't use (see README.md for the per-family subset).
+driver ignores what it doesn't use (see docs/guides/inference-bundle.md for the per-family subset).
 """
 
 import argparse
@@ -40,7 +40,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--split-seed", type=int, default=None, dest="split_seed",
                     help="neural_operator (point_deeponet) only, advanced: sensor-sampling "
                          "seed. This is NOT stored in the checkpoint (a known gap -- see "
-                         "README) -- only pass this if the checkpoint was trained with a "
+                         "docs/guides/inference-bundle.md) -- only pass this if the checkpoint was trained with a "
                          "non-default split_seed (default is 42).")
     p.add_argument("--cond-values", default=None, dest="cond_values",
                     help="sdfflow only: comma-separated target condition values, in the "

@@ -1,9 +1,9 @@
 """Flat ``key value`` config parsing for the MLP surrogate entrypoint.
 
 Faithful to the repository's native config style (shared by the ML methods and
-mirrored in ``cae_suite/config_parser.py``): ``%`` starts a full-line comment,
+mirrored in ``ai_cae4all/config_parser.py``): ``%`` starts a full-line comment,
 ``#`` starts an inline comment, keys are lowercased, and a value is the rest of
-the line. Self-contained so the entrypoint has no dependency on ``cae_suite``
+the line. Self-contained so the entrypoint has no dependency on ``ai_cae4all``
 (it runs in the method environment).
 """
 
@@ -153,7 +153,7 @@ def params_from_config(cfg: dict[str, str]) -> Params:
     )
 
 
-# Closed choice sets, mirrored from cae_suite/specs/mlp.py. Without these an
+# Closed choice sets, mirrored from ai_cae4all/specs/mlp.py. Without these an
 # unknown value reaches model construction as a bare KeyError on the activation
 # or normalization lookup table; keep the two lists in sync.
 _CHOICES = {

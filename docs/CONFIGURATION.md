@@ -1,101 +1,141 @@
-# AI-CAE4ALL configuration reference
+# Configuration
 
-This is the suite-wide entry point for configuration behavior. The executable
-source of truth is the `MethodSpec` registry under `cae_suite/specs/`, followed
-by each method's native loader and validator. This document intentionally does
-not duplicate hundreds of key names that would drift from those live sets.
+How to write, validate and look up a config. The executable source of truth is
+the `MethodSpec` for each route under [ai_cae4all/specs/](../ai_cae4all/specs),
+then each method's native loader and validator. This page does not copy key
+lists: they would drift from the specs, which hold 20 to 190 keys per route.
 
-## Validate a configuration
+## The workflow
 
-```powershell
-python AI_CAE4ALL_main.py --check path\to\config.txt --strict --no-color
-python AI_CAE4ALL_main.py --audit-configs --no-color
+A config is a flat text file. `model` picks the route and `mode` picks what the
+method does:
+
+```text
+model           transolver
+mode            train
+gpu_ids         0
+dataset_dir     ../../dataset/deterministic/ex2_dynamic_contact.h5
+modelpath       ../../output/transolver/ex2/model.pth
+log_file_dir    ../../output/transolver/ex2/train.log
 ```
 
-`--check` parses, routes, validates paths and values, probes the native runtime,
-and checks the dataset/checkpoint contracts without launching training.
-`--audit-configs` discovers the checked-in top-level `configs/**/config*.txt`
-tree. The current audit target is 269 files; use the command output, not this
-snapshot, as the current count.
+Then:
 
-## Flat-file grammar
+```bash
+python AI_CAE4ALL_main.py --config path/to/config.txt --check            # every problem at once
+python AI_CAE4ALL_main.py --config path/to/config.txt --explain-config   # what each key resolved to
+python AI_CAE4ALL_main.py --config path/to/config.txt --dry-run          # the native command
+python AI_CAE4ALL_main.py --config path/to/config.txt                    # clean preflight → launch
+```
 
-- One `key value` pair per line; tabs and spaces are accepted.
-- Blank lines and lines beginning with `%` are ignored.
-- `#` starts an inline comment.
-- Comma- or space-separated values become lists. A single value stays scalar,
-  so native consumers must normalize scalar/list fields such as
-  `test_batch_idx`.
-- Booleans are `true` or `false` (case-insensitive).
-- Paths are resolved relative to the native method repository, matching the
-  directory in which the unified launcher starts that method.
-- **Path-valued keys keep the case you wrote**; every other string value is
-  lowercased. The exempt set is listed twice and the two must agree — once in
-  `cae_suite/config_parser.py::PATH_KEYS` (the launcher's mirror) and once in the
-  method's own `general_modules/load_config.py::PATH_KEYS` — so adding a new path
-  key means editing both, or the launcher and the native parser disagree about
-  what the model actually opens. `descriptor_calibration_path` and
-  `vae_best_modelpath` (SDFFlow) are the most recent additions. Preflight's
-  `PATH-CASE-001` warns when a config's spelling differs from the on-disk name:
-  it resolves on Windows and fails on Linux.
+- `--check` runs the whole preflight without launching: spec, paths,
+  environment, dataset, checkpoint and native validator (see
+  [ARCHITECTURE.md §3](ARCHITECTURE.md#3-the-launcher-ai_cae4all)).
+- `--strict` promotes flagged warnings to errors.
+- `--audit-configs` lints every checked-in `configs/**/config*.txt`
+  structurally. Use its output, not a number written in a document, for the
+  current count.
 
-## Registered routes
+Start from a checked-in config, not from a blank file. Each route has a
+`baseline/` train and inference pair under `configs/<Method>/<category>/exN/`.
+The Studio's templates mirror those same files.
 
-| Model ID | Native repository | Modes |
+## Grammar
+
+- One `key value` pair per line. The first whitespace splits the key from the
+  value.
+- Blank lines and lines starting with `%` are ignored. `#` starts an inline
+  comment.
+- Comma- or space-separated values become a list. **A single value stays a
+  scalar** (`test_batch_idx 0` → `0`), so consumers normalize scalar/list keys.
+- `true`/`false` (any case) become booleans.
+- `100` becomes an `int`, but **`1e-4` stays a string**. Every numeric consumer
+  converts explicitly.
+- Keys and string values are lowercased, except **path keys**, which keep their
+  case. The set is listed twice and both copies must agree:
+  `ai_cae4all/config_parser.py::PATH_KEYS` and each method's
+  `general_modules/load_config.py::PATH_KEYS`. A new path key means editing
+  both. `PATH-CASE-001` warns when the case in a config differs from the disk:
+  fine on Windows, broken on Linux.
+- Duplicate keys and a UTF-8 BOM are errors. Native loaders would silently keep
+  the last duplicate, or misread the first key after a BOM.
+- Quotes are literal characters. Do not quote paths.
+
+## Paths
+
+The native process runs with cwd `methods/<Name>/`. So relative paths resolve
+from the method directory, not from the config file:
+
+- dataset paths are `../../dataset/...`
+- artifact paths (`modelpath`, `log_file_dir`, output directories) are
+  `../../output/...`
+
+Nothing is written inside `methods/`.
+
+## Routes
+
+| `model` | Directory | Modes |
 | --- | --- | --- |
-| `meshgraphnets` | `MeshGraphNets/` | `train`, `inference` |
-| `meshgraphnets-v` | `methods/MeshGraphNets_Variational/` | `train`, `inference` (`latent_type` global / local / hybrid = HI-MGN-V / HI-MGNflow / HI-MGN-hybrid) |
-| `point_deeponet`, `deeponet`, `fno` | `Neural_Operator/` | `train`, `inference` |
-| `transolver` | `Transolver/` | `train`, `inference` |
-| `sdfflow` | `methods/SDFFlow/` | `train`, `train_vae`, `train_fm`, `sample`, `reconstruct`, `interpolate`, `optimize`, `evaluate` |
-| `simulgenvae` | `SimulGenVAE/` | `train`, `train_vae`, `train_lc`, `reconstruct` |
-| `mlp` | `MLP/` | `train`, `inference` |
-| `geometry_ingest` | `methods/GeometryIngest/` | `ingest`, `inspect` |
+| `meshgraphnets` | `methods/MeshGraphNets/` | train, inference |
+| `meshgraphnets-v` | `methods/MeshGraphNets_Variational/` | train, inference |
+| `point_deeponet`, `deeponet`, `fno` | `methods/Neural_Operator/` | train, inference |
+| `transolver` | `methods/Transolver/` | train, inference |
+| `sdfflow` | `methods/SDFFlow/` | train, train_vae, train_fm, sample, reconstruct, interpolate, optimize, evaluate |
+| `simulgenvae` | `methods/SimulGenVAE/` | train, train_vae, train_lc, reconstruct |
+| `mlp` | `methods/MLP/` | train, inference |
+| `geometry_ingest` | `methods/GeometryIngest/` | ingest, inspect |
+| `sar`, `ldgn` | `methods/SAR/`, `methods/LDGN/` | optional, local-only; route only where the directory exists |
 
-HI-MGNflow (`chi-mgnflow`) was merged into `meshgraphnets-v` as `latent_type local`
-on 2026-10-19; the old repo is in git history (commit `9db47d6`).
+`meshgraphnets-v` with `use_multiscale` has three display names, set by
+`latent_type`: `global` (default) is HI-MGN-V, `local` is HI-MGNflow, and
+`hybrid` is HI-MGN-hybrid. The former `chi-mgnflow` route no longer exists.
 
-## Exact key catalogs and defaults
+`python AI_CAE4ALL_main.py --describe <model>` prints the required and default
+fields for each mode of a route.
 
-The exact current sets live here:
+## Where each contract lives
 
 | Contract | Source |
 | --- | --- |
-| Suite-known keys, required/recommended fields, defaults, paths, and value checks | `cae_suite/specs/*.py` |
-| Model-to-spec routing | `cae_suite/registry.py` |
-| Shared parsing and path-key behavior | `cae_suite/config_parser.py` |
-| Studio parameter catalogs and initial values | `studio/src/constants.js` |
-| Native fail-fast validation | each method's `general_modules/config_validation.py` or native loader |
-| HDF5 layouts and timestep semantics | `dataset/DATASET_FORMAT.md` plus each method's dataset/rollout code |
+| Known keys, required/recommended fields, defaults, path roles, value checks | `ai_cae4all/specs/<method>.py` |
+| Model → spec routing | `ai_cae4all/registry.py` |
+| Parsing and path-key behavior | `ai_cae4all/config_parser.py` |
+| Native fail-fast validation | the method's `general_modules/config_validation.py` (Neural_Operator, Transolver) or its native loader |
+| HDF5 layouts | [reference/DATASET_FORMAT.md](reference/DATASET_FORMAT.md), plus each method's dataset code |
+| Studio dropdown values | `CHOICES` in `studio/src/constants.js`, which mirrors the spec validators |
+| Per-key meaning | the method docs in [methods/](methods/README.md) and [reference/config/](reference/config/) |
 
-Some specs retain removed or method-inactive keys solely to emit a precise
-diagnostic instead of an “unknown key” error. Membership in `known_keys` does
-not by itself mean a setting is active; the spec validator decides that.
+A key being in `known_keys` does not by itself mean it is active. Some specs
+keep removed or method-inactive keys only so they can report them precisely
+instead of as "unknown". `--explain-config` shows each key as configured,
+defaulted, inactive or checkpoint-owned.
 
-To print a live catalog from the suite registry:
+To print the live key catalog of every route:
 
-```powershell
-python -c "from pathlib import Path; from cae_suite.registry import MethodRegistry; r=MethodRegistry(Path('.')); [print(','.join(s.model_ids), *sorted(s.known_keys), sep='\n  ') for s in r.specs]"
+```bash
+python -c "from pathlib import Path; from ai_cae4all.registry import MethodRegistry; r=MethodRegistry(Path('.')); [print(','.join(s.model_ids), *sorted(s.known_keys), sep='\n  ') for s in r.specs]"
 ```
 
-## Important cross-method contracts
+## Cross-method contracts
 
-- Static `T=1` datasets use direct-field targets; temporal datasets use the
-  configured autoregressive integration contract. Confirm behavior from the
-  HDF5 layout, loader, and rollout path together.
-- Inference restores architecture and normalization metadata from the selected
-  checkpoint; an inherited training config is not evidence of checkpoint
-  compatibility.
-- `write_preprocessing` is method-specific. Neural Operator keeps source HDF5
-  files read-only; Transolver only permits a dedicated runtime copy.
-- Neural Operator `use_parallel_stats` controls train-fit normalization-stat
-  computation. Its distributed-only `train_eval_subset_size` must be positive.
-- Variational MeshGraphNets uses Adam; `weight_decay` is coupled L2 decay and
-  defaults to `0.0` when omitted. Deterministic MeshGraphNets uses AdamW.
-
-## Method-specific detail
-
-Use the method repository's own docs for architecture-specific meaning. In
-particular, see [reference/config/meshgraphnets_variational.md](reference/config/meshgraphnets_variational.md),
-`Neural_Operator/CLAUDE.md`,
-`methods/SDFFlow/CLAUDE.md`, and `MLP/CLAUDE.md`.
+- **Mesh rows.** The mesh HDF5 holds coordinates, then `input_var` state rows,
+  then `cond_var` condition rows, then an optional node-type row.
+  - State rows are input and output.
+  - Condition rows are input only: read, normalized separately and carried
+    through rollout unchanged, never predicted.
+  - `input_var`/`output_var` are yours to set; with conditions present they are
+    not the row count.
+  - `input_var == output_var` is required for temporal data.
+- **Static vs temporal.** `T = 1` datasets train on the field itself. `T > 1`
+  datasets train on deltas, under `time_integration ar_ot` (default) or `ar_rt`.
+- **Inference is checkpoint-led.** Architecture and normalization come from the
+  checkpoint. Architecture keys in an inference config may be overridden after
+  load. Runtime choices stay with the config: dataset, output, rollout length,
+  sample count.
+- **The held-out set is its own file.** Every dataset has a `_infer.h5`
+  companion. Point `infer_dataset` at it, not at the training file.
+- **`write_preprocessing`** is per method. Neural_Operator keeps the source HDF5
+  read-only. Transolver allows it only on a dedicated runtime copy.
+- **`resume_training true`** checkpoints the full training state every
+  `resume_interval_minutes` and resumes a killed run with the same config.
+  Multi-process entry points reject it.

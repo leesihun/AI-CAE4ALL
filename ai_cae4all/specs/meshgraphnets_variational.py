@@ -177,7 +177,7 @@ def validate_variational(ctx: SpecValidationContext) -> None:
             Severity.WARNING,
             f"{name} was removed from the variational runtime; the native code silently ignores it.",
             field_name=name,
-            hint="Delete the line, or check docs/CONFIG_REFERENCE.md for the replacement control.",
+            hint="Delete the line, or check docs/reference/config/meshgraphnets_variational.md#removed-and-renamed-keys for the replacement control.",
             promote_in_strict=True,
         )
 

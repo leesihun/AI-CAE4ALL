@@ -19,7 +19,7 @@
 # "==== END ====" (brief.py); brief.py prints the same block at any time.
 #
 # ORDER OF WORK
-#   1. environment  launcher python imports cae_suite; the MGN-V interpreter
+#   1. environment  launcher python imports ai_cae4all; the MGN-V interpreter
 #                   imports torch / torch_geometric / h5py and runs a bf16
 #                   matmul and a scatter on GPU 0; the checkout has split_group_attr.
 #   2. data         every dataset a config names exists (exact case), and so
@@ -547,9 +547,9 @@ echo "=================================================================="
 
 # ------------------------------------------------------------ 1. environment
 echo "---- 1. environment ----------------------------------------------"
-echo "  [$(date +%T)] launcher python '$PYTHON': import cae_suite"
-"$PYTHON" -c "import cae_suite" 2>/dev/null \
-    || die "launcher python '$PYTHON' cannot import cae_suite. Set PYTHON=/path/to/python."
+echo "  [$(date +%T)] launcher python '$PYTHON': import ai_cae4all"
+"$PYTHON" -c "import ai_cae4all" 2>/dev/null \
+    || die "launcher python '$PYTHON' cannot import ai_cae4all. Set PYTHON=/path/to/python."
 
 PROBE_TIMEOUT="${PROBE_TIMEOUT:-900}"
 NGPU_SEEN=""
@@ -561,7 +561,7 @@ for m in $METHODS; do
     if [ -z "$py" ]; then
         py="$("$PYTHON" -c "
 from pathlib import Path
-from cae_suite.settings import LocalSettings
+from ai_cae4all.settings import LocalSettings
 print(LocalSettings.load(Path('.')).resolve_python('$model_id', '$spec_id'))
 ")" || die "could not resolve the $label interpreter (ai_cae4all.local.toml); set $var."
     fi
@@ -641,7 +641,7 @@ done
 "$PYTHON" - "$CFG_LIST" "$HELDOUT_LIST" $INFER_ONLY <<'PY' || die "missing configs, dataset files or checkpoints (listed above)."
 import sys
 from pathlib import Path
-from cae_suite.config_parser import parse_config
+from ai_cae4all.config_parser import parse_config
 
 DIRS = {"mgnv": "methods/MeshGraphNets_Variational"}
 missing_cfg, needed, heldout = [], {}, set()

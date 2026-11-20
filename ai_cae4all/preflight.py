@@ -213,7 +213,7 @@ def _probe_dataset(
     path = result.resolved_paths.get(field_name)
     if path is None or not path.is_file():
         return
-    script = suite_root / "cae_suite" / "dataset_probe.py"
+    script = suite_root / "ai_cae4all" / "dataset_probe.py"
     try:
         completed = subprocess.run(
             [str(result.python_executable), str(script), kind, str(path)],
@@ -408,7 +408,7 @@ def _validate_table_against_config(result: PreflightResult, field_name: str) -> 
 
 def _probe_native(result: PreflightResult, suite_root: Path) -> None:
     assert result.resolved is not None and result.python_executable is not None
-    script = suite_root / "cae_suite" / "native_probe.py"
+    script = suite_root / "ai_cae4all" / "native_probe.py"
     try:
         completed = subprocess.run(
             [str(result.python_executable), str(script), str(result.parsed.source_path)],
@@ -448,7 +448,7 @@ def _probe_native(result: PreflightResult, suite_root: Path) -> None:
 
 def _probe_checkpoints(result: PreflightResult, suite_root: Path) -> None:
     assert result.resolved is not None and result.python_executable is not None
-    script = suite_root / "cae_suite" / "checkpoint_probe.py"
+    script = suite_root / "ai_cae4all" / "checkpoint_probe.py"
     checkpoint_fields = [
         (field_name, path)
         for field_name, path in result.resolved_paths.items()

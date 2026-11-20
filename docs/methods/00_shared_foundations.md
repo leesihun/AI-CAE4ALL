@@ -1,198 +1,222 @@
-# 00 — Shared Foundations (data contract, blocks, training)
+# 00 — Shared foundations of the mesh models
 
-This page collects the conventions that **every mesh-based method** in the suite
-reuses, so the individual method docs can focus on architecture. Read this once;
-the MGN / HI-MGN / BSMS-GNN / Variational / Transolver / Neural-Operator docs all
-reference it.
+These are the concepts that MeshGraphNets ([01](01_MeshGraphNets_MGN.md)),
+HI-MGN ([02](02_HI-MGN.md)), BSMS-GNN ([03](03_BSMS-GNN.md)) and MGN-V
+([04](04_MeshGraphNets_Variational.md)) have in common. Transolver and the
+Neural Operators read the same dataset, but they use their own blocks.
 
----
+The two trees, [methods/MeshGraphNets/](../../methods/MeshGraphNets/) and
+[methods/MeshGraphNets_Variational/](../../methods/MeshGraphNets_Variational/),
+share no imports. The modules named below exist in both trees unless the text
+says otherwise.
 
-## 1. The shared mesh HDF5 dataset
+## 1. Dataset contract
 
-MeshGraphNets, HI-MGN, BSMS-GNN, MeshGraphNets-Variational, Transolver, and the
-four Neural-Operator backends **all read the same file layout with no conversion
-step**. (SDFFlow is the exception — it uses a different SDF layout, documented in
-[09_SDFFlow.md](09_SDFFlow.md).)
+The full specification is in
+[DATASET_FORMAT.md](../reference/DATASET_FORMAT.md). In short:
 
-```text
-dataset.h5
-  attrs: num_samples, num_features, num_timesteps
-  data/{sample_id}/
-    nodal_data   [num_features, num_timesteps, num_nodes]
-    mesh_edge    [2, E]                      # unique undirected element edges
-    metadata/    per-sample source + size attrs, per-feature summary stats
-  metadata/
-    feature_names
-    normalization_params/  (builder stats; train-derived normalizers appended)
-    splits/{train,val,test}                  # NOT consumed by training
-```
+- The data for one sample is `data/{sample_id}/nodal_data` with shape
+  `[F, T, N]`, plus `data/{sample_id}/mesh_edge` with shape `[2, E]`.
+- The rows of `nodal_data` are:
 
-### `nodal_data` feature rows (standard builder)
+  | Rows | Content | Role |
+  | --- | --- | --- |
+  | `0:3` | reference coordinates | `graph.pos`; never an input channel or a prediction |
+  | `3 : 3+input_var` | state | input and output |
+  | next `cond_var` rows | conditions | input only (see [§4](#4-input-only-conditions-cond_var)) |
+  | last row (if present) | node type / part label | copied through to rollouts |
 
-| Row | Meaning |
-| --- | --- |
-| `0,1,2` | x, y, z **reference** coordinates (never part of `input_var`) |
-| `3,4,5` | x, y, z displacement |
-| `6` | stress / scalar field (when present) |
-| `7` | part number (node type) — only present when the file has > 7 rows |
+- **Static (`T = 1`):** the state input is zeroed, and the target is the
+  absolute field `nodal_data[3:3+output_var]`.
+- **Temporal (`T > 1`):** the input is the state at step `t`, and the target
+  is the delta `state[t+1] − state[t]`. The AR loop needs
+  `input_var == output_var`.
+- **Splits:** training makes its own 80/10/10 split from the sorted sample
+  IDs, seeded by `split_seed` (default 42). It ignores any splits stored in
+  the file. With `split_group_attr`, every sample that shares
+  `data/{sid}/metadata.attrs[<attr>]` lands in the same split
+  ([grouped_split.py](../../methods/MeshGraphNets/general_modules/grouped_split.py)).
+- **Normalizers:** z-score statistics for nodes, edges and deltas come from
+  the train split. They are stored in the checkpoint. Training also writes
+  them back into the HDF5 unless `write_preprocessing false` is set.
 
-**Static (`num_timesteps == 1`) vs temporal (`> 1`):**
+## 2. Graph encoding
 
-- Static: physical input channels are **zeros**, target = `nodal_data[3:3+output_var]` (the final state).
-- Temporal: input = `nodal_data[3:3+input_var, t]`, target = `state[t+1] − state[t]` (a **delta**).
-
-`pos` is always the reference-coordinate slice. Training builds its **own
-deterministic 80/10/10 split** from sorted sample IDs seeded by `split_seed`; the
-stored `metadata/splits` are ignored.
-
----
-
-## 2. Node & edge features
-
-### Node input width
+### Node features
 
 ```text
-node_input_size = input_var + positional_features + (num_node_types if use_node_types)
+graph.x = [ state (input_var) | conditions (cond_var) | positional (positional_features) | node-type one-hot (num_node_types) ]
 ```
 
-- **`positional_features`** — rotation-invariant node identity features, in order:
-  1. distance from graph centroid,
-  2. mean neighbor edge length,
-  3. RWPE (random-walk return probabilities at powers 2, 4, 8, 16, 32).
-- **`use_node_types`** — reads feature row 7, maps observed part IDs to contiguous
-  indices, appends a **one-hot** vector. Mapping + count are saved in the checkpoint.
+- `positional_features` are rotation-invariant features, in this order:
+  1. distance from the centroid,
+  2. mean incident edge length,
+  3. RWPE (random-walk return probabilities at k = 2, 4, 8, 16, 32).
 
-### Edge features (`edge_var` must be `8`)
+  See [positional_features.py](../../methods/MeshGraphNets/general_modules/positional_features.py).
+- `use_node_types` reads the **last** row of `nodal_data` at `t = 0`. It maps
+  the observed labels to contiguous indices and appends a one-hot vector.
+  `num_node_types` is derived from the data and cannot be set in a config.
+  The mapping is saved in the checkpoint.
 
-Edge attributes are **not stored**; they are recomputed from reference + deformed
-positions at load time, and reused for mesh edges, world edges, and coarse edges:
+### Edge features
+
+`edge_var` must be `8` (spec code `MGN-EDGE-001`). Edge features are
+recomputed when a sample is loaded, never stored in the file:
 
 ```text
-[ deformed_dx, deformed_dy, deformed_dz, deformed_dist,
-  ref_dx,      ref_dy,      ref_dz,      ref_dist ]
+[ deformed dx, dy, dz, |d|,  reference dx, dy, dz, |d| ]
 ```
 
-For AR-RT rollout only the 4 deformed channels are recomputed per step (reference
-geometry is fixed); a `1e-12` epsilon guards `‖r‖`'s gradient at coincident nodes.
+The code is in [edge_features.py](../../methods/MeshGraphNets/general_modules/edge_features.py).
 
-### World edges (optional contact edges)
+- With `use_deformed_edge true` (the default), the deformed geometry is the
+  reference plus the state columns listed in `displacement_indices`. Use `-1`
+  to pad a missing axis with zero.
+- With `use_deformed_edge false`, both halves use the reference geometry.
+- These two keys replace `geometry_state_mode` and
+  `displacement_state_indices`. The launcher (`CFG-RENAMED-001`) and the
+  native loader both refuse the old names.
+- A `1e-12` epsilon inside the square root keeps the gradient of `|d|` finite
+  at coincident nodes.
+- MGN-V also accepts `periodic_box` (three lengths, `0` = not periodic) to
+  apply the minimum-image convention to relative vectors.
 
-When `use_world_edges True`, radius edges are built from **deformed** positions at
-each sample access (`torch_cluster.radius_graph` on GPU, or scipy KDTree), mesh
-edges are filtered out to keep the sets disjoint, and 8-D features are computed
-with the same layout/normalizers. Radius = `world_radius_multiplier ×` min sampled
-mesh-edge length.
+### World edges (optional)
 
----
+With `use_world_edges true`, radius edges are added from the **deformed**
+positions ([world_edges.py](../../methods/MeshGraphNets/general_modules/world_edges.py)):
 
-## 3. The MeshGraphNets building blocks
+- **Radius:** `world_radius_multiplier` (default 1.5) × the minimum mesh-edge
+  length in the training data. The radius is stored in
+  `checkpoint['normalization']`, so inference uses the same value.
+- **Disjoint from the mesh:** pairs that are already mesh edges are removed.
+- **Features:** the same 8-D layout as mesh edges, normalized with the
+  mesh-edge statistics.
+- **Backend:** `world_edge_backend` is `scipy_kdtree` (the dataset default),
+  `torch_cluster`, or `auto`. `world_max_num_neighbors` (default 64) caps the
+  neighbors per node, and `torch_cluster` silently truncates past that cap.
+- **During a rollout:** the edges are rebuilt at every step from the
+  predicted geometry.
+- **On coarse levels:** with `use_multiscale`, `coarse_world_edges true` adds
+  world edges to every coarse level too.
 
-These are the atoms of MGN, HI-MGN, BSMS-GNN, the Variational encoder, and the
-Variational conditional prior.
+## 3. Encode–process–decode blocks
 
-### `build_mlp` — the universal MLP
+The blocks live in `model/mlp.py`, `model/encoder_decoder.py` and
+`model/blocks.py`.
 
-```text
-Linear(in,  hidden) → SiLU → Linear(hidden, hidden) → SiLU → Linear(hidden, out) → [LayerNorm]
-```
+- **`build_mlp`:** `Linear → SiLU → Linear → SiLU → Linear`, followed by a
+  LayerNorm. Weights use Kaiming-uniform init and biases start at zero. Under
+  `use_amp`, the LayerNorm runs on the bf16 activations.
+- **Encoder:** one node MLP, one mesh-edge MLP (`8 → latent_dim`), and a
+  world-edge MLP when world edges are on.
+- **`GnBlock`:**
+  1. The edge MLP takes `[x_s, x_r, e]` and updates `e`.
+  2. Messages are **sum**-aggregated at the receiver.
+  3. The node MLP takes `[x, Σe]` and updates `x`.
 
-Two hidden layers, SiLU activation, Kaiming-uniform weights, zero bias. LayerNorm
-is appended everywhere **except** the final decoder heads.
+  Both updates are residual. With world edges, `HybridNodeBlock` reads
+  `[x, Σe_mesh, Σe_world]` instead. The first Linear is split per input
+  (`split_linear`), so the `[E, 3·latent_dim]` concatenation is never built.
+- **Decoder:** an MLP **without** LayerNorm. When `num_timesteps` is unset or
+  greater than 1, its last layer is scaled by 0.01, so a temporal model starts
+  near "no change".
 
-### `Encoder`
+## 4. Input-only conditions (`cond_var`)
 
-- node encoder: `node_input_size → latent_dim`
-- mesh-edge encoder: `8 → latent_dim`
-- optional world-edge encoder: `8 → latent_dim`
+`cond_var` rows are known per-node conditions. Examples are loads,
+temperatures and process settings.
 
-### `GnBlock` — one message-passing step (residual)
+- The model reads them at every step but never predicts them.
+- They have their own normalization statistics.
+- They are present even when the static state input is zeroed.
+- An AR rollout carries them through unchanged.
 
-```mermaid
-flowchart LR
-    subgraph GnBlock
-    direction LR
-    E["edge_attr eₖ"] --> EB["EdgeBlock MLP\n[xₛ, x_r, eₖ] → latent"]
-    X1["x sender/receiver"] --> EB
-    EB --> AGG["scatter-SUM\nreceived edges → node"]
-    X2["x node"] --> NB["NodeBlock MLP\n[x, Σ eₖ] → latent"]
-    AGG --> NB
-    NB --> RES1["x + Δx"]
-    EB --> RES2["e + Δe"]
-    end
-```
+`cond_var 0` (the default) gives the unconditioned model.
 
-- **EdgeBlock**: MLP over `[sender_x, receiver_x, edge]` (input `3·latent_dim`).
-- **NodeBlock**: MLP over `[x, sum-aggregated incoming edges]` (input `2·latent_dim`).
-- **HybridNodeBlock** (world edges on): MLP over `[x, mesh_agg, world_agg]` (input `3·latent_dim`).
-- Aggregation is **sum** (matches NVIDIA PhysicsNeMo `deforming_plate`).
-- Updates are unscaled residuals: `x ← x + Δx`, `e ← e + Δe`.
+## 5. Training and rollout
 
-> The first `Linear` of each block runs in "split" form (`_split_first_linear`) so
-> the `[E, 3·latent]` concatenation is never materialized — an activation-memory
-> optimization that is numerically identical to the naive concat.
+| Aspect | MeshGraphNets | MGN-V |
+| --- | --- | --- |
+| Loss | MSE on the normalized target | `recon_loss`: `huber` (default, δ = 1) or `mse`, weighted by `alpha_recon`, plus the VAE terms ([04](04_MeshGraphNets_Variational.md#training-objective)) |
+| Per-channel weights | `feature_loss_weights`, normalized to sum to 1 | same |
+| Optimizer | fused AdamW with decoupled `weight_decay` (default 0) | Adam with coupled `weight_decay` (default 0) |
+| Schedule | `LinearLR` warmup over `warmup_epochs` (default 3), then `CosineAnnealingWarmRestarts` over the remaining epochs | same |
+| Gradient clipping | max-norm 3.0 | same |
+| Precision | `use_amp`: bf16 autocast where native, otherwise fp16 with a GradScaler | same |
+| Memory | `use_checkpointing` (activation recomputation), `grad_accum_steps` (`0` = the whole epoch) | same |
+| EMA | `use_ema`, `ema_decay`; the EMA model is used for validation and saved with the checkpoint | same |
+| Checkpoint written | once, at the end of training (an interrupted run saves nothing) | on every new best by `best_by`; the last epoch if no epoch validated |
 
-### `Decoder`
+**Input noise (`std_noise`):** during training, Gaussian noise is added to
+the leading `output_var` state channels. It is in normalized units. The
+deformed half of every mesh and world edge feature is then rebuilt from the
+perturbed positions. Coarse edges and the world-edge connectivity are not
+re-searched. The target is corrected by
+`noise_gamma × noise × noise_std_ratio`, where `noise_std_ratio` is computed
+as `node_std / delta_std` and not set by hand. See
+[input_noise.py](../../methods/MeshGraphNets/general_modules/input_noise.py).
 
-```text
-build_mlp(latent_dim, latent_dim, output_var, layer_norm=False)
-```
+**Time integration (`time_integration`)** follows arXiv:2510.15201:
 
-For delta prediction (`num_timesteps` absent or `> 1`), the last decoder layer's
-weights are multiplied by `0.01` at construction so the model starts near "no
-change" — critical for autoregressive stability.
+- `ar_ot` (the default) trains on one-step pairs with teacher forcing.
+- `ar_rt` unrolls the whole training trajectory and backpropagates through
+  it ([ar_rollout.py](../../methods/MeshGraphNets/training_profiles/ar_rollout.py)).
+  It needs `num_timesteps > 1`.
 
----
+**Inference (`mode inference`)** rolls the model forward for
+`infer_timesteps` steps from each sample of `infer_dataset`. After every step
+it rebuilds the deformed edge features, and the world edges if they are on.
+The checkpoint's `model_config` overrides the config file for every
+architecture key. Changing such a key only in the inference config therefore
+has no effect.
 
-## 4. Training conventions (deterministic mesh models)
+**Periodic visualization:** every `test_interval` epochs, a 2×2 PNG is
+written next to the epoch log at `log_file_dir`. It shows prediction against
+truth, normalized and denormalized, coloured by `plot_feature_idx`. Set
+`display_testset` / `display_trainset` to choose which split is drawn.
 
-Shared by MGN / HI-MGN / BSMS-GNN and closely mirrored by Transolver and the
-Neural Operators.
+## 6. Multiscale basics
 
-| Aspect | Value |
-| --- | --- |
-| Loss | MSE on normalized deltas (deterministic MGN); Huber/MSE via `recon_loss` in the Variational tree |
-| Per-channel weighting | `feature_loss_weights`, normalized to sum to 1 |
-| Optimizer | Adam (fused on CUDA) / AdamW |
-| Schedule | Linear `warmup_epochs`, then cosine warm restarts |
-| Precision | bfloat16 autocast when `use_amp True` |
-| Grad clipping | max-norm `3.0` |
-| Regularization | `std_noise` injected on inputs during training, with matching target correction (`noise_gamma`, `noise_std_ratio`) |
-| EMA | Optional shadow model (`use_ema`, `ema_decay`) used for validation/inference |
-| Checkpointing | Optional activation checkpointing (`use_checkpointing`) |
-| Compile | Optional `torch.compile(dynamic=True)` (`use_compile`) |
+`use_multiscale true` replaces the flat processor with a V-cycle over a
+coarsening hierarchy. [02](02_HI-MGN.md) describes it in full. In brief:
 
-### Time integration — `time_integration`
+- `mp_per_level` has `2·multiscale_levels + 1` entries: the down arm, the
+  coarsest level, then the up arm.
+- `coarsening_type` is one mode per level: `bfs`, `voronoi_centroid`,
+  `voronoi_inherit` or `voronoi_seedmean`.
+- `voronoi_clusters` sets the Voronoi cluster counts. The spec requires the
+  key whenever multiscale is on, even for `bfs`.
+- Hierarchies are computed once per run into a shared
+  `*.mscache.<digest>.h5` file
+  ([multiscale_cache.py](../../methods/MeshGraphNets/general_modules/multiscale_cache.py)).
+  The file is deleted after training unless `hierarchy_cache_keep true` is
+  set. The relevant keys are `hierarchy_cache_dir`,
+  `hierarchy_cache_build_workers` and `hierarchy_cache_wait_timeout`
+  (default 36000 s).
 
-Follows NVIDIA/GM crash-dynamics naming (arXiv:2510.15201):
+## 7. Mid-training resume
 
-- **`ar_ot`** (default) — *Autoregressive, One-step Training*. Trained on
-  ground-truth consecutive pairs (teacher forcing); only consumes its own
-  predictions at inference. Relies on `std_noise` as the error-correction proxy.
-- **`ar_rt`** — *Autoregressive, Rollout Training*. Unrolled over the whole
-  trajectory during training, backpropagating through every step
-  (gradient-checkpointed, no noise), so it learns to correct its own accumulated
-  error. Requires `num_timesteps > 1`.
+`resume_training true` saves `<modelpath>.resume` at the first epoch boundary
+after every `resume_interval_minutes` (default 15). The file holds the model,
+EMA, optimizer, scheduler and RNG state. A restart with the same config
+fingerprint continues from that file, and the file is deleted once the final
+checkpoint is written. Multi-GPU and `model_split` training reject the key
+([resume_state.py](../../methods/MeshGraphNets/general_modules/resume_state.py),
+identical in every training repo).
 
-### Checkpoint contents
+## 8. Config parsing
 
-`model_state_dict`, optional `ema_state_dict`, optimizer/scheduler state, train &
-val losses, `normalization` (node/edge/delta z-score stats, world-edge radius,
-node-type map, coarse-edge stats), and an **architecture-critical `model_config`**.
-At inference the checkpoint's `model_config` **overrides** the runtime config for
-shape safety — so changing an architecture key only in an inference config may not
-take effect.
+The launcher ([ai_cae4all/config_parser.py](../../ai_cae4all/config_parser.py))
+and each tree's `general_modules/load_config.py` parse configs the same way:
 
----
+- Every line is `key value`.
+- A line that starts with `%` is skipped, and `#` starts an inline comment.
+- Keys are lowercased. String values are lowercased too, except path keys.
+- A single value is a bare scalar, and comma-separated values become a list.
+- `1e-4` stays a string, so consumers convert numbers explicitly.
+- `true`/`false` become booleans.
+- A BOM or a duplicate key is an error.
 
-## 5. Launcher & per-method interpreters
-
-The suite launcher (`cae_suite/`) parses the flat `key value` config, routes on
-`model`, runs a layered preflight (spec → filesystem → environment → dataset →
-checkpoint → native probe), and **subprocess-launches** the method's native
-entrypoint in **that method's own venv** (configured in `ai_cae4all.local.toml`).
-
-**Config parser quirks that every method inherits** (do not "fix"):
-
-- A single value parses to a **bare scalar**, not a 1-element list (`test_batch_idx 0` → `0`).
-- `100` → `int`; `1e-4` has no `.` so it stays a **string** — numeric consumers convert explicitly.
-- `true`/`false` → `bool`; `%` and `#` start comments; a UTF-8 **BOM is a hard error**; duplicate keys are an error.
+See [CONFIGURATION.md](../CONFIGURATION.md) for the full grammar.

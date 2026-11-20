@@ -1,48 +1,59 @@
 # The AI-CAE4ALL Studio (GUI)
 
-The Studio is a browser front end for the same launcher the CLI uses. You build
-a pipeline out of typed blocks, and every executable block is turned into a
-native flat-text config, validated by `cae_suite`'s real preflight, and run as
-the same subprocess `AI_CAE4ALL_main.py` would start.
+The Studio is a browser front end for the launcher the CLI uses. You build a
+pipeline out of typed blocks. Each executable block becomes a native flat-text
+config, is validated by `ai_cae4all`'s real preflight, and runs as the
+subprocess `AI_CAE4ALL_main.py` would start. The Studio imports no ML code:
+**when the GUI and the launcher disagree, the launcher is right.**
 
-Nothing in the Studio reimplements a model. If the GUI and the launcher ever
-disagree, the launcher is right and the GUI has a bug.
-
-- **Manual (this file)** — what the GUI does and how to drive it.
-- [guides/studio.md](guides/studio.md) — the front-end's own notes: local API
-  surface, review URLs, integration boundary.
-- [`cae_suite/specs/`](../cae_suite/specs/) — the executable source of truth for
-  every config key the GUI shows.
+- [`ai_cae4all/specs/`](../ai_cae4all/specs/) is the source of truth for every
+  config key the GUI shows.
+- [videos/README.md](videos/README.md) has two recorded walkthroughs.
 
 ---
 
 ## Start it
 
 ```bash
+python -m pip install -r studio/requirements.txt   # numpy, h5py, trimesh, meshio, gmsh
 cd studio
-python start_studio.py          # http://127.0.0.1:8080/index.html (default port 8080)
-python start_studio.py 8090     # any other port
+python start_studio.py          # http://127.0.0.1:8080/index.html
+python start_studio.py 8090     # another port
 ```
 
-`START_STUDIO.bat` does the same on Windows and opens a browser.
+On Windows, `studio\START_STUDIO.bat [port]` does the same. It uses the first
+interpreter it finds: `AI_CAE_STUDIO_PYTHON`, then the active venv
+(`VIRTUAL_ENV`), then `python`, `py`, `python3`, `CONDA_PREFIX`.
 
-The console must print `AI-CAE4ALL Studio is ready`. The badge at top right
-reports live discovery (for example `11/11 entrypoints found`) and must agree
-with `GET /api/models`.
+The console prints `AI-CAE4ALL Studio is ready.` and opens the browser. If the
+port is taken, it says so and suggests the next one. Do not serve `studio/`
+with `python -m http.server`. That shows the HTML but has no API, so preflight,
+runs and file browsing do not work.
 
-**One server per port.** `StudioHTTPServer` sets `allow_reuse_address = False`
-precisely so a second instance fails loudly instead of splitting requests with
-the first. If an edit to a spec or to `studio_backend/` "does not take", the
-server is holding the old module: restart it. The registry is read once at
-startup.
+The top-right badge (`N/N entrypoints found`) counts registered model IDs whose
+repository and entrypoint exist: 10 on a fresh checkout, 12 with the optional
+SAR/LDGN routes. It checks discovery only. Environment and data are checked when
+you Validate.
 
-**Local requests only.** The server launches processes and reads the
-repository, so on a specific bind address (the default `127.0.0.1`) it answers
-only a `Host` of `127.0.0.1`, `localhost`, `[::1]` or the bound host, at its
-own port (anything else is 403, which defeats DNS rebinding). A POST whose
-`Origin` is present and foreign -- including `null` -- is 403. JSON endpoints
-require `Content-Type: application/json` (415 otherwise); `/api/upload` takes a
-raw body and is exempt. A wildcard bind (`0.0.0.0`) skips the Host check.
+**One server per port, and the registry is read once at startup.**
+`StudioHTTPServer` sets `allow_reuse_address = False`, so a second instance
+fails instead of sharing the port. After editing `ai_cae4all/specs/` or
+`studio_backend/`, restart the server.
+
+**Local requests only.** On a specific bind address (the default `127.0.0.1`),
+the server answers only a `Host` of `127.0.0.1`, `localhost`, `[::1]` or the
+bound host at its own port. Anything else gets 403, which blocks DNS rebinding.
+A POST with a foreign `Origin` (including `null`) also gets 403. JSON endpoints
+require `Content-Type: application/json` and return 415 otherwise. This is a
+single-user development server, not a hosted service.
+
+Review URLs:
+
+| URL | Opens |
+| --- | --- |
+| `index.html` | the saved workspace, or the HI-MGN template |
+| `index.html?review=config` | the SimulGen-VAE template with its config sheet open |
+| `index.html?review=optimization` | the Design optimization template with the Optimization workspace open |
 
 ---
 
@@ -50,406 +61,267 @@ raw body and is exempt. A wildcard bind (`0.0.0.0`) skips the Host check.
 
 | Region | What it is |
 | --- | --- |
-| Top bar | Workspace nav, runtime health, **Validate**, **Run pipeline** |
-| Left | Block library (search, drag or click to add) |
-| Centre | Canvas: blocks, typed ports, zoom/fit/auto-layout, pipeline name |
+| Top bar | Workspace nav, route-health badge, `?` (shortcuts), **Validate** (V), **Run pipeline** (Ctrl+Enter) |
+| Canvas toolbar | Library, template picker, Save (Ctrl+S), Export / Import (`.json`), Auto layout (L), Undo (Ctrl+Z), Inspector, zoom −/fit (F)/+ |
+| Left | Block library: search, then drag or click to add |
+| Centre | Canvas with blocks and typed ports |
 | Right | Inspector for the selected block or connection |
-| Bottom | Runtime drawer: live log, per-step diagnostics, other jobs |
+| Bottom | Runtime drawer: live log, diagnostics, all jobs, Copy log, Stop process |
 
-Twelve workspaces open over the canvas: Models, Data, Runs, Optimization,
-Benchmarks, Artifacts, Deploy, System, Docs, plus the Evaluation, Comparison and
-Export surfaces reached from their blocks.
+The nav opens these workspaces over the canvas: Pipeline, Models, Data,
+Geometry, Runs, Optimization, Benchmarks, Artifacts, Deploy, System, Docs.
+Evaluation, Compare and Export open from their blocks.
 
 ---
 
-## Pipelines and templates
+## Templates
 
-The picker in the canvas toolbar is generated from `TEMPLATES` in
-`studio/src/constants.js` and grouped by what each pipeline trains. Every live
-route has a default profile.
+The picker is generated from `TEMPLATES` in `studio/src/constants.js`. Templates
+are grouped by the blocks they contain. Every live route has a default profile
+that mirrors a checked-in config.
 
 | Group | Templates |
 | --- | --- |
-| Mesh field surrogates | HI-MGN multiscale (default), MeshGraphNets flat, MeshGraphNets-V, Transolver, FNO, DeepONet, Point-DeepONet |
-| Fixed-geometry and tabular | SimulGen-VAE reconstruction, Parametric response estimation (MLP) |
-| Generative geometry | SDFFlow train (DeepJEB), Design optimization |
+| Mesh field surrogates | HI-MGN multiscale (default), MeshGraphNets flat, MeshGraphNets-V, Transolver, FNO, DeepONet, Point-DeepONet; SAR and LDGN field ensembles when those routes are installed |
+| Fixed-geometry and tabular surrogates | SimulGen-VAE reconstruction (ex9), Parametric response estimation (MLP on `ex3_NASA_CRM_mlp_{train,test}.h5`) |
+| Generative geometry (SDFFlow) | SDFFlow train (DeepJEB), Design optimization (needs trained SDFFlow) |
 | Data preparation | Geometry to HDF5 (ingest) |
 | Start from scratch | Untitled pipeline |
 
-The mesh templates all target **ex9 plasticity**: `dataset/deterministic/ex9_plasticity.h5` to train and
-`dataset/deterministic/ex9_plasticity_infer.h5` held out (900 / 87 samples, 20 steps, 3131 nodes). Each
-mirrors its own checked-in training config — the two MeshGraphNets pipelines
-follow `configs/MeshGraphNets/deterministic/ex9/`,
-Transolver `configs/Transolver/deterministic/ex9/`, the three operators
-`configs/Neural_Operator/deterministic/ex9/`. MeshGraphNets-V has no checked-in ex9 config
-(it was left out of the ex4–ex9 roster as a one-to-many method), so its template
-reuses the ex9 dataset keys with MGN-V's own architecture.
-
-**The held-out split is a separate source block on purpose.** Feeding the
-training dataset into the Inference block makes the graph *say* "predict what
-you trained on", and the graph wins over the trainer's own `infer_dataset`. Two
-blocks keep the split visible where a reader can see it.
-
-**Design optimization preflights red on a fresh checkout, by design.** It
-consumes `output/geometry_generation/studio/sdfflow_{vae,fm}.pth`, which do not
-exist until *SDFFlow train* writes them. Its name says so.
+- **Mesh templates use ex9 plasticity.** They train on
+  `dataset/deterministic/ex9_plasticity.h5` and hold out
+  `ex9_plasticity_infer.h5`. The wiring is trainer → Train Metrics, and
+  held-out file → Inference → Evaluate → Export. The MeshGraphNets, Transolver
+  and operator templates follow their `configs/<Name>/deterministic/ex9/`
+  configs. MeshGraphNets-V has no ex9 config, so it reuses those dataset keys
+  with its own architecture.
+- **The held-out split is its own source block.** If you wire the training
+  dataset into Inference, the graph means "predict what you trained on", and the
+  graph overrides the trainer's `infer_dataset`.
+- **Design optimization fails preflight on a fresh checkout.** It reads
+  `output/geometry_generation/studio/sdfflow_{vae,fm}.pth`, which only exist
+  after *SDFFlow train* has run.
+- **Optional routes are hidden when absent.** `markUnregisteredModels` hides the
+  palette blocks and templates of any model the launcher does not report, so SAR
+  and LDGN appear only on machines that have `methods/{SAR,LDGN}/`.
 
 ---
 
 ## Blocks
 
-23 block types. `native` means a real launcher route or backend endpoint;
-`adapter` means the Studio composes existing outputs rather than computing new
-physics.
+`native` means a launcher route or backend endpoint. `adapter` means the Studio
+combines existing outputs and computes no new physics.
 
 | Category | Blocks |
 | --- | --- |
-| Sources (4) | CAD, HDF5 Dataset, Design Parameters, Saved ML Model |
-| Preparation (1) | Geometry → HDF5 Dataset |
-| Models (9) | one per live route: MeshGraphNets, MeshGraphNets-V (`latent_type` global / local / hybrid = HI-MGN-V / HI-MGNflow / HI-MGN-hybrid), Transolver, FNO, DeepONet, Point-DeepONet, SimulGen-VAE, SDFFlow, Simple MLP. HI-MGNflow (`chi-mgnflow`) was merged into `meshgraphnets-v` as `latent_type local` on 2026-10-19; the old repo is in git history (commit `9db47d6`) |
-| Execution (2) | Inference Run, CAD Generator |
-| Optimization (1) | Optimization |
-| Evaluation (3) | Evaluate Predictions, Train Metrics, Compare Models |
-| Outputs (1) | Export Results |
-| Deployment (1) | API Deployment |
+| Sources | CAD, HDF5 Dataset, Design Parameters, Saved ML Model |
+| Preparation | Geometry → HDF5 Dataset (the `geometry_ingest` route) |
+| Models | one per registered trainable route: MeshGraphNets, MeshGraphNets-V, Transolver, FNO, DeepONet, Point-DeepONet, SimulGen-VAE, SDFFlow, Simple MLP (+ SAR, LDGN when installed) |
+| Execution | Inference Run, CAD Generator |
+| Optimization | Optimization |
+| Evaluation | Evaluate Predictions, Train Metrics, Compare Models |
+| Outputs | Export Results |
+| Deployment | API Deployment |
 
-`geometry_ingest` is the tenth live route; it is exposed as the
-**Geometry → HDF5 Dataset** block rather than a model block, because it prepares
-data instead of learning.
+MeshGraphNets-V covers HI-MGN-V, HI-MGNflow and HI-MGN-hybrid through
+`latent_type` (`global` / `local` / `hybrid`). A route the front end has no
+catalog entry for still gets a generic model block (`registerLiveModel`).
 
-### Ports are typed
+**Ports are typed.** A link is offered only when the receiving port accepts the
+sending type and the link would not create a loop. Imported pipelines follow the
+same rule. `artifact` is a receive-side wildcard: Export accepts anything.
+Export's `files` output cannot stand in for a dataset. A required port is
+starred only in modes that need it. For example, SDFFlow `sample` reads no
+dataset. Optimization has one input, the candidate CSV it ranks. If a saved
+pipeline has a link to a removed port, the pipeline still loads, and the dropped
+link is named.
 
-A link is offered only when the receiving port accepts the sending type **and**
-the link would not close a loop. The `artifact` wildcard is receive-side only:
-Export accepts anything, but Export's own `files` output is not a substitute for
-a dataset. The same rule applies when a pipeline is imported, so a saved
-document cannot reintroduce a link the canvas refuses.
+**Cards and the inspector.** Card facts are read from real sources. An HDF5
+Dataset reads its file through `/api/hdf5/facts`: samples, nodes, timesteps,
+state fields, `cond_var` conditions, or shapes/points for SDF and rows/columns
+for a table. A model card shows the data file and the keys that identify the
+variant. Inference and Evaluate cards name the model and held-out file they
+read.
 
-A required port is marked `*` — and only in modes that actually require it.
-SDFFlow's `sample` mode reads no dataset, so its `data` port is not starred
-there.
+In the inspector, **At a glance** repeats those facts and **Connections** flags
+unwired required inputs. A model block shows eight mode-dependent rows: mode,
+dataset, checkpoint, epochs/batch/learning rate (or SDFFlow and SimulGen-VAE's
+per-stage keys), then the route's distinguishing keys. Everything else is under
+**Full config**. Other blocks show every field with one line of help. Inference
+hides knobs its linked family cannot read unless you set them.
 
-**A port that changes nothing is not shipped.** The Optimization block takes one
-input — the candidate/evaluation CSV it ranks — because that is all its code
-reads. A pipeline saved before a port was removed still loads; the stale link is
-dropped and named.
-
-### What a block card shows
-
-Every card carries up to four facts read from real sources, never a drawn
-placeholder: an HDF5 Dataset reads its file's attributes through
-`/api/hdf5/facts` (samples · nodes · timesteps, the state fields, the
-input-only `cond_var` conditions — or shapes/SDF points for SDFFlow, rows and
-columns for a table); a model block shows its data file and the architecture
-keys that identify the variant (HI-MGN levels, Transolver slices, FNO modes…);
-Inference and Evaluate name the model and the held-out file they read. The
-subtitle says the block's role in *this* graph — `Training set` or `Held-out
-set` for a dataset, taken from what its output feeds — and a model's variant and
-mode. One button opens the block's detail view; executable blocks add Run.
-
-### What the inspector shows
-
-**At a glance** repeats the card's facts, **Connections** lists what each port
-is linked to and flags a required input that is not, and the settings in
-between are labelled in words with the raw config key beside them. Prose rows
-that describe a block rather than configure it (`split`, `viewer`, `metrics`…)
-are not shown, and an Inference block hides the knobs its linked family cannot
-read (`infer_chunk_size` is Transolver-only, `inference_samples` MeshGraphNets-V-only;
-the `flow_*` keys of the retired HI-MGNflow route apply to no live family)
-unless you filled one in.
-
-For a **model block**, eight rows chosen by mode, not by the order keys happen
-to be written: the mode, the dataset it reads, the checkpoint it writes or
-loads, the epoch/batch/learning-rate trio (or the per-stage spellings SDFFlow
-and SimulGen-VAE use), then the keys that distinguish that route. Training-only
-keys are hidden in non-training modes. Everything else is under **Full config**.
-
-For every other block, all its fields with a one-line explanation each, because
-those blocks have no config sheet to carry the explanation.
-
-Rows tagged *fixed behaviour* are facts about what the block does, not controls.
-Rows tagged *auto · &lt;source&gt;* were filled from the graph; type over one to
-take manual control, clear it to follow the graph again.
+Row tags:
+- *fixed behaviour*: a fact about the block, not a control.
+- *auto · &lt;source&gt;*: filled from the graph. Type over it to take control,
+  or clear it to follow the graph again.
 
 ---
 
 ## Full config
 
-Every key the live `MethodSpec` accepts, sectioned (Required, Data & output,
-Architecture, Training, Resources & runtime, Inference & evaluation,
-Optimization, Advanced, Inactive / rejected), with:
+The full config is the config modal. It lists every key the live `MethodSpec`
+accepts, in sections from Required through Inactive / rejected. Each key shows a
+status (required, set, defaulted with the backend default, optional, inactive,
+rejected) and help from `HELP`. Dropdowns appear wherever the spec publishes a
+closed value set (`CHOICES`). Keys a route knows but does not honour are marked
+inactive or rejected instead of looking live.
 
-- **status** — required, set, defaulted (with the backend default shown),
-  optional, inactive, or rejected;
-- **help** — 182 documented keys, and an honest fallback when a key has none;
-- **dropdowns** wherever the spec publishes a closed value set, so the sheet
-  cannot offer a value the launcher rejects;
-- **rejected/inactive marking** for keys a route knows but does not honour —
-  the 34 keys MeshGraphNets' removed-feature guard raises on, and the 22 the
-  deterministic runtime silently ignores, are labelled instead of looking live.
+Controls: mode, preset + **Apply preset**, **Load .txt**, **Export .txt**,
+search, *Only values I set*, *Include inactive / rejected*, a raw-text panel
+(**Parse & apply**, **Regenerate text**), **Configure via LLM**, **Explain
+config**, **Run preflight**, **Save file & close**.
 
-Controls: section tabs, search, *changed only*, *show inactive*, mode switch,
-presets, `.txt` import/export, a raw-text tab, **Explain**, **Run preflight**,
-and **Save**.
+- **Loading or pasting text** marks a key as a manual override only where its
+  value differs from what the graph supplies, and names the keys that were
+  overridden. The raw panel converts between the form and text. It does not
+  keep comments or line order, and it reports how many comment lines it
+  dropped.
+- **Show field**: a preflight error that names a key gets this button. It
+  scrolls to the key and highlights it.
+- **Configure via LLM** sends the block's full config and your instruction to
+  the LLM endpoint set under System, after a confirmation that lists what will
+  be sent. You confirm again before the result is applied. The endpoint is
+  OpenAI-compatible, with settings in `studio/runtime/llm_client.local.json`.
+  The password comes from `AI_CAE_LLM_PASSWORD` or is entered under System. It is
+  kept in server memory only and never written to disk. HTTPS is the default;
+  plain HTTP needs an explicit opt-in.
 
-Pasting or loading a `.txt` marks a key as a manual override **only where its
-value differs from what the graph supplies** — an untouched `dataset_dir` keeps
-following the connected block — and the keys that genuinely were overridden are
-named. The raw tab is form ↔ text: comments and the author's line order are not
-preserved, and a paste says how many comment lines it dropped. A preflight error
-naming an accepted key renders a **Show field** button that scrolls to and
-flashes it; the diagnostics list stays put, so you can work down it.
+### Presets
 
-**High performance** and **Low VRAM** read the largest and the smallest
-checked-in train config for the route (`PRESET_SOURCES` in
-`studio/src/constants.js`; the menu names each one, e.g. "High performance
-(ex9 HI-MGN)"). Only the recipe is copied — architecture, optimizer, precision,
-memory switches. Paths, `opt_*`, seeds, epoch budgets and their schedules,
-`*_interval` cadence, the data contract (`input_var`/`output_var`/`cond_var`,
-node types, positional features, rollout) and dataset-tuned values
-(`kl_weight`, `inference_samples`) stay the block's own, and mesh-sized values
-(`voronoi_clusters`, FNO grid/modes, DeepONet sensor grid) are filled only when
-the block has none — a flat block switched to a hierarchy gets `voronoi_clusters
-512, 64`, the HI-MGN preset's ex9 value, not the source mesh's count. A value
-equal to the block's own (`1e-6` and `0.000001`) is not listed as a change. Low
-VRAM also sets `batch_size 1` where the recipe or the block runs more, and on
-MGN-V `inference_batch_size 1` (trajectories rolled out together —
-memory and speed only); SDFFlow and SimulGen-VAE keep their stage batch sizes
-as the source has them. For MeshGraphNets both presets are the HI-MGN recipe: activations are
-checkpointed per GnBlock, so memory follows the full-resolution block count
-(15 flat, 4 + 4 HI-MGN). MLP has no checked-in config and keeps
-**Studio defaults**.
+| Preset | What it does |
+| --- | --- |
+| High performance / Low VRAM | Copies the recipe (architecture, optimizer, precision, memory switches) from the largest / smallest checked-in train config named in `PRESET_SOURCES`. The menu names the source, e.g. "High performance (ex9 HI-MGN)" |
+| Smoke test | A tiny fixed run |
+| Studio defaults | Only for MLP, which has no preset source |
+| Route-specific | MGN: Flat MGN / HI-MGN / BSMS-GNN. SDFFlow: VAE only / Flow matching only. SimulGen-VAE: VAE only / LC only / Reconstruct fields. SAR/LDGN: VAE only plus one stage-only preset |
 
-The other presets apply a fixed set of values or a checked-in config.
+High performance and Low VRAM leave several groups unchanged:
+- paths, `opt_*`, seeds, epoch budgets and schedules, `*_interval`;
+- the data contract (`input_var`/`output_var`/`cond_var`, node types, rollout);
+- dataset-tuned values.
 
-**Post-training settings live on the CAD Generator, not on the SDFFlow block.**
-The SDFFlow model block is the generator being trained: its mode list offers the
-training modes and `evaluate`, while `sample`, `reconstruct`, `interpolate` and
-`optimize` are the CAD Generator's modes (a saved block already in one of them
-keeps it in its list). Every `opt_*` key is set on the CAD Generator:
+Mesh-sized values are filled only when the block has none. A flat block switched
+to a hierarchy gets `voronoi_clusters 512, 64`. Low VRAM also sets
+`batch_size 1`, except on SDFFlow and SimulGen-VAE, which keep their per-stage
+batch sizes.
 
-- the main rows in **Settings** -- `opt_analysis`, `opt_budget`,
-  `opt_baseline_size`, `opt_popsize`, `opt_load_cases`,
-  `opt_vertical_disp_max`, `opt_stress_margin` (block defaults mirror
-  `configs/SDFFlow/geometry_generation/ex1/baseline/config_optimize_sdfflow.txt`);
-- everything else -- search details, material, `opt_length_scale`, mesh sizes,
-  verification resolution, the surrogate interpreter -- under the collapsible
-  **More optimization settings**, where an empty row runs the native default
-  shown as its placeholder. In `sample` mode the section holds the structural
-  keys when `condition_audit` is `fea` or `surrogate`.
+---
 
-`opt_budget 0` is a **screen**: `opt_baseline_size` designs are generated and
-analysed once, and `screening.csv` -- the table the Optimization block ranks
-into a Pareto set -- is written. A budget above 0 runs CMA-ES from that
-population instead. The canvas card says which (`screening · 12 designs` or
-`CMA-ES · 120 evaluations`).
+## SDFFlow, the CAD Generator and optimization
 
-A screen also writes `designs.h5` beside the table: every screened design's
-surface with its fields (von Mises, |u|, u_z, ...) -- FEA fields, or the HI-MGN
-prediction when a surrogate is wired. The CAD Generator's results open that file
-first (falling back to the STL folder), and each sample's screening numbers show
-under **Sample parameters**.
+**The SDFFlow model block is the generator being trained.** Its modes are the
+training modes plus `evaluate`. `sample`, `reconstruct`, `interpolate` and
+`optimize` belong to the **CAD Generator**, whose inspector shows only the rows
+its mode reads:
+- `num_samples` for sample;
+- the interpolation keys for interpolate;
+- `input_mesh` for reconstruct;
+- `opt_*` for optimize.
 
-The Optimization block's report draws a **Pareto plot** of every candidate:
-infeasible rows hollow grey, feasible blue, the Pareto set orange, top-k ringed.
-Either axis can be an objective or a constraint column; a plotted constraint
-draws its limit as a dashed line. Clicking a point (or **View design** on a
-selected row) opens that design's shape and fields from `designs.h5`. A report
-saved before the plot existed asks you to press Evaluate again.
+The main `opt_*` rows (`opt_analysis`, `opt_budget`, `opt_baseline_size`,
+`opt_popsize`, `opt_load_cases`, `opt_vertical_disp_max`, `opt_stress_margin`)
+default to
+`configs/SDFFlow/geometry_generation/ex1/baseline/config_optimize_sdfflow.txt`.
+The rest are under **More optimization settings**, where an empty row means the
+native default shown as its placeholder. Older graphs with an `opt_*` value left
+on the SDFFlow block still work: the generator uses that value and labels it
+"from the SDFFlow block".
 
-The model block's `evaluate` mode still reads the structural keys (its
-condition audit), so they stay live there. A graph saved before the move keeps
-working: an `opt_*` value left on the SDFFlow block is used by a CAD Generator
-with no value of its own for it, the generator's row says "from the SDFFlow
-block", and the model block's Full config lists the key under Inactive /
-rejected so it can be cleared. The two closed-loop presets that wrote these keys
-onto the model block are gone; the HI-MGN wire below replaces the surrogate one.
-
-The CAD Generator's inspector shows **only the rows its mode reads**, and the run
-config blanks the rest: `num_samples` for `sample`; `interpolation_space`,
-`source_num_samples`, `sample_index_a`/`_b`, `alpha` and `interpolation_steps`
-for `interpolate` (defaults mirror the checked-in interpolate config, so a fresh
-block passes preflight); `input_mesh` for `reconstruct`; the `opt_*` rows above
-for `optimize`. A graph saved before a row existed shows and runs the block default
-(`cadGeneratorValue`), so what the panel shows is what runs. **Fix now** on a
-CAD Generator diagnostic jumps to that row, or to the connected SDFFlow block's
-Full config when the key lives there.
-
-The CAD Generator's optional **HI-MGN surrogate** port takes a MeshGraphNets
-model block or a saved HI-MGN checkpoint. Drawing the wire is the whole setup:
-
-- the generator switches to `mode optimize` + `opt_analysis surrogate` (one
-  Ctrl+Z puts it back), and so does switching `mode` to optimize later;
-- `opt_surrogate_checkpoint` is filled from the wire (re-rooted to
-  `methods/SDFFlow`);
-- with a **model block** wired, `opt_surrogate_config` is written from that
-  block (`mode inference`) under `studio/runtime/configs/` at Validate and at
-  Run (`materializeStepConfigs`), so preflight checks the file the run reads;
-- when that block's contract is the ex13 vertical-load layout (`output_var 4`,
-  `cond_var 0`, the same test as `design_loop/surrogate.py`), the run is pinned
-  to `opt_load_cases vertical`, `opt_length_scale 0.102323`,
-  `opt_material_rho 4470` and `opt_fea_verify False`, shown read-only in the
-  inspector's **HI-MGN surrogate** section, and a deflection limit still at
-  the FEA default 0.2 mm becomes `opt_vertical_disp_max 0.36`, the ex13 median
-  (a value you typed is left alone).
-
-A saved checkpoint carries no inference config, so on that wire
-`opt_surrogate_config` is typed into the generator's **HI-MGN surrogate**
-section, as is the checkpoint when nothing is wired. In any
-other mode the wire is **dormant**, not an error: the inspector says it is
-unused and the run config leaves its checkpoint out. Pressing the CAD
-Generator's own Run executes only that block; it does not retrain the HI-MGN.
-Validate rejects a non-MGN model on the port.
-
-`opt_fea_verify` (the **FEA re-check** row, offered on a surrogate search
-whose labels fea.py reproduces) makes a surrogate search honest inside the run: after CMA-ES,
-the optimized design, the best baseline and the typical baseline are re-solved
-with the tet4 FEA solver (`design_loop/verify_with_fea.py`). report.md gains an
-"FEA verification" section (surrogate vs FEA, limit verdicts), and the
-Optimization workspace's table gains `fea_*` columns -- rank and constrain on
-those (for example `fea_vertical_displacement_mm <= 0.2`, minimize
-`fea_mass_kg`), not on the surrogate's. The CAD Generator inspector's
-"HI-MGN surrogate" section says which of the two states the run is in.
+- **`opt_budget 0` is a screen.** It analyses `opt_baseline_size` designs once
+  and writes `screening.csv`, plus `designs.h5` with every design's surface and
+  fields. A budget above 0 runs CMA-ES from that population. The card says which
+  (`screening · 12 designs`, `CMA-ES · 120 evaluations`).
+- **HI-MGN surrogate port.** Wiring a MeshGraphNets model block or a saved HI-MGN
+  checkpoint here does the whole setup:
+  - The generator switches to `mode optimize` + `opt_analysis surrogate`.
+  - `opt_surrogate_checkpoint` is filled from the wire.
+  - From a model block, an inference config is written under
+    `studio/runtime/configs/` at Validate and Run, so preflight checks the file
+    the run reads. A saved checkpoint has no config, so you type
+    `opt_surrogate_config` yourself.
+  - If the block uses the ex13 vertical-load contract (`output_var 4`,
+    `cond_var 0`), the run is pinned to `opt_load_cases vertical`,
+    `opt_length_scale 0.102323`, `opt_material_rho 4470` and
+    `opt_fea_verify False`. These are shown read-only, and a deflection limit
+    still at 0.2 mm becomes 0.36.
+  - In other modes the wire is dormant, not an error.
+  - Validate rejects a non-MGN model on the port.
+- **FEA re-check** (`opt_fea_verify`): after a surrogate search, the optimized
+  design and the best and typical baselines are re-solved with tet4 FEA
+  (`design_loop/verify_with_fea.py`). The report gains an FEA section, and the
+  Optimization table gains `fea_*` columns. Rank and constrain on those columns.
+- **Optimization block / workspace.** It computes a feasible Pareto set and a
+  crowding-distance top-k from the candidate CSV. Constraints are `column <=
+  value` and are checked against the CSV as you type. An all-infeasible result
+  names the constraint that rejected each row. The Pareto plot can use any
+  objective or constraint on either axis. Clicking a point, or **View design**,
+  opens that design from `designs.h5`.
 
 ---
 
 ## Validate, then run
 
-**Validate** runs the launcher's real preflight over every executable step. The
-first step includes the native probe, which starts the method's own interpreter,
-so expect tens of seconds.
+**Validate** runs the launcher preflight on every executable step. The first
+step's native probe starts the method's interpreter, which can take tens of
+seconds. Findings appear in the runtime drawer with step, code, field and hint.
+A finding that belongs to a block gets **Fix now**, which opens that block's
+config at the field. Graph problems such as a missing input or a type mismatch
+appear in the same list.
 
-Findings render in the runtime drawer as rows carrying the step, the diagnostic
-code, the field and a hint. A row with an owning block gets **Fix now →**, which
-selects that block and opens its config at the offending field. Graph-level
-problems (a missing input, an unselected file, a type mismatch) render the same
-way rather than as a toast that disappears.
+**Run pipeline** runs the steps in dependency order and re-checks each saved
+config just before launch. The drawer streams the native process's stdout. Jobs
+live in the backend, so closing the tab does not stop a run.
 
-`Run pipeline` executes the steps in dependency order, re-preflighting the exact
-saved config immediately before each launch. The drawer streams the native
-process's own stdout. Jobs live in the backend, so closing the tab does not stop
-a run.
+- **Ownership.** Each canvas has a `canvas_id`, which is recorded on the jobs it
+  launches. A job's status is painted only on its own canvas. On load, the canvas
+  rebuilds block status from its jobs, including runs that finished while the
+  page was closed. A job delivers results only to blocks that have not had a
+  newer delivery (`results_from`), so results you chose later are kept. Older
+  untagged jobs are handled through `owned_jobs` / `legacy_canvas`.
+- **Load pipeline** (Runs) opens a run's graph as a copy that owns only that
+  run. Compare Models uses the run this canvas owns. If there is none, it uses
+  the newest run of that model and marks it *not this canvas*.
+- **Stop** works at every stage, including during the launch preflight. A runner
+  error ends the job as *failed* with the traceback, never stuck at *running*.
+- **Server restart.** A job whose process is still alive is adopted. Stop
+  reaches it by pid, and the job is finalised as *interrupted* when the process
+  exits.
+- **Logs.** The drawer shows the last 120 000 characters (`log_truncated`); the
+  full log is on disk.
 
-Reopening the page rejoins every job still in flight, but a job paints its
-status only onto **the canvas that launched it**. Each canvas carries a
-`canvas_id` (a new one per loaded template), sent with the run and recorded on
-the job. Node ids cannot do this alone: every copy of a template shares them, so
-a freshly loaded SDFFlow template used to show another pipeline's live training
-run as its own. Jobs from before `canvas_id` existed are still claimed by node
-ids, but only by a canvas restored from a document of the same age, and only
-while such a job is **still running**: a claimed job is recorded in
-`owned_jobs`, so it stays this canvas's after it finishes, while a *finished*
-untagged job is never claimed -- node ids cannot tell this canvas's old runs
-from every other copy's. The flag survives a reload (`legacy_canvas`) and is
-dropped once no untagged pipeline job is running (an untagged command job has
-no node ids to claim by, so it does not keep the flag alive).
-
-A run that **finished while the page was closed** is painted too: on connect,
-and after a pipeline is loaded, imported or undone, the canvas rebuilds every
-block's status from the runs it owns -- finished ones oldest first, so the
-latest run of each block is what shows, then the runs still in flight.
-Status is rebuilt in full; **results are not**. Each block records the run
-whose outputs it last received (`results_from` in the saved document), and a
-replayed run writes its results path, report, export or Train Metrics binding
-only onto blocks it has not reached -- blocks whose last delivery is an older
-run. So an evaluation report, an export or a Train Metrics run the user chose
-after a run survives every reload and undo, while a run that finished unseen
-still lands. A document saved before `results_from` existed is migrated on
-first replay: a block holding exactly what one of its runs wrote counts as
-delivered by that run, anything else as the user's own later choice. A run the
-poller has already seen finish is remembered for the page's lifetime, so a
-`/api/jobs` listing fetched before that poll cannot bring it back as running.
-
-**Load pipeline** (Runs) reopens a run's graph as a *copy*: it gets a new
-`canvas_id` and owns exactly that run (`owned_jobs` in the saved document), so
-later runs of the original canvas do not paint onto it, and its runs not onto
-the original. The graph is the run's launch snapshot, so its blocks are marked
-as having received nothing yet and the run's own results replace whatever the
-snapshot carried. Compare Models follows the same rule: a model block resolves
-to a run this canvas owns (on a legacy canvas, an untagged run only while it is
-in flight); failing that, the newest run of the same model is shown, marked
-*not this canvas*.
-
-**Stop** takes effect wherever the run is: a cancel that lands during a step's
-launch preflight stops the launch before the native process starts, and one
-that lands while the process is starting kills it as soon as it is registered.
-A pipeline whose last step had already succeeded when the cancel arrived is
-recorded as *completed*. A runner error of any kind (an analysis step raising,
-a bookkeeping bug) ends the job as *failed* with the traceback in its log,
-never as a job stuck at *running*.
-
-**Restarting the server does not orphan a run.** A job whose native process is
-still alive is adopted: Stop reaches it by pid, and a watcher finalises it when
-the process exits -- as *interrupted*, with a note, because its exit code cannot
-be recovered and any later pipeline steps were not run. The drawer shows the
-last 120 000 characters of a log and says so when it truncates (`log_truncated`);
-the full log is still on disk.
-
-Artifacts land under the repository's single `output/` root; the Studio's own
-scratch (saved configs, exports, evaluation reports, job logs) lives under
+Model artifacts go under the repository's `output/`. Studio files (saved
+configs, uploads, exports, reports, job records) go under the git-ignored
 `studio/runtime/`.
 
 ---
 
-## Evaluation
+## Evaluation and comparison
 
-`Evaluate Predictions` compares a real prediction HDF5 (or a directory of them)
-against a real ground-truth HDF5 and writes a report plus a per-sample CSV.
+**Evaluate Predictions** compares a prediction HDF5, or a directory of per-sample
+files from `mode inference`, against a ground-truth HDF5. It writes a report and
+a per-sample CSV. The contract (sample matching, shapes, field mapping) is
+checked before anything is scored.
 
-The scoring contract is inspected before anything is computed: sample matching,
-array shapes, and a field mapping. Two rules matter.
+1. **Fields pair by declared name.** Positional pairing is offered only when the
+   counts match. It starts with nothing ticked and scores nothing until you
+   confirm.
+2. **Coordinate rows are never scored.** They are copied into every rollout, so
+   scoring them gives R² = 1. A coordinate-only mapping is refused. Rows named
+   `x`/`y`/`z` also count as coordinates.
+3. **The trailing node-type row is not a prediction.** Rollout writers record
+   `output_var` beside `num_features`, so the scoreable rows are read from the
+   file. For older files, the row is dropped by name.
+4. **Samples pair by ID.** A file name stands in for an ID only when the file
+   holds one record. Two different declared IDs are never paired.
 
-1. **Fields pair by declared name** when both files declare them. Positional
-   pairing is offered only when the counts match, is labelled *confirm*, and
-   will not score until you tick the confirmation.
-2. **Reference-coordinate rows are never scored.** Rows 0:3 of `nodal_data` are
-   copied into every rollout unchanged, so scoring them reports zero error and
-   R² = 1 for any model whatsoever. A coordinate-only mapping is refused with an
-   explanation. Rows named `x`/`y`/`z` count as coordinates, not only
-   `x_coord`/`y_coord`/`z_coord`. Files that carry no coordinates at all —
-   SimulGen-VAE's `reconstruct` writes `nodal_field` with the physical rows
-   only — keep every channel.
-3. **The trailing node-type row is not a prediction either.** Every mesh rollout
-   writer appends a per-node part/`node_type` label and copies it through
-   unchanged. The five writers now record `output_var` beside `num_features`, so
-   the scoreable rows are read from the file rather than inferred; where a file
-   predates that, the row is dropped by name.
-4. **A positional mapping starts unticked.** When the rows were lined up by index
-   rather than by name, no row is pre-selected — you choose the ones to score and
-   then confirm. Pre-ticking them made the confirmation the only thing standing
-   between a categorical row and a displacement field.
+Metrics are relative L2, MAE, RMSE, max absolute error and R², each summarised
+as mean, median, p95, min and max. **Relative L2 and R² are macro-averaged over
+fields.** Pooled versions are also reported (`relative_l2_pooled`,
+`r2_pooled`), along with per-field CSV columns and `aggregate_by_field`.
 
-A prediction may be a **directory**: `mode inference` writes one HDF5 per sample,
-and the picker lists such directories alongside single files.
-
-Samples pair by ID, never by coincidence. The file name stands in for a
-sample ID only when the file holds a single record, so two multi-sample files
-that happen to share a name (`ex_infer.h5`) are not paired. A single-sample
-prediction and a single-sample truth are paired without an ID match only when
-at least one of them has no ID; two different declared IDs are refused as
-different samples.
-
-Metrics are fixed: relative L2, MAE, RMSE, max absolute error and R², each
-aggregated as mean, median, p95, min and max. **Relative L2 and R² are the
-macro-average over the scored fields**, each computed per field: pooled over
-fields, a field with a large offset (a pressure near 1000) made any predictor's
-R² look near-perfect. The pooled values stay available as `relative_l2_pooled`
-and `r2_pooled`, the per-field values as `relative_l2[<field>]` / `r2[<field>]`
-columns in the per-sample CSV and as `aggregate_by_field` in the report. MAE,
-RMSE and max absolute error are pooled over the scored values. A 1-D embedded
-vector (MLP `Y_pred`/`Y_true` with one output) is scored row by row.
-
-## Comparison
-
-`Compare Models` ranks the mean of one numeric column across the CSVs you
-select. Choosing outputs from the same held-out set is yours to get right — but
-the claim is no longer left unexamined: the array `contract` and the sample IDs
-recorded in each per-sample CSV are cross-checked, and a mismatch is reported
-above the ranking ("these runs share no sample IDs", "scored under different
-array contracts"). Shape bookkeeping columns (`fields`, `timesteps`, `nodes`,
-`values`) are not offered as metrics. The group column is filled from the
-detected columns until you edit it; a blank you leave there (one mean per CSV)
-is kept.
+**Compare Models** ranks the mean of one numeric column across the selected
+CSVs. It cross-checks each CSV's array `contract` and sample IDs, and reports any
+mismatch above the ranking.
 
 ---
 
@@ -457,15 +329,16 @@ is kept.
 
 | Workspace | What it gives you |
 | --- | --- |
-| **Models** | All 11 live routes: repository, entrypoint, modes, key count, dataset kind, install health; per-route details and checked-in examples |
-| **Data** | The HDF5 catalog with a sample viewer (mesh, points, field, timestep player); "Inspect HDF5" renders the file's contract inline |
-| **Runs** | Studio-launched jobs with status, step and log; Train Metrics plots every metric parsed from a real run log |
-| **Optimization** | Feasible Pareto set and crowding-distance top-k from a real candidate CSV. It ranks numbers you give it; it does not invent physics. Constraints are checked against the chosen CSV as you type; an all-infeasible result names the constraint that rejected each row and the closest value observed; the selected designs are written back as a CSV in the source's own columns |
-| **Benchmarks** | Every train and infer config named by `configs/campaigns/dataset_matrix/manifest.json`, each preflightable and loadable into the canvas. A passing config is not a result |
-| **Artifacts** | Every output and checkpoint, searchable, with "Use in pipeline" to drop a correct source block onto the canvas |
-| **Deploy** | Portable CPU inference and the PyInstaller `.exe` build. Families the bundle cannot run say so and disable the button |
-| **System** | Interpreters, CUDA devices, install health, and a full `--audit-configs` over every checked-in config |
-| **Docs** | The repository's Markdown, rendered, with working in-repo links, a "Start here" strip, and rows grouped by area rather than by modification time |
+| **Models** | Every registered route: repository, entrypoint, modes, keys, dataset kind, install health, checked-in examples |
+| **Data** | HDF5 catalog and sample viewer (points / mesh / field, timestep player, compare, upload with **+ Add dataset**). **Inspect HDF5** shows the file's contract; **Use in pipeline** drops a source block |
+| **Geometry** | Geometry Explorer: an SDFFlow slider between two noise endpoints for the car, DeepJEB and MCB profiles (each needs its checkpoints under `output/geometry_generation/`). For DeepJEB, **Predict response** runs the ex13 HI-MGN checkpoint on the generated shape |
+| **Runs** | Studio jobs with status, steps and logs; **Load pipeline**; Train Metrics plots every metric parsed from a run log |
+| **Optimization** | Pareto / top-k ranking of a candidate CSV (see above); the selection is written back as CSV |
+| **Benchmarks** | Every config in `configs/campaigns/dataset_matrix/manifest.json`, each with preflight and loadable into the canvas. A passing config is not a result |
+| **Artifacts** | Outputs and checkpoints, searchable, with **Use in pipeline** |
+| **Deploy** | Portable CPU inference ([guides/inference-bundle.md](guides/inference-bundle.md)). The run button stays disabled until checkpoint metadata confirms the family is supported. **Build .exe with PyInstaller** is enabled when PyInstaller is installed |
+| **System** | Interpreters, CUDA devices, install health, LLM endpoint settings, and a full `--audit-configs` |
+| **Docs** | The repository's Markdown, rendered, with working in-repo links |
 
 ---
 
@@ -473,14 +346,15 @@ is kept.
 
 | Symptom | Cause |
 | --- | --- |
-| A change to a spec or `studio_backend/` has no effect | The server holds the old module. Restart it; check `GET /api/models` |
-| Validate seems to hang | The first step's native probe starts the method's own interpreter. Tens of seconds is normal |
-| A workspace looks empty | Workspaces load real repository state for 3–6 s. Wait for "Loading real AI-CAE4ALL state…" to clear |
-| Evaluate reports a perfect score | Check the field pairing. Scoring coordinate rows is the classic cause and is now refused |
-| Inference produced nothing to evaluate | The Inference block should name `inference_output_dir`; it is auto-filled next to the checkpoint |
-| A run needs a value the Studio will not guess | `input_var` / `output_var` on mesh routes are deliberately yours to set: with `cond_var` rows present they are not the feature-row count |
-| The Optimization Run button stays disabled | A constraint names a column the selected CSV does not have, or is not `column <= value`. The note under the field says which |
-| A dataset card shows no facts | The path does not end in `.h5`/`.hdf5`, the file is missing, or the server is offline — the facts come from the file itself |
+| A spec or backend change has no effect | The server holds the old module. Restart it |
+| The badge shows fewer routes than expected | A method directory or entrypoint is missing; compare with `python AI_CAE4ALL_main.py --list-models` |
+| Validate seems to hang | The native probe is starting the method interpreter |
+| A workspace looks empty | It is still loading repository state ("Loading real AI-CAE4ALL state…") |
+| Evaluate reports a perfect score | Check the field pairing |
+| Inference produced nothing to evaluate | The Inference block needs `inference_output_dir` (auto-filled next to the checkpoint) |
+| The Studio will not guess `input_var` / `output_var` | Intended: on mesh routes with `cond_var` rows they are not the feature-row count |
+| The Optimization Run button stays disabled | A constraint names a missing column or is not `column <= value`; the note under the field says which |
+| A dataset card shows no facts | The path is not `.h5`/`.hdf5`, the file is missing, or the server is offline |
 
 ---
 
@@ -488,25 +362,89 @@ is kept.
 
 | To add | Do this |
 | --- | --- |
-| A block | Add a `BLOCK_SPECS` entry in `studio/src/constants.js` (ports, defaults, category, maturity) |
-| A model route | Nothing, if the backend registers it: `registerLiveModel` installs a block from the live spec. Add a `MODEL_CATALOG` entry for richer copy and defaults |
-| A template | Add a `TEMPLATES` entry; the picker and its grouping are generated from node types |
-| Help for a key | Add it to `HELP` in `constants.js`; the config sheet and non-model inspectors both read it |
-| A dropdown | Add the value set to `CHOICES`; mirror the spec validator exactly, and never invent a value |
+| A model route | Register its spec in the launcher. `registerLiveModel` installs a generic block from the live spec. Add a `MODEL_CATALOG` entry for labels, defaults and ports, and a `TEMPLATES` entry (every route needs one) |
+| A block | A `BLOCK_SPECS` entry in `studio/src/constants.js` (ports, defaults, category, maturity) |
+| A template | A `TEMPLATES` entry mirroring a checked-in config that passes Validate on a fresh checkout. Grouping is automatic |
+| Key help | `HELP` in `constants.js` |
+| A dropdown | `CHOICES`, mirroring the spec validator exactly |
+| A preset source | `PRESET_SOURCES` in `constants.js` |
 
-Front-end modules: `constants.js` (catalog), `graph.js` (canvas), `cards.js`
-(card and At-a-glance facts), `inspector.js`,
-`config.js` (config sheet), `validate.js` (graph checks and step construction),
-`autofill.js` (graph-derived values), `run.js` (jobs and diagnostics),
-`studio.js` (workspaces), `viewer.js`/`render3d.js` (samples),
-`markdown.js` (docs rendering). Backend: `studio_backend/` — `state.py` owns
-jobs, `analysis.py` evaluation/comparison/optimization, `suite_bridge.py` the
-launcher bridge.
+Restart the server after any spec or backend change. Never import
+`studio_backend.state` from a helper script: constructing `StudioState()` runs
+job recovery and can rewrite a live server's records.
 
-Tests: `python -m pytest -q studio/studio_backend` for the backend (11 modules,
-69 tests). `studio_backend/conftest.py` redirects the runtime root to a
-temporary directory for the run, because importing `studio_backend.state`
-recovers jobs and the tests write configs and exports. The root `tests/` suite that used to cover the launcher contracts the
-GUI depends on was deleted in commit `9884fb1` and has no replacement — use
-`python AI_CAE4ALL_main.py --audit-configs` for that layer. See
+**Front end (`studio/src/`).**
+
+| Module(s) | Role |
+| --- | --- |
+| `constants.js` | catalog, templates, help, choices |
+| `main.js` | boot, template picker, review URLs |
+| `graph.js` | canvas |
+| `cards.js`, `inspector.js` | cards and the inspector |
+| `config.js` | config sheet and presets |
+| `validate.js` | graph checks and step construction |
+| `autofill.js` | graph-derived values |
+| `run.js` | jobs and diagnostics |
+| `studio.js` | workspaces |
+| `geometry-explorer.js` | Geometry workspace |
+| `viewer.js`, `render3d.js` | sample viewer |
+| `persistence.js` | saved documents |
+| `markdown.js` | docs rendering |
+
+**Back end (`studio/studio_backend/`).**
+
+| Module(s) | Role |
+| --- | --- |
+| `http_handler.py` | routes and request checks |
+| `state.py` | jobs and recovery |
+| `suite_bridge.py` | the bridge to `ai_cae4all` |
+| `analysis.py` | evaluation, comparison, optimization |
+| `training_metrics.py` | log parsing for Train Metrics |
+| `hdf5_preview.py`, `geometry_preview.py`, `mesh_topology.py` | sample viewer |
+| `geometry_explorer.py`, `geometry_worker.py`, `geometry_analysis.py` | Geometry workspace |
+| `llm_configure.py` | LLM client |
+
+### Local API
+
+All endpoints are under `/api/`.
+
+**GET**
+
+| Group | Endpoints |
+| --- | --- |
+| Registry and configs | `health`, `models`, `configs?model=`, `config?path=`, `audit-configs` |
+| Docs and files | `docs`, `doc?path=`, `files?kind=`, `text?path=`, `image?path=` |
+| HDF5 and previews | `hdf5`, `hdf5/facts`, `hdf5/samples`, `hdf5/sample`, `preview/samples`, `preview/sample`, `predictions` |
+| Runs and checkpoints | `checkpoint?path=`, `benchmarks`, `jobs`, `jobs/{id}`, `training-metrics` (filters `job_id`, `node_id`, `model_id`) |
+| Deploy, LLM, geometry | `deploy`, `llm/settings`, `geometry-explorer/profiles`, `geometry-explorer/jobs?id=` |
+
+**POST**
+
+| Group | Endpoints |
+| --- | --- |
+| Configs and runs | `preflight`, `config/explain`, `config/save`, `pipeline/run`, `jobs/{id}/cancel` |
+| Inference and deploy | `inference/run`, `build/exe` |
+| Analysis | `evaluation/schema`, `evaluation/run`, `comparison/schema`, `comparison/run`, `optimization/schema`, `optimization/run`, `export` |
+| Geometry | `geometry-explorer/generate`, `geometry-explorer/analyze` |
+| LLM | `llm/configure`, `llm/settings` |
+| Fixtures | `simulgen/smoke-fixture`, `geometry/smoke-fixture`, `viewer/smoke-fixture` (non-scientific usability fixtures) |
+| Upload | `upload?kind=dataset\|geometry\|checkpoint` |
+
+- **Upload** takes a raw body and an `X-Filename` header (8 GiB max), and is
+  stored under `studio/runtime/uploads/<kind>/`.
+- **JSON bodies** are capped at 2 MiB.
+- **Preflight** returns 200 with `ok: false` when it finds errors.
+- **Static files**: the server serves only `index.html`, the stylesheets,
+  `src/*.js` and `runtime/exports/`.
+
+### Tests
+
+```bash
+python -m pytest -q studio/studio_backend
+```
+
+`studio_backend/conftest.py` points the runtime root at a temporary directory,
+because importing `studio_backend.state` recovers jobs, and the tests write
+configs and exports. The launcher contracts the GUI depends on are covered by
+`python AI_CAE4ALL_main.py --audit-configs` and per-config `--check`. See
 [guides/testing.md](guides/testing.md).

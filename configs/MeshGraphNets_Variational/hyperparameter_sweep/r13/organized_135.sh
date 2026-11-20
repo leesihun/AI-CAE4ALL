@@ -44,13 +44,13 @@ SWEEPS=configs/MeshGraphNets_Variational/hyperparameter_sweep
 LIST_R8="base=r8/hybrid_base kl0.1=r8/hybrid_kl0.1 kl1=r8/hybrid_kl1 kl10=r8/hybrid_kl10 kl100=r8/hybrid_kl100 mmd10000=r8/hybrid_mmd10000"
 LIST_OTHER="base43=r9/hybrid_base_s43 base44=r10/hybrid_base_s44 local42=r11/local_s42 local43=r11/local_s43"
 
-"$PYTHON" -c "import cae_suite" 2>/dev/null \
-    || { echo "launcher python '$PYTHON' cannot import cae_suite. Set PYTHON=/path/to/python."; exit 2; }
+"$PYTHON" -c "import ai_cae4all" 2>/dev/null \
+    || { echo "launcher python '$PYTHON' cannot import ai_cae4all. Set PYTHON=/path/to/python."; exit 2; }
 MGNV_PYTHON="${MGNV_PYTHON:-}"
 if [ -z "$MGNV_PYTHON" ]; then
     MGNV_PYTHON="$("$PYTHON" -c "
 from pathlib import Path
-from cae_suite.settings import LocalSettings
+from ai_cae4all.settings import LocalSettings
 print(LocalSettings.load(Path('.')).resolve_python('meshgraphnets-v', 'meshgraphnets_variational'))
 ")" || { echo "could not resolve the MGN-V interpreter (ai_cae4all.local.toml); set MGNV_PYTHON."; exit 2; }
 fi

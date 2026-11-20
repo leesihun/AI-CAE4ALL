@@ -192,7 +192,7 @@ class CheckpointProbeTorchVersionTests(unittest.TestCase):
         import importlib.util
 
         spec = importlib.util.spec_from_file_location(
-            "checkpoint_probe_under_test", SUITE_ROOT / "cae_suite" / "checkpoint_probe.py")
+            "checkpoint_probe_under_test", SUITE_ROOT / "ai_cae4all" / "checkpoint_probe.py")
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         return module

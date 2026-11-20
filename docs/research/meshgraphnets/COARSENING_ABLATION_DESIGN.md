@@ -353,7 +353,7 @@ silently:
    is rebuilt from a checkpoint's `model_config` without touching the dataset)
 5. `training_profiles/setup.py::build_model_config` — or inference reconstructs
    the wrong architecture from the checkpoint
-6. `cae_suite/specs/meshgraphnets.py` — `MGN_KEYS` + the `coarsening_modes` set,
+6. `ai_cae4all/specs/meshgraphnets.py` — `MGN_KEYS` + the `coarsening_modes` set,
    or `--audit-configs` rejects valid configs / accepts invalid ones
 
 `parallelism/model_split.py` has its own multiscale forward and is already not

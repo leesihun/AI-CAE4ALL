@@ -1,53 +1,53 @@
 # Model Capabilities
 
-Per-architecture chunking/caching guarantees (IMPLEMENTATION_PLAN.md section
-8.5) and what "exact" means for each. Everything in the "exact" column is
-covered by a query-chunk-parity test (`tests/test_query_chunking.py` plus
-each model's own `test_<model>.py`); nothing labeled exact may change
-predictions, loss, or gradients beyond the measured fp32 tolerances in
-`tests/`.
+What each Neural-Operator model can chunk or cache, and what "exact" means for
+it. Every row is covered by a query-chunk parity test
+(`tests/test_query_chunking.py` plus each model's `test_<model>.py`). Nothing
+labeled exact may change predictions, loss or gradients beyond the fp32
+tolerances asserted in `tests/`. User-facing docs:
+[05_DeepONet.md](../../methods/05_DeepONet.md),
+[06_Point-DeepONet.md](../../methods/06_Point-DeepONet.md),
+[07_FNO.md](../../methods/07_FNO.md).
 
-| Model | `encode_operator` returns | Exact `decode_queries` chunk | What is NOT chunkable |
+| Model | `encode_operator` returns | Exact `decode_queries` chunk | Not chunkable |
 | --- | --- | --- | --- |
-| Point-DeepONet | branch context `[num_graphs, H]` | trunk + fusion + refiners over a node range | PointNet branch (runs once over the sampled/sensor set) |
-| DeepONet | branch coefficients `[num_graphs, output_var, basis_dim]` | trunk + modal product over a node range | the fixed-sensor splat (one grid per graph) |
-| FNO | predicted output grid `[num_graphs, output_var, *resolution]` | grid-to-node `grid_sample` over a node range | the spectral core itself (Fourier layers are global over the whole grid) |
+| Point-DeepONet | branch context `[num_graphs, H]` | trunk + fusion + refiners over a node range | PointNet branch (runs once over the sensor set) |
+| DeepONet | branch coefficients `[num_graphs, output_var, basis_dim]` | trunk + modal product over a node range | the sensor-grid splat (one grid per graph) |
+| FNO | output grid `[num_graphs, output_var, *resolution]` | grid-to-node `grid_sample` over a node range | the spectral core (Fourier layers are global over the grid) |
 
-## Sampling / resolution knobs are architecture changes, not memory controls
+## Sampling and resolution knobs change the model
 
-`point_sensor_count`, `deeponet_sensor_resolution`, and `fno_grid_resolution`/
-`fno_modes` all change what the model actually computes (the operator
-input distribution or its Fourier/latent capacity). They must always be
-reported alongside accuracy numbers, and changing them for "speed" without
-re-running the fair-comparison protocol (`IMPLEMENTATION_PLAN.md` section 17)
-invalidates any accuracy comparison across a resolution change.
+`point_sensor_count`, `deeponet_sensor_resolution`, `fno_grid_resolution` and
+`fno_modes` change what the model computes: the operator input distribution or
+its Fourier capacity. Report them with every accuracy number. Changing them for
+speed makes results incomparable across the change.
 
-## Training-time memory controls (also never allowed to change results)
+## Memory controls that do not change results
 
-- `use_checkpointing True`: re-runs the forward pass inside the backward
-  pass for FNO's spectral blocks (`torch.utils.checkpoint.checkpoint`,
-  `use_reentrant=False`) and Point-DeepONet's/DeepONet's trunk-heavy stages
-  where wired. Exact by construction (recomputation, not approximation).
-- `train_query_chunk_size` / `infer_query_chunk_size`: splits the query
-  range fed to `decode_queries` during training/inference respectively; `0`
-  disables chunking. Exactness is what `test_query_chunking.py` verifies.
-- `grad_accum_steps`: accumulates gradients over multiple micro-batches
-  before an optimizer step (`training_profiles/training_loop.py`); this
-  changes optimizer *cadence*, not the per-sample forward computation.
+- `use_checkpointing True`: recomputes each FNO block in backward
+  (`torch.utils.checkpoint.checkpoint`, `use_reentrant=False`, in
+  `MeshFNO._forward_grid_stack` and `MeshFNO.pipeline_block`). Exact by
+  construction. DeepONet and Point-DeepONet ignore the key.
+- `time_integration ar_rt` always checkpoints each unrolled step while training
+  (`training_profiles/ar_rollout.py`), independent of `use_checkpointing`.
+- `train_query_chunk_size` / `infer_query_chunk_size`: split the query range fed
+  to `decode_queries`; `0` disables chunking. `test_query_chunking.py` verifies
+  exactness.
+- `grad_accum_steps`: accumulates gradients over micro-batches before an
+  optimizer step. This changes optimizer cadence, not the per-sample forward.
 
-## fp32 islands under bf16 autocast (section 12.4)
+## fp32 islands under bf16 autocast
 
-Every op below explicitly disables autocast and casts to float32 internally,
-regardless of the ambient AMP setting, because bf16 either loses too much
-precision or the underlying primitive (FFT) does not support it:
+These ops compute in float32 whatever the ambient AMP setting, because bf16
+loses too much precision or the primitive (FFT) does not support it:
 
-- `model/spectral.py::SpectralConvNd.forward` (`torch.fft.rfftn`/`irfftn`)
+- `model/spectral.py::SpectralConvNd.forward` (`torch.fft.rfftn`/`irfftn`,
+  autocast disabled).
 - `model/deeponet.py::DeepONet._decode` and
-  `model/point_deeponet.py::PointDeepONet._decode` (final modal dot
-  products / einsum)
-- `model/adapters/grid.py::splat` (weighted-mean accumulation; always fp32
-  regardless of caller's autocast state, since it never enters an
-  autocast-disabled block itself but only ever receives/returns fp32)
+  `model/point_deeponet.py::PointDeepONet._decode` (final modal product and
+  einsum, autocast disabled).
+- `model/adapters/grid.py::splat`: accumulates in explicit fp32 buffers
+  regardless of input dtype.
 
-BatchNorm1d (PointNet) autocasts itself to fp32 internally by default and
-needs no extra handling here.
+BatchNorm1d (PointNet) already runs in fp32 under autocast and needs no extra
+handling.

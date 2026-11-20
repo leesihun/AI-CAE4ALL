@@ -20,8 +20,10 @@ The repository is fully self-contained at runtime: no network access, no
 ## Run Commands
 
 ```bash
-python main.py --config ex1/config_train_smoke_deeponet.txt
-python main.py --config ex1/config_infer_smoke_deeponet.txt
+# from the repo root, through the launcher (preflight first)
+python AI_CAE4ALL_main.py --config configs/Neural_Operator/deterministic/ex1/baseline/config_train_deeponet.txt
+# or directly, from methods/Neural_Operator
+python main.py --config ../../configs/Neural_Operator/deterministic/ex1/baseline/config_train_deeponet.txt
 ```
 
 `mode` (`train`/`inference`) lives inside the config file; `--config` only
@@ -121,7 +123,7 @@ selects which file to read.
   `inference_output_dir`, `sdf_sidecar`, `log_dir`, `log_file_dir` —
   `general_modules/load_config.py::PATH_KEYS`) keep the case written in the
   config; every other string value is still lowercased. Mirrored in
-  `cae_suite/config_parser.py::PATH_KEYS`; a new path key must be added to both.
+  `ai_cae4all/config_parser.py::PATH_KEYS`; a new path key must be added to both.
 - Unknown or legacy (removed-feature) config keys raise immediately in
   `general_modules/config_validation.py`, before any HDF5 file is opened.
 
@@ -129,8 +131,8 @@ selects which file to read.
 
 `pytest tests/` runs entirely on tiny synthetic HDF5 fixtures
 (`tests/conftest.py`) and finishes in well under a minute. It does not touch
-`dataset/deterministic/ex1_static_thermoelastic.h5`/`ex2_dynamic_contact.h5`. Real-data smoke runs use the `ex1/config_*_smoke_*.txt`
-configs directly via `main.py`.
+`dataset/deterministic/ex1_static_thermoelastic.h5`/`ex2_dynamic_contact.h5`. Real-data runs use the
+`configs/Neural_Operator/deterministic/exN/baseline/` configs.
 
 ## Documentation Notes
 
@@ -139,9 +141,9 @@ The authoritative docs are:
 - [README.md](../../README.md)
 - [docs/ARCHITECTURE.md](../../docs/ARCHITECTURE.md)
 - [docs/CONFIGURATION.md](../../docs/CONFIGURATION.md)
-- [dataset/DATASET_FORMAT.md](../../docs/reference/DATASET_FORMAT.md)
-- [docs/POINT_DEEPONET_PARITY.md](../../docs/research/neural_operator/POINT_DEEPONET_PARITY.md)
-- [docs/MODEL_CAPABILITIES.md](../../docs/research/neural_operator/MODEL_CAPABILITIES.md)
+- [docs/reference/DATASET_FORMAT.md](../../docs/reference/DATASET_FORMAT.md)
+- [docs/research/neural_operator/POINT_DEEPONET_PARITY.md](../../docs/research/neural_operator/POINT_DEEPONET_PARITY.md)
+- [docs/research/neural_operator/MODEL_CAPABILITIES.md](../../docs/research/neural_operator/MODEL_CAPABILITIES.md)
 
 The research notes under `docs/research/neural_operator/` record design
 decisions and their rationale; when they and the code disagree, the code is

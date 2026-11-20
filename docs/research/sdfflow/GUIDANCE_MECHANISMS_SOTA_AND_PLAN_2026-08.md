@@ -638,7 +638,7 @@ batch/chunk 최적화로 줄일 여지는 크지만, "수십 배 단축"은 아�
    직접 넣으면 model layer가 decoder/calibration/MC에 결합된다. `sample.py`가 generic guidance callback을
    넘기거나 `general_modules/descriptor_guidance.py`가 ODE를 감싸게 한다. correction을 `dt`가 포함된 velocity로
    정의할지 per-step jump로 정의할지 먼저 고정하고 25/50/100 NFE invariance를 시험한다.
-5. **config와 spec을 동시에 갱신한다.** native parser, `cae_suite/specs/sdfflow.py::known_keys`, sample-mode
+5. **config와 spec을 동시에 갱신한다.** native parser, `ai_cae4all/specs/sdfflow.py::known_keys`, sample-mode
    active fields, validator를 한 change로 묶는다. calibration metadata가 현재 checkpoint/config와 맞지 않으면
    silent reuse하지 말고 hard error로 막는다.
 6. **CI는 결정론적 unit/integration test로 나눈다.** analytic sphere/box 또는 mock decoder로 (a) soft

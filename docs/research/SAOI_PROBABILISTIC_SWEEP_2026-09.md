@@ -31,7 +31,7 @@ held-out part families. This is the first head-to-head between the two.
 
 Configs: `SAOI_sweep3/` and `SAOI_sweepB/`, both **since replaced** by
 [configs/MeshGraphNets_Variational/SAOI_run/](../../configs/MeshGraphNets_Variational/SAOI_run/)
-and [configs/HI_MGNFlow/SAOI_run/](../../configs/HI_MGNFlow/SAOI_run/), which
+and the HI-MGNflow `configs/HI_MGNFlow/SAOI_run/` (retired with that route, in git history at `9db47d6`), which
 are no longer sweeps at all: each is one fixed recipe over the two board
 halves. The numbers below belong to the old grids and are not reproducible
 from the current configs.
@@ -182,9 +182,8 @@ Recorded because both were argued from mechanism and both were wrong.
 `sd_ratio` g0 0.482 vs g1 0.494, i.e. if anything marginally *wider*. The
 prediction was that opening the `fm_loss → encoder` gradient would let the
 encoder make `z` trivially predictable from `g`, narrowing the conditional
-distribution (better CRPS, worse `W1/sd`). See
-[MGN_ENHANCEMENT_RESEARCH.md](meshgraphnets_variational/MGN_ENHANCEMENT_RESEARCH.md)
-for the argument. `beta_aux 1.0` is on in every arm and may be holding the
+distribution (better CRPS, worse `W1/sd`). The argument was in
+`MGN_ENHANCEMENT_RESEARCH.md`, since deleted (git history). `beta_aux 1.0` is on in every arm and may be holding the
 degenerate solution off — that is untested, but the *net* effect of the flag at
 this budget is nil, so it is not a lever.
 

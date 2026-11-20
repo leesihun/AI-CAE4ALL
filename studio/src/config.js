@@ -81,12 +81,12 @@ export function backendDefaultsFor(modelId, mode) {
   };
 }
 
-// COARSE_ONLY_KEYS in cae_suite/specs/meshgraphnets_variational.py.
+// COARSE_ONLY_KEYS in ai_cae4all/specs/meshgraphnets_variational.py.
 const MGNV_COARSE_ONLY = keys(`latent_ch vae_local_mp_layers local_inject prior_arch prior_param prior_tf_heads prior_tf_dropout prior_fm_draws prior_cond_noise`);
 
 /** The keys the MGN-V spec warns are ignored for the chosen latent variant
  * (MGNV-LATENT-INACTIVE, MGNV-LATENT-KL-WEIGHT, MGNV-LATENT-MMD-WEIGHT in
- * cae_suite/specs/meshgraphnets_variational.py); unset means the spec default
+ * ai_cae4all/specs/meshgraphnets_variational.py); unset means the spec default
  * (latent_type global, latent_reg mmd). */
 function mgnvLatentInactive(key, config) {
   const pick = (name, fallback) => String(config?.[name] ?? "").trim().toLowerCase() || fallback;

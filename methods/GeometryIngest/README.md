@@ -29,13 +29,20 @@ python AI_CAE4ALL_main.py --describe geometry_ingest                            
 each input, print stats, write nothing). Config paths resolve from the tool repo
 root (`methods/GeometryIngest/`), matching the suite's native-path convention.
 
+**Point `input_geometry` at your own geometry before running.** Both shipped
+configs say `input_geometry incoming_geometry`, which resolves to
+`methods/GeometryIngest/incoming_geometry/` -- a placeholder that does not exist
+in the repository. Replace it with a directory of geometry files or a single
+file, absolute or relative to `methods/GeometryIngest/` (e.g.
+`../../dataset/<your_dir>`).
+
 ### Config keys
 
 | Key | Need | Meaning |
 | --- | --- | --- |
 | `model` | required | `geometry_ingest` |
 | `mode` | required | `ingest` or `inspect` |
-| `input_geometry` | required | Directory of geometry files (`.step .stp .igs .iges .stl .ply .obj`) |
+| `input_geometry` | required | Directory of geometry files (`.step .stp .igs .iges .stl .ply .obj`, searched recursively), or one file |
 | `output_dataset` | required for `ingest` | Output HDF5 (graph). Point cloud is written alongside as `<stem>_pointcloud.h5` |
 | `reader` | opt (`auto`) | `auto` \| `trimesh` \| `gmsh` |
 | `mesh_type` | opt (`volume`) | `volume` → gmsh tet mesh (dim 3); `surface` → triangle mesh (dim 2) |
@@ -53,8 +60,15 @@ root (`methods/GeometryIngest/`), matching the suite's native-path convention.
 > Comments must be on their own `%` line. An inline `% ...` after a value is **not**
 > stripped by the suite parser and becomes part of the value.
 
-Shipped template in `configs/GeometryIngest/`: `config_ingest_volume.txt`
-(CAD → volume, needs gmsh).
+Shipped templates in `configs/GeometryIngest/` (both write under
+`../../output/geometry_ingest/ingested/`):
+
+- `config_ingest_volume.txt` -- CAD → volume tet mesh (needs gmsh), graph +
+  8192-point cloud, `parts.h5`.
+- `config_ingest_surface.txt` -- CAD or surface mesh → triangle surface
+  (`mesh_type surface`; STL/PLY/OBJ go through trimesh, STEP/IGES through gmsh),
+  graph + 4096-point cloud, `limit 3`, `parts_surface.h5`. It mirrors the Studio
+  `geometry` template.
 
 ### The preview render
 
@@ -90,7 +104,8 @@ pip install gmsh meshio trimesh        # gmsh: STEP/IGES + volume tet meshing
 
 - `gmsh` — **required** for STEP/IGES and volume (tet) meshing (OpenCASCADE-backed).
   Imported lazily, so surface (`trimesh`) runs need no gmsh.
-- `trimesh` — surface STL/PLY/OBJ reading + repair (already in this repo's envs).
+- `trimesh` — surface STL/PLY/OBJ reading (already in this repo's envs). The
+  pipeline loads with `process=True` (vertex welding) and does no further repair.
 - `meshio` — optional, broader format IO/export.
 
 ### Airgapped install
@@ -136,7 +151,7 @@ rather than a cryptic traceback.
 | File | Role |
 | --- | --- |
 | `readers.py` | `read_trimesh` (surface) · `read_gmsh` (surface/volume) · `read_auto` |
-| `clean.py` | watertight repair for dirty STL before volume meshing |
+| `clean.py` | `repair_surface`: watertight repair for dirty STL before volume meshing. **Not called by the pipeline, the launcher entrypoint or the CLI**; call it yourself and export the cleaned surface first |
 | `to_graph.py` | elements → unique undirected `mesh_edge [2,E]` (tri & tet) |
 | `to_pointcloud.py` | deterministic FPS / random resample to fixed N |
 | `writer.py` | the HDF5 contract writer (zero-filled field rows) |

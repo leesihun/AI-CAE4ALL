@@ -46,7 +46,7 @@ Files touched:
 | [`model/blocks.py`](../../../methods/MeshGraphNets/model/blocks.py) | `AttentionPoolBlock` (new); `UnpoolBlock` gained a `use_attention` constructor flag and an `attn_mlp` |
 | [`model/MeshGraphNets.py`](../../../methods/MeshGraphNets/model/MeshGraphNets.py) | `pool_type`/`unpool_type`/`pool_heads` config plumbing in `_build_multiscale_processor`; the pool branch in `_forward_multiscale`; `_pool_log_scale`; zero-init walk in `MeshGraphNets.__init__` |
 | [`training_profiles/setup.py`](../../../methods/MeshGraphNets/training_profiles/setup.py) | `build_model_config` carries the three new keys so checkpoints reconstruct the right architecture at inference (`inference_profiles/rollout.py` already does a blanket `model_config` merge — no change needed there) |
-| `cae_suite/specs/meshgraphnets.py` (parent repo) | `pool_type`, `pool_heads`, `unpool_type` added to `MGN_KEYS` |
+| `ai_cae4all/specs/meshgraphnets.py` (parent repo) | `pool_type`, `pool_heads`, `unpool_type` added to `MGN_KEYS` |
 | [`tests/test_attention_transfer.py`](../../../methods/MeshGraphNets/tests/test_attention_transfer.py) | equivalence (§10.1), pool-only/unpool-only ablation, a train-step divergence sanity check, and a batching/no-leakage check |
 
 A numerics note beyond what §9 specified: both score computations
@@ -146,7 +146,7 @@ Files touched beyond Part I's list:
 | [`general_modules/edge_features.py`](../../../methods/MeshGraphNets/general_modules/edge_features.py) | `DEFORMED_FEATURE_DIM` / `REFERENCE_FEATURE_DIM` / `DEFORMED_SLICE` / `REFERENCE_SLICE`; `EDGE_FEATURE_DIM` now derived from the two halves instead of a literal 8 |
 | [`training_profiles/ar_rollout.py`](../../../methods/MeshGraphNets/training_profiles/ar_rollout.py) | branch-aware `_refresh_multiscale` + new `_refresh_one_partition`; `_coarse_positions` keyed by `{level}_{branch}`; `RolloutContext.coarse_edge_stat()` unwraps per-branch stat lists; all seven bare `4` slices replaced with the named slices |
 | [`training_profiles/setup.py`](../../../methods/MeshGraphNets/training_profiles/setup.py) | `build_model_config` carries `voronoi_branches` |
-| `cae_suite/specs/meshgraphnets.py` (parent repo) | `voronoi_branches` added to `MGN_KEYS` |
+| `ai_cae4all/specs/meshgraphnets.py` (parent repo) | `voronoi_branches` added to `MGN_KEYS` |
 | [`tests/test_multi_partition.py`](../../../methods/MeshGraphNets/tests/test_multi_partition.py) (new) | K=1-explicit-vs-unset equivalence, single- and two-level forward pass, **batching/no-cross-sample-leakage** (the design's own flagged highest-risk item), a gradient step confirming every branch's slice of `skip_projs`' input gets a nonzero gradient every step (not just eventually), the two hierarchy-build validation guards, the model-construction guard, per-branch stat unwrapping in `RolloutContext`, and composition with Part I attention |
 | [`tests/test_ar_rollout.py`](../../../methods/MeshGraphNets/tests/test_ar_rollout.py) | new `multiscale_branched` geometry case in `GEOMETRY_CASES` (rebuilt-vs-dataloader feature fidelity, per branch) with assertions that it cannot pass vacuously, plus a test pinning the edge-half constants to `deformed_edge_attr_torch`'s real output |
 
@@ -488,7 +488,7 @@ for any H.
 - `pool_type`: `mean` (default) | `attention`; `pool_heads` (default 4).
 - `voronoi_clusters` gains a companion `voronoi_branches` (per level, default
   all 1 → current behaviour exactly).
-- Register all three in `cae_suite/specs/meshgraphnets.py` `known_keys` or
+- Register all three in `ai_cae4all/specs/meshgraphnets.py` `known_keys` or
   `--audit-configs` flags them, and add them to `build_model_config` in
   [`training_profiles/setup.py`](../../../methods/MeshGraphNets/training_profiles/setup.py) L158 so inference
   reconstructs the same architecture from the checkpoint.

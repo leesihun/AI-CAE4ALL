@@ -1,9 +1,9 @@
 # CPU-only inference bundle dependencies. Install with:
 #   pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
 #
-# No CUDA, no torch_cluster (see README.md "Why CPU-only"). The versions below
+# No CUDA, no torch_cluster (see docs/guides/inference-bundle.md, "Why CPU only"). The versions below
 # are pinned to what was actually built and parity-tested for this bundle
-# (see README.md "Verification"); >= floors are the minimum believed-compatible
+# (see docs/guides/inference-bundle.md); >= floors are the minimum believed-compatible
 # version, not a promise every newer release keeps the same checkpoint-loading
 # behavior. Re-run the parity checks before moving off the pinned versions.
 

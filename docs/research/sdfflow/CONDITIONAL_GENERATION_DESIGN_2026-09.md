@@ -15,7 +15,7 @@ Files this design touches: `methods/SDFFlow/scripts/add_fea_conditions.py`,
 `general_modules/{condition_names, sdf_dataset, descriptor_proxy,
 descriptor_calibration, descriptor_refinement, descriptor_guidance}.py`,
 `model/velocity_net.py`, `inference_profiles/{sample, interpolate, evaluate}.py`,
-`design_loop/problem.py`, `cae_suite/specs/sdfflow.py`, `studio/src/constants.js`,
+`design_loop/problem.py`, `ai_cae4all/specs/sdfflow.py`, `studio/src/constants.js`,
 and `configs/SDFFlow/{config_train_v3_fea, config_calibrate_descriptors,
 config_sample_conditional, config_cond_sweep, config_evaluate_conditional}.txt`.
 

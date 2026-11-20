@@ -5,10 +5,10 @@ Supports two coarsening methods:
 
 1. **BFS Bi-Stride** (Cao et al., ICML 2023):
    - BFS assigns each node a depth. Even-depth → coarse; odd-depth → fine-only.
-   - ~4x reduction per level on triangular meshes.
+   - ~2x reduction per level (bi-stride keeps every other BFS depth).
    - Topology-based → no cross-boundary false edges.
 
-2. **FPS-Voronoi** (new):
+2. **FPS-Voronoi**:
    - Farthest Point Sampling selects k seed nodes maximally spread across the mesh.
    - Multi-source BFS assigns each node to its nearest seed (Voronoi partition).
    - Configurable reduction ratio (e.g., 20k → 200 in one level).

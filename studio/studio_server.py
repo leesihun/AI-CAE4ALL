@@ -11,7 +11,7 @@ from pathlib import Path
 
 # Running this file directly makes ``studio/`` (rather than the repository
 # root) Python's first import location.  The backend intentionally reuses the
-# top-level ``cae_suite`` package, so make the documented direct-launch command
+# top-level ``ai_cae4all`` package, so make the documented direct-launch command
 # work independently of the caller's current working directory.
 SUITE_ROOT = Path(__file__).resolve().parent.parent
 if str(SUITE_ROOT) not in sys.path:

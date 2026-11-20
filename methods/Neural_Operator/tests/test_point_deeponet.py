@@ -96,7 +96,7 @@ def test_query_chunking_matches_full_decode(tiny_static_2d_h5):
 
 
 def test_parity_shapes_match_paper_mapping(tiny_static_2d_h5):
-    """docs/POINT_DEEPONET_PARITY.md: trunk_refiner reshapes to
+    """docs/research/neural_operator/POINT_DEEPONET_PARITY.md: trunk_refiner reshapes to
     [chunk_N, H, output_var] (paper's asymmetric refiner), and branch_context
     is [num_graphs, H] -- not normal DeepONet's symmetric [B, O, P] shape."""
     model, data_spec, domain, train, val, test, cfg = _build(
