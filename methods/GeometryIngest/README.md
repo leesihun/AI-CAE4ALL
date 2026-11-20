@@ -124,7 +124,11 @@ pip install --no-index --find-links wheels/ gmsh trimesh
 ```
 
 Prefetched Linux/manylinux wheels are **committed** under `wheels/` (all < 50 MB,
-GitHub-safe), so an airgapped clone already carries them.
+GitHub-safe), so an airgapped clone already carries them. The committed gmsh
+wheel has its `share/doc/gmsh/` tree (manual images, example STLs; ~5 MB)
+removed and is recompressed: every remaining member is byte-identical to the
+PyPI wheel and `RECORD` lists only what is left. A freshly downloaded wheel
+works the same, just larger.
 
 ### Automatic offline install
 

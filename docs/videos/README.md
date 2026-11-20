@@ -58,8 +58,10 @@ The checked-in native optimization config uses FEA with a positive search budget
 so adjust its backend and budget for a surrogate screening workflow.
 
 `manifest.json` records file sizes, SHA-256 checksums, inline attachment URLs,
-and playback metadata. The GitHub attachments contain the same full-quality
-files as the originals in this directory.
+and playback metadata. The GitHub attachments are the full-quality originals
+(~20 MB each). The copies in this directory were re-encoded on 2026-11-20
+(x264 `-preset veryslow -crf 28`, same 1080p30 picture and burned-in captions,
+SSIM 0.99 against the originals) to keep the clone small.
 The two MP4s are curated documentation assets. Local raw takes, job logs,
 checkpoints, and alternate edits remain outside the published documentation.
 
