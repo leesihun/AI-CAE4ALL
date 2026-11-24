@@ -1,39 +1,60 @@
 #!/usr/bin/env python3
-"""Generate B300 round 14: the prior (GNN or transformer) x the latent regularizer (MMD or the
-per-sample KL at 1, 10, 100). Every run is on the joint setting of round 12, one job per card.
+"""Generate B300 round 14: the prior's velocity network (GNN or transformer) x the latent
+regularizer (MMD or the per-sample KL at 10, 100) x what the prior reads of the geometry
+(prior_trunk), each on the joint setting of round 12; and beside them stochastic_mode noise
+(no encoder, no prior: z ~ N(0,I), the loss the CRPS of 2 draws). One job per card.
 
     python configs/MeshGraphNets_Variational/hyperparameter_sweep/r14/make_sweep.py           # writes the configs here (--pack 1)
     python .../r14/make_sweep.py --plan         # jobs, cards and estimated hours; writes nothing
 
 Standard library only, any Python 3.8+. Every run is r12's `joint`: prior_freeze_epoch 0
 (one objective for all 360 epochs) and the prior's loss reaching the encoder
-(prior_grad_to_encoder 1). Sixteen runs, eight settings x seeds 42/43:
+(prior_grad_to_encoder 1). Twenty runs, ten settings x seeds 42/43:
 
-                      MMD            KL 1              KL 10              KL 100
-    GNN prior         joint          joint_kl1         joint_kl10         joint_kl100
-    transformer       joint_tfk8     joint_tfk8_kl1    joint_tfk8_kl10    joint_tfk8_kl100
+                      MMD           KL 10             KL 100         trunk decoder     trunk multiscale
+    GNN prior         joint         joint_kl10        joint_kl100    joint_dec         joint_ms
+    transformer       joint_tfk8    joint_tfk8_kl10   -              joint_tfk8_dec    -
+    no prior          noise (hybrid), noise_global (global)
 
 Why this table. Of round 13's twelve settings only joint_kl10 changed the latent (a decoded
-N(0,I) draw 551 -> 211) and had both seeds low (69/72); joint_kl1 went the other way (106/84).
-The only prior that fitted the training geometries better without a warm-up was r9's tf_k8,
-never run on joint. So the KL is read as a line of weights a factor 10 apart, per prior.
+N(0,I) draw 551 -> 211) and had both seeds low (69/72). The only prior that fitted the
+training geometries better without a warm-up was r9's tf_k8, never run on joint. And in
+every round since r8 only the velocity network changed: what the prior reads of the geometry
+(three message-passing blocks on the fine mesh, averaged per coarsest cluster) never did.
 
     joint            r12's joint, nothing else changed (the control; it died in round 13).
-    joint_kl1        latent_reg kl, kl_weight 1: every sample's posterior is pulled to N(0,I)
+    joint_kl10       latent_reg kl, kl_weight 10: every sample's posterior is pulled to N(0,I)
                      (the plain VAE term). The MMD only asks the rows of a batch, pooled, to
                      look N(0,I); this asks it of every sample, so of every geometry too.
-                     (round 13: 106/84.)
-    joint_kl10       kl_weight 10. (round 13: 69/72.)
+                     (round 13: 69/72.)
     joint_kl100      kl_weight 100: where the KL's price (a posterior off the floor, a decoder
                      that stops reading z) overtakes its gain. (r8, two parts: 99.)
+    joint_dec        prior_trunk decoder: the prior has no trunk of its own; its condition per
+                     coarse node is the simulator's own descending arm at z = 0 (the features
+                     the coarsest blocks start from), through one MLP. The prior's loss does
+                     not reach the simulator through it.
+    joint_ms         prior_trunk multiscale: the prior's own descending arm (the fine blocks,
+                     then a mean pool and prior_mp_layers more blocks at every coarser level).
+                     The same reach as joint_dec, trained by the prior's loss alone: it tells
+                     "a wider view" from "the decoder's features".
     joint_tfk8       r9's gfix_tf_k8 on joint: prior_arch transformer, prior_fm_draws 8,
                      local_inject coarsest, lambda_mmd_g 0. Not the transformer alone.
-    joint_tfk8_kl1   the same prior with kl_weight 1.
-    joint_tfk8_kl10  ... kl_weight 10: the two changes that moved anything, together.
-    joint_tfk8_kl100 ... kl_weight 100.
+    joint_tfk8_kl10  the same prior with kl_weight 10: the two changes that moved anything, together.
+    joint_tfk8_dec   the same prior with prior_trunk decoder.
+    noise            stochastic_mode noise (2026-11-24): no posterior encoder and no prior. z_g and
+                     z_l are N(0,I) in training too, the batch is run noise_draws 2 times and the
+                     loss is the fair CRPS of the draws (spread is rewarded only where the truth
+                     has it). The prior never has to match a posterior, so the round's question
+                     (the prior generalizes worse than the posterior) does not arise; what it
+                     asks is whether the simulator alone learns the spread. Estimated x1.14 the
+                     base's time and peak (16 fine blocks per step against 14).
+    noise_global     the same with latent_type global: one N(0,I) vector per sample, no z_l.
 
-joint_kl1 and joint_kl10 repeat round 13's runs: the second wave has eight cards and six
-other jobs, so they cost no time, and they say whether 69/72 comes back.
+2026-11-24: joint_kl1, joint_tfk8_kl1 and joint_tfk8_kl100 were taken out for the three
+prior_trunk settings (round 13's joint_kl1 was 106/84, worse than the base). To bring one
+back, add its weight to GNN_KL / TF_KL and its two seeds to ORDER.
+
+joint_kl10 repeats round 13's run: it says whether 69/72 comes back.
 
 The base (two parts, not run here) is r8 hybrid_e360, r9 hybrid_base_s43 and r10
 hybrid_base_s44. Edit this file, never a generated config.
@@ -41,7 +62,7 @@ hybrid_base_s44. Edit this file, never a generated config.
 --pack sets the jobs per card, and with it run_135.sh's GPUS and THREADS_PER_JOB
 (rewritten here) and each job's use_checkpointing (on only where the estimated peak of
 PACK jobs would not fit the card). The default here is 1: 8 jobs on the 8 cards at once,
-checkpointing off, the other eight as cards free. run_135.sh sets MPS=0 (one job per card
+checkpointing off, the other twelve as cards free. run_135.sh sets MPS=0 (one job per card
 has nothing to share). use_checkpointing and the slot layout do not enter the resume
 fingerprint, so the round can be stopped, regenerated with another --pack (--force) and
 restarted: every job resumes.
@@ -61,7 +82,7 @@ NODE = "135"
 REF = dict(lr="1e-4", ep=360, bs=16, ar=1000, w=128, mmd=1.0, ld=32, ch=4, ph=128, pm=3, pms=0.05, fms=30,
            inj="all", mmdg=None, arch="gnn", param="velocity", k=1, fmb=4, cn=0.0, drop=0.0,
            lt="hybrid", cap=0.0, wu=0, anc=0.0, ldrop=0.0, frz="auto", genc=0.0, reg="mmd", klw="1e-3",
-           tp=1.0, cw=0.0)
+           tp=1.0, cw=0.0, trunk="fine", sm="vae", nd=2)
 MP = (4, 6, 8, 6, 4)
 VORONOI = (4096, 256)
 REF_JOB = ("r8", "hybrid_e360")   # the base at seed 42, trained in round 8
@@ -70,36 +91,56 @@ SEEDS = (42, 43)
 # setting -> (changes from REF, what it is, seeds). The run order is ORDER below.
 # frz "auto" = prior_freeze_epoch at 2/3 of training_epochs (240); genc = prior_grad_to_encoder;
 # reg/klw = latent_reg and kl_weight; inj = local_inject; mmdg = lambda_mmd_g; arch = prior_arch;
-# k = prior_fm_draws.
+# k = prior_fm_draws; trunk = prior_trunk.
 JOINT = dict(frz=0, genc=1.0)
 # r9's gfix_tf_k8 (r12's joint_tfk8): the transformer prior trained on 8 flow draws per sample,
 # z_l read at the coarsest level only, no MMD on z_g.
 TFK8 = dict(inj="coarsest", mmdg=0, arch="transformer", k=8)
-KL_WEIGHTS = ("1", "10", "100")
-SETTINGS = {   # the GNN prior's line, then the transformer prior's (brief.py's a1-a4, a5-a8)
+GNN_KL = ("10", "100")   # "1" was here until 2026-11-24 (joint_kl1; round 13: 106/84)
+TF_KL = ("10",)          # "1" and "100" were here until 2026-11-24
+TRUNKS = {"dec": ("decoder", "the prior reads the simulator's descending arm at z = 0 (prior_trunk decoder; "
+                             "no trunk of its own)"),
+          "ms": ("multiscale", "the prior's own trunk goes down to the coarsest level (prior_trunk multiscale)")}
+SETTINGS = {   # the GNN prior's settings, then the transformer prior's (brief.py's a1-a5, a6-a8)
     "joint": (JOINT, "r12's joint: no prior-only part (prior_freeze_epoch 0) and the prior's loss "
                      "reaches the encoder (prior_grad_to_encoder 1)", SEEDS),
 }
-for _w in KL_WEIGHTS:
+for _w in GNN_KL:
     SETTINGS[f"joint_kl{_w}"] = (dict(JOINT, reg="kl", klw=_w),
                                  f"joint, per-sample KL to N(0,I) instead of the MMD (latent_reg kl, "
                                  f"kl_weight {_w})", SEEDS)
+for _t in ("dec", "ms"):
+    SETTINGS[f"joint_{_t}"] = (dict(JOINT, trunk=TRUNKS[_t][0]), f"joint, {TRUNKS[_t][1]}", SEEDS)
 SETTINGS["joint_tfk8"] = (dict(JOINT, **TFK8), "joint with r9's tf_k8 prior: transformer, 8 flow draws per "
                                                 "sample, z_l injected at the coarsest level only", SEEDS)
-for _w in KL_WEIGHTS:
+for _w in TF_KL:
     SETTINGS[f"joint_tfk8_kl{_w}"] = (dict(JOINT, **TFK8, reg="kl", klw=_w),
                                       f"joint, r9's tf_k8 prior, per-sample KL (kl_weight {_w})", SEEDS)
+SETTINGS["joint_tfk8_dec"] = (dict(JOINT, **TFK8, trunk=TRUNKS["dec"][0]),
+                              f"joint, r9's tf_k8 prior, {TRUNKS['dec'][1]}", SEEDS)
+# stochastic_mode noise (added 2026-11-24): no posterior encoder and no prior. z ~ N(0, I) in
+# training and at inference, NOISE_DRAWS forwards per batch, loss = their fair CRPS. Not on
+# joint (there is no prior to freeze or to feed the encoder): the simulator, the data and the
+# schedule are the base's, everything of the encoder and the prior is gone.
+NOISE_DRAWS = 2
+NOISE = dict(sm="noise", nd=NOISE_DRAWS)
+SETTINGS["noise"] = (NOISE, f"stochastic_mode noise: no encoder, no prior; z_g and z_l ~ N(0,I), "
+                            f"{NOISE_DRAWS} draws per batch, loss = their CRPS", SEEDS)
+SETTINGS["noise_global"] = (dict(NOISE, lt="global"),
+                            f"stochastic_mode noise with latent_type global: one N(0,I) vector per sample "
+                            f"(no z_l), {NOISE_DRAWS} draws per batch, loss = their CRPS", SEEDS)
 # Run order: job k on slot k (the cards of SLOT_CARDS), then each freed card takes the next job.
 # First eight = what is not known yet and decides the round: the control (it died in round 13),
-# the transformer prior with the MMD and with KL 10, and KL 100 on the GNN prior; with round
-# 13's joint_kl1 / joint_kl10 the GNN line is complete after the first wave. A setting's two
-# seeds are never on one card (round 13 lost two whole settings to two cards): in the first
-# eight they are two lines apart, in the last eight four lines apart, and each of the last
-# eight takes a different freed card.
-ORDER = [("joint", 42), ("joint_tfk8_kl10", 42), ("joint", 43), ("joint_tfk8_kl10", 43),
-         ("joint_tfk8", 42), ("joint_kl100", 42), ("joint_tfk8", 43), ("joint_kl100", 43),
-         ("joint_tfk8_kl100", 42), ("joint_tfk8_kl1", 42), ("joint_kl10", 42), ("joint_kl1", 42),
-         ("joint_tfk8_kl100", 43), ("joint_tfk8_kl1", 43), ("joint_kl10", 43), ("joint_kl1", 43)]
+# the transformer prior on joint, and prior_trunk decoder under each of the two (each beside the
+# run it is marked against). The second eight: the two noise settings (no encoder, no prior) and
+# the KL settings that repeat round 13. The last four: the multiscale control and KL 100. A
+# setting's two seeds are never on one card (round 13 lost two whole settings to two cards):
+# both seeds are always in the same wave of jobs, and each job of a wave takes a different card.
+ORDER = [("joint", 42), ("joint_tfk8_dec", 42), ("joint", 43), ("joint_tfk8_dec", 43),
+         ("joint_dec", 42), ("joint_tfk8", 42), ("joint_dec", 43), ("joint_tfk8", 43),
+         ("noise", 42), ("noise_global", 42), ("joint_tfk8_kl10", 42), ("joint_kl10", 42),
+         ("noise", 43), ("noise_global", 43), ("joint_tfk8_kl10", 43), ("joint_kl10", 43),
+         ("joint_ms", 42), ("joint_kl100", 42), ("joint_ms", 43), ("joint_kl100", 43)]
 # Runs of earlier rounds that brief.py shows beside this round's (it reads them where they are).
 # Their configs equal the setting they stand for except the seed and the paths (self_check).
 REFERENCE_RUNS = {
@@ -170,12 +211,25 @@ class Spec:
     klw: str = REF["klw"]
     tp: float = REF["tp"]
     cw: float = REF["cw"]
+    trunk: str = REF["trunk"]
+    sm: str = REF["sm"]
+    nd: int = REF["nd"]
     seed: int = SEEDS[0]
+
+
+# stochastic_mode noise, a GUESS from the fine-level block count (what sets both time and
+# activation memory): the base runs 14 fine blocks per step (simulator 4 + 4 of mp_per_level,
+# posterior encoder 3, prior trunk 3); noise runs the simulator's 8, NOISE_DRAWS times.
+FINE_BLOCKS_BASE, FINE_BLOCKS_SIM = 14, 8
+
+
+def cost_scale(spec):
+    return 1.0 if spec.sm == "vae" else spec.nd * FINE_BLOCKS_SIM / FINE_BLOCKS_BASE
 
 
 def peak_gb(spec, ckpt):
     per_100k = GB_PER_100K * (spec.w / 128 + 4.7 / 21 * (spec.ph / 128 - 1) + 4.7 / 21 * (spec.pm / 3 - 1))
-    gb = per_100k * WORST_NODES[spec.bs] / 1e5 + 1.0
+    gb = per_100k * WORST_NODES[spec.bs] / 1e5 * cost_scale(spec) + 1.0
     return gb * CKPT_MEM + 1.0 if ckpt else gb
 
 
@@ -283,7 +337,19 @@ EVAL = [
     ("histogram_bins", "30"),
     ("save_rollouts", "False"),
 ]
-SAMPLES, INFER_BATCH = 4, 4   # draws per held-out scene; 256 scenes per geometry -> 1024 draws
+# What stochastic_mode noise does not build: the posterior encoder, the latent regularizer, the
+# auxiliary loss and the prior (ai_cae4all/specs/meshgraphnets_variational.py NOISE_INACTIVE_KEYS),
+# and prior_freeze_epoch, which the spec refuses above 0.
+NOISE_DROPPED = (
+    "vae_encoder_mp_layers", "vae_graph_aware", "vae_local_mp_layers", "latent_reg", "kl_weight",
+    "lambda_mmd", "lambda_mmd_g", "mmd_bandwidth", "mmd_cond_width", "alpha_recon", "beta_aux",
+    "posterior_min_std", "posterior_max_std_g", "local_dropout", "use_conditional_prior", "prior_type",
+    "prior_family", "prior_mp_layers", "prior_trunk", "prior_hidden_dim", "prior_arch", "prior_param",
+    "prior_fm_blocks", "prior_tf_dropout", "prior_nll_weight", "prior_fm_draws", "prior_cond_noise",
+    "prior_grad_to_encoder", "prior_fm_steps", "prior_fm_solver", "prior_fm_time_power",
+    "prior_freeze_epoch",
+)
+SAMPLES, INFER_BATCH = 4, 4  # draws per held-out scene; 256 scenes per geometry -> 1024 draws
 JOBS_MARK = "## Jobs (generated by make_sweep.py; everything below is rewritten)"
 PATH_KEYS = {"modelpath", "log_file_dir", "inference_output_dir", "hierarchy_cache_dir", "resume_training"}
 
@@ -365,6 +431,8 @@ def train_body(spec, job, pack):
         b.set("kl_weight", lr_value(spec.klw) if "e-" in spec.klw else spec.klw, after="latent_reg")
         b.drop("lambda_mmd", "lambda_mmd_g", "mmd_bandwidth")
     b.set("prior_mp_layers", spec.pm).set("prior_hidden_dim", spec.ph)
+    if spec.trunk != REF["trunk"]:
+        b.set("prior_trunk", spec.trunk, after="prior_mp_layers")
     if spec.arch != REF["arch"]:
         b.set("prior_arch", spec.arch, after="prior_hidden_dim")
     if spec.param != REF["param"]:
@@ -386,6 +454,9 @@ def train_body(spec, job, pack):
         b.set("prior_fm_time_power", f"{spec.tp:g}", after="prior_fm_solver")
     if spec.lt == "global":   # no coarse-level latent: these two keys would be ignored
         b.drop("latent_ch", "vae_local_mp_layers")
+    if spec.sm != REF["sm"]:  # no encoder, no prior: their keys would be ignored (preflight warns)
+        b.set("stochastic_mode", spec.sm, after="use_vae").set("noise_draws", spec.nd, after="stochastic_mode")
+        b.drop(*NOISE_DROPPED)
     b.set("use_checkpointing", use_checkpointing(spec, pack))
     b.set("resume_training", "True")
     return b
@@ -431,7 +502,7 @@ def build_jobs():
 
 def est_hours(job, pack):
     ckpt = CKPT_SLOWDOWN if use_checkpointing(job.spec, pack) else 1.0
-    return EP_H[job.spec.bs] * job.spec.ep * ckpt * SHARE[pack] + INFER_H
+    return EP_H[job.spec.bs] * job.spec.ep * cost_scale(job.spec) * ckpt * SHARE[pack] + INFER_H
 
 
 def slot_gpus(pack):
@@ -447,8 +518,9 @@ def threads_per_job(pack):
 def write_run_135(pack):
     text = f"""\
 #!/usr/bin/env bash
-# B300 round 14 (the prior, GNN or transformer, x the latent regularizer, MMD or KL 1, 10, 100; each on
-# r12's joint), node 135: see run_node.sh (order of work, overrides) and README.md (the jobs as one queue).
+# B300 round 14 (the prior, GNN or transformer, x the latent regularizer, MMD or KL 10, 100, x what the
+# prior reads of the geometry, prior_trunk; each on r12's joint; and stochastic_mode noise, no prior),
+# node 135: see run_node.sh (order of work, overrides) and README.md (the jobs as one queue).
 # WRITTEN BY make_sweep.py --pack {pack}: {pack} job(s) per card on GPUs {', '.join(CARDS)}, {len(CARDS) * pack} slots
 # (slot order {' '.join(slot_gpus(pack))}); each job gets {threads_per_job(pack)} torch threads + 4 DataLoader workers.
 # MPS is OFF here, always (MPS=0 below is not an override): round 13 lost both seeds of two

@@ -797,6 +797,9 @@ class ModelSplitStage(nn.Module):
 
         self.use_multiscale  = bool(config.get('use_multiscale', False))
         self.use_vae         = bool(config.get('use_vae', False))
+        if self.use_vae and str(config.get('stochastic_mode', 'vae')).lower().strip() == 'noise':
+            raise ValueError('stochastic_mode noise is not wired through the model_split '
+                             'pipeline; use parallel_mode ddp')
         self.use_world_edges = bool(config.get('use_world_edges', False))
         self.use_coarse_world_edges = (
             bool(config.get('coarse_world_edges', False))

@@ -15,7 +15,7 @@ Every round is on ex3 shell buckling (`dataset/probabilistic/ex3*.h5`).
 | [r11/](r11/) | B300 135, 16 jobs | where the latent lives; a z_g the decoder reads; the prior diagnosis tool |
 | [r12/](r12/) | B300 135, 8 jobs | the prior trained jointly with the encoder |
 | [r13/](r13/) | B300 135, 24 jobs | a latent forced into order, and a plainer model |
-| [r14/](r14/) | B300 135, 16 jobs, one per card | the prior (GNN or transformer) × the latent regularizer (MMD or KL 1, 10, 100) |
+| [r14/](r14/) | B300 135, 20 jobs, one per card | the prior (GNN or transformer) × the latent regularizer (MMD or KL 10, 100) × what the prior reads of the geometry (`prior_trunk`); plus no prior at all (`stochastic_mode noise`: z ~ N(0,I), CRPS of 2 draws) |
 
 The earlier rounds were removed on 2026-11-19 and are in git history: round 2
 (SAOI + ex3) at commit `2b88bdb`; rounds 3–7 and `aarl1/` at commit `e735316`.

@@ -18,6 +18,7 @@
 # and then misc/prior_diagnosis.py on the same three sets (what is wrong with
 # the prior, and how much: prior_diagnosis_<ho|tr|ts>.json; `jt` too where the
 # run kept <checkpoint stem>.joint.pth, which a joint run does not).
+# The noise settings (stochastic_mode noise) are skipped: no posterior, no prior.
 #
 # The base's three runs brief.py shows beside them (r8's hybrid_e360, r9's and
 # r10's base; `brief.py --refs` lists them) are diagnosed as well: their first
@@ -120,6 +121,10 @@ touch "$FAIL" "$PFAIL"
 NAMES=(); CFGS=(); OUTS=()
 while read -r node jid _rest; do
     [ "$node" = "$NODE" ] || continue
+    # stochastic_mode noise has no posterior and no prior: nothing here applies. Its W2 and
+    # per-geometry histogram come from its own inference (spread_metrics.json, histogram).
+    grep -Eq '^stochastic_mode[[:space:]]+noise' "$SWEEP_DIR/config_infer_$jid.txt" 2>/dev/null \
+        && { log "$jid: stochastic_mode noise, no posterior or prior to diagnose (skipped)"; continue; }
     NAMES+=("$jid"); CFGS+=("$SWEEP_DIR/config_infer_$jid.txt"); OUTS+=("$OUT_ROOT/$jid/diag")
 done < <(grep -v '^[[:space:]]*#' "$SWEEP_DIR/jobs.txt" | tr -d '\r')
 N_JOBS=${#NAMES[@]}

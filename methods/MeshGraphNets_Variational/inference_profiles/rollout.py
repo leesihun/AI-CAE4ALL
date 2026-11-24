@@ -548,6 +548,8 @@ def run_rollout(config, config_filename='config.txt'):
             else:
                 sampler_desc = (f"conditional mixture prior "
                                 f"({conditional_prior.num_components} components, temp={prior_temperature:g})")
+        elif getattr(model, 'noise_mode', False):
+            sampler_desc = "N(0, I) (stochastic_mode noise: trained on it, no prior)"
         else:
             sampler_desc = "N(0, I)"
         batch_desc = (

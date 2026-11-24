@@ -98,7 +98,11 @@ VAR_KEYS = frozenset(
         # prior_tf_heads, training dropout prior_tf_dropout); prior_param: its
         # head predicts the 'velocity' or the clean 'x'; prior_fm_draws: (z0, t)
         # pairs per posterior sample; prior_cond_noise: relative noise on the
-        # prior's trunk context in its training loss. local_dropout: hybrid,
+        # prior's trunk context in its training loss. prior_trunk: where the
+        # prior's per-coarse-node condition comes from ('fine': its own blocks
+        # on the fine mesh; 'multiscale': its own descending arm; 'decoder':
+        # the simulator's descending arm at z = 0, no gradient); checkpoint
+        # architecture. local_dropout: hybrid,
         # training only; share of graphs whose z_l the processor does not see,
         # so they are reconstructed from z_g alone. local_warmup_epochs: hybrid,
         # the first N epochs withhold every graph's z_l; zg_anchor_weight then
@@ -106,7 +110,12 @@ VAR_KEYS = frozenset(
         # posterior_max_std_g: cap on the z_g posterior std (0 = none).
         "local_dropout", "local_warmup_epochs", "zg_anchor_weight", "posterior_max_std_g",
         "local_inject", "lambda_mmd_g", "mmd_cond_width", "prior_arch", "prior_param", "prior_tf_heads",
-        "prior_tf_dropout", "prior_fm_draws", "prior_cond_noise",
+        "prior_tf_dropout", "prior_fm_draws", "prior_cond_noise", "prior_trunk",
+        # How z is drawn: 'vae' (posterior encoder + learned prior, default) or
+        # 'noise' (z ~ N(0, I) in training and inference, no encoder, no prior;
+        # trained with the fair CRPS of noise_draws forwards per batch).
+        # Checkpoint architecture.
+        "stochastic_mode", "noise_draws",
         # All-gather z across DDP ranks before MMD so the two-sample estimator
         # sees the GLOBAL batch instead of the per-rank one (default True).
         "mmd_gather_ranks",
@@ -182,8 +191,10 @@ def validate_variational(ctx: SpecValidationContext) -> None:
         )
 
     if values.get("use_vae", False) is True:
+        # stochastic_mode noise builds no encoder and no prior: their defaults are not "used".
+        noise = str(values.get("stochastic_mode", "vae")).lower().strip() == "noise"
         for name in ("vae_latent_dim", "vae_encoder_mp_layers", "recon_loss", "vae_graph_aware"):
-            if name not in values:
+            if name not in values and not (noise and name in NOISE_INACTIVE_KEYS):
                 ctx.add(
                     "MGNV-VAE-DEFAULT",
                     Severity.NOTICE,
@@ -196,12 +207,12 @@ def validate_variational(ctx: SpecValidationContext) -> None:
         prior_type = str(values.get("prior_type") or "gnn_e2e").lower()
         if prior_type == "gnn_e2e":
             for name in ("prior_family", "prior_mp_layers", "prior_hidden_dim"):
-                if name not in values:
+                if name not in values and not noise:
                     ctx.add("MGNV-PRIOR-DEFAULT", Severity.NOTICE, f"{name} is absent; the native conditional-prior default will be used.", field_name=name)
             family = str(values.get("prior_family", "fm")).lower()
             if family not in {"fm", "gmm"}:
                 ctx.add("MGNV-PRIOR-FAMILY", Severity.ERROR, "prior_family must be 'fm' or 'gmm'.", field_name="prior_family")
-            if family == "fm" and "prior_fm_steps" not in values:
+            if family == "fm" and "prior_fm_steps" not in values and not noise:
                 ctx.add("MGNV-FM-DEFAULT", Severity.NOTICE, "prior_fm_steps is absent; the native default of 20 will be used.", field_name="prior_fm_steps")
             if family == "gmm" and "prior_mixture_components" not in values:
                 ctx.add(
@@ -332,6 +343,8 @@ def validate_variational(ctx: SpecValidationContext) -> None:
 
         validate_latent_placement(ctx)
 
+    validate_stochastic_mode(ctx)
+
     # The native trainers branch only on 'crps' and rank everything else by the
     # reconstruction loss, so 'det' (a HI-MGNflow criterion) was accepted here
     # and then silently trained as 'recon' while the log said "best by det".
@@ -376,16 +389,98 @@ def validate_variational(ctx: SpecValidationContext) -> None:
 
 
 # Mirror of LATENT_TYPES / LATENT_REGS / LOCAL_INJECT_MODES in the runtime's
-# model/latent.py and PRIOR_ARCHS / PRIOR_PARAMS in model/conditional_prior.py.
+# model/latent.py and PRIOR_ARCHS / PRIOR_PARAMS / PRIOR_TRUNKS in
+# model/conditional_prior.py.
 LATENT_TYPES = ("global", "local", "hybrid")
 LATENT_REGS = ("mmd", "kl")
 LOCAL_INJECT_MODES = ("all", "coarsest")
 PRIOR_ARCHS = ("gnn", "transformer")
 PRIOR_PARAMS = ("velocity", "x")
+PRIOR_TRUNKS = ("fine", "multiscale", "decoder")
 # Keys read only by the coarse-level path (model/MeshGraphNets.py + CoarseFMPrior).
 COARSE_ONLY_KEYS = ("latent_ch", "vae_local_mp_layers", "local_inject", "prior_arch",
                     "prior_param", "prior_tf_heads", "prior_tf_dropout", "prior_fm_draws",
-                    "prior_cond_noise")
+                    "prior_cond_noise", "prior_trunk")
+
+
+# Mirror of STOCHASTIC_MODES in the runtime's model/latent.py.
+STOCHASTIC_MODES = ("vae", "noise")
+# Keys that only feed the posterior encoder, the latent regularizer or the
+# learned prior. stochastic_mode noise builds none of them.
+NOISE_INACTIVE_KEYS = (
+    "vae_encoder_mp_layers", "vae_graph_aware", "vae_local_mp_layers",
+    "latent_reg", "kl_weight", "lambda_mmd", "lambda_mmd_g", "mmd_cond_width",
+    "mmd_bandwidth", "mmd_gather_ranks", "alpha_recon", "beta_aux", "pv_channel",
+    "posterior_min_std", "posterior_max_std_g", "local_dropout",
+    "prior_type", "use_conditional_prior", "prior_family", "prior_nll_weight",
+    "prior_fm_steps", "prior_fm_solver", "prior_fm_time_power", "prior_mp_layers",
+    "prior_hidden_dim", "prior_kl_reg_weight", "prior_cov_rank",
+    "prior_velocity_hidden_dim", "prior_fm_moments", "prior_condition_hidden_dim",
+    "prior_fm_velocity_arch", "prior_fm_blocks", "prior_fm_moment_hidden_dim",
+    "prior_fm_moment_weight", "prior_fm_moment_min_scale", "prior_fm_moment_max_scale",
+    "prior_moment_calibration_epochs", "prior_grad_to_encoder", "prior_min_std",
+    "prior_mixture_components", "prior_arch", "prior_param", "prior_tf_heads",
+    "prior_tf_dropout", "prior_fm_draws", "prior_cond_noise", "prior_trunk",
+    "prior_temperature",
+)
+# Schedules that act on the posterior or the prior; noise mode has neither, so
+# a nonzero value is a run that is not the one configured.
+NOISE_REJECTED_SCHEDULES = ("prior_freeze_epoch", "local_warmup_epochs", "zg_anchor_weight")
+
+
+def validate_stochastic_mode(ctx: SpecValidationContext) -> None:
+    """stochastic_mode / noise_draws.
+
+    noise draws z ~ N(0, I) in training and inference and trains the simulator
+    with the fair CRPS of noise_draws forwards; there is no posterior encoder
+    and no prior, so their keys are inactive and their schedules are errors.
+    """
+    values = ctx.values
+    mode = str(values.get("stochastic_mode", "vae")).lower().strip()
+    if mode not in STOCHASTIC_MODES:
+        ctx.add("MGNV-STOCH-MODE", Severity.ERROR,
+                f"stochastic_mode must be one of {', '.join(STOCHASTIC_MODES)}; "
+                f"got {values['stochastic_mode']!r}.",
+                field_name="stochastic_mode")
+        return
+    if mode != "noise":
+        if "noise_draws" in values:
+            ctx.add("MGNV-LATENT-INACTIVE", Severity.WARNING,
+                    "noise_draws only applies to stochastic_mode noise; it is ignored.",
+                    field_name="noise_draws", promote_in_strict=True)
+        return
+    if values.get("use_vae", False) is not True:
+        ctx.add("MGNV-STOCH-VAE", Severity.ERROR,
+                "stochastic_mode noise feeds z through the VAE's z-conditioning "
+                "paths, which use_vae True builds; without it the model is "
+                "deterministic.",
+                field_name="use_vae", hint="set use_vae True")
+    if "noise_draws" in values:
+        draws = integer(values["noise_draws"])
+        if draws is None or draws < 2:
+            ctx.add("MGNV-STOCH-DRAWS", Severity.ERROR,
+                    f"noise_draws must be an integer >= 2 (the CRPS spread term "
+                    f"compares draws); got {values['noise_draws']!r}.",
+                    field_name="noise_draws")
+    if ctx.mode != "train":
+        return
+    for name in NOISE_REJECTED_SCHEDULES:
+        if (numeric(values.get(name, 0)) or 0) > 0:
+            ctx.add("MGNV-STOCH-SCHEDULE", Severity.ERROR,
+                    f"{name} schedules the posterior or the prior; stochastic_mode "
+                    f"noise has neither.",
+                    field_name=name, hint=f"set {name} 0")
+    if str(values.get("parallel_mode", "ddp")).lower().strip() == "model_split":
+        ctx.add("MGNV-STOCH-PIPELINE", Severity.ERROR,
+                "stochastic_mode noise is not wired through the model_split pipeline.",
+                field_name="parallel_mode")
+    for name in NOISE_INACTIVE_KEYS:
+        if name in values:
+            ctx.add("MGNV-LATENT-INACTIVE", Severity.WARNING,
+                    f"{name} configures the posterior encoder, the latent regularizer "
+                    f"or the prior; stochastic_mode noise has none of them, so it is "
+                    f"ignored.",
+                    field_name=name, promote_in_strict=True)
 
 
 def _validate_zg_revival(ctx: SpecValidationContext, latent_type: str) -> None:
@@ -592,7 +687,8 @@ def validate_coarse_prior(ctx: SpecValidationContext) -> None:
     values = ctx.values
     for name, choices, default in (("local_inject", LOCAL_INJECT_MODES, "all"),
                                    ("prior_arch", PRIOR_ARCHS, "gnn"),
-                                   ("prior_param", PRIOR_PARAMS, "velocity")):
+                                   ("prior_param", PRIOR_PARAMS, "velocity"),
+                                   ("prior_trunk", PRIOR_TRUNKS, "fine")):
         value = str(values.get(name, default)).lower().strip()
         if value not in choices:
             ctx.add("MGNV-LATENT-CHOICE", Severity.ERROR,

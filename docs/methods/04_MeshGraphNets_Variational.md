@@ -86,7 +86,7 @@ and `build_conditional_prior` picks the class. It is trained jointly
 | --- | --- | --- |
 | `ConditionalFMPrior` | `global`, `prior_family fm` (default) | Conditional flow matching from `N(0, I)`, or from a per-graph Gaussian with `prior_fm_moments`. The velocity net is `mlp` or `residual_film`. Sampled with `prior_fm_steps` steps of `heun` (default) or `euler`. |
 | `ConditionalMixturePrior` | `global`, `prior_family gmm` | Graph-conditioned Gaussian mixture, with optional low-rank covariance. Legacy. |
-| `CoarseFMPrior` | `local` / `hybrid` | Flow matching over the coarsest-level nodes. `prior_arch` is `gnn` (default) or `transformer` (AdaLN-Zero attention). `prior_param` sets whether the head predicts `velocity` (default) or `x`. |
+| `CoarseFMPrior` | `local` / `hybrid` | Flow matching over the coarsest-level nodes. `prior_arch` is `gnn` (default) or `transformer` (AdaLN-Zero attention). `prior_param` sets whether the head predicts `velocity` (default) or `x`. `prior_trunk` sets what each coarse node is conditioned on: its own cluster through the prior's fine-mesh blocks (`fine`, default), the prior's own descending arm (`multiscale`), or the simulator's descending arm at `z = 0`, without gradient (`decoder`). |
 
 `prior_fm_time_power p > 1` concentrates both the training times and the
 sampler grid near the noise end.
@@ -110,6 +110,21 @@ loss = alpha_recon      · recon(f(z_q, g), y)        huber (default) or mse
      + beta_aux         · PV(f(z_q, g), y)            peak-to-valley of decoded channel pv_channel
      + prior_nll_weight · prior loss                  FM MSE, or mixture NLL (+ prior_kl_reg_weight)
 ```
+
+**Noise mode** (`stochastic_mode noise`) replaces all four terms. There is no
+posterior encoder and no prior: `z ~ N(0, I)` in training and inference, in
+the `latent_type` layout, and each batch runs `noise_draws` forwards (K ≥ 2),
+each with its own `z`:
+
+```text
+loss = Σ_c w_c · mean_nodes [ (1/K) Σ_k |f(z_k, g) − y|  −  1/(2K(K−1)) Σ_{k≠j} |f(z_k, g) − f(z_j, g)| ]
+```
+
+That is the fair CRPS per output channel, weighted by `feature_loss_weights`. Only
+the first forward gets `std_noise`; the others see the same noised graph.
+Validation scores `vae_valid_prior_samples` N(0, I) forwards with the same
+CRPS, so `best_by crps` works. In the epoch log, "Train recon" is that
+training CRPS. The posterior-validation column is one N(0, I) draw.
 
 **MMD.** The MMD matches only the *aggregate* posterior to `N(0, I)`, so the
 latent stays the ball that the flow-matching prior integrates from. Two keys

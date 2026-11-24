@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# B300 round 14 (the prior, GNN or transformer, x the latent regularizer, MMD or KL 1, 10, 100; each on r12's joint) on node 135's cards as one queue.
+# B300 round 14 (the prior, GNN or transformer, x the latent regularizer, MMD or KL 10, 100, x prior_trunk; each on r12's joint; plus stochastic_mode noise: no encoder, no prior) on node 135's cards as one queue.
 # Do not call this file directly; run, from the repo root or anywhere:
 #
 #   bash configs/MeshGraphNets_Variational/hyperparameter_sweep/r14/run_135.sh
@@ -614,6 +614,15 @@ print(info)
     { grep -q "prior_fm_time_power" "$method_dir/model/conditional_prior.py" \
         && grep -q "mmd_cond_width" "$method_dir/model/MeshGraphNets.py"; } \
         || die "this checkout's $method_dir has no prior_fm_time_power / mmd_cond_width (round 13's keys). Pull first."
+    # Without it the three prior_trunk settings would train the default trunk and say nothing.
+    { grep -q "prior_trunk" "$method_dir/model/conditional_prior.py" \
+        && grep -q "geometry_features" "$method_dir/model/MeshGraphNets.py"; } \
+        || die "this checkout's $method_dir has no prior_trunk (round 14's key). Pull first."
+    # Without it the noise settings would train an ordinary VAE (unknown key ignored natively)
+    # and multi-GPU noise runs would fail in DDP (K forwards, one backward).
+    { grep -q "noise_draws" "$method_dir/training_profiles/training_loop.py" \
+        && grep -q "noise_mode" "$method_dir/training_profiles/distributed_training.py"; } \
+        || die "this checkout's $method_dir has no stochastic_mode noise (round 14's key). Pull first."
 done
 MGNV_PYTHON="${MGNV_PYTHON:-}"
 

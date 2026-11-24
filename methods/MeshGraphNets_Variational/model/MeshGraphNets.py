@@ -10,7 +10,7 @@ from model.coarsening import pool_features
 from model.conditional_prior import build_conditional_prior
 from model.encoder_decoder import Decoder, Encoder, GnBlock
 from model.latent import (
-    LATENT_REGS, LATENT_TYPES, LOCAL_INJECT_MODES, Latent, broadcast_rows,
+    LATENT_REGS, LATENT_TYPES, LOCAL_INJECT_MODES, STOCHASTIC_MODES, Latent, broadcast_rows,
     coarsest_parent_maps, coarsest_view, kl_to_standard_normal,
 )
 from model.mlp import build_mlp, init_weights
@@ -46,10 +46,19 @@ class MeshGraphNets(nn.Module):
         # Lives on the outer MeshGraphNets so DDP/EMA wrap both VAE and prior together.
         prior_type = str(config.get('prior_type', '')).lower().strip()
         self.use_vae = bool(config.get('use_vae', False))
-        self.has_gnn_prior = self.use_vae and prior_type == 'gnn_e2e'
+        # stochastic_mode noise: z is plain N(0, I) noise, in training too; no
+        # posterior encoder and no prior (see EncoderProcessorDecoder).
+        self.noise_mode = self.use_vae and self.model.noise_mode
+        self.has_gnn_prior = (self.use_vae and prior_type == 'gnn_e2e'
+                              and not self.noise_mode)
         if self.has_gnn_prior:
             self.prior = build_conditional_prior(config).to(device)
             self.prior.use_checkpointing = bool(config.get('use_checkpointing', False))
+            if getattr(self.prior, 'trunk', 'fine') == 'decoder':
+                # prior_trunk decoder: the prior has no trunk of its own and
+                # reads this model's descending arm. A bound method, not a
+                # submodule, so the simulator's weights are not registered twice.
+                self.prior.bind_geometry(self.model.geometry_features)
             print(f'MeshGraphNets: joint GNN conditional prior enabled '
                   f'(prior_type=gnn_e2e, family={self.prior.family})')
         else:
@@ -120,6 +129,8 @@ class MeshGraphNets(nn.Module):
             # OWN node/edge encoders, NOT the simulator's encoded latents --
             # graph.x is unchanged across both forwards because the simulator's
             # encoder builds a fresh Data inside (does not mutate input).
+            # (prior_trunk decoder is the exception: it reads the simulator's
+            # descending arm at z = 0, see geometry_features.)
             if self.prior.family == 'fm':
                 prior_outputs = {'pooled': self.prior.condition(graph)}
             else:
@@ -180,6 +191,19 @@ class EncoderProcessorDecoder(nn.Module):
         self.decoder = Decoder(self.latent_dim, self.node_output_size)
 
         self.use_vae = config.get('use_vae', False)
+        # How the draw is made (STOCHASTIC_MODES). 'vae' (default): a posterior
+        # encoder q(z | y, g) in training, a learned prior at inference. 'noise':
+        # z ~ N(0, I) in training AND inference, no encoder, no prior; the
+        # trainer draws noise_draws predictions per graph and scores them with
+        # the fair CRPS against the one observed field, which is what makes the
+        # draws spread (engression / FGN). The conditioning modules, the
+        # V-cycle and the latent layout are the same in both.
+        self.stochastic_mode = str(config.get('stochastic_mode', 'vae')).lower().strip()
+        if self.stochastic_mode not in STOCHASTIC_MODES:
+            raise ValueError(f"stochastic_mode must be one of {STOCHASTIC_MODES}, "
+                             f"got '{self.stochastic_mode}'")
+        self.noise_mode = bool(self.use_vae) and self.stochastic_mode == 'noise'
+        self.vae_encoder = None
         if self.use_vae:
             self._build_vae_components(config)
 
@@ -363,6 +387,46 @@ class EncoderProcessorDecoder(nn.Module):
             'local': self.latent_ch,
             'hybrid': self.latent_ch + self.vae_latent_dim,
         }[self.latent_type]
+        if self.noise_mode:
+            # Withholding z_l is a posterior-side device; plain noise has no
+            # z_g that must learn to carry anything on its own.
+            self.local_dropout = 0.0
+            print(f"  Noise latent ({self.latent_type}): z ~ N(0, I)"
+                  + ("" if self.latent_type == 'local' else f", z_g {self.num_z} slots x {self.vae_latent_dim}")
+                  + ("" if self.latent_type == 'global' else f", z_l {self.latent_ch} ch per coarsest node")
+                  + ("" if self.latent_type == 'global' or self.local_inject == 'all'
+                     else f", z_l injected at the {self.local_inject} level only")
+                  + "; no posterior encoder, no prior")
+        else:
+            self._build_posterior_encoder(config, vae_encoder_mp_layers)
+        print(f"  VAE z conditioning: {self.z_conditioning}")
+
+        if not self.use_multiscale:
+            self.z_fusers = self._build_z_conditioners(self.message_passing_num)
+        else:
+            L = self.multiscale_levels
+            self.ms_z_fusers_pre = nn.ModuleList()
+            self.ms_z_fusers_post = nn.ModuleList()
+            for i in range(L):
+                self.ms_z_fusers_pre.append(
+                    self._build_z_conditioners(self.mp_per_level[i]))
+                self.ms_z_fusers_post.append(
+                    self._build_z_conditioners(self.mp_per_level[2 * L - i]))
+            self.ms_z_fusers_coarsest = self._build_z_conditioners(self.mp_per_level[L])
+
+        # Which field row the peak-to-valley term scores. 2 = z_disp in the
+        # (x_disp, y_disp, z_disp) state block, the row the warpage metric reads.
+        self.pv_channel = int(self.config.get('pv_channel', 2))
+        if not 0 <= self.pv_channel < self.node_output_size:
+            raise ValueError(
+                f'pv_channel {self.pv_channel} is outside the '
+                f'{self.node_output_size} output rows.')
+        print(f"  VAE: ENABLED (z_dim={self.vae_latent_dim}"
+              + (", stochastic_mode noise)" if self.noise_mode
+                 else f", vae_encoder_mp_layers={vae_encoder_mp_layers})"))
+
+    def _build_posterior_encoder(self, config, vae_encoder_mp_layers):
+        """q(z | y, g) of stochastic_mode vae."""
         self.vae_encoder = GNNVariationalEncoder(
             self.node_output_size, self.edge_input_size,
             self.latent_dim, self.vae_latent_dim, num_mp_layers=vae_encoder_mp_layers,
@@ -393,29 +457,6 @@ class EncoderProcessorDecoder(nn.Module):
         print(f"  VAE posterior σ floor: {self.vae_posterior_min_std}"
               + ("" if self.posterior_max_std_g == 0.0
                  else f", z_g σ cap: {self.posterior_max_std_g}"))
-        print(f"  VAE z conditioning: {self.z_conditioning}")
-
-        if not self.use_multiscale:
-            self.z_fusers = self._build_z_conditioners(self.message_passing_num)
-        else:
-            L = self.multiscale_levels
-            self.ms_z_fusers_pre = nn.ModuleList()
-            self.ms_z_fusers_post = nn.ModuleList()
-            for i in range(L):
-                self.ms_z_fusers_pre.append(
-                    self._build_z_conditioners(self.mp_per_level[i]))
-                self.ms_z_fusers_post.append(
-                    self._build_z_conditioners(self.mp_per_level[2 * L - i]))
-            self.ms_z_fusers_coarsest = self._build_z_conditioners(self.mp_per_level[L])
-
-        # Which field row the peak-to-valley term scores. 2 = z_disp in the
-        # (x_disp, y_disp, z_disp) state block, the row the warpage metric reads.
-        self.pv_channel = int(self.config.get('pv_channel', 2))
-        if not 0 <= self.pv_channel < self.node_output_size:
-            raise ValueError(
-                f'pv_channel {self.pv_channel} is outside the '
-                f'{self.node_output_size} output rows.')
-        print(f"  VAE: ENABLED (z_dim={self.vae_latent_dim}, vae_encoder_mp_layers={vae_encoder_mp_layers})")
 
     # ── VAE helpers ──────────────────────────────────────────────────────────
 
@@ -602,6 +643,9 @@ class EncoderProcessorDecoder(nn.Module):
         What _encode_vae computes on the posterior path, without the rest of
         the forward -- used to fit / train the prior against the posterior.
         """
+        if self.vae_encoder is None:
+            raise RuntimeError('this model has no posterior encoder '
+                               '(use_vae off, or stochastic_mode noise)')
         batch = getattr(graph, 'batch', None)
         if batch is None:
             batch = torch.zeros(graph.x.shape[0], dtype=torch.long, device=graph.x.device)
@@ -753,6 +797,9 @@ class EncoderProcessorDecoder(nn.Module):
     def forward(self, graph, use_posterior=None, fixed_z=None):
         if use_posterior is None:
             use_posterior = self.training and self.use_vae
+        if self.noise_mode:
+            # No posterior exists: z is N(0, I) in training and inference alike.
+            use_posterior = False
 
         if not self.use_multiscale:
             return self._forward_flat(graph, use_posterior, fixed_z)
@@ -848,17 +895,8 @@ class EncoderProcessorDecoder(nn.Module):
             })
 
             ld = level_data[i]
-            if 'seeds' in ld:
-                # Inherit mode: coarse node IS the seed → pool is a gather.
-                h_coarse = current_graph.x[ld['seeds']]
-            else:
-                h_coarse = pool_features(current_graph.x, ld['ftc'], ld['n_c'])
-            e_coarse = run_mlp(self.coarse_eb_encoders[i], ld['c_ea'],
-                               self.use_checkpointing and self.training)
-            current_graph = Data(x=h_coarse, edge_attr=e_coarse, edge_index=ld['c_ei'])
-            if self.use_coarse_world_edges and ld['c_we_idx'] is not None and ld['c_we_idx'].shape[1] > 0:
-                current_graph.world_edge_attr  = ld['c_we_attr']
-                current_graph.world_edge_index = ld['c_we_idx']
+            current_graph = self._coarsen_level(
+                current_graph, ld, i, self.use_checkpointing and self.training)
 
             if self.use_vae and z is not None:
                 current_batch = scatter(current_batch, ld['ftc'], dim=0, dim_size=ld['n_c'], reduce='min')
@@ -902,6 +940,70 @@ class EncoderProcessorDecoder(nn.Module):
             aux_loss = self._pv_loss(predicted, original_y, fine_batch,
                                      self._num_graphs(z, fine_batch, num_graphs))
         return predicted, vae_losses, aux_loss
+
+    def _coarsen_level(self, graph, ld, i, checkpointed):
+        """Level i's graph pooled onto level i+1: node features, encoded coarse
+        edges and (when enabled) the coarse world edges."""
+        if 'seeds' in ld:
+            # Inherit mode: coarse node IS the seed → pool is a gather.
+            h_coarse = graph.x[ld['seeds']]
+        else:
+            h_coarse = pool_features(graph.x, ld['ftc'], ld['n_c'])
+        e_coarse = run_mlp(self.coarse_eb_encoders[i], ld['c_ea'], checkpointed)
+        coarse_graph = Data(x=h_coarse, edge_attr=e_coarse, edge_index=ld['c_ei'])
+        if self.use_coarse_world_edges and ld['c_we_idx'] is not None and ld['c_we_idx'].shape[1] > 0:
+            coarse_graph.world_edge_attr  = ld['c_we_attr']
+            coarse_graph.world_edge_index = ld['c_we_idx']
+        return coarse_graph
+
+    @torch.no_grad()
+    def geometry_features(self, graph):
+        """What the V-cycle holds on its coarsest level before any latent is read.
+
+        The descending arm only (encoder, every level's pre-blocks, the pools),
+        run at z = 0 and without gradient: [n_c, latent_dim], one row per
+        coarsest node, i.e. the input of the coarsest blocks. A function of the
+        input graph alone, whatever the latent type or `local_inject`.
+
+        `prior_trunk decoder` conditions the coarse prior on it. It is a second
+        pass over the descending arm (forward only, nothing kept for backward);
+        the weights are the simulator's, and the prior's loss does not reach
+        them through this path.
+        """
+        if not self.use_multiscale:
+            raise RuntimeError('geometry_features needs use_multiscale True')
+        L = self.multiscale_levels
+        level_data = self._extract_level_data(graph, L)
+        batch = getattr(graph, 'batch', None)
+        if batch is None:
+            batch = torch.zeros(graph.x.shape[0], dtype=torch.long, device=graph.x.device)
+        z = maps = None
+        if self.use_vae:
+            B = int(getattr(graph, 'num_graphs', 0) or (int(batch.max().item()) + 1))
+            dev, dtype = graph.x.device, graph.x.dtype
+            if self.latent_type == 'global':
+                z = torch.zeros(B, self.num_z, self.vae_latent_dim, device=dev, dtype=dtype)
+            else:
+                maps = coarsest_parent_maps(level_data)
+                n_c = level_data[len(level_data) - 1]['n_c']
+                z = Latent(
+                    torch.zeros(B, self.num_z, self.vae_latent_dim, device=dev, dtype=dtype)
+                    if self.latent_type == 'hybrid' else None,
+                    torch.zeros(n_c, self.latent_ch, device=dev, dtype=dtype))
+        adaln = self.use_vae and self.z_conditioning == 'adaln'
+        current = self.encoder(graph)
+        z_per_node = None if z is None else self._level_z(z, 0, batch, maps)
+        for i in range(len(level_data)):
+            current = run_graph_blocks(
+                self.pre_blocks[i], current,
+                z_fusers=self.ms_z_fusers_pre[i] if z is not None else None,
+                z_per_node=z_per_node, adaln=adaln, checkpointed=False)
+            ld = level_data[i]
+            current = self._coarsen_level(current, ld, i, False)
+            if z is not None:
+                batch = scatter(batch, ld['ftc'], dim=0, dim_size=ld['n_c'], reduce='min')
+                z_per_node = self._level_z(z, i + 1, batch, maps or {})
+        return current.x
 
     def _unpool_merge(self, i, h_coarse, h_skip, up_ei, rel_pos):
         """Level i's learned unpool, then the skip merge."""

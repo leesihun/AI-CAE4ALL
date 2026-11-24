@@ -87,7 +87,7 @@ KEY_CATALOGS.sdfflow = [...new Set([
 KEY_CATALOGS.meshgraphnetsV = [...new Set([
   ...KEY_CATALOGS.meshgraphnetsV,
   ...keys(`latent_type latent_ch vae_local_mp_layers latent_reg kl_weight`),
-  ...keys(`local_inject local_dropout local_warmup_epochs zg_anchor_weight posterior_max_std_g lambda_mmd_g prior_arch prior_param prior_tf_heads prior_tf_dropout prior_fm_draws prior_cond_noise prior_fm_time_power mmd_cond_width`)
+  ...keys(`local_inject local_dropout local_warmup_epochs zg_anchor_weight posterior_max_std_g lambda_mmd_g prior_arch prior_param prior_tf_heads prior_tf_dropout prior_fm_draws prior_cond_noise prior_trunk prior_fm_time_power mmd_cond_width stochastic_mode noise_draws`)
 ])].sort();
 
 export const MODEL_CATALOG = {
@@ -490,10 +490,13 @@ export const CHOICES = {
   z_conditioning: ["concat", "adaln"],
   // MGNV-LATENT-TYPE / MGNV-LATENT-REG.
   latent_reg: ["mmd", "kl"],
-  // MGNV-LATENT-CHOICE (LOCAL_INJECT_MODES / PRIOR_ARCHS / PRIOR_PARAMS).
+  // MGNV-LATENT-CHOICE (LOCAL_INJECT_MODES / PRIOR_ARCHS / PRIOR_PARAMS / PRIOR_TRUNKS).
   local_inject: ["all", "coarsest"],
   prior_arch: ["gnn", "transformer"],
   prior_param: ["velocity", "x"],
+  prior_trunk: ["fine", "multiscale", "decoder"],
+  // STOCHASTIC_MODES in ai_cae4all/specs/meshgraphnets_variational.py.
+  stochastic_mode: ["vae", "noise"],
   spread_stat: ["range", "mean", "std", "mag_max"],
   // SAR-SCOPE-001 (ai_cae4all/specs/sar.py SAMPLE_SCOPES) and LDGN-SCOPE-001.
   sample_scope: ["geometry", "scene"],
@@ -1465,6 +1468,9 @@ export const HELP = {
   lambda_mmd_g: "MMD weight of the global latent z_g (latent_type hybrid, latent_reg mmd). Defaults to lambda_mmd; 0 drops the z_g MMD, leaving z_g shaped by reconstruction and the prior only. lambda_mmd still weighs z_l.",
   prior_arch: "Velocity network of the coarse-level flow prior (latent_type local/hybrid). gnn (default): message passing over the coarsest graph plus a pooled z_g token. transformer: full attention over every coarsest node (+ one token per z_g slot), AdaLN-conditioned on t and the pooled context; depth prior_fm_blocks, width prior_velocity_hidden_dim, heads prior_tf_heads. Checkpoint architecture.",
   prior_param: "What the coarse flow prior's head predicts (latent_type local/hybrid). velocity (default): the flow velocity. x: the clean latent z1, converted to a velocity for training and sampling. Checkpoint architecture.",
+  prior_trunk: "Where the coarse flow prior's per-coarse-node condition comes from (latent_type local/hybrid). fine (default): prior_mp_layers blocks of its own on the fine mesh, then the cluster mean, so a coarse node knows its own cluster and a few-hop rim. multiscale: the same blocks, then a pool plus prior_mp_layers more blocks on every coarser level (its own descending arm, trained by the prior loss). decoder: no trunk of its own; it reads the simulator's descending arm with the latent set to zero, without gradient, so the prior loss does not train those features. Checkpoint architecture.",
+  stochastic_mode: "How MeshGraphNets-V draws z (use_vae True). vae (default): a posterior encoder in training and a learned prior at inference. noise: z ~ N(0, I) in training and inference alike, with no encoder and no prior; each batch runs noise_draws forwards with independent z and trains on their fair CRPS. latent_type still sets the z layout. Every encoder, regularizer and prior key is ignored. Checkpoint architecture.",
+  noise_draws: "Forwards per batch with independent z ~ N(0, I) when stochastic_mode is noise (default 4, at least 2: the CRPS spread term compares draws). Training compute and activation memory grow about linearly with it.",
   prior_tf_heads: "Attention heads of the transformer coarse prior (prior_arch transformer only, default 4). Must divide the prior velocity width. Checkpoint architecture.",
   prior_tf_dropout: "Training-only dropout of the transformer coarse prior (prior_arch transformer only, default 0 = off): on the attention weights and on both residual branches of every block. Range [0, 1); eval, inference and sampling never drop. Adds no weights, so a checkpoint loads with any value. 0.1 is the usual transformer setting; 0.3 is strong.",
   prior_fm_draws: "Noise/time draws per posterior sample in the coarse flow prior's training loss (latent_type local/hybrid, default 1). K > 1 regresses K (z0, t) pairs per sample, costing K prior passes per step.",

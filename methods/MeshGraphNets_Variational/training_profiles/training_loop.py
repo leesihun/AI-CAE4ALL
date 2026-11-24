@@ -292,6 +292,13 @@ class _ObjectiveTerms:
         self.num_timesteps = n_steps
         self.zg_anchor_sum = 0.0
         self.zg_anchor_count = 0
+        # stochastic_mode noise: K forwards with independent z ~ N(0, I) per
+        # batch, trained with the fair CRPS of the K draws against the one
+        # target (engression / FGN). No regularizer, no aux, no prior.
+        self.noise_mode = bool(getattr(inner_model, 'noise_mode', False))
+        self.noise_draws = int(config.get('noise_draws', 4) or 4)
+        if self.noise_mode and self.noise_draws < 2:
+            raise ValueError('noise_draws must be >= 2: the CRPS spread term needs two draws')
 
 
 def _anchor_keys(graph, num_timesteps):
@@ -393,6 +400,8 @@ def _compose_loss(model, graph, terms):
     all tensors, so an AR-RT step can be gradient-checkpointed wholesale. `reg`
     is the active latent regularizer (MMD or per-sample KL).
     """
+    if terms.noise_mode:
+        return _compose_noise_loss(model, graph, terms)
     with torch.amp.autocast('cuda', dtype=terms.amp_dtype, enabled=terms.use_amp):
         predicted_acc, target_acc, vae_losses, aux_loss_val, prior_outputs = model(
             graph, compute_prior_path=terms.compute_prior_path,
@@ -476,6 +485,27 @@ def _compose_loss(model, graph, terms):
             reg_loss_val, aux_tensor, kl_anchor_val, prior_loss_val)
 
 
+def _compose_noise_loss(model, graph, terms):
+    """stochastic_mode noise: the fair CRPS of K draws, z ~ N(0, I) each.
+
+    Only the first forward applies std_noise: it adds the input noise to
+    graph.x / graph.y IN PLACE, so the other K-1 forwards then see the same
+    noised input and target, which the CRPS needs (K draws of one conditional).
+    Same return contract as _compose_loss; `prediction` is the first draw (an
+    AR-RT unroll advances on it), `recon_sum` is the CRPS sum, and the
+    regularizer, aux and prior terms are zeros.
+    """
+    preds = []
+    with torch.amp.autocast('cuda', dtype=terms.amp_dtype, enabled=terms.use_amp):
+        for k in range(terms.noise_draws):
+            pred, target, _, _, _ = model(graph, add_noise=(None if k == 0 else False))
+            preds.append(pred)
+    crps = _crps_from_samples(torch.stack([p.float() for p in preds]), target.float())
+    loss, crps_sum, _ = _loss_from_errors(crps, terms.loss_weights, sync=False)
+    zero = torch.zeros((), device=crps.device, dtype=torch.float32)
+    return preds[0], loss, crps_sum, zero, zero, zero, zero
+
+
 def _build_rollout_context(config, device):
     """Return an AR-RT context, or None when the run is AR-OT."""
     return RolloutContext(config, device) if ar_rt_enabled(config) else None
@@ -532,7 +562,13 @@ def log_training_config(config):
     else:
         print("Time integration: AR-OT (one-step / teacher-forced training)")
 
-    if config.get('use_vae', False):
+    if (config.get('use_vae', False)
+            and str(config.get('stochastic_mode', 'vae')).lower().strip() == 'noise'):
+        print(f"Noise latent: ENABLED (latent_type={config.get('latent_type', 'global')}, "
+              f"z_dim={config.get('vae_latent_dim', 32)}, z ~ N(0, I) in training and "
+              f"inference, loss = fair CRPS of noise_draws={config.get('noise_draws', 4)} "
+              f"draws; no posterior encoder, no prior)")
+    elif config.get('use_vae', False):
         z_dim   = config.get('vae_latent_dim', 32)
         mp_enc  = config.get('vae_encoder_mp_layers', 5)
         reg, w  = latent_reg_weight(config)
@@ -551,6 +587,7 @@ def log_training_config(config):
             elif str(config.get('latent_type', 'global')).lower().strip() != 'global':
                 arch = str(config.get('prior_arch', 'gnn')).lower().strip()
                 print(f"Prior (coarse FM): fm_weight={p_w} arch={arch} "
+                      f"trunk={config.get('prior_trunk', 'fine')} "
                       f"blocks={config.get('prior_fm_blocks', 4)} "
                       + (f"heads={config.get('prior_tf_heads', 4)} " if arch == 'transformer' else "")
                       + f"velocity_hidden={config.get('prior_velocity_hidden_dim', config.get('prior_hidden_dim'))} "
@@ -931,8 +968,9 @@ def train_epoch(model, dataloader, optimizer, device, config, epoch, ema_model=N
 
         # Update progress bar every 10 batches to reduce memory query overhead
         if batch_idx % 10 == 0:
-            postfix = {'rec': f'{batch_loss_sum.item() / batch_loss_count:.2e}', 'mem': _mem_str()}
-            if use_vae:
+            rec_key = 'crps' if objective_terms.noise_mode else 'rec'
+            postfix = {rec_key: f'{batch_loss_sum.item() / batch_loss_count:.2e}', 'mem': _mem_str()}
+            if use_vae and not objective_terms.noise_mode:
                 postfix[latent_reg] = f'{float(reg_loss_val):.2e}'
                 postfix['aux'] = f'{float(aux_loss_val):.2e}'
                 postfix['λ']   = f'{reg_weight:.1e}'
@@ -1077,14 +1115,18 @@ def evaluate_vae_learned_prior_epoch(model, dataloader, device, config, epoch=0,
     means the prior has collapsed and generated samples will have far too
     little spread.
 
-    No-op when there is no learned prior (returns None).
+    stochastic_mode noise has no prior: its S draws are N(0, I) forwards (what
+    inference does), scored the same way, with no prior diagnostic.
+
+    No-op when there is no learned prior and no noise latent (returns None).
     """
     inner = _unwrap_for_submodule(model)
-    if getattr(inner, 'prior', None) is None:
+    noise_mode = bool(getattr(inner, 'noise_mode', False))
+    if getattr(inner, 'prior', None) is None and not noise_mode:
         return None
     sim = getattr(inner, 'model', None)
     has_posterior = getattr(sim, 'vae_encoder', None) is not None
-    is_fm_prior = getattr(inner.prior, 'family', 'gmm') == 'fm'
+    is_fm_prior = (not noise_mode) and getattr(inner.prior, 'family', 'gmm') == 'fm'
     # Prior samples drawn per graph, used for (a) the CRPS estimate and (b) the
     # prior-spread diagnostic (fm has no closed-form variance, so it is estimated
     # from this sample cloud). Sample 0 doubles as the recon eval z.
@@ -1120,7 +1162,9 @@ def evaluate_vae_learned_prior_epoch(model, dataloader, device, config, epoch=0,
         for graph in pbar:
             graph = _move_graph_to_device(graph, device, config)
             with torch.amp.autocast('cuda', dtype=amp_dtype, enabled=use_amp):
-                if is_fm_prior:
+                if noise_mode:
+                    z_cloud = None  # each forward draws its own N(0, I)
+                elif is_fm_prior:
                     z_cloud = inner.prior.sample_n(
                         graph, num_prior_samples, temperature=prior_temperature,
                     )  # [B, S, num_z, D], or Latent(g [B, S, ...], l [n_c, S, C])
@@ -1138,7 +1182,7 @@ def evaluate_vae_learned_prior_epoch(model, dataloader, device, config, epoch=0,
                 for s in range(num_prior_samples):
                     predicted, target, _, _, _ = model(
                         graph, add_noise=False, use_posterior=False,
-                        fixed_z=select_draw(z_cloud, s),
+                        fixed_z=None if z_cloud is None else select_draw(z_cloud, s),
                     )
                     pred_samples.append(predicted.float())
                 predicted = pred_samples[0]
@@ -1152,7 +1196,9 @@ def evaluate_vae_learned_prior_epoch(model, dataloader, device, config, epoch=0,
                     for name, t in latent_parts(logvar_q):
                         var_q_all.setdefault(name, []).append(_as_slots(t.float().exp()).cpu())
 
-                if is_fm_prior:
+                if noise_mode:
+                    pass
+                elif is_fm_prior:
                     # Per-row prior variance from the sample cloud (draws on dim 1).
                     for name, t in latent_parts(z_cloud):
                         prior_var_all.setdefault(name, []).append(

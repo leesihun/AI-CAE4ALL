@@ -25,7 +25,7 @@ class _ConditionalPriorBase(nn.Module):
     identical state_dict keys.
     """
 
-    def __init__(self, config, build_pool=True):
+    def __init__(self, config, build_pool=True, build_trunk=True):
         super().__init__()
         self.config = dict(config)
         self.z_dim = int(config.get('vae_latent_dim', 32))
@@ -58,12 +58,15 @@ class _ConditionalPriorBase(nn.Module):
             base_input_size += int(config.get('num_node_types', 0))
         edge_input_size = int(config.get('edge_var'))
 
-        self.node_encoder = build_mlp(base_input_size, self.hidden_dim, self.hidden_dim)
-        self.edge_encoder = build_mlp(edge_input_size, self.hidden_dim, self.hidden_dim)
-        self.mp_layers = nn.ModuleList([
-            GnBlock(self.hidden_dim, use_world_edges=False)
-            for _ in range(self.num_mp_layers)
-        ])
+        # Not built for prior_trunk decoder (CoarseFMPrior), which reads the
+        # simulator's features instead: no parameter sits unused under DDP.
+        if build_trunk:
+            self.node_encoder = build_mlp(base_input_size, self.hidden_dim, self.hidden_dim)
+            self.edge_encoder = build_mlp(edge_input_size, self.hidden_dim, self.hidden_dim)
+            self.mp_layers = nn.ModuleList([
+                GnBlock(self.hidden_dim, use_world_edges=False)
+                for _ in range(self.num_mp_layers)
+            ])
         # State-dict compatible with the deprecated GlobalAttention (same gate_nn keys).
         # Not built when nothing reads it (latent_type local), so no parameter
         # sits unused under DDP.
@@ -529,6 +532,8 @@ PRIOR_ARCHS = ('gnn', 'transformer')
 _TF_MODULES = ('l_in', 'cond_mlp', 'tf_blocks', 'final_mod', 'l_head',
                'g_tok_in', 'g_tok_head')
 PRIOR_PARAMS = ('velocity', 'x')
+# Where the coarse prior's per-coarse-node condition comes from (see CoarseFMPrior).
+PRIOR_TRUNKS = ('fine', 'multiscale', 'decoder')
 # x-prediction turns x into v by dividing by (1 - s*t); near t = 1 that
 # vanishes, so the divisor is floored (JiT, Li & He 2025, use 0.05 too).
 X_PRED_MIN_DENOM = 0.05
@@ -611,6 +616,25 @@ class CoarseFMPrior(_ConditionalPriorBase):
     AdaLN-Zero condition per graph. The position code is the coarsest centroid,
     centred and RMS-scaled per graph, with sin/cos features at 1, 2, 4, 8.
 
+    prior_trunk sets where cond_x comes from. All three end as one H-vector
+    per coarsest node; they differ in how much of the mesh that vector has seen
+    and in who trained it:
+
+      fine        (default) prior_mp_layers GnBlocks on the fine mesh, then the
+                  cluster mean: a coarse node knows its own cluster and a
+                  prior_mp_layers-hop rim around it.
+      multiscale  the same fine blocks, then for every coarser level a mean
+                  pool, that level's encoded edges and prior_mp_layers more
+                  GnBlocks: the prior's own descending arm, trained by the
+                  prior's loss alone.
+      decoder     no trunk of its own: the simulator's descending arm at z = 0
+                  (EncoderProcessorDecoder.geometry_features), without gradient,
+                  through one MLP. The features are the ones the reconstruction
+                  loss trained; the prior's loss does not reach them.
+
+    For multiscale and decoder the attention pool reads the coarsest-level
+    features rather than the fine nodes.
+
     prior_param x makes the heads predict the clean z1 instead of the velocity;
     the velocity v = (x - s z_t) / max(1 - s t, X_PRED_MIN_DENOM) is what is
     regressed and integrated, so the loss and the sampler are unchanged.
@@ -649,9 +673,14 @@ class CoarseFMPrior(_ConditionalPriorBase):
         tf_dropout = float(config.get('prior_tf_dropout', 0.0))
         if not 0.0 <= tf_dropout < 1.0:
             raise ValueError(f'prior_tf_dropout must be in [0, 1), got {tf_dropout}')
+        trunk = str(config.get('prior_trunk', 'fine')).lower().strip()
+        if trunk not in PRIOR_TRUNKS:
+            raise ValueError(f"prior_trunk must be one of {PRIOR_TRUNKS}, got '{trunk}'")
         # The transformer reads the pooled trunk in its condition for local
         # too; the GNN only for the hybrid token.
-        super().__init__(config, build_pool=(latent_type == 'hybrid' or arch == 'transformer'))
+        super().__init__(config, build_pool=(latent_type == 'hybrid' or arch == 'transformer'),
+                         build_trunk=(trunk != 'decoder'))
+        self.trunk = trunk
         self.latent_type = latent_type
         self.hybrid = latent_type == 'hybrid'
         self.arch = arch
@@ -669,6 +698,20 @@ class CoarseFMPrior(_ConditionalPriorBase):
         self.time_power = _fm_time_power(config)
         self.flat_dim = self.num_z * self.z_dim
         H = self.hidden_dim
+        if trunk == 'multiscale':
+            self.ms_edge_encoders = nn.ModuleList([
+                build_mlp(int(config.get('edge_var')), H, H) for _ in range(self.levels)
+            ])
+            self.ms_layers = nn.ModuleList([
+                nn.ModuleList([GnBlock(H, use_world_edges=False)
+                               for _ in range(self.num_mp_layers)])
+                for _ in range(self.levels)
+            ])
+        elif trunk == 'decoder':
+            self.geom_encoder = build_mlp(int(config.get('latent_dim')), H, H)
+            # Set by the owning model (bind_geometry). Not a submodule: the
+            # simulator's weights are its own.
+            self._geometry_fn = None
         Hv = int(config.get('prior_velocity_hidden_dim',
                             config.get('prior_hidden_dim', H)))
         self.velocity_hidden_dim = Hv
@@ -761,20 +804,52 @@ class CoarseFMPrior(_ConditionalPriorBase):
 
     # -- conditioning ---------------------------------------------------------
 
-    def condition(self, graph):
-        """Trunk on the fine mesh -> coarsest-level context dict."""
-        batch = getattr(graph, 'batch', None)
-        if batch is None:
-            batch = torch.zeros(graph.x.shape[0], dtype=torch.long, device=graph.x.device)
+    def bind_geometry(self, fn):
+        """prior_trunk decoder: `fn(graph) -> [n_c, latent_dim]`, the owning
+        simulator's geometry_features."""
+        self._geometry_fn = fn
+
+    def _coarse_features(self, graph, cv):
+        """(cond_x [n_c, H], fine-level trunk features or None) for `prior_trunk`."""
+        if self.trunk == 'decoder':
+            if self._geometry_fn is None:
+                raise RuntimeError(
+                    "prior_trunk decoder reads the simulator's coarsest-level features, "
+                    "but no simulator is bound: call "
+                    "prior.bind_geometry(model.model.geometry_features) "
+                    "(MeshGraphNets does it for the prior it builds).")
+            return self.geom_encoder(self._geometry_fn(graph).detach()), None
         ckpt = checkpoint_active(self)
         g = Data(x=run_mlp(self.node_encoder, graph.x, ckpt),
                  edge_attr=run_mlp(self.edge_encoder, graph.edge_attr, ckpt),
                  edge_index=graph.edge_index)
         g = run_plain_blocks(self.mp_layers, g, ckpt)
+        if self.trunk == 'fine':
+            return pool_features(g.x, cv['parent'], cv['n_c']), g.x
+        # multiscale: pool, encode that level's edges, message-pass; the last
+        # level reached is the coarsest one, the rows of cv.
+        for i in range(self.levels):
+            key = f'fine_to_coarse_{i}'
+            if not hasattr(graph, key):
+                break
+            n_c = graph[f'coarse_centroid_{i}'].shape[0]
+            g = Data(x=pool_features(g.x, graph[key], n_c),
+                     edge_attr=run_mlp(self.ms_edge_encoders[i],
+                                       graph[f'coarse_edge_attr_{i}'], ckpt),
+                     edge_index=graph[f'coarse_edge_index_{i}'])
+            g = run_plain_blocks(self.ms_layers[i], g, ckpt)
+        return g.x, None
+
+    def condition(self, graph):
+        """The trunk (`prior_trunk`) -> coarsest-level context dict."""
+        batch = getattr(graph, 'batch', None)
+        if batch is None:
+            batch = torch.zeros(graph.x.shape[0], dtype=torch.long, device=graph.x.device)
         cv = coarsest_view(graph, self.levels)
         B = int(getattr(graph, 'num_graphs', 0) or (int(batch.max().item()) + 1))
+        cond_x, fine_x = self._coarse_features(graph, cv)
         ctx = {
-            'x': pool_features(g.x, cv['parent'], cv['n_c']),
+            'x': cond_x,
             'batch': cv['batch'],
             'B': B,
         }
@@ -786,7 +861,8 @@ class CoarseFMPrior(_ConditionalPriorBase):
             ctx['M'] = _max_rows_per_graph(graph, cv['pos'])
         if hasattr(self, 'pool'):
             # dim_size: without it PyG's softmax/reduce read index.max() back (a host sync)
-            ctx['pooled'] = self.pool(g.x, batch, dim_size=B)
+            ctx['pooled'] = (self.pool(fine_x, batch, dim_size=B) if fine_x is not None
+                             else self.pool(cond_x, cv['batch'], dim_size=B))
         return ctx
 
     def _position_code(self, pos, batch, B):
@@ -1279,6 +1355,7 @@ def build_prior_config(config):
         # latent_type local / hybrid (CoarseFMPrior) only:
         'prior_arch': str(config.get('prior_arch', 'gnn')).lower().strip(),
         'prior_param': str(config.get('prior_param', 'velocity')).lower().strip(),
+        'prior_trunk': str(config.get('prior_trunk', 'fine')).lower().strip(),
         'prior_tf_heads': config.get('prior_tf_heads', 4),
         'prior_tf_dropout': config.get('prior_tf_dropout', 0.0),
         'prior_fm_draws': config.get('prior_fm_draws', 1),

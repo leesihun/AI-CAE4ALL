@@ -225,6 +225,11 @@ def build_model_config(config) -> dict:
         # partition the rollout happens to build.
         'hierarchy_variants': config.get('hierarchy_variants', 1),
         'use_vae':           config.get('use_vae', False),
+        # Architecture-defining: 'noise' builds no posterior encoder and no
+        # prior, and its z is N(0, I) at inference. Absent in older
+        # checkpoints, which are all 'vae'. noise_draws is training-only.
+        'stochastic_mode':   str(config.get('stochastic_mode', 'vae')).lower().strip(),
+        'noise_draws':       config.get('noise_draws', 4),
         'vae_latent_dim':    config.get('vae_latent_dim', 32),
         'vae_encoder_mp_layers':     config.get('vae_encoder_mp_layers', 5),
         'vae_graph_aware':   config.get('vae_graph_aware', False),
@@ -292,11 +297,12 @@ def build_model_config(config) -> dict:
             config.get('prior_fm_velocity_arch', 'mlp')
         ).lower().strip(),
         'prior_fm_blocks':          config.get('prior_fm_blocks', 4),
-        # latent_type local / hybrid only. prior_arch / prior_tf_heads shape
-        # the prior; prior_param changes what its heads mean; prior_fm_draws,
-        # prior_cond_noise and prior_tf_dropout are training-only, kept for
-        # provenance.
+        # latent_type local / hybrid only. prior_arch / prior_tf_heads /
+        # prior_trunk shape the prior; prior_param changes what its heads
+        # mean; prior_fm_draws, prior_cond_noise and prior_tf_dropout are
+        # training-only, kept for provenance.
         'prior_arch':               str(config.get('prior_arch', 'gnn')).lower().strip(),
+        'prior_trunk':              str(config.get('prior_trunk', 'fine')).lower().strip(),
         'prior_param':              str(config.get('prior_param', 'velocity')).lower().strip(),
         'prior_tf_heads':           config.get('prior_tf_heads', 4),
         'prior_tf_dropout':         config.get('prior_tf_dropout', 0.0),

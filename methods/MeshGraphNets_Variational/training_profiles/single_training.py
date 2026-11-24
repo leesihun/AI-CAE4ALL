@@ -174,6 +174,16 @@ def single_worker(config, config_filename='config.txt'):
     local_warmup = int(config.get('local_warmup_epochs', 0) or 0) if hybrid else 0
     zg_anchor_on = local_warmup > 0 and float(config.get('zg_anchor_weight', 0) or 0) > 0
     zg_anchor = None
+    if getattr(model, 'noise_mode', False):
+        # These schedules act on the posterior or the prior, which noise mode
+        # does not build. Preflight refuses this too.
+        for name, on in (('prior_freeze_epoch', prior_freeze > 0),
+                         ('local_warmup_epochs', local_warmup > 0),
+                         ('zg_anchor_weight',
+                          float(config.get('zg_anchor_weight', 0) or 0) > 0)):
+            if on:
+                raise ValueError(f'{name} schedules the posterior or the prior; '
+                                 f'stochastic_mode noise has neither. Set it to 0.')
 
     best_valid_loss = float('inf')
     last_valid_loss = float('inf')

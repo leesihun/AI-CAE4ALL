@@ -120,6 +120,8 @@ The V-cycle and coarsening are described in
 | `local_dropout` | `hybrid`, training only: the share of graphs whose `z_l` is withheld from the processor, in `[0, 1)` |
 | `local_warmup_epochs` | `hybrid`: withhold every `z_l` for the first N epochs; checkpoint selection restarts at epoch N. Single GPU |
 | `zg_anchor_weight` | `hybrid`, needs `local_warmup_epochs`: KL that keeps `z_g` near its end-of-warmup posterior |
+| `stochastic_mode` | `vae` (default): posterior encoder + learned prior. `noise`: `z ~ N(0, I)` in training and inference, no encoder and no prior; trained on the fair CRPS of `noise_draws` forwards. `latent_type` still sets the z layout. Every encoder, regularizer and prior key is ignored; `prior_freeze_epoch`, `local_warmup_epochs`, `zg_anchor_weight` and `model_split` are errors. Checkpoint architecture |
+| `noise_draws` | `noise` only: forwards per batch, each with its own `z` (default 4, at least 2). Training cost grows about linearly with it |
 
 ## Objective
 
@@ -160,6 +162,7 @@ weight acts relative to `alpha_recon`.
 | `prior_fm_moments` + `prior_fm_moment_hidden_dim`, `prior_fm_moment_weight` (1.0), `prior_fm_moment_min_scale` / `prior_fm_moment_max_scale` (0.03 / 20) | Condition-dependent Gaussian base for the global FM prior |
 | `prior_arch` | `local`/`hybrid` coarse prior (`CoarseFMPrior`): `gnn` (default) or `transformer` |
 | `prior_param` | Head target: `velocity` (default) or `x` |
+| `prior_trunk` | Where the coarse prior's per-coarse-node condition comes from. `fine` (default): `prior_mp_layers` blocks of its own on the fine mesh, then the cluster mean. `multiscale`: the same blocks, then a pool and `prior_mp_layers` more blocks on every coarser level. `decoder`: no trunk of its own; the simulator's descending arm with the latent set to zero, read without gradient (`prior_mp_layers` is unused). Checkpoint architecture |
 | `prior_tf_heads`, `prior_tf_dropout` | Transformer heads (default 4; must divide the width) and training dropout (default 0) |
 | `prior_fm_draws` | `(z0, t)` draws per posterior sample in the coarse prior loss (default 1) |
 | `prior_cond_noise` | Relative noise on the coarse prior's context in training (default 0) |

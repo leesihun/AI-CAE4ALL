@@ -192,9 +192,12 @@ def _train_worker_inner(rank, world_size, config, gpu_ids, config_filename):
         # every parameter's gradient hook fires once per step. DDP's reducer
         # rejects that ("marked ready twice") unless the graph is declared
         # static, which also legalizes the per-step checkpointing.
-        static_graph = ar_rt_enabled(config)
+        # stochastic_mode noise is the same case: noise_draws forwards, one backward.
+        noise_mode = bool(getattr(model, 'noise_mode', False))
+        static_graph = ar_rt_enabled(config) or noise_mode
         if static_graph:
-            print("  DDP: static_graph=True (required by AR-RT unrolling)")
+            why = 'AR-RT unrolling' if ar_rt_enabled(config) else 'stochastic_mode noise draws'
+            print(f"  DDP: static_graph=True (required by {why})")
         ddp_model = DDP(
             model,
             device_ids=[gpu_id],

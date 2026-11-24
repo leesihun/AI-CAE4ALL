@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """A results block short enough to retype by hand, for B300 round 14 (the prior, GNN or
-transformer, x the latent regularizer, MMD or KL 1, 10, 100; each on round 12's joint setting).
+transformer, x the latent regularizer, MMD or KL 10, 100, x what the prior reads of the
+geometry, prior_trunk; each on round 12's joint setting).
 
     python configs/MeshGraphNets_Variational/hyperparameter_sweep/r14/brief.py
     python .../r14/brief.py --long     # every number, not for typing
-    python .../r14/brief.py --prior a3 # the full prior diagnosis of one setting (default a1)
+    python .../r14/brief.py --prior a4 # the full prior diagnosis of one setting (default a1)
 
 Standard library only; run it with any Python 3.8+, while the jobs run or
 after. It prints a column legend and a numbered job index (read them, do not
@@ -32,8 +33,8 @@ as the `pd` and `pb` lines:
     a0 66/95/75 m78 ho 27/29/78 tr 56/57/82 ts 45/46/101 g0 l100 n551 s2       the base
     a1 + 55/60 m58 ho 27/30/58 tr 56/57/60 ts 45/47/62 g0 l100 n400 s40        joint: mark, w2 per seed, mean, diagnosis
     a2 += 52/61 m57 ho 27/29/57 tr 56/57/59 ts 45/46/60 g0 l100 n90 s300       joint plus one change: marks against a0, a1
-    pd - 2 3 1 1 2 2 - 2 0                the decision per setting a0, a1, ... (a0..a8), then a check digit
-    pb - 2 2 1 1 2 2 - 2 2                the same against the base
+    pd - 2 3 1 1 2 2 - 2 - - 0            the decision per setting a0, a1, ... (a0..a10), then a check digit
+    pb - 2 2 1 1 2 2 - 2 - - 2              the same against the base
     d0 30 4 85 9                          the decoder between two posteriors, base (then d1: joint)
     c1 1 3 8 14 24 u 12 13 5              the causes found in joint's own diagnosis
     pf 4:tr                               a prior-diagnosis part that failed (job:part)
@@ -68,11 +69,15 @@ LEGEND = """\
 COLUMNS (do not type)   every number x100, rounded ("27" = 0.27)
   aN    one line per setting (SETTINGS below), the last lines of the block:
         mark  blank before the setting has two seeds. a1 (joint) has one, against the base (a0).
-              a2-a5 have two: against the base, then against a1 (joint, the GNN prior with the MMD).
-              a6-a8 (the transformer prior + KL) have their second mark against a5 (the
-              transformer prior with the MMD).
-              Read a1, a2, a3, a4 as one line (the GNN prior: MMD, KL 1, 10, 100) and
-              a5, a6, a7, a8 as the same line with the transformer prior.
+              a2-a6 have two: against the base, then against a1 (joint, the GNN prior with the MMD).
+              a7, a8 (the transformer prior + KL 10, + prior_trunk decoder) have their second
+              mark against a6 (the transformer prior with the MMD).
+              Read a1, a2, a3 as one line (the GNN prior: MMD, KL 10, KL 100); a4, a5 as what
+              the prior reads of the geometry (a4 the decoder's coarsest features, a5 its own
+              multiscale trunk) against a1; a6, a7, a8 as the transformer prior: MMD, KL 10,
+              the decoder's features. a9 (noise: no encoder, no prior, z ~ N(0,I), CRPS of 2
+              draws) is marked against the base only; a10 (the same, latent_type global) also
+              against a9. a9, a10 have the w2 only (no ho/tr/ts: nothing to diagnose).
               + every seed beats every seed of the other, - every seed loses, = neither
         w2    per seed, in seed order 42/43(/44). a0 is r8's hybrid_e360, r9's hybrid_base_s43
               and r10's hybrid_base_s44 (rows R1-R3). One setting's seeds differ by about 30.
@@ -130,18 +135,24 @@ ONE aN LINE (do not type)   %s
              2) 둘째 값(posterior)이 floor에 그대로 있는가. prior의 loss가 encoder로 들어가면
                 posterior가 geometry만으로 맞히기 쉬운 쪽으로 밀립니다. 둘째 값이 floor에서
                 올라갔다면 encoder가 draw의 정보를 버린 것이고, 그 설정의 prior 점수는 믿을 수 없습니다.
-             3) a2~a5는 a1(joint)에 바꾼 것을 더한 설정입니다. 기호가 둘이면 첫째는 base,
-                둘째는 a1과의 비교입니다 (a6~a8은 a5, 즉 transformer prior와의 비교).
+             3) a2~a6는 a1(joint)에 바꾼 것을 더한 설정입니다. 기호가 둘이면 첫째는 base,
+                둘째는 a1과의 비교입니다 (a7, a8은 a6, 즉 transformer prior와의 비교).
                 같은 설정의 seed끼리도 30쯤 다르니 기호를 먼저 봅니다.
-             4) KL 설정 (a2~a4, a6~a8)은 posterior 자체가 넓어서 둘째 값이 floor보다 조금 높은 것이
+             4) KL 설정 (a2, a3, a7)은 posterior 자체가 넓어서 둘째 값이 floor보다 조금 높은 것이
                 정상입니다. 셋째 값(prior)과의 차이를 봅니다. KL 100에서 둘째 값이 100 근처까지
                 올라갔다면 decoder가 z를 읽지 않게 된 것입니다 (l도 0에 가까워집니다).
-             6) 두 줄로 읽습니다: a1, a2, a3, a4 = GNN prior에서 MMD, KL 1, 10, 100,
-                a5, a6, a7, a8 = transformer prior에서 MMD, KL 1, 10, 100. 한 설정의 두 seed가 아니라
-                KL이 커질 때 ho의 셋째 값이 한 방향으로 움직이는지, 두 줄이 같은 모양인지를 봅니다.
              5) n, s는 latent가 정리되었는지입니다. n이 ho의 셋째 값(prior)까지 내려오면 N(0,I)에서
                 아무렇게나 뽑은 z도 decoder가 제대로 읽는다는 뜻입니다. n은 내려갔는데 prior가
                 그대로면 "latent 정리"가 원인이 아니고, n과 prior가 같이 내려가면 원인이 맞습니다.
+             6) 세 묶음으로 읽습니다: a1, a2, a3 = GNN prior에서 MMD, KL 10, KL 100.
+                a4, a5 = prior가 geometry를 읽는 부분만 바꾼 것 (a4: decoder의 coarsest 특징,
+                a5: prior 자체의 multiscale trunk). a6, a7, a8 = transformer prior에서 MMD, KL 10,
+                decoder의 coarsest 특징. a9, a10 = encoder도 prior도 없는 noise 방식 (z ~ N(0,I),
+                draw 2개의 CRPS로 학습; a10은 latent_type global). w2만 있고 base와 비교합니다.
+             7) a4, a5, a8 (prior_trunk)은 tr, ts, ho의 셋째 값(prior)을 a1 (a8은 a6)과 비교합니다.
+                a4와 a5가 같이 내려가면 "prior가 geometry를 넓게 본 것"이 이유이고, a4만 내려가면
+                "decoder가 쓰는 특징"이 이유입니다. tr만 내려가고 ts, ho가 그대로면 학습 geometry를
+                외운 것입니다. 둘 다 그대로면 prior의 입력이 원인이 아닙니다.
 """ % EXAMPLE
 READING_EN = """\
 ONE aN LINE (do not type)   %s
@@ -155,19 +166,26 @@ ONE aN LINE (do not type)   %s
                 in the encoder the posterior is pushed towards what the geometry alone predicts.
                 A second number above the floor = the encoder dropped the draw's information,
                 and that setting's prior score cannot be trusted.
-             3) a2-a5 are a1 (joint) plus a change. Of two marks the first is against
-                the base, the second against a1 (a6-a8: against a5, the transformer prior).
+             3) a2-a6 are a1 (joint) plus a change. Of two marks the first is against
+                the base, the second against a1 (a7, a8: against a6, the transformer prior).
                 One setting's seeds differ by about 30, so read the marks first.
-             4) The KL settings (a2-a4, a6-a8) have a wider posterior by design, so their second
+             4) The KL settings (a2, a3, a7) have a wider posterior by design, so their second
                 number sits somewhat above the floor; read the gap to the third. A second number
                 near 100 at KL 100 = the decoder stopped reading z (l falls towards 0 too).
-             6) Read two lines: a1, a2, a3, a4 = MMD, KL 1, 10, 100 with the GNN prior,
-                a5, a6, a7, a8 = the same with the transformer prior. Not two seeds of one
-                setting, but whether the third number of ho moves one way as the KL grows, and
-                whether the two lines have the same shape.
              5) n and s say whether the latent is in order. n down at the third number of ho
                 (the prior) = the decoder reads any N(0,I) draw correctly. n down with the
                 prior unchanged = the order of the latent is not the cause; both down = it is.
+             6) Read three groups: a1, a2, a3 = MMD, KL 10, KL 100 with the GNN prior.
+                a4, a5 = only what the prior reads of the geometry changes (a4: the decoder's
+                coarsest features, a5: the prior's own multiscale trunk). a6, a7, a8 = the
+                transformer prior with MMD, KL 10, the decoder's coarsest features. a9, a10 = the
+                noise way, no encoder and no prior (z ~ N(0,I), trained on the CRPS of 2 draws;
+                a10 latent_type global): the w2 only, read against the base.
+             7) a4, a5, a8 (prior_trunk): compare the third number (the prior) on tr, ts, ho
+                with a1's (a8: with a6's). a4 and a5 both down = the wider view of the geometry
+                is the reason; a4 alone down = the decoder's own features are. tr down with ts
+                and ho unchanged = it memorized the training geometries. Neither down = the
+                prior's input is not the cause.
 """ % EXAMPLE
 
 
@@ -348,14 +366,19 @@ def ranges(nums):
 SETTINGS = {
     "base": None,
     "joint": "base",                    # prior_freeze_epoch 0 + prior_grad_to_encoder 1 (GNN prior, MMD)
-    "joint_kl1": "joint",               # ... latent_reg kl, kl_weight 1
-    "joint_kl10": "joint",              # ... kl_weight 10
+    "joint_kl10": "joint",              # ... latent_reg kl, kl_weight 10
     "joint_kl100": "joint",             # ... kl_weight 100
+    "joint_dec": "joint",               # ... prior_trunk decoder (the simulator's descending arm at z = 0)
+    "joint_ms": "joint",                # ... prior_trunk multiscale (the prior's own descending arm)
     "joint_tfk8": "joint",              # ... transformer prior, 8 flow draws, z_l at the coarsest level
-    "joint_tfk8_kl1": "joint_tfk8",     # tf_k8 + kl_weight 1
     "joint_tfk8_kl10": "joint_tfk8",    # tf_k8 + kl_weight 10
-    "joint_tfk8_kl100": "joint_tfk8",   # tf_k8 + kl_weight 100
+    "joint_tfk8_dec": "joint_tfk8",     # tf_k8 + prior_trunk decoder
+    "noise": "base",                    # stochastic_mode noise: no encoder, no prior, CRPS of 2 N(0,I) draws
+    "noise_global": "noise",            # ... latent_type global (no z_l)
 }
+# Settings with no posterior and no prior (stochastic_mode noise): diagnose_135.sh skips them,
+# so their aN line has the w2 only and they take no part in the prior diagnosis.
+NO_PRIOR = ("noise", "noise_global")
 JID_RE = re.compile(r"^(?:hybrid_)?(.+)_s(\d+)$")   # hybrid_<setting>_s<seed>
 
 # Each setting tests one cause of the base's prior error (the keys of prior_verdict.CAUSES):
@@ -363,13 +386,13 @@ JID_RE = re.compile(r"^(?:hybrid_)?(.+)_s(\d+)$")   # hybrid_<setting>_s<seed>
 #             is read from the setting's own diagnosis, what it changes against its reference).
 PRIOR_TESTS = {
     "joint": ("frozen", True, "the prior trained together with the encoder"),
-    "joint_kl1": ("points", False, "KL 1 in place of MMD (a wider posterior)"),
     "joint_kl10": ("points", False, "KL 10 in place of MMD (a wider posterior)"),
     "joint_kl100": ("points", False, "KL 100 in place of MMD (a wider posterior)"),
+    "joint_dec": ("unseen", False, "the prior reads the decoder's coarsest-level features"),
+    "joint_ms": ("unseen", False, "the prior's own trunk goes down to the coarsest level"),
     "joint_tfk8": ("fit", True, "a transformer prior trained on 8 flow draws per sample"),
-    "joint_tfk8_kl1": ("points", False, "KL 1 in place of MMD, with the transformer prior"),
     "joint_tfk8_kl10": ("points", False, "KL 10 in place of MMD, with the transformer prior"),
-    "joint_tfk8_kl100": ("points", False, "KL 100 in place of MMD, with the transformer prior"),
+    "joint_tfk8_dec": ("unseen", False, "the decoder's coarsest-level features, with the transformer prior"),
 }
 CODES = {1: "CONFIRMED", 2: "RULED OUT", 3: "OPEN", 4: "WORSE", 5: "MIXED"}
 SETS = ("tr", "ts", "ho")   # the order of every tr/ts/ho triple below
@@ -548,6 +571,11 @@ def prior_report(prior, fails):
                 + (f"  seeds {seeds}" if base else "  (not diagnosed yet)"))
     for setting in names[1:]:
         k, ref = num[setting], SETTINGS[setting]
+        if setting in NO_PRIOR:   # no prior to diagnose: "-" in pd and pb
+            pd.append(None)
+            pb.append(None)
+            text.append(f"  a{k:<2} {setting:<{width}}  no prior (stochastic_mode noise): the w2 line only")
+            continue
         key, _by, what = PRIOR_TESTS[setting]
         parts = get(setting)
         cause = f"{PV.NUMBER[key]} {key}"

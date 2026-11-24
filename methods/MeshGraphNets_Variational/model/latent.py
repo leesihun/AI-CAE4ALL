@@ -24,6 +24,9 @@ LATENT_TYPES = ('global', 'local', 'hybrid')
 LATENT_REGS = ('mmd', 'kl')
 # Which V-cycle levels read z_l (MeshGraphNets._level_z).
 LOCAL_INJECT_MODES = ('all', 'coarsest')
+# How z is drawn: a posterior encoder + learned prior ('vae'), or plain N(0, I)
+# noise in training and inference, trained with the K-draw CRPS ('noise').
+STOCHASTIC_MODES = ('vae', 'noise')
 
 
 class Latent(NamedTuple):
