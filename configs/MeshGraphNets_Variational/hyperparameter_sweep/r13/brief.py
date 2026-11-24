@@ -29,7 +29,7 @@ as the `pd` and `pb` lines:
     stop 7                        was running when the run died (run the round again)
     4 F:train CUDA out of memory  a failure: stage and the first error line
     d 4:tr                        a diagnosis part that failed (job:part)
-    a0 66/95/75 m78 ho 27/29/78 tr 56/57/82 ts 45/48/100 g0 l100 n578 s51      the base
+    a0 66/95/75 m78 ho 27/29/78 tr 56/57/82 ts 45/46/101 g0 l100 n551 s2       the base
     a1 + 55/60 m58 ho 27/30/58 tr 56/57/60 ts 45/47/62 g0 l100 n400 s40        joint: mark, w2 per seed, mean, diagnosis
     a2 += 52/61 m57 ho 27/29/57 tr 56/57/59 ts 45/46/60 g0 l100 n90 s300       joint plus one change: marks against a0, a1
     pd - 2 3 1 1 2 2 - 2 - 3 2 2 0        the decision per setting a0..a12, then a check digit
@@ -85,10 +85,11 @@ COLUMNS (do not type)   every number x100, rounded ("27" = 0.27)
         n     is the latent in order: a z ~ N(0,I), never seen by the prior, decoded on the
               held-out geometries, scored like the prior (third number of ho). Equal to the
               prior's score = the decoder reads any N(0,I) draw as a valid result, the
-              geometry does not move the latent, the prior has nothing to learn. The base: 578.
+              geometry does not move the latent, the prior has nothing to learn. The base:
+              a0's n (551; r8's 240-epoch base had 578).
         s     the posterior's width over the spread of its means, z_l, held-out (x100).
               ~0 = every sample is a point with gaps between them; 100 or more = the
-              samples of one geometry overlap. The base: 51.
+              samples of one geometry overlap. The base: a0's s (2; r8's 240-epoch base had 51).
         "-"   not diagnosed yet (or the part failed: a "d" line)
   run   #:% of the epochs done:seconds of the last epoch (r8 alone on a card: 277)
   #     job number (JOBS below, the jobs.txt order)
@@ -115,7 +116,7 @@ COLUMNS (do not type)   every number x100, rounded ("27" = 0.27)
 """
 
 # One aN line read out, printed under the legend. Korean where the terminal can print it.
-EXAMPLE = "a0 66/95/75 m78 ho 27/29/78 tr 56/57/82 ts 45/48/100 g0 l100 n578 s51"
+EXAMPLE = "a0 66/95/75 m78 ho 27/29/78 tr 56/57/82 ts 45/46/101 g0 l100 n551 s2"
 READING_KO = """\
 ONE aN LINE (do not type)   %s
   66/95/75   seed 42/43/44 각각의 held-out W2

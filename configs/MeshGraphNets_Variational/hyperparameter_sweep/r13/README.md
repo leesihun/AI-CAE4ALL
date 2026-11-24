@@ -13,9 +13,10 @@ learn. Three things are known about the latent of the base:
 - z_g is unused: the decoder gives the same result with z_g swapped or zeroed.
 - z_l carries the draw. Each of its rows looks N(0,1), but a z ~ N(0,I) sent
   straight to the decoder scores 578 on the held-out geometries against the
-  prior's 83: the 256 coarse nodes together are far from N(0,I).
-- The posteriors are narrow (width 0.51 of the spread of their means; 0.03 in
-  the 360-epoch run): points with gaps between them.
+  prior's 83 (r8's 240-epoch base; a0, the 360-epoch base: 551 against 78):
+  the 256 coarse nodes together are far from N(0,I).
+- The posteriors are narrow (width 0.51 of the spread of their means in the
+  240-epoch base, 0.02 in a0): points with gaps between them.
 
 This round asks two questions on round 12's `joint` setting
 (`prior_freeze_epoch 0`, `prior_grad_to_encoder 1`):
@@ -168,10 +169,10 @@ and type back the block between `==== TYPE THIS BACK ====` and `==== END ====`.
 - **n**: a z ~ N(0,I), which the prior never saw, decoded on the held-out
   geometries and scored like the prior. Equal to the prior's number = the
   decoder reads any N(0,I) draw as a valid result, so the geometry does not
-  move the latent. The base: 578.
+  move the latent. The base: a0's n (551; r8's 240-epoch base had 578).
 - **s**: the posterior's width over the spread of its means, for z_l (x100).
   Near 0 = points with gaps; 100 or more = the samples of a geometry overlap.
-  The base: 51.
+  The base: a0's s (2; r8's 240-epoch base had 51).
 
 Reading n with the prior: n down and the prior down = the order of the latent
 was the cause. n down and the prior unchanged = it was not. n unchanged = the
