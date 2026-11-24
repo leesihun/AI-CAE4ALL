@@ -15,7 +15,7 @@ Every round is on ex3 shell buckling (`dataset/probabilistic/ex3*.h5`).
 | [r11/](r11/) | B300 135, 16 jobs | where the latent lives; a z_g the decoder reads; the prior diagnosis tool |
 | [r12/](r12/) | B300 135, 8 jobs | the prior trained jointly with the encoder |
 | [r13/](r13/) | B300 135, 24 jobs | a latent forced into order, and a plainer model |
-| [r14/](r14/) | B300 135, 20 jobs, one per card | the prior (GNN or transformer) × the latent regularizer (MMD or KL 10, 100) × what the prior reads of the geometry (`prior_trunk`); plus no prior at all (`stochastic_mode noise`: z ~ N(0,I), CRPS of 2 draws) |
+| [r14/](r14/) | B300 135, 24 jobs, 3 per card at once | the prior (GNN or transformer) × the latent regularizer (MMD or KL 10, 100) × what the prior reads of the geometry (`prior_trunk`); plus no prior at all (`stochastic_mode noise`: z ~ N(0,I), CRPS of 2 draws) |
 
 The earlier rounds were removed on 2026-11-19 and are in git history: round 2
 (SAOI + ex3) at commit `2b88bdb`; rounds 3–7 and `aarl1/` at commit `e735316`.
@@ -55,7 +55,7 @@ generated file; `--plan` prints the queue and writes nothing).
   one MPS daemon instead of time-slicing (1.54x throughput for 3 batch-4 jobs
   on a 3090). Every card is probed first; on a failure the run says
   `MPS OFF ... <why>` and time-slices. `kill_all.sh` quits the daemon. Round
-  14 runs one job per card and its `run_135.sh` sets `MPS=0`.
+  14's `run_135.sh` sets `MPS=0` (three jobs per card, time-sliced).
 - **`use_compile True`:** each GnBlock is one compiled function (1.36x per
   step). A startup self-test compares it with eager, forward and backward; on
   a failure the log says `use_compile: compiled GnBlocks OFF, training

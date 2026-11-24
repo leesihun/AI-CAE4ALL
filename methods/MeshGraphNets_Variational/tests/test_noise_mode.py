@@ -140,6 +140,25 @@ def test_crps_rewards_spread_that_matches(dataset_path):
     assert _crps_from_samples(spread, y).mean() < _crps_from_samples(sharp, y).mean()
 
 
+@pytest.mark.parametrize("latent_type", ["global", "hybrid"])
+def test_checkpointing_gives_the_same_loss_and_gradients(dataset_path, latent_type):
+    """Several jobs per card turn use_checkpointing on: z is drawn outside the
+    checkpointed blocks, so recomputing a block must see the same draw."""
+    results = []
+    for ckpt in (False, True):
+        cfg, model, loader = _noise(dataset_path, latent_type, use_checkpointing=ckpt)
+        _jitter(model)
+        model.train()
+        graph = next(iter(loader))
+        torch.manual_seed(7)
+        _, loss, *_ = _compose_loss(model, graph.clone(), _terms(cfg, model))
+        loss.backward()
+        results.append((loss.detach(), [p.grad.clone() for p in model.parameters() if p.grad is not None]))
+    (l0, g0), (l1, g1) = results
+    assert torch.allclose(l0, l1, rtol=1e-5, atol=1e-6) and len(g0) == len(g1)
+    assert all(torch.allclose(a, b, rtol=1e-4, atol=1e-6) for a, b in zip(g0, g1))
+
+
 def test_too_few_draws_is_refused(dataset_path):
     cfg, model, _ = _build(dataset_path, stochastic_mode="noise", noise_draws=1)
     with pytest.raises(ValueError, match="noise_draws must be >= 2"):

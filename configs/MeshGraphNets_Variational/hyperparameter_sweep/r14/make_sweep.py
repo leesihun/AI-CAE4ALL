@@ -2,19 +2,21 @@
 """Generate B300 round 14: the prior's velocity network (GNN or transformer) x the latent
 regularizer (MMD or the per-sample KL at 10, 100) x what the prior reads of the geometry
 (prior_trunk), each on the joint setting of round 12; and beside them stochastic_mode noise
-(no encoder, no prior: z ~ N(0,I), the loss the CRPS of 2 draws). One job per card.
+(no encoder, no prior: z ~ N(0,I), the loss the CRPS of 2 draws). Three jobs per card, all
+24 at once (the user, 2026-11-24).
 
     python configs/MeshGraphNets_Variational/hyperparameter_sweep/r14/make_sweep.py           # writes the configs here (--pack 1)
     python .../r14/make_sweep.py --plan         # jobs, cards and estimated hours; writes nothing
 
 Standard library only, any Python 3.8+. Every run is r12's `joint`: prior_freeze_epoch 0
 (one objective for all 360 epochs) and the prior's loss reaching the encoder
-(prior_grad_to_encoder 1). Twenty runs, ten settings x seeds 42/43:
+(prior_grad_to_encoder 1). Twenty-four runs, twelve settings x seeds 42/43:
 
                       MMD           KL 10             KL 100         trunk decoder     trunk multiscale
     GNN prior         joint         joint_kl10        joint_kl100    joint_dec         joint_ms
     transformer       joint_tfk8    joint_tfk8_kl10   -              joint_tfk8_dec    -
-    no prior          noise (hybrid), noise_global (global)
+    GNN, KL 10 + trunk decoder: joint_kl10_dec
+    no prior          noise (hybrid), noise_global (global), noise_coarse (hybrid, z_l at the coarsest level)
 
 Why this table. Of round 13's twelve settings only joint_kl10 changed the latent (a decoded
 N(0,I) draw 551 -> 211) and had both seeds low (69/72). The only prior that fitted the
@@ -49,6 +51,11 @@ every round since r8 only the velocity network changed: what the prior reads of 
                      asks is whether the simulator alone learns the spread. Estimated x1.14 the
                      base's time and peak (16 fine blocks per step against 14).
     noise_global     the same with latent_type global: one N(0,I) vector per sample, no z_l.
+    joint_kl10_dec   (added with --pack 3) KL 10 and prior_trunk decoder together: the change that
+                     put the latent in order and the one aimed at unseen geometries, on one run.
+    noise_coarse     (added with --pack 3) noise with local_inject coarsest: z_l enters only at the
+                     coarsest level, so the decoder's upward arm makes the spread smooth in space.
+                     Between noise_global (one vector) and noise (z_l at every level).
 
 2026-11-24: joint_kl1, joint_tfk8_kl1 and joint_tfk8_kl100 were taken out for the three
 prior_trunk settings (round 13's joint_kl1 was 106/84, worse than the base). To bring one
@@ -61,9 +68,10 @@ hybrid_base_s44. Edit this file, never a generated config.
 
 --pack sets the jobs per card, and with it run_135.sh's GPUS and THREADS_PER_JOB
 (rewritten here) and each job's use_checkpointing (on only where the estimated peak of
-PACK jobs would not fit the card). The default here is 1: 8 jobs on the 8 cards at once,
-checkpointing off, the other twelve as cards free. run_135.sh sets MPS=0 (one job per card
-has nothing to share). use_checkpointing and the slot layout do not enter the resume
+PACK jobs would not fit the card). The default here is 3: all 24 jobs on the 8 cards at
+once, checkpointing on (about 55-63 GB each, a guess). run_135.sh sets MPS=0 (round 13
+lost two settings with two jobs per card under MPS); the cards are time-shared. --pack 1
+gives one job per card with checkpointing off and the rest as cards free. use_checkpointing and the slot layout do not enter the resume
 fingerprint, so the round can be stopped, regenerated with another --pack (--force) and
 restarted: every job resumes.
 """
@@ -129,18 +137,27 @@ SETTINGS["noise"] = (NOISE, f"stochastic_mode noise: no encoder, no prior; z_g a
 SETTINGS["noise_global"] = (dict(NOISE, lt="global"),
                             f"stochastic_mode noise with latent_type global: one N(0,I) vector per sample "
                             f"(no z_l), {NOISE_DRAWS} draws per batch, loss = their CRPS", SEEDS)
+# Added 2026-11-24 with --pack 3 (24 slots, so four more jobs): the two best bets, together.
+SETTINGS["joint_kl10_dec"] = (dict(JOINT, reg="kl", klw="10", trunk=TRUNKS["dec"][0]),
+                              f"joint, per-sample KL (kl_weight 10) and {TRUNKS['dec'][1]}", SEEDS)
+SETTINGS["noise_coarse"] = (dict(NOISE, inj="coarsest"),
+                            f"stochastic_mode noise, z_l read at the coarsest level only (local_inject "
+                            f"coarsest), {NOISE_DRAWS} draws per batch, loss = their CRPS", SEEDS)
 # Run order: job k on slot k (the cards of SLOT_CARDS), then each freed card takes the next job.
-# First eight = what is not known yet and decides the round: the control (it died in round 13),
-# the transformer prior on joint, and prior_trunk decoder under each of the two (each beside the
-# run it is marked against). The second eight: the two noise settings (no encoder, no prior) and
-# the KL settings that repeat round 13. The last four: the multiscale control and KL 100. A
-# setting's two seeds are never on one card (round 13 lost two whole settings to two cards):
-# both seeds are always in the same wave of jobs, and each job of a wave takes a different card.
-ORDER = [("joint", 42), ("joint_tfk8_dec", 42), ("joint", 43), ("joint_tfk8_dec", 43),
-         ("joint_dec", 42), ("joint_tfk8", 42), ("joint_dec", 43), ("joint_tfk8", 43),
-         ("noise", 42), ("noise_global", 42), ("joint_tfk8_kl10", 42), ("joint_kl10", 42),
-         ("noise", 43), ("noise_global", 43), ("joint_tfk8_kl10", 43), ("joint_kl10", 43),
-         ("joint_ms", 42), ("joint_kl100", 42), ("joint_ms", 43), ("joint_kl100", 43)]
+# Laid out for --pack 3 (user, 11-24: all 24 at once): job k on card SLOT_CARDS[k % 8], so each
+# column below is one card. The cards are balanced by guessed cost (cost_scale): the six noise
+# jobs (x1.14) each share a card with a prior_trunk decoder job (x0.88) and one other (x1.0), so
+# those six cards carry 3.02; cards 6 and 7 carry three x1.0 jobs (3.0). A setting's two seeds
+# are on neighbouring cards, never one (plan() refuses otherwise). The settings added last
+# (joint_ms, noise_coarse, joint_kl10_dec) are on cards 0 and 3, where round 13's jobs died.
+#        card 4                card 5                card 6                    card 7
+ORDER = [("joint", 42),        ("joint", 43),        ("joint_kl10", 42),       ("joint_kl10", 43),
+         # card 1              card 2                card 0                    card 3
+         ("joint_kl100", 42),  ("joint_kl100", 43),  ("joint_ms", 42),         ("joint_ms", 43),
+         ("noise", 42),        ("noise", 43),        ("joint_tfk8", 42),       ("joint_tfk8", 43),
+         ("noise_global", 42), ("noise_global", 43), ("noise_coarse", 42),     ("noise_coarse", 43),
+         ("joint_dec", 42),    ("joint_dec", 43),    ("joint_tfk8_kl10", 42),  ("joint_tfk8_kl10", 43),
+         ("joint_tfk8_dec", 42), ("joint_tfk8_dec", 43), ("joint_kl10_dec", 42), ("joint_kl10_dec", 43)]
 # Runs of earlier rounds that brief.py shows beside this round's (it reads them where they are).
 # Their configs equal the setting they stand for except the seed and the paths (self_check).
 REFERENCE_RUNS = {
@@ -150,7 +167,7 @@ CARDS = ("0", "1", "2", "3", "4", "5", "6", "7")   # all 8 cards from round 9 on
 # The card of slot k. Cards 0 and 3 are last: both seeds of two settings died on them in round
 # 13, so the first four jobs (the control and the main setting) are on 4-7.
 SLOT_CARDS = ("4", "5", "6", "7", "1", "2", "0", "3")
-PACK = 1                                           # jobs per card; --pack overrides
+PACK = 3                                           # jobs per card; --pack overrides (user, 11-24: all at once)
 CPUS = 120                                         # of 128: torch threads + 4 DataLoader workers per job
 
 DISPLAY = {"hybrid": "HI-MGN-hybrid (latent_type hybrid)", "local": "HI-MGNflow (latent_type local)",
@@ -171,7 +188,8 @@ CARD_GB = 260          # of 288 on a B300, the rest for the CUDA contexts and fr
 
 # Estimated hours, ONLY for the plan. EP_H = hours per batch-16 epoch alone on a card
 # without checkpointing (r8 measured 277 s on 135). Checkpointing x1.52 (aarl 3090);
-# PACK jobs on one card each run SHARE[PACK] times slower (guess).
+# With n jobs running on one card each runs SHARE[n] times slower (guess); plan() lets a card's
+# jobs speed up as its others finish.
 EP_H = {16: 0.077}
 CKPT_SLOWDOWN = 1.52
 SHARE = {1: 1.0, 2: 1.5, 3: 2.1}
@@ -220,11 +238,19 @@ class Spec:
 # stochastic_mode noise, a GUESS from the fine-level block count (what sets both time and
 # activation memory): the base runs 14 fine blocks per step (simulator 4 + 4 of mp_per_level,
 # posterior encoder 3, prior trunk 3); noise runs the simulator's 8, NOISE_DRAWS times.
-FINE_BLOCKS_BASE, FINE_BLOCKS_SIM = 14, 8
+# prior_trunk decoder, the same kind of GUESS: the prior's own prior_mp_layers fine blocks (with
+# their backward) are gone, and the simulator's 4 descending fine blocks run once more forward
+# only, under no_grad (a forward ~1/3 of forward + backward). multiscale adds blocks at 4096 and
+# ~256 nodes only (~1% of the fine level's work): counted as 1.0, as are tf_k8 and KL.
+FINE_BLOCKS_BASE, FINE_BLOCKS_SIM, SIM_DOWN_FINE_BLOCKS, FORWARD_ONLY = 14, 8, 4, 1 / 3
 
 
 def cost_scale(spec):
-    return 1.0 if spec.sm == "vae" else spec.nd * FINE_BLOCKS_SIM / FINE_BLOCKS_BASE
+    if spec.sm != "vae":
+        return spec.nd * FINE_BLOCKS_SIM / FINE_BLOCKS_BASE                # noise: 16/14 = 1.14
+    if spec.trunk == "decoder":
+        return (FINE_BLOCKS_BASE - spec.pm + SIM_DOWN_FINE_BLOCKS * FORWARD_ONLY) / FINE_BLOCKS_BASE   # 0.88
+    return 1.0
 
 
 def peak_gb(spec, ckpt):
@@ -500,9 +526,10 @@ def build_jobs():
     return jobs
 
 
-def est_hours(job, pack):
+def alone_hours(job, pack):
+    """Hours of the job alone on a card (training with this pack's checkpointing, then inference)."""
     ckpt = CKPT_SLOWDOWN if use_checkpointing(job.spec, pack) else 1.0
-    return EP_H[job.spec.bs] * job.spec.ep * cost_scale(job.spec) * ckpt * SHARE[pack] + INFER_H
+    return EP_H[job.spec.bs] * job.spec.ep * cost_scale(job.spec) * ckpt + INFER_H
 
 
 def slot_gpus(pack):
@@ -603,15 +630,35 @@ def self_check():
 
 
 def plan(jobs, pack):
-    """Job k on slot k; a freed slot takes the next job."""
+    """Job k on slot k; a freed slot takes the next job. The jobs running on one card share it:
+    with n of them, each runs SHARE[n] times slower than alone, so a card's jobs end together
+    only if their work is equal, and a card ends when the sum of its jobs' work is done."""
     gpus = slot_gpus(pack)
-    free = [0.0] * len(gpus)
-    out = []
-    for k, j in enumerate(jobs):
-        s = k if k < len(gpus) else min(range(len(gpus)), key=free.__getitem__)
-        t = free[s]
-        free[s] = t + est_hours(j, pack)
-        out.append((j, gpus[s], t, free[s]))
+    queue, free_slots = list(enumerate(jobs)), list(range(len(gpus)))
+    left, start, slot, out, t = {}, {}, {}, [None] * len(jobs), 0.0
+    while queue or left:
+        while queue and free_slots:
+            k, j = queue.pop(0)
+            slot[k], start[k], left[k] = free_slots.pop(0), t, alone_hours(j, pack)
+        on = {}
+        for k in left:
+            on[gpus[slot[k]]] = on.get(gpus[slot[k]], 0) + 1
+        slow = {k: SHARE[on[gpus[slot[k]]]] for k in left}
+        dt = min(left[k] * slow[k] for k in left)
+        t += dt
+        for k in sorted(left):
+            left[k] -= dt / slow[k]
+            if left[k] <= 1e-9:
+                del left[k]
+                out[k] = (jobs[k], gpus[slot[k]], start[k], t)
+                free_slots.append(slot[k])
+    if len(jobs) <= len(gpus):   # all at once: the cards are fixed, so check the seeds
+        cards = {}
+        for j, gpu, *_ in out:
+            cards.setdefault(j.setting, []).append(gpu)
+        twice = [s for s, g in cards.items() if len(set(g)) < len(g)]
+        if twice:
+            raise SystemExit(f"two seeds of {', '.join(twice)} on one card: reorder ORDER")
     return out
 
 
@@ -645,7 +692,8 @@ def main():
                f"{', '.join(CARDS)} = {len(slot_gpus(pack))} slots (slot order {' '.join(slot_gpus(pack))}), "
                f"{threads_per_job(pack)} torch threads per job, MPS off. "
                f"Estimated makespan {makespan / 24:.1f} days (GUESSED speeds: {EP_H[16]} h per batch-16 epoch alone, "
-               f"x{CKPT_SLOWDOWN} with checkpointing, x{SHARE[pack]} per job at {pack} per card; peaks with "
+               f"x{CKPT_SLOWDOWN} with checkpointing, each job x{SHARE[pack]} while {pack} share a card; "
+               f"cost per job from cost_scale: noise x1.14, prior_trunk decoder x0.88; peaks with "
                f"checkpointing guessed at {CKPT_MEM} of the full peak).")
     if args.plan:
         print(summary)

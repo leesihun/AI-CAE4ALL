@@ -1,8 +1,8 @@
 # B300 round 14: the prior (GNN or transformer) x the latent regularizer (MMD or KL 10, 100) x what the prior reads of the geometry
 
 Model: HI-MGN-hybrid (`meshgraphnets-v`, `latent_type hybrid`) on ex3 shell
-buckling. Node 135, twenty jobs, **one per card on all eight cards** (eight at
-once, the other twelve as cards free), MPS off.
+buckling. Node 135, twenty-four jobs, **three per card on all eight cards, all
+at once** (the user, 2026-11-24), gradient checkpointing on, MPS off.
 
 ## What it asks
 
@@ -61,6 +61,16 @@ between posterior and prior to close. The fifth question:
 5. Does a sampler with no prior (`noise`, `noise_global`) reach the base on the
    held-out geometries, and does a z_l help it (`noise` vs `noise_global`)?
 
+**Added 2026-11-24: three jobs per card.** All 24 slots start at once, so
+two settings were added to fill the last four:
+
+- `joint_kl10_dec`: KL 10 and `prior_trunk decoder` together, the change that
+  put the latent in order in round 13 and the one aimed at unseen geometries.
+  Read against `joint_kl10` (does the decoder's view add to KL 10?).
+- `noise_coarse`: `noise` with `local_inject coarsest`. z_l enters only at the
+  coarsest level, so the ascending arm spreads it into a smooth field. It sits
+  between `noise_global` (one vector) and `noise` (z_l at every level).
+
 ## The settings
 
 | setting | change from `joint` | seeds |
@@ -76,6 +86,8 @@ between posterior and prior to close. The fifth question:
 | `joint_tfk8_dec` | `joint_tfk8` + `prior_trunk decoder` | 42, 43 |
 | `noise` | the base with `stochastic_mode noise`, `noise_draws 2`; the encoder, regularizer, aux and prior keys are not in the config | 42, 43 |
 | `noise_global` | `noise` + `latent_type global` (one N(0,I) vector per sample, no z_l) | 42, 43 |
+| `joint_kl10_dec` | `joint_kl10` + `prior_trunk decoder` | 42, 43 |
+| `noise_coarse` | `noise` + `local_inject coarsest` | 42, 43 |
 
 The noise settings start from the base, not from `joint` (there is no prior to
 train jointly). `prior_freeze_epoch`, `local_warmup_epochs` and
@@ -179,7 +191,7 @@ the decoder's features.
 - **Trunk** (a4, a5, a8): the same shape of failure: the prior on `tr` falls
   and on `ts` / `ho` it does not. No change on any set = the prior's input is
   not the cause.
-- **Noise** (a9, a10): only the w2 and the per-geometry histograms of the
+- **Noise** (a9, a10, a12): only the w2 and the per-geometry histograms of the
   inference run (`make_histogram True`). Too narrow a spread shows as w2
   near 100 with the right mean; the histograms tell the two apart.
 
@@ -195,25 +207,37 @@ Pull first. `run_node.sh` stops with "Pull first." if the checkout lacks round
 13's keys or this round's `prior_trunk` or `stochastic_mode noise`. Round 13 and round 14 cannot run on
 135 together (the same cards).
 
-## Running it (node 135, cards 0–7, one job per card)
+## Running it (node 135, cards 0–7, three jobs per card)
 
     bash configs/MeshGraphNets_Variational/hyperparameter_sweep/r14/run_135.sh
 
-`run_135.sh` sets `MPS=0` itself (not an override: one job per card has nothing
-to share, and round 13 lost two settings under MPS). Slot order: cards
-4 5 6 7 1 2 0 3. Cards 0 and 3, where round 13's jobs died, are last.
+`run_135.sh` sets `MPS=0` itself (not an override: round 13 lost both seeds of
+two settings with two jobs per card under MPS); the three jobs of a card
+time-share it. 2 torch threads per job (`THREADS_PER_JOB` overrides).
 
-| wave | cards 4, 5, 6, 7 | cards 1, 2, 0, 3 |
-| --- | --- | --- |
-| 1 (0–30 h) | `joint` 42, `joint_tfk8_dec` 42, `joint` 43, `joint_tfk8_dec` 43 | `joint_dec` 42, `joint_tfk8` 42, `joint_dec` 43, `joint_tfk8` 43 |
-| 2 (30–64 h) | `noise` 42, `noise_global` 42, `joint_tfk8_kl10` 42, `joint_kl10` 42 | `noise` 43, `noise_global` 43, `joint_tfk8_kl10` 43, `joint_kl10` 43 |
-| 3 (60–90 h) | `joint_ms` 42, `joint_kl100` 42 (cards 6, 7) | `joint_ms` 43, `joint_kl100` 43 (cards 0, 3) |
+| card | its three jobs (guessed cost: noise x1.14, trunk `decoder` x0.88, others x1.0) | load | est. end |
+| --- | --- | --- | --- |
+| 4 | `joint` 42, `noise` 42, `joint_dec` 42 | 3.02 | 4.0 days |
+| 5 | `joint` 43, `noise` 43, `joint_dec` 43 | 3.02 | 4.0 days |
+| 6 | `joint_kl10` 42, `joint_tfk8` 42, `joint_tfk8_kl10` 42 | 3.00 | 3.9 days |
+| 7 | `joint_kl10` 43, `joint_tfk8` 43, `joint_tfk8_kl10` 43 | 3.00 | 3.9 days |
+| 1 | `joint_kl100` 42, `noise_global` 42, `joint_tfk8_dec` 42 | 3.02 | 4.0 days |
+| 2 | `joint_kl100` 43, `noise_global` 43, `joint_tfk8_dec` 43 | 3.02 | 4.0 days |
+| 0 | `joint_ms` 42, `noise_coarse` 42, `joint_kl10_dec` 42 | 3.02 | 4.0 days |
+| 3 | `joint_ms` 43, `noise_coarse` 43, `joint_kl10_dec` 43 | 3.02 | 4.0 days |
 
-A setting's two seeds are never on one card. Wave 1 holds the two controls and
-the two `decoder` settings, so the question about the prior's input has its
-first answer after 30 h; wave 2 opens with the noise settings, the fifth
-question, at about 64 h. Later waves take cards as they free, so their table
-rows are the order, not fixed cards.
+Balanced by guessed cost: each of the six noise jobs (the heaviest) shares a
+card with a `decoder`-trunk job (the lightest) and one other; the two cards
+left hold three ordinary jobs. If the `decoder` guess is wrong, the noise
+cards are at most 0.14 job heavier, which is still the best that six noise
+jobs on eight cards allow. A setting's two seeds are on neighbouring cards,
+never one (`make_sweep.py` refuses otherwise). The settings added last are on
+cards 0 and 3, where round 13's jobs died. Every job finishes at about the
+same time; there is no early answer.
+
+To go back to one job per card (checkpointing off, the rest queued):
+`python -B .../r14/make_sweep.py --pack 1 --force`. Resume ignores
+`use_checkpointing` and the slot layout, so running jobs continue.
 
 At any time:
 
@@ -221,16 +245,18 @@ At any time:
 
 and type back the block between `==== TYPE THIS BACK ====` and `==== END ====`.
 
-- **a0–a10**: base, `joint`, `joint_kl10`, `joint_kl100`, `joint_dec`,
+- **a0–a12**: base, `joint`, `joint_kl10`, `joint_kl100`, `joint_dec`,
   `joint_ms`, `joint_tfk8`, `joint_tfk8_kl10`, `joint_tfk8_dec`, `noise`,
-  `noise_global`. Read a1–a3 as one line (the GNN prior: MMD, KL 10, KL 100),
-  a4 and a5 against a1 (the trunk), a6–a8 as the transformer prior (MMD,
-  KL 10, trunk `decoder`), a9 and a10 against the base (no prior).
+  `noise_global`, `joint_kl10_dec`, `noise_coarse`. Read a1–a3 as one line
+  (the GNN prior: MMD, KL 10, KL 100), a4 and a5 against a1 (the trunk), a6–a8
+  as the transformer prior (MMD, KL 10, trunk `decoder`), a11 against a2
+  (KL 10 with and without the trunk), a9, a10, a12 against the base (no prior).
 - **Mark**: `+` every seed beats every seed of the other setting, `-` every
   seed loses, `=` neither. a1 and a9 have one mark, against the base. a2–a6
   have two: against the base, then against a1. a7 and a8 have their second
-  mark against a6, a10 against a9. a9 and a10 have the w2 only (no ho / tr /
-  ts, g, l, n, s: there is no encoder or prior to diagnose).
+  mark against a6, a10 and a12 against a9, a11 against a2. a9, a10 and a12
+  have the w2 only (no ho / tr / ts, g, l, n, s: there is no encoder or prior
+  to diagnose).
 - **ho / tr / ts**: floor / posterior sample / prior on the 8 held-out
   geometries, on 16 training geometries, and on the 15 geometries of the test
   split.
@@ -263,54 +289,72 @@ for how it is made), and the block's `pd` / `pb` lines carry it:
 | `joint` | 36 the prior trained on a frozen encoder |
 | the three KL settings | 24 the posteriors are points with gaps |
 | `joint_tfk8` | 3 the prior does not fit its training geometries |
-| `joint_dec`, `joint_ms`, `joint_tfk8_dec` | 4 missed on new geometries inside the training range |
-| `noise`, `noise_global` | none: `diagnose_135.sh` skips them (no posterior, no prior); their `pd` / `pb` are `-` |
+| `joint_dec`, `joint_ms`, `joint_tfk8_dec`, `joint_kl10_dec` | 4 missed on new geometries inside the training range |
+| `noise`, `noise_global`, `noise_coarse` | none: `diagnose_135.sh` skips them (no posterior, no prior); their `pd` / `pb` are `-` |
 
 `python .../r14/brief.py --prior a4` prints the full prior diagnosis of one
 setting. `kill_all.sh` stops the watcher too.
 
 ## Memory and time
 
-One job per card: checkpointing is off (a job peaks at about 180 GB of the
-card's 260). About 28 h of training (r8 measured 277 s per epoch alone on a
-card, 360 epochs) plus about 2 h of inference: about 30 h per job, three
-waves, **about 90 h (3.7 days)** for the round.
+Three jobs per card: a job alone peaks at about 180 GB of the card's 260, so
+gradient checkpointing is on for all 24 (x1.52 per step, the gradients
+unchanged; `tests/test_noise_mode.py` checks this for noise mode too). Peaks
+with checkpointing: about 55 GB (63 GB for noise, 49 GB for the `decoder`
+trunk), about 167 GB on each card.
+
+Time: about 28 h of training alone on a card (r8: 277 s per epoch, 360
+epochs), x1.52 for checkpointing, each job x2.1 slower while three share the
+card (a guess; never measured at three jobs per card), plus inference. The
+plan lets a card's jobs speed up as its others finish: **every card ends at
+3.9–4.0 days.** Without MPS the three jobs time-slice; if that gives no
+overlap at all the factor is 3, not 2.1, and the round takes nearer 5.5 days.
+One job per card in waves would take about 3.7 days for 20 jobs; this layout
+trades some speed for all 24 finishing together.
+
+The CPU: 24 jobs x (2 torch threads + 4 loader workers) = 144 processes busy
+on 128 cores. If epochs are slow and the GPUs idle, lower `num_workers` or
+`THREADS_PER_JOB`.
 
 The noise settings are guessed from block counts: the base runs 14 fine-mesh
 blocks per step (simulator 8, posterior encoder 3, prior 3); noise runs the
-simulator twice (2 x 8 = 16), so x1.14: about 205 GB and 34 h. Not measured. The transformer settings carry 8 flow
+simulator twice (2 x 8 = 16), so x1.14. Not measured. The transformer settings carry 8 flow
 draws per sample through the prior only (the trunk runs once), so they should
 cost little more; that is not measured.
 
 The trunks are not measured on ex3 either. `decoder` adds one forward-only
 pass of the descending arm (4 fine and 6 mid-level blocks, nothing kept for
-backward) and drops the prior's 3 fine blocks with their backward.
-`multiscale` adds 3 blocks at 4096 nodes and 3 at ~256. The plan's 180 GB and
-30 h are the same guess for every setting.
+backward) and drops the prior's 3 fine blocks with their backward: counted as
+(14 − 3 + 4/3) / 14 = x0.88. `multiscale` adds 3 blocks at 4096 nodes and 3 at
+~256 (about 1% of the fine level's work): counted as x1.0.
 
 ## Jobs (generated by make_sweep.py; everything below is rewritten)
 
-20 trainings (10 settings: joint seeds 42/43; joint_kl10 seeds 42/43; joint_kl100 seeds 42/43; joint_dec seeds 42/43; joint_ms seeds 42/43; joint_tfk8 seeds 42/43; joint_tfk8_kl10 seeds 42/43; joint_tfk8_dec seeds 42/43; noise seeds 42/43; noise_global seeds 42/43; the base is not run: its 42/43/44 = r8 hybrid_e360, r9 hybrid_base_s43, r10 hybrid_base_s44); --pack 1: 1 per card on GPUs 0, 1, 2, 3, 4, 5, 6, 7 = 8 slots (slot order 4 5 6 7 1 2 0 3), 11 torch threads per job, MPS off. Estimated makespan 3.7 days (GUESSED speeds: 0.077 h per batch-16 epoch alone, x1.52 with checkpointing, x1.0 per job at 1 per card; peaks with checkpointing guessed at 0.3 of the full peak).
+24 trainings (12 settings: joint seeds 42/43; joint_kl10 seeds 42/43; joint_kl100 seeds 42/43; joint_dec seeds 42/43; joint_ms seeds 42/43; joint_tfk8 seeds 42/43; joint_tfk8_kl10 seeds 42/43; joint_tfk8_dec seeds 42/43; noise seeds 42/43; noise_global seeds 42/43; joint_kl10_dec seeds 42/43; noise_coarse seeds 42/43; the base is not run: its 42/43/44 = r8 hybrid_e360, r9 hybrid_base_s43, r10 hybrid_base_s44); --pack 3: 3 per card on GPUs 0, 1, 2, 3, 4, 5, 6, 7 = 24 slots (slot order 4 5 6 7 1 2 0 3 4 5 6 7 1 2 0 3 4 5 6 7 1 2 0 3), 2 torch threads per job, MPS off. Estimated makespan 4.0 days (GUESSED speeds: 0.077 h per batch-16 epoch alone, x1.52 with checkpointing, each job x2.1 while 3 share a card; cost per job from cost_scale: noise x1.14, prior_trunk decoder x0.88; peaks with checkpointing guessed at 0.3 of the full peak).
 
 | # | job | change from the base | GPU | checkpointing | est. peak GB | est. h | est. start-end (days) |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | hybrid_joint_s42 | r12's joint: no prior-only part (prior_freeze_epoch 0) and the prior's loss reaches the encoder (prior_grad_to_encoder 1); seed 42 | 4 | off | 180 | 30 | 0.0-1.2 |
-| 2 | hybrid_joint_tfk8_dec_s42 | joint, r9's tf_k8 prior, the prior reads the simulator's descending arm at z = 0 (prior_trunk decoder; no trunk of its own); seed 42 | 5 | off | 180 | 30 | 0.0-1.2 |
-| 3 | hybrid_joint_s43 | r12's joint: no prior-only part (prior_freeze_epoch 0) and the prior's loss reaches the encoder (prior_grad_to_encoder 1); seed 43 | 6 | off | 180 | 30 | 0.0-1.2 |
-| 4 | hybrid_joint_tfk8_dec_s43 | joint, r9's tf_k8 prior, the prior reads the simulator's descending arm at z = 0 (prior_trunk decoder; no trunk of its own); seed 43 | 7 | off | 180 | 30 | 0.0-1.2 |
-| 5 | hybrid_joint_dec_s42 | joint, the prior reads the simulator's descending arm at z = 0 (prior_trunk decoder; no trunk of its own); seed 42 | 1 | off | 180 | 30 | 0.0-1.2 |
-| 6 | hybrid_joint_tfk8_s42 | joint with r9's tf_k8 prior: transformer, 8 flow draws per sample, z_l injected at the coarsest level only; seed 42 | 2 | off | 180 | 30 | 0.0-1.2 |
-| 7 | hybrid_joint_dec_s43 | joint, the prior reads the simulator's descending arm at z = 0 (prior_trunk decoder; no trunk of its own); seed 43 | 0 | off | 180 | 30 | 0.0-1.2 |
-| 8 | hybrid_joint_tfk8_s43 | joint with r9's tf_k8 prior: transformer, 8 flow draws per sample, z_l injected at the coarsest level only; seed 43 | 3 | off | 180 | 30 | 0.0-1.2 |
-| 9 | hybrid_noise_s42 | stochastic_mode noise: no encoder, no prior; z_g and z_l ~ N(0,I), 2 draws per batch, loss = their CRPS; seed 42 | 4 | off | 205 | 34 | 1.2-2.6 |
-| 10 | noise_global_s42 | stochastic_mode noise with latent_type global: one N(0,I) vector per sample (no z_l), 2 draws per batch, loss = their CRPS; seed 42 | 5 | off | 205 | 34 | 1.2-2.6 |
-| 11 | hybrid_joint_tfk8_kl10_s42 | joint, r9's tf_k8 prior, per-sample KL (kl_weight 10); seed 42 | 6 | off | 180 | 30 | 1.2-2.5 |
-| 12 | hybrid_joint_kl10_s42 | joint, per-sample KL to N(0,I) instead of the MMD (latent_reg kl, kl_weight 10); seed 42 | 7 | off | 180 | 30 | 1.2-2.5 |
-| 13 | hybrid_noise_s43 | stochastic_mode noise: no encoder, no prior; z_g and z_l ~ N(0,I), 2 draws per batch, loss = their CRPS; seed 43 | 1 | off | 205 | 34 | 1.2-2.6 |
-| 14 | noise_global_s43 | stochastic_mode noise with latent_type global: one N(0,I) vector per sample (no z_l), 2 draws per batch, loss = their CRPS; seed 43 | 2 | off | 205 | 34 | 1.2-2.6 |
-| 15 | hybrid_joint_tfk8_kl10_s43 | joint, r9's tf_k8 prior, per-sample KL (kl_weight 10); seed 43 | 0 | off | 180 | 30 | 1.2-2.5 |
-| 16 | hybrid_joint_kl10_s43 | joint, per-sample KL to N(0,I) instead of the MMD (latent_reg kl, kl_weight 10); seed 43 | 3 | off | 180 | 30 | 1.2-2.5 |
-| 17 | hybrid_joint_ms_s42 | joint, the prior's own trunk goes down to the coarsest level (prior_trunk multiscale); seed 42 | 6 | off | 180 | 30 | 2.5-3.7 |
-| 18 | hybrid_joint_kl100_s42 | joint, per-sample KL to N(0,I) instead of the MMD (latent_reg kl, kl_weight 100); seed 42 | 7 | off | 180 | 30 | 2.5-3.7 |
-| 19 | hybrid_joint_ms_s43 | joint, the prior's own trunk goes down to the coarsest level (prior_trunk multiscale); seed 43 | 0 | off | 180 | 30 | 2.5-3.7 |
-| 20 | hybrid_joint_kl100_s43 | joint, per-sample KL to N(0,I) instead of the MMD (latent_reg kl, kl_weight 100); seed 43 | 3 | off | 180 | 30 | 2.5-3.7 |
+| 1 | hybrid_joint_s42 | r12's joint: no prior-only part (prior_freeze_epoch 0) and the prior's loss reaches the encoder (prior_grad_to_encoder 1); seed 42 | 4 | on | 55 | 90 | 0.0-3.7 |
+| 2 | hybrid_joint_s43 | r12's joint: no prior-only part (prior_freeze_epoch 0) and the prior's loss reaches the encoder (prior_grad_to_encoder 1); seed 43 | 5 | on | 55 | 90 | 0.0-3.7 |
+| 3 | hybrid_joint_kl10_s42 | joint, per-sample KL to N(0,I) instead of the MMD (latent_reg kl, kl_weight 10); seed 42 | 6 | on | 55 | 93 | 0.0-3.9 |
+| 4 | hybrid_joint_kl10_s43 | joint, per-sample KL to N(0,I) instead of the MMD (latent_reg kl, kl_weight 10); seed 43 | 7 | on | 55 | 93 | 0.0-3.9 |
+| 5 | hybrid_joint_kl100_s42 | joint, per-sample KL to N(0,I) instead of the MMD (latent_reg kl, kl_weight 100); seed 42 | 1 | on | 55 | 90 | 0.0-3.7 |
+| 6 | hybrid_joint_kl100_s43 | joint, per-sample KL to N(0,I) instead of the MMD (latent_reg kl, kl_weight 100); seed 43 | 2 | on | 55 | 90 | 0.0-3.7 |
+| 7 | hybrid_joint_ms_s42 | joint, the prior's own trunk goes down to the coarsest level (prior_trunk multiscale); seed 42 | 0 | on | 55 | 90 | 0.0-3.7 |
+| 8 | hybrid_joint_ms_s43 | joint, the prior's own trunk goes down to the coarsest level (prior_trunk multiscale); seed 43 | 3 | on | 55 | 90 | 0.0-3.7 |
+| 9 | hybrid_noise_s42 | stochastic_mode noise: no encoder, no prior; z_g and z_l ~ N(0,I), 2 draws per batch, loss = their CRPS; seed 42 | 4 | on | 63 | 96 | 0.0-4.0 |
+| 10 | hybrid_noise_s43 | stochastic_mode noise: no encoder, no prior; z_g and z_l ~ N(0,I), 2 draws per batch, loss = their CRPS; seed 43 | 5 | on | 63 | 96 | 0.0-4.0 |
+| 11 | hybrid_joint_tfk8_s42 | joint with r9's tf_k8 prior: transformer, 8 flow draws per sample, z_l injected at the coarsest level only; seed 42 | 6 | on | 55 | 93 | 0.0-3.9 |
+| 12 | hybrid_joint_tfk8_s43 | joint with r9's tf_k8 prior: transformer, 8 flow draws per sample, z_l injected at the coarsest level only; seed 43 | 7 | on | 55 | 93 | 0.0-3.9 |
+| 13 | noise_global_s42 | stochastic_mode noise with latent_type global: one N(0,I) vector per sample (no z_l), 2 draws per batch, loss = their CRPS; seed 42 | 1 | on | 63 | 96 | 0.0-4.0 |
+| 14 | noise_global_s43 | stochastic_mode noise with latent_type global: one N(0,I) vector per sample (no z_l), 2 draws per batch, loss = their CRPS; seed 43 | 2 | on | 63 | 96 | 0.0-4.0 |
+| 15 | hybrid_noise_coarse_s42 | stochastic_mode noise, z_l read at the coarsest level only (local_inject coarsest), 2 draws per batch, loss = their CRPS; seed 42 | 0 | on | 63 | 96 | 0.0-4.0 |
+| 16 | hybrid_noise_coarse_s43 | stochastic_mode noise, z_l read at the coarsest level only (local_inject coarsest), 2 draws per batch, loss = their CRPS; seed 43 | 3 | on | 63 | 96 | 0.0-4.0 |
+| 17 | hybrid_joint_dec_s42 | joint, the prior reads the simulator's descending arm at z = 0 (prior_trunk decoder; no trunk of its own); seed 42 | 4 | on | 49 | 82 | 0.0-3.4 |
+| 18 | hybrid_joint_dec_s43 | joint, the prior reads the simulator's descending arm at z = 0 (prior_trunk decoder; no trunk of its own); seed 43 | 5 | on | 49 | 82 | 0.0-3.4 |
+| 19 | hybrid_joint_tfk8_kl10_s42 | joint, r9's tf_k8 prior, per-sample KL (kl_weight 10); seed 42 | 6 | on | 55 | 93 | 0.0-3.9 |
+| 20 | hybrid_joint_tfk8_kl10_s43 | joint, r9's tf_k8 prior, per-sample KL (kl_weight 10); seed 43 | 7 | on | 55 | 93 | 0.0-3.9 |
+| 21 | hybrid_joint_tfk8_dec_s42 | joint, r9's tf_k8 prior, the prior reads the simulator's descending arm at z = 0 (prior_trunk decoder; no trunk of its own); seed 42 | 1 | on | 49 | 82 | 0.0-3.4 |
+| 22 | hybrid_joint_tfk8_dec_s43 | joint, r9's tf_k8 prior, the prior reads the simulator's descending arm at z = 0 (prior_trunk decoder; no trunk of its own); seed 43 | 2 | on | 49 | 82 | 0.0-3.4 |
+| 23 | hybrid_joint_kl10_dec_s42 | joint, per-sample KL (kl_weight 10) and the prior reads the simulator's descending arm at z = 0 (prior_trunk decoder; no trunk of its own); seed 42 | 0 | on | 49 | 82 | 0.0-3.4 |
+| 24 | hybrid_joint_kl10_dec_s43 | joint, per-sample KL (kl_weight 10) and the prior reads the simulator's descending arm at z = 0 (prior_trunk decoder; no trunk of its own); seed 43 | 3 | on | 49 | 82 | 0.0-3.4 |
