@@ -32,7 +32,7 @@ Outputs per node: von Mises (MPa), |u| (mm) and signed u_z (mm), one sample per
 split policy are `build_deepjeb_mgn`'s. Per-bracket results are cached under
 `--cache` so an interrupted run resumes.
 
-  python -m design_loop.build_deepjeb_fea --out ../../dataset/deterministic/ex10_deepjeb_mgn.h5
+  python -m design_loop.build_deepjeb_fea --out ../../dataset/deterministic/legacy_deepjeb_mgn.h5
 """
 
 import argparse
@@ -178,7 +178,7 @@ def records_from(item, lab):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--raw', default=RAW_ROOT)
-    parser.add_argument('--out', default='../../dataset/deterministic/ex10_deepjeb_mgn.h5')
+    parser.add_argument('--out', default='../../dataset/deterministic/legacy_deepjeb_mgn.h5')
     parser.add_argument('--cache', default='../../output/deepjeb_fea_labels')
     parser.add_argument('--target-nodes', type=int, default=5000)
     parser.add_argument('--mesh-size-max', type=float, default=LABEL_MESH_SIZE_MAX)

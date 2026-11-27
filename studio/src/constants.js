@@ -333,7 +333,7 @@ export const MODEL_CATALOG = {
  *    4 hierarchy variants, the larger prior) against the probabilistic ex1
  *    baseline (2,3,5,3,2).
  *  - transolver: ex3_full, 24 layers in full precision, against ex9, 8 under AMP.
- *  - fno / deeponet: ex9 against ex13 (batch 1; FNO width 20 instead of 32).
+ *  - fno / deeponet: ex9 against ex10 (batch 1; FNO width 20 instead of 32).
  *  - point_deeponet: ex9 reads every node (point_sensor_count 0); ex1 5000 at batch 1.
  *  - sdfflow: ex3's 512 latent tokens against ex2's 128.
  *  - simulgenvae: ex9 against ex3_full, the same network at vae_batch_size 2.
@@ -354,11 +354,11 @@ export const PRESET_SOURCES = {
   },
   fno: {
     high: { path: "configs/Neural_Operator/deterministic/ex9/baseline/config_train_fno.txt", note: "ex9" },
-    low: { path: "configs/Neural_Operator/deterministic/ex13/baseline/config_train_fno.txt", note: "ex13" }
+    low: { path: "configs/Neural_Operator/deterministic/ex10/baseline/config_train_fno.txt", note: "ex10" }
   },
   deeponet: {
     high: { path: "configs/Neural_Operator/deterministic/ex9/baseline/config_train_deeponet.txt", note: "ex9" },
-    low: { path: "configs/Neural_Operator/deterministic/ex13/baseline/config_train_deeponet.txt", note: "ex13" }
+    low: { path: "configs/Neural_Operator/deterministic/ex10/baseline/config_train_deeponet.txt", note: "ex10" }
   },
   point_deeponet: {
     high: { path: "configs/Neural_Operator/deterministic/ex9/baseline/config_train_point_deeponet.txt", note: "ex9, all nodes" },

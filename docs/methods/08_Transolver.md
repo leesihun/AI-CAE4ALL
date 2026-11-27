@@ -132,7 +132,7 @@ keys (`message_passing_num`, `edge_var`, ...) are errors (`TRANS-MGN-KEY`).
   `reject_multi_process`.
 
 Checked-in profiles:
-`configs/Transolver/deterministic/{ex1,ex2,ex3_full,ex3_mid,ex4,...,ex9,ex13}/baseline/config_{train,infer}_transolver3.txt`.
+`configs/Transolver/deterministic/{ex1,ex2,ex3_full,ex3_mid,ex4,...,ex9,ex10}/baseline/config_{train,infer}_transolver3.txt`.
 Every training config uses `slice_space`, `slice_num 64`, `chunk_size 4096` and
 `ddp`. For example,
 [ex2](../../configs/Transolver/deterministic/ex2/baseline/config_train_transolver3.txt)

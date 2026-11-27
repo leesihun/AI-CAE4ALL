@@ -38,7 +38,7 @@ SimulGenVAE where the mesh is fixed.
 | ex7 | AirfRANS | [AirfRANS](https://airfrans.readthedocs.io/en/latest/notes/dataset.html) | 804 / 196 | Steady RANS, ~155k nodes. Uses the published AoA extrapolation split |
 | ex8 | Geo-FNO elasticity | Geo-FNO | 1000 / 200 | Canonical ntrain/ntest split, fixed mesh |
 | ex9 | Geo-FNO plasticity | Geo-FNO | 900 / 87 | Plain held-out split, fixed mesh. **`cond_var 2`** (see below) |
-| ex13 | DeepJEB vertical-load FEA | own OpenRadioss relabel of DeepJEB geometry | 2121 solved | Built by `D:/CAE_datasets_raw/deepjeb_ver_fea/src/build_ex13.py`. Replaces the earlier DeepJEB field set, whose fields could not be paired with its vertices |
+| ex10 | DeepJEB vertical-load FEA | own OpenRadioss relabel of DeepJEB geometry | 2121 solved | Built by `D:/CAE_datasets_raw/deepjeb_ver_fea/src/build_ex10.py`. Replaces the earlier DeepJEB field set, whose fields could not be paired with its vertices |
 
 ### Row layouts and traps
 
@@ -173,7 +173,21 @@ labels are CFD).
 
 Thingi10K was trained as `ex4` and removed on 2026-10-07. Its shapes are
 unrelated objects, so in-between samples fall apart. The files are kept under
-`_set_aside_20261007/`.
+`_set_aside_20261007/` as `thingi10k(_infer).h5`.
+
+The slots were compacted on 2026-11-27 (no gaps): deterministic `ex13` → `ex10`
+and `ex14` → `ex11`; geometry `ex6` → `ex4`. Copies on aarl and scripts under
+`paper/generative_design_optimization/` still use the old names.
+
+SFEM (cmudrc, BrepGen-generated parts with linear-static FEA) was built as
+deterministic `ex11` and dropped on 2026-11-27: the parts are AI-generated
+shapes, not real designs, and the near-point-load stresses span ~13 decades.
+The dataset, its configs and the raw download were deleted.
+
+ShapeNet-Car (Umetani & Bickel 2018, geometry `ex4`) was dropped the same day
+before training: every car is one shared 3,584-quad template fitted to the
+ShapeNet model (no wheels, rounded detail), and the CFD ran on that smoothed
+shape. DrivAerML is used for car aerodynamics instead.
 
 ---
 
@@ -189,7 +203,6 @@ upstream. Converter: `D:/CAE_datasets_raw/lino_dgn/convert_ellipse.py`.
 
 | Dataset | Size | Why |
 | --- | --- | --- |
-| ShapeNet-Car (Umetani & Bickel) | 26 GB | The standard Transolver surface benchmark. Google Drive's quota blocked the download |
 | DeepMind `airfoil` | 56 GB | Compressible, 600 steps; same converter as ex4 |
 | AhmedML surface-only | ~500 MB/case | Industrial-scale automotive aero, as a case subset |
 | WindsorML | 1 TB+ | Over budget except as a small subset |

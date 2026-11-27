@@ -19,7 +19,7 @@ from typing import Any, Callable
 from studio_backend.mesh_topology import aggregate_values, build_topology
 
 
-CHECKPOINT_RELATIVE = Path("output/dataset_matrix/deterministic/ex13/himgn/model.pth")
+CHECKPOINT_RELATIVE = Path("output/dataset_matrix/deterministic/ex10/himgn/model.pth")
 
 # The checkpoint owns architecture and normalization. These are the serving
 # paths and one-step static contract, not another copy of the architecture.

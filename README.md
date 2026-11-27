@@ -254,7 +254,7 @@ a held-out accuracy ranking. See [evaluation and comparison](docs/GUI.md#evaluat
 
 SDFFlow's [native guide](methods/SDFFlow/) describes advanced generation and
 evaluation tools. The DeepJEB video shows 100-candidate HI-MGN screening. Its
-ex13 vertical-load surrogate has its own scale/material/load contract and cannot
+ex10 vertical-load surrogate has its own scale/material/load contract and cannot
 use the older pad/lug FEA re-check; independent verification requires the matching
 solver workflow. The generator's surrogate input currently accepts the compatible
 MeshGraphNets/HI-MGN family.

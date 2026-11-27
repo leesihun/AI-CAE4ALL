@@ -425,7 +425,7 @@ export function connectPortDetails(first, second) {
   const ranks = inputNode?.type === "run.cad_generator" && input.portId === "surrogate"
     && !cadUsesSurrogate(inputNode);
   if (ranks) Object.assign(inputNode.config, { mode: "optimize", opt_analysis: "surrogate" });
-  // The block's 0.2 mm deflection limit is set for the FEA labels; on the ex13
+  // The block's 0.2 mm deflection limit is set for the FEA labels; on the ex10
   // vertical-load labels the median design deflects 0.36 mm, so 0.2 rejects
   // most of the population. Move it only off that default, never off a value
   // the user typed.
@@ -435,8 +435,8 @@ export function connectPortDetails(first, second) {
   if (relimit) inputNode.config.opt_vertical_disp_max = "0.36";
   render();
   toast(ranks
-    ? `Blocks linked. CAD Generator switched to optimize with the HI-MGN surrogate${relimit ? "; vertical deflection limit set to the ex13 median, 0.36 mm" : ""} (undo with Ctrl+Z).`
-    : relimit ? "Blocks linked. Vertical deflection limit set to the ex13 median, 0.36 mm." : "Blocks linked.");
+    ? `Blocks linked. CAD Generator switched to optimize with the HI-MGN surrogate${relimit ? "; vertical deflection limit set to the ex10 median, 0.36 mm" : ""} (undo with Ctrl+Z).`
+    : relimit ? "Blocks linked. Vertical deflection limit set to the ex10 median, 0.36 mm." : "Blocks linked.");
   return true;
 }
 

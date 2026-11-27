@@ -591,10 +591,10 @@ def test_layout_follows_the_inference_config(tmp_path):
 
     ver = tmp_path / "ver.txt"
     ver.write_text("model meshgraphnets\ninput_var 4\noutput_var 4\n% cond_var 2\n")
-    old = tmp_path / "ex10.txt"
+    old = tmp_path / "legacy.txt"
     old.write_text("model meshgraphnets\ninput_var 3\noutput_var 3\ncond_var 4\n")
     assert surrogate_module.layout_from_config(str(ver)) == "ver"
-    assert surrogate_module.layout_from_config(str(old)) == "ex10"
+    assert surrogate_module.layout_from_config(str(old)) == "legacy"
 
     model = surrogate_module.HIMGNSurrogate(str(ver), "model.pth", load_cases=("ver",),
                                             workdir=tmp_path)

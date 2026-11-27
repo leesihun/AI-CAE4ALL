@@ -86,7 +86,7 @@ def _clear_owned_outputs(out_dir):
 # The launcher's SDF-OPT-SURROGATE-002 mirrors this table and tolerance
 # (ai_cae4all/specs/sdfflow.py::SURROGATE_LABEL_CONSTANTS).
 _SURROGATE_LABEL_CONSTANTS = {'E': 113.8e9, 'nu': 0.342, 'length_scale': 0.19 / 1.8}
-# The ex13 ('ver') labels were solved in DeepJEB's own frame (longest side
+# The ex10 ('ver') labels were solved in DeepJEB's own frame (longest side
 # 184.181 mm), with the paper's Ti-6Al-4V (D:/CAE_datasets_raw/deepjeb_ver_fea).
 _SURROGATE_LABEL_CONSTANTS_VER = {'E': 113.8e9, 'nu': 0.342, 'length_scale': 0.184181 / 1.8}
 
@@ -97,7 +97,7 @@ def _label_constants(layout):
 _LABEL_CONSTANT_RTOL = 1e-3
 
 
-def _warn_surrogate_constants(material, bracket, layout='ex10'):
+def _warn_surrogate_constants(material, bracket, layout='legacy'):
     used = {'E': material.E, 'nu': material.nu, 'length_scale': bracket.length_scale}
     moved = [f'{k} {used[k]:g} (labels: {v:g})' for k, v in _label_constants(layout).items()
              if abs(used[k] - v) > _LABEL_CONSTANT_RTOL * abs(v)]
@@ -501,7 +501,7 @@ def run_optimize(config, config_filename='config.txt'):
                                         'target_faces': LABEL_SURFACE_FACES,
                                         'mesh_size_max': LABEL_MESH_SIZE_MAX,
                                         'target_nodes': 5000,
-                                    } if surrogate.layout == 'ex10' else {
+                                    } if surrogate.layout == 'legacy' else {
                                         # Not reproducible with fea.py: see the
                                         # opt_fea_verify refusal above.
                                         'solver': 'OpenRadioss implicit, tet4 L0.7 mm',

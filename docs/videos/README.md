@@ -44,7 +44,7 @@ The fresh demonstration job did not produce those pretrained results.
 ## Data and interpretation
 
 The local recordings use `ex1_deepjeb.h5` for geometry learning,
-`ex13_deepjeb_ver.h5` for the HI-MGN structural model, and the completed run's
+`ex10_deepjeb_ver.h5` for the HI-MGN structural model, and the completed run's
 `screening.csv` and `designs.h5` for candidate inspection. The fields shown are
 HI-MGN predictions. The workflow is screening (`opt_budget = 0`), with an
 illustrative 0.4 mm constraint; it does not demonstrate an independently

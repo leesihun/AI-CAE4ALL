@@ -1,29 +1,29 @@
-% deterministic/ex13 - fno; paper-informed native adaptation, not an exact reproduction.
+% deterministic/ex10 - point_deeponet; paper-informed native adaptation, not an exact reproduction.
 % Field storage order (0-based): input -> output -> conditioner -> partNo.
 % input [0:3]: x_coord, y_coord, z_coord
 % output/state [3:]: u_x, u_y, u_z, von_mises
 % conditioner: none
 % partNo: node_type (0 free, 1 bolt bore wall - clamped, 2 lug ear bore wall - RBE3 load)
 % Static state input is zero; temporal input is current state and target is next-state delta.
-% Reference: https://arxiv.org/abs/2010.08895
+% Reference: https://arxiv.org/abs/2412.18362
 % See configs/campaigns/dataset_matrix/README.md for deviations and verification boundaries.
-% ex13 = DeepJEB vertical load (35.6 kN +z) re-solved with OpenRadioss tet4 L0.7 on all
+% ex10 = DeepJEB vertical load (35.6 kN +z) re-solved with OpenRadioss tet4 L0.7 on all
 %   2121 meshable ex1_deepjeb shapes, decimated to ~5000 surface nodes. Split inherited from
 %   ex1_deepjeb (train file = its train shapes, infer file = its 425 held-out shapes); inside
 %   the train file split_group_attr parent keeps every DeepJEB parent in one partition.
-%   Build: D:/CAE_datasets_raw/deepjeb_ver_fea/src/build_ex13.py; report: paper/deepjeb_ver_fea.
+%   Build: D:/CAE_datasets_raw/deepjeb_ver_fea/src/build_ex10.py; report: paper/deepjeb_ver_fea.
 % No source HDF5 writes. Checkpoints are created by the paired training config.
 
-model                            fno
-mode                             inference
-gpu_ids                          0
+model                            point_deeponet
+mode                             train
+gpu_ids                          1
 parallel_mode                    ddp
 split_seed                       42
-dataset_dir                      ../../dataset/deterministic/ex13_deepjeb_ver.h5
-infer_dataset                    ../../dataset/deterministic/ex13_deepjeb_ver_infer.h5
-modelpath                        ../../output/dataset_matrix/deterministic/ex13/fno/model.pth
-log_file_dir                     ../../output/dataset_matrix/deterministic/ex13/fno/train.log
-inference_output_dir             ../../output/dataset_matrix/deterministic/ex13/fno/infer
+dataset_dir                      ../../dataset/deterministic/ex10_deepjeb_ver.h5
+infer_dataset                    ../../dataset/deterministic/ex10_deepjeb_ver_infer.h5
+modelpath                        ../../output/dataset_matrix/deterministic/ex10/point_deeponet/model.pth
+log_file_dir                     ../../output/dataset_matrix/deterministic/ex10/point_deeponet/train.log
+inference_output_dir             ../../output/dataset_matrix/deterministic/ex10/point_deeponet/infer
 infer_timesteps                  1
 input_var                        4
 output_var                       4
@@ -35,7 +35,7 @@ time_integration                 ar_ot
 training_epochs                  500
 batch_size                       1
 learningr                        0.001
-weight_decay                     0.0001
+weight_decay                     0.00001
 warmup_epochs                    5
 num_workers                      2
 prefetch_factor                  2
@@ -68,10 +68,18 @@ integration_weight_source        none
 write_test_predictions           True
 max_grad_norm                    1
 checkpoint_interval              50
-fno_variant                      mesh
-fno_grid_resolution              26, 44, 16
-fno_modes                        8, 8, 6
-fno_hidden_channels              20
-fno_layers                       4
-fno_use_channel_mlp              False
-fno_norm                         none
+point_variant                    mesh_state
+point_sensor_count               0
+point_sampling                   random
+point_resample_each_epoch        True
+point_hidden_channels            128
+point_feature_dim                128
+pointnet_depth                   3
+pointnet_activation              relu
+pointnet_norm                    batch
+point_branch_merge               sum
+point_trunk_depth                3
+point_refiner_depth              2
+point_siren_omega0               10
+point_output_activation          identity
+infer_query_chunk_size           16384

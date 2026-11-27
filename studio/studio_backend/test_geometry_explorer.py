@@ -61,7 +61,7 @@ def factory(tmp_path):
                 p = tmp_path / spec[key]
                 p.parent.mkdir(parents=True, exist_ok=True)
                 p.touch()
-        hi = tmp_path / "output/dataset_matrix/deterministic/ex13/himgn/model.pth"
+        hi = tmp_path / "output/dataset_matrix/deterministic/ex10/himgn/model.pth"
         hi.parent.mkdir(parents=True, exist_ok=True)
         hi.touch()
         service = GeometryExplorerService(tmp_path, tmp_path / "runtime", worker or GatedWorker(), analyzer)

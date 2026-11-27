@@ -1,29 +1,29 @@
-% deterministic/ex13 - deeponet; paper-informed native adaptation, not an exact reproduction.
+% deterministic/ex10 - fno; paper-informed native adaptation, not an exact reproduction.
 % Field storage order (0-based): input -> output -> conditioner -> partNo.
 % input [0:3]: x_coord, y_coord, z_coord
 % output/state [3:]: u_x, u_y, u_z, von_mises
 % conditioner: none
 % partNo: node_type (0 free, 1 bolt bore wall - clamped, 2 lug ear bore wall - RBE3 load)
 % Static state input is zero; temporal input is current state and target is next-state delta.
-% Reference: https://doi.org/10.1038/s42256-021-00302-5 ; https://arxiv.org/abs/2111.05512
+% Reference: https://arxiv.org/abs/2010.08895
 % See configs/campaigns/dataset_matrix/README.md for deviations and verification boundaries.
-% ex13 = DeepJEB vertical load (35.6 kN +z) re-solved with OpenRadioss tet4 L0.7 on all
+% ex10 = DeepJEB vertical load (35.6 kN +z) re-solved with OpenRadioss tet4 L0.7 on all
 %   2121 meshable ex1_deepjeb shapes, decimated to ~5000 surface nodes. Split inherited from
 %   ex1_deepjeb (train file = its train shapes, infer file = its 425 held-out shapes); inside
 %   the train file split_group_attr parent keeps every DeepJEB parent in one partition.
-%   Build: D:/CAE_datasets_raw/deepjeb_ver_fea/src/build_ex13.py; report: paper/deepjeb_ver_fea.
+%   Build: D:/CAE_datasets_raw/deepjeb_ver_fea/src/build_ex10.py; report: paper/deepjeb_ver_fea.
 % No source HDF5 writes. Checkpoints are created by the paired training config.
 
-model                            deeponet
-mode                             inference
+model                            fno
+mode                             train
 gpu_ids                          0
 parallel_mode                    ddp
 split_seed                       42
-dataset_dir                      ../../dataset/deterministic/ex13_deepjeb_ver.h5
-infer_dataset                    ../../dataset/deterministic/ex13_deepjeb_ver_infer.h5
-modelpath                        ../../output/dataset_matrix/deterministic/ex13/deeponet/model.pth
-log_file_dir                     ../../output/dataset_matrix/deterministic/ex13/deeponet/train.log
-inference_output_dir             ../../output/dataset_matrix/deterministic/ex13/deeponet/infer
+dataset_dir                      ../../dataset/deterministic/ex10_deepjeb_ver.h5
+infer_dataset                    ../../dataset/deterministic/ex10_deepjeb_ver_infer.h5
+modelpath                        ../../output/dataset_matrix/deterministic/ex10/fno/model.pth
+log_file_dir                     ../../output/dataset_matrix/deterministic/ex10/fno/train.log
+inference_output_dir             ../../output/dataset_matrix/deterministic/ex10/fno/infer
 infer_timesteps                  1
 input_var                        4
 output_var                       4
@@ -68,13 +68,10 @@ integration_weight_source        none
 write_test_predictions           True
 max_grad_norm                    1
 checkpoint_interval              50
-deeponet_branch_source           fixed_sensors
-deeponet_sensor_resolution       16, 16, 8
-deeponet_hidden_channels         256
-deeponet_branch_depth            4
-deeponet_trunk_depth             4
-deeponet_basis_dim               128
-deeponet_activation              relu
-deeponet_multi_output            split_both
-deeponet_max_branch_params       100000000
-infer_query_chunk_size           16384
+fno_variant                      mesh
+fno_grid_resolution              26, 44, 16
+fno_modes                        8, 8, 6
+fno_hidden_channels              20
+fno_layers                       4
+fno_use_channel_mlp              False
+fno_norm                         none

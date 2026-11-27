@@ -31,7 +31,8 @@ training config has not produced yet.
 | `ex3/tokens512` | as `ex3`, with `latent_tokens 512` | `config_train_sdfflow.txt`, `config_infer_sdfflow.txt` | `../../output/geometry_generation/ex3_mcb/sdfflow_t512/` |
 
 The Thingi10K route (`ex4`, baseline and tokens512) was removed on 2026-10-07
-(commit `d9a8343`).
+(commit `d9a8343`); its files sit in `_set_aside_*/thingi10k*.h5`. A ShapeNet-Car `ex4` was built
+on 2026-11-26 and deleted on 2026-11-27 before training, so `ex4` is empty.
 
 By mode: `train`, `sample`, `evaluate` and `interpolate` on the three routes
 (`ex3/tokens512` has only `train` and `sample`); the
@@ -153,7 +154,7 @@ slug there.)
 
 and, for the v3 recipe (`config_train_v3.txt`, no longer checked in; it trained on
 DeepJEB and wrote to an output directory named `ex4`, unrelated to the later
-Thingi10K route of that name):
+Thingi10K route):
 
 ```text
 output/geometry_generation/ex4/sdfflow_vae.pth        final-epoch VAE (the pipeline's completeness check reads this)
@@ -725,10 +726,10 @@ same objective the search used.
 With `opt_analysis surrogate`, every number is a HI-MGN prediction, and the
 summary records `surrogate` (stats, checkpoint, label constants).
 The surrogate's layout follows its inference config
-(`surrogate.py::layout_from_config`): `output_var 4, cond_var 0` is the ex13
+(`surrogate.py::layout_from_config`): `output_var 4, cond_var 0` is the ex10
 vertical-load contract (`ver`: u_x, u_y, u_z, von Mises + a node-type row from
 `design_loop/interfaces.py`'s bore/ear rule, `opt_load_cases vertical` only,
-label length scale 0.184181/1.8, no `opt_fea_verify`); anything else is ex10.
+label length scale 0.184181/1.8, no `opt_fea_verify`); anything else is `legacy` (the first DeepJEB field set, deleted 2026-10-02).
 The `ver` layout **registers each candidate to its own frame** first
 (`deepjeb_bridge.registered_millimetres` → `interfaces.register_to_interfaces`):
 the population map (`normalized_to_millimetres`) assumes every bracket is
@@ -738,7 +739,7 @@ the four bolt bores (scale, x-y) plus the lug bore (z) fixes it; coordinates,
 node types and mass (`mass_of(..., frame_scale)`, up to ~10% heavier before)
 all use that frame, and `summary['surrogate']['frame']` counts registrations.
 The interface gates are judged on the full MC surface, the types carried
-through `decimate` as the labels' were. **ex10 is deliberately not
+through `decimate` as the labels' were. **`legacy` is deliberately not
 registered**: its labels were written through the population map, so that is
 its train/serve-consistent frame.
 `opt_surrogate_python` (path key, optional) is the interpreter for the nested

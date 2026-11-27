@@ -22,9 +22,9 @@ So the honest headline is the mass percentile; stress and displacement are
 reported alongside it as context, explicitly labelled.
 
   python methods/SDFFlow/design_loop/compare_to_deepjeb.py \
-      --summary output/geometry_generation/ex4/optimization_surrogate/summary.json \
+      --summary output/dataset_matrix/geometry_generation/ex1/sdfflow/optimize/summary.json \
       --labels D:/CAE_datasets_raw/deepjeb/Scalar/bracket_labels.csv \
-      --json-out output/geometry_generation/ex4/optimization_surrogate/vs_deepjeb.json
+      --json-out output/dataset_matrix/geometry_generation/ex1/sdfflow/optimize/vs_deepjeb.json
 """
 
 import argparse

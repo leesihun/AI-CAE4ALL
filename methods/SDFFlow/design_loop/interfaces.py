@@ -1,6 +1,6 @@
 """DeepJEB interface geometry and the geometric boundary-condition rule (vertical case).
 
-The ex13 surrogate (`dataset/deterministic/ex13_deepjeb_ver.h5`) was labelled
+The ex10 surrogate (`dataset/deterministic/ex10_deepjeb_ver.h5`) was labelled
 with this rule: every DeepJEB bracket carries the same boolean-merged interface
 features, measured on all 421 FieldMesh brackets (mm, DeepJEB frame):
 
@@ -24,7 +24,7 @@ which the gates refused as missing bores.
 The gates keep the labelling run's meaning -- a shape whose bores do not close
 (coverage) or do not run the wall height (span) is not a bracket the labels
 describe, and is refused rather than predicted. `SERVE_GATES` are set so all
-424 held-out ex13 graphs pass (their minima: 17 nodes, 301 deg, span 0.74); the
+424 held-out ex10 graphs pass (their minima: 17 nodes, 301 deg, span 0.74); the
 labelling run's own gates (12 nodes, 300 deg, 0.8) refuse 5 of them. Serving
 (`deepjeb_bridge.mesh_to_ver_record`) judges them on the full marching-cubes
 surface, not the 5000-node graph: the graph's ~3.5 mm edges can leave one ring

@@ -19,9 +19,9 @@ to happen.
 the same envelope (centre 15.79, -71.58, 32.74 mm and longest side 184.18 mm,
 measured across the fetched brackets with standard deviations of 0.24 and 0.71
 mm), and `normalize_mesh` scales each one's longest side to 1.8.
-`normalized_to_millimetres` inverts that with the population numbers. The ex10
-labels were written through that same map, so the ex10 layout keeps it (train
-and serve share one frame). The ex13 ('ver') labels were solved on the CAD
+`normalized_to_millimetres` inverts that with the population numbers. The legacy
+labels were written through that same map, so the legacy layout keeps it (train
+and serve share one frame). The ex10 ('ver') labels were solved on the CAD
 brackets in their true frames, and a generated shape's own length is not the
 population's (ex1 samples come out scaled 0.97-1.01, shifted up to ~3 mm), so
 that layout registers each shape on its bores first (`registered_millimetres`).
@@ -45,7 +45,7 @@ from design_loop.interfaces import (
     SERVE_TOL, InterfaceError, node_types, register_to_interfaces, vertex_normals,
 )
 
-# The ex13 vertical-load layout (D:/CAE_datasets_raw/deepjeb_ver_fea/src/build_ex13.py):
+# The ex10 vertical-load layout (D:/CAE_datasets_raw/deepjeb_ver_fea/src/build_ex10.py):
 # one load case, no condition rows, and the boundary conditions carried as a
 # trailing node-type row (0 free, 1 bolt bore wall, 2 lug ear bore wall).
 VER_FEATURE_NAMES = ['x_coord', 'y_coord', 'z_coord', 'u_x', 'u_y', 'u_z', 'von_mises',
@@ -126,7 +126,7 @@ def registered_millimetres(mesh):
     one. `interfaces.register_to_interfaces` recovers the per-shape scale and
     shift from the bores every DeepJEB bracket shares. Raises InterfaceError
     when they cannot be fitted: a shape without the canonical interface pattern
-    is not one the ex13 labels describe.
+    is not one the ex10 labels describe.
 
     frame['mm_per_unit'] is the shape's millimetres per normalized SDF unit
     (DEEPJEB_MAX_SIDE / SDF_TARGET_EXTENT x frame['scale']).
@@ -148,10 +148,10 @@ def apply_frame(vertices, frame):
 
 def mesh_to_ver_record(mesh, target_nodes=5000, already_millimetres=False,
                        name='generated', tol=SERVE_TOL):
-    """One ex13-layout record: coordinates, a zeroed state block, node types.
+    """One ex10-layout record: coordinates, a zeroed state block, node types.
 
     A generated (normalized) shape is first registered to its own frame
-    (`registered_millimetres`); the ex13 labels were solved on the exact CAD
+    (`registered_millimetres`); the ex10 labels were solved on the exact CAD
     brackets in theirs, so this is the frame the surrogate was trained in.
     The node types come from the geometric interface rule the labels were made
     with (`design_loop.interfaces`), applied to the full surface and carried
@@ -195,7 +195,7 @@ def write_inference_contract(out_path, records, feature_names=FEATURE_NAMES,
             md = sg.create_group('metadata')
             md.attrs['filename_id'] = f"{rec['item']}_{rec['case']}"
             md.attrs['bracket'] = rec['item']
-            # The ex13 configs split on `split_group_attr parent`; a generated
+            # The ex10 configs split on `split_group_attr parent`; a generated
             # shape is its own parent.
             md.attrs['parent'] = rec['item']
             md.attrs['load_case'] = rec['case']

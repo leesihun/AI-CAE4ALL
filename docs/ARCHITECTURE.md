@@ -402,7 +402,7 @@ two. SimulGenVAE runs multi-GPU in-process via `mp.spawn`.
 
 | Directory | Contents |
 | --- | --- |
-| `dataset/deterministic/` | ex1 static thermoelastic, ex2 dynamic contact, ex3 NASA CRM (full/mid, plus the MLP tables), ex4 cylinder flow, ex5 deforming plate, ex6 flag, ex7 AirfRANS, ex8 elasticity, ex9 plasticity, ex13 DeepJEB vertical FEA |
+| `dataset/deterministic/` | ex1 static thermoelastic, ex2 dynamic contact, ex3 NASA CRM (full/mid, plus the MLP tables), ex4 cylinder flow, ex5 deforming plate, ex6 flag, ex7 AirfRANS, ex8 elasticity, ex9 plasticity, ex10 DeepJEB vertical FEA |
 | `dataset/probabilistic/` | ex1 turbulent radiative layer, ex2 crack path, ex3 shell buckling (one-to-many targets for MGN-V) |
 | `dataset/geometry_generation/` | SDFFlow SDF datasets: ex1 DeepJEB, ex2 DrivAerML, ex3 MCB |
 | `dataset/validation/` | `ellipse*.h5`, the upstream SAR/LDGN validation case |

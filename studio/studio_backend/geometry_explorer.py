@@ -172,7 +172,7 @@ class GeometryExplorerService:
                           "vae_checkpoint": spec["vae"], "conditioning": spec["conditioning"],
                           "default": {"seed": 42, "index_a": 0, "index_b": 1, **spec.get("endpoints", {}),
                                       "source_num_samples": 16, "mc_resolution": 64, "ode_steps": 50}})
-        hi_checkpoint = "output/dataset_matrix/deterministic/ex13/himgn/model.pth"
+        hi_checkpoint = "output/dataset_matrix/deterministic/ex10/himgn/model.pth"
         return {"profiles": items, "analysis": {"profile": "deepjeb", "checkpoint": hi_checkpoint,
                  "available": (self.root / hi_checkpoint).is_file(), "graph_nodes": 5000,
                  "method": "native surface graph + HI-MGN surrogate; vertical load case"},
@@ -261,7 +261,7 @@ class GeometryExplorerService:
                 raise ValueError("Analysis client_id must match the geometry generation.")
             if self.latest_generation.get(client) != generation_id:
                 raise ValueError("That geometry has been superseded; analyze the newest completed generation.")
-            checkpoint = self.root / "output/dataset_matrix/deterministic/ex13/himgn/model.pth"
+            checkpoint = self.root / "output/dataset_matrix/deterministic/ex10/himgn/model.pth"
             if not checkpoint.is_file():
                 raise ValueError("Required HI-MGN checkpoint is missing: " + str(checkpoint.relative_to(self.root)))
             normalized = {"generation_id": generation_id, "profile": "deepjeb",

@@ -318,11 +318,11 @@ function surrogateSection(node) {
     surrogate?.block
       ? readonlyRow("inference config", `written from ${surrogate.block.id} at Validate / Run`, "automatic")
       : editable("opt_surrogate_config"),
-    ...(ver ? Object.entries(VER_SURROGATE_SETTINGS).map(([key, value]) => readonlyRow(keyLabel(key), value, "fixed by the ex13 labels")) : [])
+    ...(ver ? Object.entries(VER_SURROGATE_SETTINGS).map(([key, value]) => readonlyRow(keyLabel(key), value, "fixed by the ex10 labels")) : [])
   ].join("");
   const verified = !ver && ["true", "1", "yes", "on"].includes(String(cadGeneratorValue(node, "opt_fea_verify") ?? "").trim().toLowerCase());
   const layoutNote = ver
-    ? "This surrogate was trained on the ex13 vertical-load labels (output_var 4, cond_var 0), so the run is set to the vertical load case in DeepJEB's frame at 4470 kg/m³. FEA re-verification stays off: <code>opt_fea_verify</code> re-solves with fea.py's pad / lug-crown boundary conditions, not the bolt-bore / lug-bore rule these labels used, so it would grade the surrogate against a different problem."
+    ? "This surrogate was trained on the ex10 vertical-load labels (output_var 4, cond_var 0), so the run is set to the vertical load case in DeepJEB's frame at 4470 kg/m³. FEA re-verification stays off: <code>opt_fea_verify</code> re-solves with fea.py's pad / lug-crown boundary conditions, not the bolt-bore / lug-bore rule these labels used, so it would grade the surrogate against a different problem."
     : "";
   const gate = verified
     ? `<div class="diagnostic"><i></i><div><strong>FEA verification on (<code>opt_fea_verify</code>).</strong><br>The search ranks with HI-MGN; afterwards the optimized design, the best baseline, and the typical baseline are re-solved with the tet4 FEA solver. report.md and the <code>fea_*</code> columns of the optimization table carry the solver's numbers: judge the design on those.</div></div>`
@@ -349,7 +349,7 @@ function cadGeneratorEntries(node) {
     // surrogate's files in the HI-MGN surrogate section.
     .filter(key => !isCadOptKey(key) || CAD_MAIN_OPT_KEYS.has(key))
     .filter(key => key !== "opt_fea_verify" || feaRecheck)
-    // Fixed by the ex13 labels; shown read-only in the surrogate section.
+    // Fixed by the ex10 labels; shown read-only in the surrogate section.
     .filter(key => !(verPinned(node) && key in VER_SURROGATE_SETTINGS))
     .filter(key => cadRowActive(mode, key))
     .filter(key => !(mode === "optimize" && SDFFLOW_OPTIMIZE_INERT_KEYS.has(key)))
@@ -376,7 +376,7 @@ const SDFFLOW_OPT_FALLBACKS = {
 };
 let cadMoreOpen = false;
 
-/** Whether the wired ex13 HI-MGN fixes VER_SURROGATE_SETTINGS for this run. */
+/** Whether the wired ex10 HI-MGN fixes VER_SURROGATE_SETTINGS for this run. */
 function verPinned(node) {
   const surrogate = cadSurrogate(node);
   return Boolean(surrogate?.block && surrogate.layout === "ver" && cadUsesSurrogate(node));

@@ -198,7 +198,7 @@ SURROGATE_LABEL_CONSTANTS = {
     "opt_material_nu": 0.342,
     "opt_length_scale": 0.19 / 1.8,
 }
-# The ex13 ('ver') surrogate's labels were solved in DeepJEB's own frame
+# The ex10 ('ver') surrogate's labels were solved in DeepJEB's own frame
 # (longest side 184.181 mm); mirrors `_SURROGATE_LABEL_CONSTANTS_VER`.
 SURROGATE_LABEL_CONSTANTS_VER = dict(SURROGATE_LABEL_CONSTANTS,
                                      opt_length_scale=0.184181 / 1.8)
@@ -211,8 +211,8 @@ def _surrogate_label_constants(ctx: SpecValidationContext) -> dict:
     """Label constants for the layout `opt_surrogate_config` declares.
 
     Mirrors `design_loop/surrogate.py::layout_from_config`: output_var 4 with
-    cond_var 0 is the ex13 vertical-load contract, anything else (or an
-    unreadable file) the ex10 one.
+    cond_var 0 is the ex10 vertical-load contract, anything else (or an
+    unreadable file) the legacy one.
     """
     raw = ctx.values.get("opt_surrogate_config")
     if not isinstance(raw, str) or not raw:

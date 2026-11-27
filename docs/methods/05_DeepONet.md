@@ -188,7 +188,7 @@ query-chunk parity (`test_query_chunking.py`), the noise contract, EMA BatchNorm
 buffers, checkpoint round-trips, AR-RT and `model_split`.
 
 Checked-in configs:
-`configs/Neural_Operator/deterministic/{ex1,ex2,ex3_full,ex3_mid,ex4,...,ex9,ex13}/baseline/config_{train,infer}_{deeponet,point_deeponet,fno}.txt`.
+`configs/Neural_Operator/deterministic/{ex1,ex2,ex3_full,ex3_mid,ex4,...,ex9,ex10}/baseline/config_{train,infer}_{deeponet,point_deeponet,fno}.txt`.
 
 Design notes: [MODEL_CAPABILITIES.md](../research/neural_operator/MODEL_CAPABILITIES.md)
 (what each model can chunk, fp32 islands).

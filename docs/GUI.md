@@ -239,7 +239,7 @@ on the SDFFlow block still work: the generator uses that value and labels it
     `studio/runtime/configs/` at Validate and Run, so preflight checks the file
     the run reads. A saved checkpoint has no config, so you type
     `opt_surrogate_config` yourself.
-  - If the block uses the ex13 vertical-load contract (`output_var 4`,
+  - If the block uses the ex10 vertical-load contract (`output_var 4`,
     `cond_var 0`), the run is pinned to `opt_load_cases vertical`,
     `opt_length_scale 0.102323`, `opt_material_rho 4470` and
     `opt_fea_verify False`. These are shown read-only, and a deflection limit
@@ -331,7 +331,7 @@ mismatch above the ranking.
 | --- | --- |
 | **Models** | Every registered route: repository, entrypoint, modes, keys, dataset kind, install health, checked-in examples |
 | **Data** | HDF5 catalog and sample viewer (points / mesh / field, timestep player, compare, upload with **+ Add dataset**). **Inspect HDF5** shows the file's contract; **Use in pipeline** drops a source block |
-| **Geometry** | Geometry Explorer: an SDFFlow slider between two noise endpoints for the car, DeepJEB and MCB profiles (each needs its checkpoints under `output/geometry_generation/`). For DeepJEB, **Predict response** runs the ex13 HI-MGN checkpoint on the generated shape |
+| **Geometry** | Geometry Explorer: an SDFFlow slider between two noise endpoints for the car, DeepJEB and MCB profiles (each needs its checkpoints under `output/geometry_generation/`). For DeepJEB, **Predict response** runs the ex10 HI-MGN checkpoint on the generated shape |
 | **Runs** | Studio jobs with status, steps and logs; **Load pipeline**; Train Metrics plots every metric parsed from a run log |
 | **Optimization** | Pareto / top-k ranking of a candidate CSV (see above); the selection is written back as CSV |
 | **Benchmarks** | Every config in `configs/campaigns/dataset_matrix/manifest.json`, each with preflight and loadable into the canvas. A passing config is not a result |

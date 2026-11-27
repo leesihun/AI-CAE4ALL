@@ -136,7 +136,7 @@ export const CAD_GENERATOR_ROW_MODES = {
 const CAD_GENERATOR_ALIASES = { num_samples: "candidates", cfg_scale: "guidance" };
 const CAD_OPT_KEYS = new Set([...SDFFLOW_OPTIMIZE_KEYS, ...SDFFLOW_STRUCTURAL_KEYS]);
 
-// The ex13 ('ver') HI-MGN surrogate's label constants: vertical load only,
+// The ex10 ('ver') HI-MGN surrogate's label constants: vertical load only,
 // DeepJEB's own frame (184.181 mm longest side), Ti-6Al-4V at 4470 kg/m^3.
 // `mode optimize` refuses any other load case and opt_fea_verify on this layout
 // (fea.py does not model its bolt-bore/lug-bore BCs). Mirrors
@@ -204,7 +204,7 @@ export function cadGeneratorValue(node, key) {
  * What is wired into a CAD Generator's `surrogate` port.
  *
  * `layout` follows design_loop/surrogate.py::layout_from_config on the wired
- * model block's own config (output_var 4 with cond_var 0 is the ex13
+ * model block's own config (output_var 4 with cond_var 0 is the ex10
  * vertical-load contract), so it is known before anything is written. A saved
  * checkpoint carries no inference config, so its layout is unknown here.
  */
@@ -219,7 +219,7 @@ export function cadSurrogate(node) {
   if (block) {
     const outputVar = Number(String(block.config.output_var ?? "").trim() || 0);
     const condVar = Number(String(block.config.cond_var ?? "").trim() || 0);
-    layout = outputVar === 4 && condVar === 0 ? "ver" : "ex10";
+    layout = outputVar === 4 && condVar === 0 ? "ver" : "legacy";
   }
   return { edge, source, block, family, layout };
 }
@@ -506,7 +506,7 @@ export function executableSteps(targetId = null) {
       // The wired HI-MGN decides the surrogate side of the run: its checkpoint
       // (autofill puts it in opt_surrogate_checkpoint), its inference config
       // (written from the block at Validate/Run, materializeStepConfigs), and
-      // for the ex13 vertical-load layout the four settings its labels fix.
+      // for the ex10 vertical-load layout the four settings its labels fix.
       // The wire is the most explicit statement in the graph, so it wins over
       // whatever the SDFFlow block's Full config or a preset left there.
       const surrogate = cadSurrogate(node);

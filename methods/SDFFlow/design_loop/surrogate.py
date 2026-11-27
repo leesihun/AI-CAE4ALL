@@ -45,17 +45,17 @@ class SurrogateError(RuntimeError):
     pass
 
 
-# Two DeepJEB surrogate layouts exist. 'ex10' (build_deepjeb_mgn): stress,
+# Two DeepJEB surrogate layouts exist. 'legacy' (build_deepjeb_mgn): stress,
 # |u|, u_z for four load cases told apart by one-hot condition rows, BCs from
-# `problem.find_interfaces`. 'ver' (ex13, OpenRadioss vertical load): u_x,
+# `problem.find_interfaces`. 'ver' (ex10, OpenRadioss vertical load): u_x,
 # u_y, u_z, von Mises for the vertical case only, BCs as a node-type row from
 # the bore/lug rule in `design_loop.interfaces`.
-LAYOUTS = ('ex10', 'ver')
+LAYOUTS = ('legacy', 'ver')
 
 
 def layout_from_config(config_path):
-    """The surrogate layout its inference config declares: 'ver' for the ex13
-    contract (output_var 4, cond_var 0), else 'ex10'."""
+    """The surrogate layout its inference config declares: 'ver' for the ex10
+    contract (output_var 4, cond_var 0), else 'legacy'."""
     values = {}
     with open(config_path, encoding='utf-8') as fh:
         for line in fh:
@@ -65,8 +65,8 @@ def layout_from_config(config_path):
     try:
         out_var, cond_var = int(values.get('output_var', 0)), int(values.get('cond_var', 0))
     except ValueError:
-        return 'ex10'
-    return 'ver' if (out_var, cond_var) == (VER_OUTPUT_VAR, VER_COND_VAR) else 'ex10'
+        return 'legacy'
+    return 'ver' if (out_var, cond_var) == (VER_OUTPUT_VAR, VER_COND_VAR) else 'legacy'
 
 
 def gpu_id_from_config(config):
@@ -93,7 +93,7 @@ class HIMGNSurrogate:
         self.config_path = os.path.abspath(config_path)
         if layout is None:
             layout = (layout_from_config(self.config_path)
-                      if os.path.isfile(self.config_path) else 'ex10')
+                      if os.path.isfile(self.config_path) else 'legacy')
         if layout not in LAYOUTS:
             raise SurrogateError(f'unknown surrogate layout {layout!r}; available {LAYOUTS}')
         self.layout = layout
@@ -103,7 +103,7 @@ class HIMGNSurrogate:
         # raw mc_resolution-128 surface matches (graph edge p95 4.88 vs 4.89 mm)
         # better than a 12000-face re-surfacing does (5.95 mm).
         if surface_faces is None:
-            surface_faces = LABEL_SURFACE_FACES if layout == 'ex10' else 0
+            surface_faces = LABEL_SURFACE_FACES if layout == 'legacy' else 0
         self.surface_faces = int(surface_faces or 0)
         # Metres per normalized SDF unit, for mass only. The FEA backend's
         # Bracket uses opt_length_scale (0.19/1.8 by default); without it the
@@ -114,7 +114,7 @@ class HIMGNSurrogate:
         self.length_scale = float(length_scale) if length_scale else None
         # The nested launcher call otherwise takes gpu_ids from the surrogate
         # config file, a second hidden device setting that need not exist on
-        # this host (the checked-in ex10 config says 5; aarl has 0-3).
+        # this host (the old legacy config said 5; aarl has 0-3).
         self.gpu_id = None if gpu_id is None else int(gpu_id)
         self.checkpoint = os.path.abspath(checkpoint)
         self.python = python or sys.executable

@@ -34,8 +34,8 @@ Still relative-only in absolute terms -- tet4 is stiff and the measure is the
 design here, so the comparison between them is sound.
 
   python methods/SDFFlow/design_loop/verify_with_fea.py \
-      --run-dir output/geometry_generation/ex4/optimization_surrogate \
-      --json-out output/geometry_generation/ex4/optimization_surrogate/fea_verified.json
+      --run-dir output/dataset_matrix/geometry_generation/ex1/sdfflow/optimize \
+      --json-out output/dataset_matrix/geometry_generation/ex1/sdfflow/optimize/fea_verified.json
 """
 
 import argparse

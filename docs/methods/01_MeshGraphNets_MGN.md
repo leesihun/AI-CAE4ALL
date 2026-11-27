@@ -79,7 +79,7 @@ Shipped configs follow the pattern
 for example
 [ex1 train](../../configs/MeshGraphNets/deterministic/ex1/baseline/config_train_meshgraphnets.txt)
 and [ex1 infer](../../configs/MeshGraphNets/deterministic/ex1/baseline/config_infer_meshgraphnets.txt).
-The slots are ex1, ex2, ex3_full, ex3_mid, ex4–ex9 and ex13.
+The slots are ex1, ex2, ex3_full, ex3_mid and ex4–ex10.
 
 ## Outputs
 
