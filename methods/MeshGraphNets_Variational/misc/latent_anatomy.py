@@ -971,7 +971,10 @@ def main():
     if isinstance(cfg.get('hierarchy_seed'), (list, tuple)):
         cfg['hierarchy_seed'] = cfg['hierarchy_seed'][0]
 
-    attr = cfg.get('split_group_attr')
+    # geometries are grouped by eval_group_attr; the train/val/test split is made by
+    # split_group_attr (the two differ when one split group holds several geometries)
+    attr = cfg.get('eval_group_attr') or cfg.get('split_group_attr')
+    split_attr = cfg.get('split_group_attr') or attr
     if a.dataset:
         h5_path = _abs(a.dataset)
     elif a.split == 'heldout':
@@ -985,7 +988,7 @@ def main():
         raise SystemExit(f'{h5_path}: not every scene carries metadata attr {attr!r}')
     order = _group_order(groups_attr.values())
     if a.split != 'heldout':
-        part = grouped_split_ids(h5_path, sorted(groups_attr, key=int), attr, 0.8, 0.1,
+        part = grouped_split_ids(h5_path, sorted(groups_attr, key=int), split_attr, 0.8, 0.1,
                                  int(cfg.get('split_seed', 42)))[('train', 'val', 'test').index(a.split)]
         keep = {str(groups_attr[s]) for s in part}
         order = [v for v in order if v in keep]

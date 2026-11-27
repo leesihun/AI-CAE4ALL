@@ -741,11 +741,13 @@ def reference(cfg, norm, model, prior, dev, n_ref, cache, stamp):
                 return [str(v) for v in z['values']], z['raw'], z['emb']
         except (OSError, ValueError, KeyError):
             pass
-    path, attr = cfg['dataset_dir'], cfg['split_group_attr']
+    path = cfg['dataset_dir']
+    attr = cfg.get('eval_group_attr') or cfg['split_group_attr']
     ga = _eval_dataset_groups(path, attr)
     if not ga:
         return [], None, None
-    train = grouped_split_ids(path, sorted(ga, key=int), attr, 0.8, 0.1, int(cfg.get('split_seed', 42)))[0]
+    train = grouped_split_ids(path, sorted(ga, key=int), cfg.get('split_group_attr') or attr, 0.8, 0.1,
+                              int(cfg.get('split_seed', 42)))[0]
     values = _group_order({str(ga[s]) for s in train})
     if len(values) > n_ref:
         values = [values[i] for i in np.linspace(0, len(values) - 1, n_ref).round().astype(int)]
@@ -915,7 +917,10 @@ def main():
     if isinstance(cfg.get('hierarchy_seed'), (list, tuple)):
         cfg['hierarchy_seed'] = cfg['hierarchy_seed'][0]
 
-    attr = cfg.get('split_group_attr')
+    # geometries are grouped by eval_group_attr; the train/val/test split is made by
+    # split_group_attr (the two differ when one split group holds several geometries)
+    attr = cfg.get('eval_group_attr') or cfg.get('split_group_attr')
+    split_attr = cfg.get('split_group_attr') or attr
     if a.dataset:
         h5_path = _abs(a.dataset)
     elif a.split == 'heldout':
@@ -929,7 +934,7 @@ def main():
         raise SystemExit(f'{h5_path}: not every scene carries metadata attr {attr!r}')
     order = _group_order(groups_attr.values())
     if a.split != 'heldout':
-        part = grouped_split_ids(h5_path, sorted(groups_attr, key=int), attr, 0.8, 0.1,
+        part = grouped_split_ids(h5_path, sorted(groups_attr, key=int), split_attr, 0.8, 0.1,
                                  int(cfg.get('split_seed', 42)))[('train', 'val', 'test').index(a.split)]
         keep = {str(groups_attr[s]) for s in part}
         order = [v for v in order if v in keep]

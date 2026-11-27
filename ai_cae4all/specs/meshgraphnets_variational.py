@@ -13,6 +13,11 @@ VAR_KEYS = frozenset(
         # Group samples by data/{sid}/metadata.attrs[<attr>] so every draw of
         # one geometry lands in the same split (general_modules/grouped_split.py).
         "split_group_attr",
+        # Per-geometry grouping of the scored file (per-group spread figures and
+        # the misc/ diagnosis tools); falls back to split_group_attr. Needed when
+        # one split group holds several geometries, or eval_dataset lacks the
+        # split attribute.
+        "eval_group_attr",
         "model", "mode", "gpu_ids", "parallel_mode", "log_file_dir", "modelpath",
         "dataset_dir", "infer_dataset", "eval_dataset", "inference_output_dir",
         "infer_timesteps", "split_seed", "input_var", "output_var", "cond_var",
@@ -115,7 +120,7 @@ VAR_KEYS = frozenset(
         # 'noise' (z ~ N(0, I) in training and inference, no encoder, no prior;
         # trained with the fair CRPS of noise_draws forwards per batch).
         # Checkpoint architecture.
-        "stochastic_mode", "noise_draws",
+        "stochastic_mode", "noise_draws", "noise_loss",
         # All-gather z across DDP ranks before MMD so the two-sample estimator
         # sees the GLOBAL batch instead of the per-rank one (default True).
         "mmd_gather_ranks",
@@ -405,6 +410,8 @@ COARSE_ONLY_KEYS = ("latent_ch", "vae_local_mp_layers", "local_inject", "prior_a
 
 # Mirror of STOCHASTIC_MODES in the runtime's model/latent.py.
 STOCHASTIC_MODES = ("vae", "noise")
+# Mirror of NOISE_LOSSES in the runtime's training_profiles/training_loop.py.
+NOISE_LOSSES = ("crps", "energy")
 # Keys that only feed the posterior encoder, the latent regularizer or the
 # learned prior. stochastic_mode noise builds none of them.
 NOISE_INACTIVE_KEYS = (
@@ -429,10 +436,11 @@ NOISE_REJECTED_SCHEDULES = ("prior_freeze_epoch", "local_warmup_epochs", "zg_anc
 
 
 def validate_stochastic_mode(ctx: SpecValidationContext) -> None:
-    """stochastic_mode / noise_draws.
+    """stochastic_mode / noise_draws / noise_loss.
 
     noise draws z ~ N(0, I) in training and inference and trains the simulator
-    with the fair CRPS of noise_draws forwards; there is no posterior encoder
+    with the fair CRPS of noise_draws forwards (noise_loss crps) or their fair
+    energy score per graph (noise_loss energy); there is no posterior encoder
     and no prior, so their keys are inactive and their schedules are errors.
     """
     values = ctx.values
@@ -444,10 +452,11 @@ def validate_stochastic_mode(ctx: SpecValidationContext) -> None:
                 field_name="stochastic_mode")
         return
     if mode != "noise":
-        if "noise_draws" in values:
-            ctx.add("MGNV-LATENT-INACTIVE", Severity.WARNING,
-                    "noise_draws only applies to stochastic_mode noise; it is ignored.",
-                    field_name="noise_draws", promote_in_strict=True)
+        for name in ("noise_draws", "noise_loss"):
+            if name in values:
+                ctx.add("MGNV-LATENT-INACTIVE", Severity.WARNING,
+                        f"{name} only applies to stochastic_mode noise; it is ignored.",
+                        field_name=name, promote_in_strict=True)
         return
     if values.get("use_vae", False) is not True:
         ctx.add("MGNV-STOCH-VAE", Severity.ERROR,
@@ -462,6 +471,11 @@ def validate_stochastic_mode(ctx: SpecValidationContext) -> None:
                     f"noise_draws must be an integer >= 2 (the CRPS spread term "
                     f"compares draws); got {values['noise_draws']!r}.",
                     field_name="noise_draws")
+    if "noise_loss" in values and str(values["noise_loss"]).lower().strip() not in NOISE_LOSSES:
+        ctx.add("MGNV-STOCH-LOSS", Severity.ERROR,
+                f"noise_loss must be one of {', '.join(NOISE_LOSSES)}; "
+                f"got {values['noise_loss']!r}.",
+                field_name="noise_loss")
     if ctx.mode != "train":
         return
     for name in NOISE_REJECTED_SCHEDULES:

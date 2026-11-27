@@ -227,9 +227,11 @@ def build_model_config(config) -> dict:
         'use_vae':           config.get('use_vae', False),
         # Architecture-defining: 'noise' builds no posterior encoder and no
         # prior, and its z is N(0, I) at inference. Absent in older
-        # checkpoints, which are all 'vae'. noise_draws is training-only.
+        # checkpoints, which are all 'vae'. noise_draws and noise_loss are
+        # training-only (recorded as provenance).
         'stochastic_mode':   str(config.get('stochastic_mode', 'vae')).lower().strip(),
         'noise_draws':       config.get('noise_draws', 4),
+        'noise_loss':        str(config.get('noise_loss', 'crps')).lower().strip(),
         'vae_latent_dim':    config.get('vae_latent_dim', 32),
         'vae_encoder_mp_layers':     config.get('vae_encoder_mp_layers', 5),
         'vae_graph_aware':   config.get('vae_graph_aware', False),

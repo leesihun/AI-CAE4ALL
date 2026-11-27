@@ -927,9 +927,10 @@ def run_rollout(config, config_filename='config.txt'):
                 )
             except Exception as exc:  # never let plotting break a finished rollout
                 print(f"  Histogram generation failed: {exc}")
-            # One figure per held-out geometry (split_group_attr), beside the
+            # One figure per held-out geometry (eval_group_attr, else
+            # split_group_attr), beside the
             # pooled one: the pooled curve hides per-geometry width errors.
-            group_attr = config.get('split_group_attr')
+            group_attr = config.get('eval_group_attr') or config.get('split_group_attr')
             if group_attr and generated_spreads:
                 try:
                     groups = _eval_dataset_groups(str(eval_dataset), str(group_attr))

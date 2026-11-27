@@ -268,7 +268,7 @@ def load_spread_module():
 def job_groups(job, spread, force):
     cfg = cfg_values(job["infer"])
     out_dir = cfg.get("inference_output_dir")
-    attr = cfg.get("split_group_attr")
+    attr = cfg.get("eval_group_attr") or cfg.get("split_group_attr")
     eval_h5 = cfg.get("eval_dataset") or cfg.get("infer_dataset")
     if not (out_dir and attr and eval_h5):
         return None
@@ -351,7 +351,8 @@ def summarize(rows):
 def spread_arrays(job, spread):
     """spread_values.npz of a job, with each FE result and draw tagged by its geometry."""
     cfg = cfg_values(job["infer"])
-    out_dir, attr = cfg.get("inference_output_dir"), cfg.get("split_group_attr")
+    out_dir = cfg.get("inference_output_dir")
+    attr = cfg.get("eval_group_attr") or cfg.get("split_group_attr")
     eval_h5 = cfg.get("eval_dataset") or cfg.get("infer_dataset")
     if not (out_dir and attr and eval_h5):
         return None

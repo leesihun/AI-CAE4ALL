@@ -203,7 +203,7 @@ def figure(dists, rows, out_png, title):
 # --------------------------------------------------------------------- jobs
 def job_scores(job, spread, rollouts, splits):
     cfg = plots.cfg_values(job["infer"])
-    attr = cfg.get("split_group_attr")
+    attr = cfg.get("eval_group_attr") or cfg.get("split_group_attr")
     eval_h5 = cfg.get("eval_dataset") or cfg.get("infer_dataset")
     out_dir = cfg.get("inference_output_dir")
     if not (attr and eval_h5 and out_dir):

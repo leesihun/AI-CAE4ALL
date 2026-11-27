@@ -456,7 +456,10 @@ def main():
         print('  [note] hierarchy_seed lists several seeds; this uses the first for every geometry')
         cfg['hierarchy_seed'] = cfg['hierarchy_seed'][0]
 
-    attr = cfg.get('split_group_attr')
+    # geometries are grouped by eval_group_attr; the train/val/test split is made by
+    # split_group_attr (the two differ when one split group holds several geometries)
+    attr = cfg.get('eval_group_attr') or cfg.get('split_group_attr')
+    split_attr = cfg.get('split_group_attr') or attr
     if a.dataset:
         h5_path = _abs(a.dataset)
     elif a.split == 'heldout':
@@ -471,7 +474,7 @@ def main():
     order = _group_order(groups.values())
     if a.split != 'heldout':
         # training_profiles/setup.py: dataset.split(0.8, 0.1, 0.1, seed=split_seed)
-        part = grouped_split_ids(h5_path, sorted(groups, key=int), attr, 0.8, 0.1,
+        part = grouped_split_ids(h5_path, sorted(groups, key=int), split_attr, 0.8, 0.1,
                                  int(cfg.get('split_seed', 42)))[('train', 'val', 'test').index(a.split)]
         keep = {str(groups[s]) for s in part}
         order = [v for v in order if v in keep]

@@ -7,16 +7,17 @@
 #   bash configs/MeshGraphNets_Variational/hyperparameter_sweep/r14/stop_noise_135.sh      # stop + infer
 #
 # 1. finds each noise job's launcher (AI_CAE4ALL_main.py --config .../config_train_<job>.txt)
-#    among your own processes and sends it SIGINT, by PID; the launcher passes it to the
-#    trainer's process group (the trainer keeps model.pth and its .resume state) and
-#    escalates to terminate/kill after 10 s / 15 s on its own. Every other job is untouched.
-# 2. waits until those launchers and their trainers are gone (SIGTERM after 120 s, SIGKILL
-#    after 20 s more, still by PID).
+#    among your own processes and sends SIGTERM, by PID, to it and to the trainer it
+#    started. Not SIGINT: run_node.sh starts each job with `( ... ) &` in a non-interactive
+#    bash, so the job and everything under it ignore SIGINT (tried 11-27: nothing stopped).
+#    model.pth is only written on a validation improvement, so a kill keeps the best
+#    checkpoint; the .resume state is written atomically. Every other job is untouched.
+# 2. waits until those launchers and their trainers are gone (SIGKILL after 60 s, by PID).
 # 3. runs TRAIN=0 JOBS="<the noise jobs>" run_135.sh: inference on the kept model.pth, then
 #    the W2 and per-geometry histogram plots. Beside a run_135.sh that is still going (the
 #    other jobs) it starts as LANE=b, on the cards the stopped jobs had.
 #
-# The first run's log shows these jobs as "train FAILED (rc=130)": that is the stop, not an
+# The first run's log shows these jobs as "train FAILED (rc=143)": that is the stop, not an
 # error. The learning rate was not fully annealed (cosine over 360 epochs). Running
 # run_135.sh normally later resumes their training from the .resume state.
 set -u
@@ -86,21 +87,19 @@ if [ "${#GPU_LIST[@]}" -gt 0 ]; then
 fi
 
 echo
-echo "Will stop (SIGINT): ${LAUNCHERS[*]:-nothing}"
+echo "Will stop (SIGTERM, launcher + trainer): ${LAUNCHERS[*]:-nothing}"
 echo "Then: ${LANE_ARG:+LANE=$LANE_ARG }TRAIN=0 ${GPUS_ARG:+GPUS=\"$GPUS_ARG\" }JOBS=\"${TODO[*]}\" bash $CFG_DIR/run_135.sh"
 [ "$DRY" = "1" ] && { echo "(-n: nothing done)"; exit 0; }
 
 # ---- 1-2. stop, then wait for the launchers and their trainers to be gone
 if [ "${#LAUNCHERS[@]}" -gt 0 ]; then
-    kill -INT "${LAUNCHERS[@]}" 2>/dev/null
-    waited=0; sig_term=0
+    kill -TERM "${TREE[@]}" 2>/dev/null
+    waited=0
     while :; do
         left=(); for p in "${TREE[@]}"; do alive "$p" && left+=("$p"); done
         [ "${#left[@]}" -eq 0 ] && break
-        if [ "$waited" -ge 140 ]; then
+        if [ "$waited" -ge 60 ]; then
             echo "  still alive after ${waited}s, SIGKILL: ${left[*]}"; kill -KILL "${left[@]}" 2>/dev/null; sleep 3; break
-        elif [ "$waited" -ge 120 ] && [ "$sig_term" = "0" ]; then
-            echo "  still alive after ${waited}s, SIGTERM: ${left[*]}"; kill -TERM "${left[@]}" 2>/dev/null; sig_term=1
         fi
         sleep 5; waited=$((waited + 5))
     done

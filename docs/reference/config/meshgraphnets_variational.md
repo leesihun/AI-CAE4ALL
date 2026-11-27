@@ -51,6 +51,7 @@ Required fields:
 | `infer_dataset`, `infer_timesteps` | Rollout initial conditions and step count |
 | `split_seed` | Seed of the 80/10/10 split that training builds from sorted sample IDs (default 42). Stored `metadata/splits` is ignored |
 | `split_group_attr` | Keeps every sample sharing `data/{sid}/metadata.attrs[<attr>]` in one split; at inference it also adds per-group spread figures |
+| `eval_group_attr` | Metadata attribute that names one geometry in the scored file, for the per-group spread figures and the `misc/` diagnosis tools (default: `split_group_attr`). Set it when a split group holds several geometries or `eval_dataset` lacks the split attribute (ex3: split by `split_group`, score by `shape_idx`) |
 | `write_preprocessing` | Write the train-derived normalizers back into the HDF5 (default true) |
 | `use_parallel_stats` | Parallel normalization-stat computation (default true) |
 | `static_cache_per_worker` | Per-worker LRU cap for positional features, non-multiscale runs (default 64) |
@@ -122,6 +123,7 @@ The V-cycle and coarsening are described in
 | `zg_anchor_weight` | `hybrid`, needs `local_warmup_epochs`: KL that keeps `z_g` near its end-of-warmup posterior |
 | `stochastic_mode` | `vae` (default): posterior encoder + learned prior. `noise`: `z ~ N(0, I)` in training and inference, no encoder and no prior; trained on the fair CRPS of `noise_draws` forwards. `latent_type` still sets the z layout. Every encoder, regularizer and prior key is ignored; `prior_freeze_epoch`, `local_warmup_epochs`, `zg_anchor_weight` and `model_split` are errors. Checkpoint architecture |
 | `noise_draws` | `noise` only: forwards per batch, each with its own `z` (default 4, at least 2). Training cost grows about linearly with it |
+| `noise_loss` | `noise` only: `crps` (default) is the fair CRPS per node and feature; `energy` is the fair energy score per graph, `mean_k d(x_k, y) − 1/(2K(K−1)) Σ_{i≠j} d(x_i, x_j)` with `d` the feature-weighted RMS difference over the graph's nodes, so the whole field is scored as one vector. Training only; validation still reports the per-node CRPS |
 
 ## Objective
 

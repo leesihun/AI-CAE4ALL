@@ -87,7 +87,7 @@ KEY_CATALOGS.sdfflow = [...new Set([
 KEY_CATALOGS.meshgraphnetsV = [...new Set([
   ...KEY_CATALOGS.meshgraphnetsV,
   ...keys(`latent_type latent_ch vae_local_mp_layers latent_reg kl_weight`),
-  ...keys(`local_inject local_dropout local_warmup_epochs zg_anchor_weight posterior_max_std_g lambda_mmd_g prior_arch prior_param prior_tf_heads prior_tf_dropout prior_fm_draws prior_cond_noise prior_trunk prior_fm_time_power mmd_cond_width stochastic_mode noise_draws`)
+  ...keys(`local_inject local_dropout local_warmup_epochs zg_anchor_weight posterior_max_std_g lambda_mmd_g prior_arch prior_param prior_tf_heads prior_tf_dropout prior_fm_draws prior_cond_noise prior_trunk prior_fm_time_power mmd_cond_width stochastic_mode noise_draws noise_loss`)
 ])].sort();
 
 export const MODEL_CATALOG = {
@@ -497,6 +497,7 @@ export const CHOICES = {
   prior_trunk: ["fine", "multiscale", "decoder"],
   // STOCHASTIC_MODES in ai_cae4all/specs/meshgraphnets_variational.py.
   stochastic_mode: ["vae", "noise"],
+  noise_loss: ["crps", "energy"],
   spread_stat: ["range", "mean", "std", "mag_max"],
   // SAR-SCOPE-001 (ai_cae4all/specs/sar.py SAMPLE_SCOPES) and LDGN-SCOPE-001.
   sample_scope: ["geometry", "scene"],
@@ -1471,6 +1472,7 @@ export const HELP = {
   prior_trunk: "Where the coarse flow prior's per-coarse-node condition comes from (latent_type local/hybrid). fine (default): prior_mp_layers blocks of its own on the fine mesh, then the cluster mean, so a coarse node knows its own cluster and a few-hop rim. multiscale: the same blocks, then a pool plus prior_mp_layers more blocks on every coarser level (its own descending arm, trained by the prior loss). decoder: no trunk of its own; it reads the simulator's descending arm with the latent set to zero, without gradient, so the prior loss does not train those features. Checkpoint architecture.",
   stochastic_mode: "How MeshGraphNets-V draws z (use_vae True). vae (default): a posterior encoder in training and a learned prior at inference. noise: z ~ N(0, I) in training and inference alike, with no encoder and no prior; each batch runs noise_draws forwards with independent z and trains on their fair CRPS. latent_type still sets the z layout. Every encoder, regularizer and prior key is ignored. Checkpoint architecture.",
   noise_draws: "Forwards per batch with independent z ~ N(0, I) when stochastic_mode is noise (default 4, at least 2: the CRPS spread term compares draws). Training compute and activation memory grow about linearly with it.",
+  noise_loss: "Training loss of stochastic_mode noise. crps (default): fair CRPS per node and feature, a sum of marginal scores. energy: fair energy score per graph, where a graph's whole output field is one vector, so the loss also sees how the draws co-vary across nodes. Training only; validation and best_by crps are unchanged.",
   prior_tf_heads: "Attention heads of the transformer coarse prior (prior_arch transformer only, default 4). Must divide the prior velocity width. Checkpoint architecture.",
   prior_tf_dropout: "Training-only dropout of the transformer coarse prior (prior_arch transformer only, default 0 = off): on the attention weights and on both residual branches of every block. Range [0, 1); eval, inference and sampling never drop. Adds no weights, so a checkpoint loads with any value. 0.1 is the usual transformer setting; 0.3 is strong.",
   prior_fm_draws: "Noise/time draws per posterior sample in the coarse flow prior's training loss (latent_type local/hybrid, default 1). K > 1 regresses K (z0, t) pairs per sample, costing K prior passes per step.",

@@ -126,6 +126,19 @@ Validation scores `vae_valid_prior_samples` N(0, I) forwards with the same
 CRPS, so `best_by crps` works. In the epoch log, "Train recon" is that
 training CRPS. The posterior-validation column is one N(0, I) draw.
 
+`noise_loss energy` swaps the per-node CRPS for the fair energy score of each
+graph, the multivariate form of the same rule:
+
+```text
+loss = mean_graphs [ (1/K) Σ_k d(f(z_k, g), y)  −  1/(2K(K−1)) Σ_{k≠j} d(f(z_k, g), f(z_j, g)) ]
+d(a, b) = sqrt( mean_nodes Σ_c w_c (a − b)_c² )
+```
+
+The whole field of a graph is one vector, so the loss also scores how the draws
+co-vary across nodes, which a sum of per-node scores cannot. Validation and
+`best_by crps` still use the per-node CRPS; "Train recon" is then the energy
+score.
+
 **MMD.** The MMD matches only the *aggregate* posterior to `N(0, I)`, so the
 latent stays the ball that the flow-matching prior integrates from. Two keys
 refine it:
@@ -180,7 +193,9 @@ topology and carry real spread: either several realizations per input, or one
 realization per input across many inputs.
 
 `split_group_attr` keeps every draw of a geometry in the same split, which is
-required for multi-draw files such as ex3. `cond_var`, `periodic_box` and
+required for multi-draw files such as ex3. Scoring groups the evaluation file
+by `eval_group_attr` (default: the split attribute); the augmented ex3 file
+splits by `split_group` and scores by `shape_idx`. `cond_var`, `periodic_box` and
 world edges work as described in [00](00_shared_foundations.md).
 
 ## Modes and keys

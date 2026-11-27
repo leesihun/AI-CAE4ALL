@@ -184,6 +184,50 @@ def _crps_from_samples(samples, target):
     return accuracy - spread / (S * (S - 1))
 
 
+NOISE_LOSSES = ('crps', 'energy')
+
+
+def _energy_score_from_samples(samples, target, batch, num_graphs, loss_weights=None, eps=1e-12):
+    """Fair energy score of S draws, one value per graph.
+
+    The multivariate proper scoring rule that the CRPS is the 1-D case of. The
+    whole output field of a graph (all nodes x features) is ONE vector, so the
+    score sees how the draws co-vary across nodes; the per-node CRPS is a sum
+    of marginal scores and is blind to that joint structure.
+
+        ES = mean_s d(x_s, y)  -  1/(2 S (S-1)) Σ_s Σ_j d(x_s, x_j)
+        d(a, b) = sqrt( mean over the graph's nodes of Σ_f w_f (a - b)_f² )
+
+    d is the Euclidean norm of the field difference divided by sqrt(n_nodes)
+    (a constant per graph, so the score stays proper), with the same feature
+    weights as every other loss: a 20k-node and a 100k-node graph then score
+    on one scale. `eps` sits under the square root because two identical
+    draws would otherwise give a 0/0 gradient.
+
+    samples: [S, N, F]. target: [N, F]. batch: [N] graph index. Returns
+    [num_graphs]. Pairs accumulate one by one, as in `_crps_from_samples`.
+    """
+    S = samples.shape[0]
+    counts = torch.bincount(batch, minlength=num_graphs).clamp_min(1).to(target.dtype)
+
+    def dist(a, b):
+        sq = _per_node_loss((a - b).pow(2), loss_weights)                      # [N]
+        per_graph = torch.zeros(num_graphs, dtype=sq.dtype, device=sq.device)
+        return (per_graph.index_add_(0, batch, sq) / counts + eps).sqrt()     # [G]
+
+    accuracy = dist(samples[0], target)
+    for i in range(1, S):
+        accuracy = accuracy + dist(samples[i], target)
+    accuracy = accuracy / S
+    if S < 2:
+        return accuracy
+    spread = torch.zeros_like(accuracy)
+    for i in range(S - 1):
+        for j in range(i + 1, S):
+            spread = spread + dist(samples[i], samples[j])
+    return accuracy - spread / (S * (S - 1))
+
+
 def _mem_gb():
     """(peak allocated, reserved) in GB — the two numbers that explain an OOM.
 
@@ -295,10 +339,15 @@ class _ObjectiveTerms:
         # stochastic_mode noise: K forwards with independent z ~ N(0, I) per
         # batch, trained with the fair CRPS of the K draws against the one
         # target (engression / FGN). No regularizer, no aux, no prior.
+        # noise_loss energy scores each graph's whole field as one vector
+        # (fair energy score) instead of node by node.
         self.noise_mode = bool(getattr(inner_model, 'noise_mode', False))
         self.noise_draws = int(config.get('noise_draws', 4) or 4)
         if self.noise_mode and self.noise_draws < 2:
             raise ValueError('noise_draws must be >= 2: the CRPS spread term needs two draws')
+        self.noise_loss = str(config.get('noise_loss', 'crps')).lower().strip()
+        if self.noise_mode and self.noise_loss not in NOISE_LOSSES:
+            raise ValueError(f"noise_loss must be one of {NOISE_LOSSES}, got '{self.noise_loss}'")
 
 
 def _anchor_keys(graph, num_timesteps):
@@ -486,24 +535,43 @@ def _compose_loss(model, graph, terms):
 
 
 def _compose_noise_loss(model, graph, terms):
-    """stochastic_mode noise: the fair CRPS of K draws, z ~ N(0, I) each.
+    """stochastic_mode noise: the fair CRPS of K draws, z ~ N(0, I) each
+    (noise_loss crps), or their fair energy score per graph (noise_loss energy).
 
     Only the first forward applies std_noise: it adds the input noise to
     graph.x / graph.y IN PLACE, so the other K-1 forwards then see the same
     noised input and target, which the CRPS needs (K draws of one conditional).
     Same return contract as _compose_loss; `prediction` is the first draw (an
     AR-RT unroll advances on it), `recon_sum` is the CRPS sum, and the
-    regularizer, aux and prior terms are zeros.
+    regularizer, aux and prior terms are zeros. With the energy score
+    `recon_sum` is the batch-mean score times the node count, so the caller's
+    sum / node-count is that mean.
     """
     preds = []
     with torch.amp.autocast('cuda', dtype=terms.amp_dtype, enabled=terms.use_amp):
         for k in range(terms.noise_draws):
             pred, target, _, _, _ = model(graph, add_noise=(None if k == 0 else False))
             preds.append(pred)
+    if terms.noise_loss == 'energy':
+        target = target.float()
+        batch = getattr(graph, 'batch', None)
+        if batch is None:
+            batch = torch.zeros(target.shape[0], dtype=torch.long, device=target.device)
+        num_graphs = int(getattr(graph, 'num_graphs', 0) or (int(batch.max().item()) + 1))
+        score = _energy_score_from_samples(torch.stack([p.float() for p in preds]), target,
+                                           batch, num_graphs, terms.loss_weights)
+        loss = score.mean()
+        zero = torch.zeros((), device=loss.device, dtype=torch.float32)
+        return preds[0], loss, loss.detach() * target.shape[0], zero, zero, zero, zero
     crps = _crps_from_samples(torch.stack([p.float() for p in preds]), target.float())
     loss, crps_sum, _ = _loss_from_errors(crps, terms.loss_weights, sync=False)
     zero = torch.zeros((), device=crps.device, dtype=torch.float32)
     return preds[0], loss, crps_sum, zero, zero, zero, zero
+
+
+def _noise_loss_name(config):
+    energy = str(config.get('noise_loss', 'crps')).lower().strip() == 'energy'
+    return 'fair energy score per graph' if energy else 'fair CRPS'
 
 
 def _build_rollout_context(config, device):
@@ -566,7 +634,8 @@ def log_training_config(config):
             and str(config.get('stochastic_mode', 'vae')).lower().strip() == 'noise'):
         print(f"Noise latent: ENABLED (latent_type={config.get('latent_type', 'global')}, "
               f"z_dim={config.get('vae_latent_dim', 32)}, z ~ N(0, I) in training and "
-              f"inference, loss = fair CRPS of noise_draws={config.get('noise_draws', 4)} "
+              f"inference, loss = {_noise_loss_name(config)} of "
+              f"noise_draws={config.get('noise_draws', 4)} "
               f"draws; no posterior encoder, no prior)")
     elif config.get('use_vae', False):
         z_dim   = config.get('vae_latent_dim', 32)
@@ -968,7 +1037,7 @@ def train_epoch(model, dataloader, optimizer, device, config, epoch, ema_model=N
 
         # Update progress bar every 10 batches to reduce memory query overhead
         if batch_idx % 10 == 0:
-            rec_key = 'crps' if objective_terms.noise_mode else 'rec'
+            rec_key = objective_terms.noise_loss if objective_terms.noise_mode else 'rec'
             postfix = {rec_key: f'{batch_loss_sum.item() / batch_loss_count:.2e}', 'mem': _mem_str()}
             if use_vae and not objective_terms.noise_mode:
                 postfix[latent_reg] = f'{float(reg_loss_val):.2e}'
